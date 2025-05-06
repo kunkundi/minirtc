@@ -39,14 +39,20 @@ TcuvidDestroyVideoParser cuvidDestroyVideoParser_ld = NULL;
 TNvEncodeAPICreateInstance NvEncodeAPICreateInstance_ld = NULL;
 TNvEncodeAPIGetMaxSupportedVersion NvEncodeAPIGetMaxSupportedVersion_ld = NULL;
 
+#ifdef _WIN32
+static HMODULE nvcuda_dll = NULL;
+static HMODULE nvcuvid_dll = NULL;
+static HMODULE nvEncodeAPI64_dll = NULL;
+#else
 static void* nvcuda_dll = NULL;
 static void* nvcuvid_dll = NULL;
 static void* nvEncodeAPI64_dll = NULL;
+#endif
 
 static int LoadLibraryHelper(void** library, const char* winLib,
                              const char* linuxLib) {
 #ifdef _WIN32
-  *library = LoadLibrary(TEXT(winLib));
+  *library = LoadLibraryA(winLib);
 #else
   *library = dlopen(linuxLib, RTLD_LAZY);
 #endif
@@ -64,7 +70,7 @@ static int LoadLibraryHelper(void** library, const char* winLib,
 static void FreeLibraryHelper(void** library) {
   if (*library != NULL) {
 #ifdef _WIN32
-    FreeLibrary(*library);
+    FreeLibrary((HMODULE)*library);
 #else
     dlclose(*library);
 #endif
@@ -75,7 +81,7 @@ static void FreeLibraryHelper(void** library) {
 static int LoadFunctionHelper(void* library, void** func,
                               const char* funcName) {
 #ifdef _WIN32
-  *func = GetProcAddress(library, funcName);
+  *func = GetProcAddress((HMODULE)library, funcName);
 #else
   *func = dlsym(library, funcName);
 #endif
@@ -87,8 +93,9 @@ static int LoadFunctionHelper(void* library, void** func,
 }
 
 int LoadNvCodecDll() {
-  if (LoadLibraryHelper(&nvcuda_dll, "nvcuda.dll", "libcuda.so") != 0) {
-    FreeLibraryHelper(&nvcuda_dll);
+  if (LoadLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll), "nvcuda.dll",
+                        "libcuda.so") != 0) {
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll));
     return -1;
   }
 
@@ -119,11 +126,12 @@ int LoadNvCodecDll() {
           0 ||
       LoadFunctionHelper(nvcuda_dll, (void**)&cuMemcpy2DUnaligned_ld,
                          "cuMemcpy2DUnaligned_v2") != 0) {
-    FreeLibraryHelper(&nvcuda_dll);
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll));
   }
 
-  if (LoadLibraryHelper(&nvcuvid_dll, "nvcuvid.dll", "libnvcuvid.so") != 0) {
-    FreeLibraryHelper(&nvcuvid_dll);
+  if (LoadLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll), "nvcuvid.dll",
+                        "libnvcuvid.so") != 0) {
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll));
     return -1;
   }
 
@@ -153,7 +161,7 @@ int LoadNvCodecDll() {
                          "cuvidParseVideoData") != 0 ||
       LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidDestroyVideoParser_ld,
                          "cuvidDestroyVideoParser") != 0) {
-    FreeLibraryHelper(&nvcuvid_dll);
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll));
     return -1;
   }
 
@@ -170,7 +178,7 @@ int LoadNvCodecDll() {
       LoadFunctionHelper(nvEncodeAPI64_dll,
                          (void**)&NvEncodeAPIGetMaxSupportedVersion_ld,
                          "NvEncodeAPIGetMaxSupportedVersion") != 0) {
-    FreeLibraryHelper(&nvEncodeAPI64_dll);
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvEncodeAPI64_dll));
     return -1;
   }
 #endif
@@ -182,15 +190,15 @@ int LoadNvCodecDll() {
 
 int ReleaseNvCodecDll() {
   if (nvcuda_dll != NULL) {
-    FreeLibraryHelper(&nvcuda_dll);
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll));
   }
 
   if (nvcuvid_dll != NULL) {
-    FreeLibraryHelper(&nvcuvid_dll);
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll));
   }
 
   if (nvEncodeAPI64_dll != NULL) {
-    FreeLibraryHelper(&nvEncodeAPI64_dll);
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvEncodeAPI64_dll));
   }
 
   LOG_INFO("Release NvCodec API success");
