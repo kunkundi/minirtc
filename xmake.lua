@@ -25,8 +25,6 @@ if is_os("windows") then
     add_defines("_WEBSOCKETPP_CPP11_INTERNAL_")
     add_cxflags("/WX")
 elseif is_os("linux") then
-    add_requires("glib", {system = true})
-    add_packages("glib")
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
 elseif is_os("macosx") then
@@ -173,7 +171,7 @@ target("media")
         "src/media/nvcodec",
         "thirdparty/nvcodec/interface", {public = true})
         add_includedirs(path.join(os.getenv("CUDA_PATH"), "include"), {public = true})
-    elseif is_os(("linux")) then
+    elseif is_os("linux") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
         "src/media/video/encode/nvcodec/*.cpp",
@@ -244,7 +242,7 @@ target("projectx")
         "ws2_32", "Bcrypt", "windowsapp", "User32", "Strmiids", "Mfuuid",
         "Secur32", "Bcrypt")
         add_links("cuda", "nvencodeapi", "nvcuvid")
-    elseif is_os(("linux")) then
+    elseif is_os("linux") then
         add_linkdirs("thirdparty/nvcodec/lib/x64")
         add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
         add_links("cuda", "nvidia-encode", "nvcuvid")

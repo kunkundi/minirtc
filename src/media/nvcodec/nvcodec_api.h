@@ -7,7 +7,9 @@
 #ifndef _NVCODEC_API_H_
 #define _NVCODEC_API_H_
 
+#if __WIN32__
 #include <Windows.h>
+#endif
 
 #include <iostream>
 

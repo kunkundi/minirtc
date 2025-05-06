@@ -7,6 +7,7 @@
 #ifndef _STATISTICS_H_
 #define _STATISTICS_H_
 
+#include <atomic>
 #include <condition_variable>
 #include <functional>
 #include <memory>

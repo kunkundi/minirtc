@@ -16,7 +16,7 @@
 
 #include <limits>
 
-#if defined(__POSIX__)
+#if defined(__linux__)
 #include <sys/time.h>
 #endif
 #if defined(__APPLE__)
@@ -54,7 +54,7 @@ int64_t SystemTimeNanos() {
     return rtc::dchecked_cast<int64_t>(a * b);
   };
   ticks = mul(mach_absolute_time(), timebase.numer) / timebase.denom;
-#elif defined(__POSIX__)
+#elif defined(__linux__)
   struct timespec ts;
   // TODO(deadbeef): Do we need to handle the case when CLOCK_MONOTONIC is not
   // supported?
