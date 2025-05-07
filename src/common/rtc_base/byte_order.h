@@ -15,7 +15,7 @@
 
 #include <cstring>
 
-#if defined(__POSIX__) && !defined(__native_client__)
+#if defined(__linux__) && !defined(__native_client__)
 #include <arpa/inet.h>
 #endif
 
@@ -89,7 +89,7 @@
 #error WEBRTC_ARCH_BIG_ENDIAN or WEBRTC_ARCH_LITTLE_ENDIAN must be defined.
 #endif  // defined(WEBRTC_ARCH_LITTLE_ENDIAN)
 
-#elif defined(__POSIX__)
+#elif defined(__linux__)
 #include <endian.h>
 #else
 #error "Missing byte order functions for this arch."

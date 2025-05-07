@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <limits>
 
-#if defined(__POSIX__)
+#if defined(__linux__)
 #include <sys/time.h>
 #endif
 #if defined(__APPLE__)
@@ -37,7 +37,8 @@ int64_t SystemClock::CurrentTimeNs() {
   ticks = static_cast<int64_t>(mach_absolute_time() * timebase.numer) /
           timebase.denom;
 
-#elif defined(__POSIX__)
+#elif defined(__linux__)
+  constexpr int64_t kNumNanosecsPerSec = 1000000000;
   struct timespec ts;
   if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
     return -1;  // Error case for POSIX clock retrieval
@@ -90,7 +91,7 @@ int64_t SystemClock::CurrentNtpTimeMs() {
 }
 
 int64_t SystemClock::CurrentUtcTimeNs() {
-#if defined(__POSIX__)
+#if defined(__linux__)
   struct timeval time;
   gettimeofday(&time, nullptr);
   return (static_cast<int64_t>(time.tv_sec) * 1000000000 + time.tv_usec * 1000);

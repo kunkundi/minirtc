@@ -10,7 +10,7 @@
 
 #include <stdint.h>
 
-#if defined(__POSIX__)
+#if defined(__linux__)
 #include <sys/time.h>
 #endif
 
@@ -209,7 +209,7 @@ int64_t TimeUTCMicros() {
   if (g_clock) {
     return g_clock->TimeNanos() / kNumNanosecsPerMicrosec;
   }
-#if defined(__POSIX__)
+#if defined(__linux__)
   struct timeval time;
   gettimeofday(&time, nullptr);
   // Convert from second (1.0) and microsecond (1e-6).
