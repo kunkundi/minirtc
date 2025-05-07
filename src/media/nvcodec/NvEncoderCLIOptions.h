@@ -1,28 +1,12 @@
 /*
- * This copyright notice applies to this header file only:
+ * Copyright 2017-2021 NVIDIA Corporation.  All rights reserved.
  *
- * Copyright (c) 2010-2024 NVIDIA Corporation
+ * Please refer to the NVIDIA end user license agreement (EULA) associated
+ * with this source code for terms and conditions that govern your use of
+ * this software. Any use, reproduction, disclosure, or distribution of
+ * this software and related documentation outside the terms of the EULA
+ * is strictly prohibited.
  *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use,
- * copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the software, and to permit persons to whom the
- * software is furnished to do so, subject to the following
- * conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
- * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #pragma once
@@ -96,9 +80,6 @@ class NvEncoderInitParam {
   virtual bool IsCodecHEVC() {
     return GetEncodeGUID() == NV_ENC_CODEC_HEVC_GUID;
   }
-
-  virtual bool IsCodecAV1() { return GetEncodeGUID() == NV_ENC_CODEC_AV1_GUID; }
-
   std::string GetHelpMessage(bool bMeOnly = false, bool bUnbuffered = false,
                              bool bHide444 = false,
                              bool bOutputInVidMem = false) {
@@ -117,8 +98,7 @@ class NvEncoderInitParam {
     if (bOutputInVidMem && bMeOnly) {
       oss << std::endl;
     } else {
-      oss << "; HEVC: " << szHevcProfileNames;
-      oss << "; AV1: " << szAV1ProfileNames << std::endl;
+      oss << "; HEVC: " << szHevcProfileNames << std::endl;
     }
 
     if (!bMeOnly) {
@@ -131,9 +111,7 @@ class NvEncoderInitParam {
     }
 
     if (!bHide444 && !bLowLatency) {
-      oss << "-444         (Only for RGB input) YUV444 encode. Not valid for "
-             "AV1 Codec"
-          << std::endl;
+      oss << "-444         (Only for RGB input) YUV444 encode" << std::endl;
     }
     if (bMeOnly) return oss.str();
     oss << "-fps         Frame rate" << std::endl;
@@ -146,14 +124,6 @@ class NvEncoderInitParam {
       oss << "-rc          Rate control mode: " << szRcModeNames << std::endl
           << "-gop         Length of GOP (Group of Pictures)" << std::endl
           << "-bitrate     Average bit rate, can be in unit of 1, K, M"
-          << std::endl
-          << "Note:        Fps or Average bit rate values for each session can "
-             "be specified in the form of v1,v1,v3 (no space) for "
-             "AppTransOneToN"
-          << std::endl
-          << "             If the number of 'bitrate' or 'fps' values "
-             "specified are less than the number of sessions, then the last "
-             "specified value will be considered for the remaining sessions"
           << std::endl
           << "-maxbitrate  Max bit rate, can be in unit of 1, K, M" << std::endl
           << "-vbvbufsize  VBV buffer size in bits, can be in unit of 1, K, M"
@@ -217,21 +187,15 @@ class NvEncoderInitParam {
                                (pParams->encodeGUID == NV_ENC_CODEC_H264_GUID)
                                    ? pParams->encodeConfig->encodeCodecConfig
                                          .h264Config.chromaFormatIDC
-                               : (pParams->encodeGUID == NV_ENC_CODEC_HEVC_GUID)
-                                   ? pParams->encodeConfig->encodeCodecConfig
-                                         .hevcConfig.chromaFormatIDC
                                    : pParams->encodeConfig->encodeCodecConfig
-                                         .av1Config.chromaFormatIDC)
+                                         .hevcConfig.chromaFormatIDC)
        << std::endl
        << "\tbitdepth     : "
        << ((pParams->encodeGUID == NV_ENC_CODEC_H264_GUID)
-               ? pParams->encodeConfig->encodeCodecConfig.h264Config
-                     .inputBitDepth
-           : (pParams->encodeGUID == NV_ENC_CODEC_HEVC_GUID)
-               ? pParams->encodeConfig->encodeCodecConfig.hevcConfig
-                     .inputBitDepth
-               : pParams->encodeConfig->encodeCodecConfig.av1Config
-                     .inputBitDepth)
+               ? 0
+               : pParams->encodeConfig->encodeCodecConfig.hevcConfig
+                     .pixelBitDepthMinus8) +
+              8
        << std::endl
        << "\trc           : "
        << ConvertValueToString(vRcMode, szRcModeNames,
@@ -310,15 +274,9 @@ class NvEncoderInitParam {
    * provided to the application and sets the fields from
    * NV_ENC_INITIALIZE_PARAMS based on the supplied values.
    */
-
-  virtual void setTransOneToN(bool isTransOneToN) {
-    bTransOneToN = isTransOneToN;
-  }
-
   virtual void SetInitParams(NV_ENC_INITIALIZE_PARAMS *pParams,
                              NV_ENC_BUFFER_FORMAT eBufferFormat) {
     NV_ENC_CONFIG &config = *pParams->encodeConfig;
-    int nGOPOption = 0, nBFramesOption = 0;
     for (unsigned i = 0; i < tokens.size(); i++) {
       if (tokens[i] == "-codec" && ++i || tokens[i] == "-preset" && ++i ||
           tokens[i] == "-tuninginfo" && ++i ||
@@ -329,11 +287,8 @@ class NvEncoderInitParam {
               (IsCodecH264()
                    ? ParseString("-profile", tokens[i], vH264Profile,
                                  szH264ProfileNames, &config.profileGUID)
-               : IsCodecHEVC()
-                   ? ParseString("-profile", tokens[i], vHevcProfile,
-                                 szHevcProfileNames, &config.profileGUID)
-                   : ParseString("-profile", tokens[i], vAV1Profile,
-                                 szAV1ProfileNames, &config.profileGUID)) ||
+                   : ParseString("-profile", tokens[i], vHevcProfile,
+                                 szHevcProfileNames, &config.profileGUID)) ||
           tokens[i] == "-rc" && ++i != tokens.size() &&
               ParseString("-rc", tokens[i], vRcMode, szRcModeNames,
                           &config.rcParams.rateControlMode) ||
@@ -341,7 +296,7 @@ class NvEncoderInitParam {
               ParseInt("-fps", tokens[i], &pParams->frameRateNum) ||
           tokens[i] == "-bf" && ++i != tokens.size() &&
               ParseInt("-bf", tokens[i], &config.frameIntervalP) &&
-              ++config.frameIntervalP && ++nBFramesOption ||
+              ++config.frameIntervalP ||
           tokens[i] == "-bitrate" && ++i != tokens.size() &&
               ParseBitRate("-bitrate", tokens[i],
                            &config.rcParams.averageBitRate) ||
@@ -376,7 +331,7 @@ class NvEncoderInitParam {
         config.rcParams.enableLookahead = config.rcParams.lookaheadDepth > 0;
         continue;
       }
-      int aqStrength = 0;
+      int aqStrength;
       if (tokens[i] == "-aq" && ++i != tokens.size() &&
           ParseInt("-aq", tokens[i], &aqStrength)) {
         config.rcParams.enableAQ = true;
@@ -386,13 +341,10 @@ class NvEncoderInitParam {
 
       if (tokens[i] == "-gop" && ++i != tokens.size() &&
           ParseInt("-gop", tokens[i], &config.gopLength)) {
-        nGOPOption = 1;
         if (IsCodecH264()) {
           config.encodeCodecConfig.h264Config.idrPeriod = config.gopLength;
-        } else if (IsCodecHEVC()) {
-          config.encodeCodecConfig.hevcConfig.idrPeriod = config.gopLength;
         } else {
-          config.encodeCodecConfig.av1Config.idrPeriod = config.gopLength;
+          config.encodeCodecConfig.hevcConfig.idrPeriod = config.gopLength;
         }
         continue;
       }
@@ -400,14 +352,8 @@ class NvEncoderInitParam {
       if (tokens[i] == "-444") {
         if (IsCodecH264()) {
           config.encodeCodecConfig.h264Config.chromaFormatIDC = 3;
-        } else if (IsCodecHEVC()) {
-          config.encodeCodecConfig.hevcConfig.chromaFormatIDC = 3;
         } else {
-          std::ostringstream errmessage;
-          errmessage << "Incorrect Parameter: YUV444 Input not supported with "
-                        "AV1 Codec"
-                     << std::endl;
-          throw std::invalid_argument(errmessage.str());
+          config.encodeCodecConfig.hevcConfig.chromaFormatIDC = 3;
         }
         continue;
       }
@@ -424,27 +370,8 @@ class NvEncoderInitParam {
     if (IsCodecHEVC()) {
       if (eBufferFormat == NV_ENC_BUFFER_FORMAT_YUV420_10BIT ||
           eBufferFormat == NV_ENC_BUFFER_FORMAT_YUV444_10BIT) {
-        config.encodeCodecConfig.hevcConfig.inputBitDepth = NV_ENC_BIT_DEPTH_10;
-        config.encodeCodecConfig.hevcConfig.outputBitDepth =
-            NV_ENC_BIT_DEPTH_10;
+        config.encodeCodecConfig.hevcConfig.pixelBitDepthMinus8 = 2;
       }
-    }
-
-    if (IsCodecAV1()) {
-      if (eBufferFormat == NV_ENC_BUFFER_FORMAT_YUV420_10BIT) {
-        config.encodeCodecConfig.av1Config.inputBitDepth = NV_ENC_BIT_DEPTH_10;
-        config.encodeCodecConfig.av1Config.outputBitDepth = NV_ENC_BIT_DEPTH_10;
-      }
-    }
-
-    if (nGOPOption && nBFramesOption &&
-        (config.gopLength < ((uint32_t)config.frameIntervalP))) {
-      std::ostringstream errmessage;
-      errmessage << "gopLength (" << config.gopLength
-                 << ") must be greater or equal to frameIntervalP (number of B "
-                    "frames + 1) ("
-                 << config.frameIntervalP << ")\n";
-      throw std::invalid_argument(errmessage.str());
     }
 
     funcInit(pParams);
@@ -482,76 +409,29 @@ class NvEncoderInitParam {
   }
   bool ParseBitRate(const std::string &strName, const std::string &strValue,
                     unsigned *pBitRate) {
-    if (bTransOneToN) {
-      std::vector<std::string> oneToNBitrate = split(strValue, ',');
-      std::string currBitrate;
-      if ((bitrateCnt + 1) > oneToNBitrate.size()) {
-        currBitrate = oneToNBitrate[oneToNBitrate.size() - 1];
-      } else {
-        currBitrate = oneToNBitrate[bitrateCnt];
-        bitrateCnt++;
+    try {
+      size_t l;
+      double r = std::stod(strValue, &l);
+      char c = strValue[l];
+      if (c != 0 && c != 'k' && c != 'm') {
+        LOG(ERROR) << strName << " units: 1, K, M (lower case also allowed)";
       }
-
-      try {
-        size_t l;
-        double r = std::stod(currBitrate, &l);
-        char c = currBitrate[l];
-        if (c != 0 && c != 'k' && c != 'm') {
-          LOG(ERROR) << strName << " units: 1, K, M (lower case also allowed)";
-        }
-        *pBitRate =
-            (unsigned)((c == 'm' ? 1000000 : (c == 'k' ? 1000 : 1)) * r);
-      } catch (std::invalid_argument) {
-        return false;
-      }
-      return true;
+      *pBitRate = (unsigned)((c == 'm' ? 1000000 : (c == 'k' ? 1000 : 1)) * r);
+    } catch (std::invalid_argument) {
+      return false;
     }
-
-    else {
-      try {
-        size_t l;
-        double r = std::stod(strValue, &l);
-        char c = strValue[l];
-        if (c != 0 && c != 'k' && c != 'm') {
-          LOG(ERROR) << strName << " units: 1, K, M (lower case also allowed)";
-        }
-        *pBitRate =
-            (unsigned)((c == 'm' ? 1000000 : (c == 'k' ? 1000 : 1)) * r);
-      } catch (std::invalid_argument) {
-        return false;
-      }
-      return true;
-    }
+    return true;
   }
   template <typename T>
   bool ParseInt(const std::string &strName, const std::string &strValue,
                 T *pInt) {
-    if (bTransOneToN) {
-      std::vector<std::string> oneToNFps = split(strValue, ',');
-      std::string currFps;
-      if ((fpsCnt + 1) > oneToNFps.size()) {
-        currFps = oneToNFps[oneToNFps.size() - 1];
-      } else {
-        currFps = oneToNFps[fpsCnt];
-        fpsCnt++;
-      }
-
-      try {
-        *pInt = (T)std::stoi(currFps);
-      } catch (std::invalid_argument) {
-        LOG(ERROR) << strName << " need a value of positive number";
-        return false;
-      }
-      return true;
-    } else {
-      try {
-        *pInt = (T)std::stoi(strValue);
-      } catch (std::invalid_argument) {
-        LOG(ERROR) << strName << " need a value of positive number";
-        return false;
-      }
-      return true;
+    try {
+      *pInt = std::stoi(strValue);
+    } catch (std::invalid_argument) {
+      LOG(ERROR) << strName << " need a value of positive number";
+      return false;
     }
+    return true;
   }
   bool ParseQp(const std::string &strName, const std::string &strValue,
                NV_ENC_QP *pQp) {
@@ -576,29 +456,26 @@ class NvEncoderInitParam {
   std::vector<std::string> split(const std::string &s, char delim) {
     std::stringstream ss(s);
     std::string token;
-    std::vector<std::string> tks;
+    std::vector<std::string> tokens;
     while (getline(ss, token, delim)) {
-      tks.push_back(token);
+      tokens.push_back(token);
     }
-    return tks;
+    return tokens;
   }
 
  private:
   std::string strParam;
   std::function<void(NV_ENC_INITIALIZE_PARAMS *pParams)> funcInit =
-      []([[maybe_unused]] NV_ENC_INITIALIZE_PARAMS *pParams) {};
+      [](NV_ENC_INITIALIZE_PARAMS *pParams) {};
   std::vector<std::string> tokens;
   GUID guidCodec = NV_ENC_CODEC_H264_GUID;
   GUID guidPreset = NV_ENC_PRESET_P3_GUID;
   NV_ENC_TUNING_INFO m_TuningInfo = NV_ENC_TUNING_INFO_HIGH_QUALITY;
   bool bLowLatency = false;
-  uint32_t bitrateCnt = 0;
-  uint32_t fpsCnt = 0;
-  bool bTransOneToN = 0;
 
-  const char *szCodecNames = "h264 hevc av1";
-  std::vector<GUID> vCodec = std::vector<GUID>{
-      NV_ENC_CODEC_H264_GUID, NV_ENC_CODEC_HEVC_GUID, NV_ENC_CODEC_AV1_GUID};
+  const char *szCodecNames = "h264 hevc";
+  std::vector<GUID> vCodec =
+      std::vector<GUID>{NV_ENC_CODEC_H264_GUID, NV_ENC_CODEC_HEVC_GUID};
 
   const char *szChromaNames = "yuv420 yuv444";
   std::vector<uint32_t> vChroma = std::vector<uint32_t>{1, 3};
@@ -623,16 +500,10 @@ class NvEncoderInitParam {
       NV_ENC_HEVC_PROFILE_MAIN10_GUID,
       NV_ENC_HEVC_PROFILE_FREXT_GUID,
   };
-  const char *szAV1ProfileNames = "main";
-  std::vector<GUID> vAV1Profile = std::vector<GUID>{
-      NV_ENC_AV1_PROFILE_MAIN_GUID,
-  };
-
   const char *szProfileNames =
       "(default) auto baseline(h264) main(h264) high(h264) high444(h264)"
       " stereo(h264) progressiv_high(h264) constrained_high(h264)"
-      " main(hevc) main10(hevc) frext(hevc)"
-      " main(av1) high(av1)";
+      " main(hevc) main10(hevc) frext(hevc)";
   std::vector<GUID> vProfile = std::vector<GUID>{
       GUID{},
       NV_ENC_CODEC_PROFILE_AUTOSELECT_GUID,
@@ -646,15 +517,13 @@ class NvEncoderInitParam {
       NV_ENC_HEVC_PROFILE_MAIN_GUID,
       NV_ENC_HEVC_PROFILE_MAIN10_GUID,
       NV_ENC_HEVC_PROFILE_FREXT_GUID,
-      NV_ENC_AV1_PROFILE_MAIN_GUID,
   };
 
   const char *szLowLatencyTuningInfoNames = "lowlatency ultralowlatency";
-  const char *szTuningInfoNames = "hq lowlatency ultralowlatency lossless uhq";
+  const char *szTuningInfoNames = "hq lowlatency ultralowlatency lossless";
   std::vector<NV_ENC_TUNING_INFO> vTuningInfo = std::vector<NV_ENC_TUNING_INFO>{
       NV_ENC_TUNING_INFO_HIGH_QUALITY, NV_ENC_TUNING_INFO_LOW_LATENCY,
-      NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, NV_ENC_TUNING_INFO_LOSSLESS,
-      NV_ENC_TUNING_INFO_ULTRA_HIGH_QUALITY};
+      NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, NV_ENC_TUNING_INFO_LOSSLESS};
 
   const char *szRcModeNames = "constqp vbr cbr";
   std::vector<NV_ENC_PARAMS_RC_MODE> vRcMode =
@@ -974,10 +843,9 @@ class NvEncoderInitParam {
          << std::endl
          << "    chromaFormatIDC: "
          << pConfig->encodeCodecConfig.hevcConfig.chromaFormatIDC << std::endl
-         << "    inputBitDepth: "
-         << pConfig->encodeCodecConfig.hevcConfig.inputBitDepth << std::endl
-         << "    outputBitDepth: "
-         << pConfig->encodeCodecConfig.hevcConfig.outputBitDepth << std::endl
+         << "    pixelBitDepthMinus8: "
+         << pConfig->encodeCodecConfig.hevcConfig.pixelBitDepthMinus8
+         << std::endl
          << "    idrPeriod: " << pConfig->encodeCodecConfig.hevcConfig.idrPeriod
          << std::endl
          << "    intraRefreshPeriod: "
@@ -1055,142 +923,7 @@ class NvEncoderInitParam {
          << std::endl
          << "    ltrTrustMode: "
          << pConfig->encodeCodecConfig.hevcConfig.ltrTrustMode << std::endl;
-    } else if (pInitializeParams->encodeGUID == NV_ENC_CODEC_AV1_GUID) {
-      os << "NV_ENC_CODEC_CONFIG (AV1):" << std::endl
-         << "    level: " << pConfig->encodeCodecConfig.av1Config.level
-         << std::endl
-         << "    tier: " << pConfig->encodeCodecConfig.av1Config.tier
-         << std::endl
-         << "    minPartSize: "
-         << pConfig->encodeCodecConfig.av1Config.minPartSize << std::endl
-         << "    maxPartSize: "
-         << pConfig->encodeCodecConfig.av1Config.maxPartSize << std::endl
-         << "    outputAnnexBFormat: "
-         << pConfig->encodeCodecConfig.av1Config.outputAnnexBFormat << std::endl
-         << "    enableTimingInfo: "
-         << pConfig->encodeCodecConfig.av1Config.enableTimingInfo << std::endl
-         << "    enableDecoderModelInfo: "
-         << pConfig->encodeCodecConfig.av1Config.enableDecoderModelInfo
-         << std::endl
-         << "    enableFrameIdNumbers: "
-         << pConfig->encodeCodecConfig.av1Config.enableFrameIdNumbers
-         << std::endl
-         << "    disableSeqHdr: "
-         << pConfig->encodeCodecConfig.av1Config.disableSeqHdr << std::endl
-         << "    repeatSeqHdr: "
-         << pConfig->encodeCodecConfig.av1Config.repeatSeqHdr << std::endl
-         << "    enableIntraRefresh: "
-         << pConfig->encodeCodecConfig.av1Config.enableIntraRefresh << std::endl
-         << "    chromaFormatIDC: "
-         << pConfig->encodeCodecConfig.av1Config.chromaFormatIDC << std::endl
-         << "    enableBitstreamPadding: "
-         << pConfig->encodeCodecConfig.av1Config.enableBitstreamPadding
-         << std::endl
-         << "    enableCustomTileConfig: "
-         << pConfig->encodeCodecConfig.av1Config.enableCustomTileConfig
-         << std::endl
-         << "    enableFilmGrainParams: "
-         << pConfig->encodeCodecConfig.av1Config.enableFilmGrainParams
-         << std::endl
-         << "    inputBitDepth: "
-         << pConfig->encodeCodecConfig.av1Config.inputBitDepth << std::endl
-         << "    outputBitDepth: "
-         << pConfig->encodeCodecConfig.av1Config.outputBitDepth << std::endl
-         << "    idrPeriod: " << pConfig->encodeCodecConfig.av1Config.idrPeriod
-         << std::endl
-         << "    intraRefreshPeriod: "
-         << pConfig->encodeCodecConfig.av1Config.intraRefreshPeriod << std::endl
-         << "    intraRefreshCnt: "
-         << pConfig->encodeCodecConfig.av1Config.intraRefreshCnt << std::endl
-         << "    maxNumRefFramesInDPB: "
-         << pConfig->encodeCodecConfig.av1Config.maxNumRefFramesInDPB
-         << std::endl
-         << "    numTileColumns: "
-         << pConfig->encodeCodecConfig.av1Config.numTileColumns << std::endl
-         << "    numTileRows: "
-         << pConfig->encodeCodecConfig.av1Config.numTileRows << std::endl
-         << "    maxTemporalLayersMinus1: "
-         << pConfig->encodeCodecConfig.av1Config.maxTemporalLayersMinus1
-         << std::endl
-         << "    colorPrimaries: "
-         << pConfig->encodeCodecConfig.av1Config.colorPrimaries << std::endl
-         << "    transferCharacteristics: "
-         << pConfig->encodeCodecConfig.av1Config.transferCharacteristics
-         << std::endl
-         << "    matrixCoefficients: "
-         << pConfig->encodeCodecConfig.av1Config.matrixCoefficients << std::endl
-         << "    colorRange: "
-         << pConfig->encodeCodecConfig.av1Config.colorRange << std::endl
-         << "    chromaSamplePosition: "
-         << pConfig->encodeCodecConfig.av1Config.chromaSamplePosition
-         << std::endl
-         << "    useBFramesAsRef: "
-         << pConfig->encodeCodecConfig.av1Config.useBFramesAsRef << std::endl
-         << "    numFwdRefs: "
-         << pConfig->encodeCodecConfig.av1Config.numFwdRefs << std::endl
-         << "    numBwdRefs: "
-         << pConfig->encodeCodecConfig.av1Config.numBwdRefs << std::endl;
-      if (pConfig->encodeCodecConfig.av1Config.filmGrainParams != NULL) {
-        os << "    NV_ENC_FILM_GRAIN_PARAMS_AV1:" << std::endl
-           << "        applyGrain: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->applyGrain
-           << std::endl
-           << "        chromaScalingFromLuma: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams
-                  ->chromaScalingFromLuma
-           << std::endl
-           << "        overlapFlag: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->overlapFlag
-           << std::endl
-           << "        clipToRestrictedRange: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams
-                  ->clipToRestrictedRange
-           << std::endl
-           << "        grainScalingMinus8: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams
-                  ->grainScalingMinus8
-           << std::endl
-           << "        arCoeffLag: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->arCoeffLag
-           << std::endl
-           << "        numYPoints: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->numYPoints
-           << std::endl
-           << "        numCbPoints: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->numCbPoints
-           << std::endl
-           << "        numCrPoints: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->numCrPoints
-           << std::endl
-           << "        arCoeffShiftMinus6: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams
-                  ->arCoeffShiftMinus6
-           << std::endl
-           << "        grainScaleShift: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams
-                  ->grainScaleShift
-           << std::endl
-           << "        cbMult: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->cbMult
-           << std::endl
-           << "        cbLumaMult: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->cbLumaMult
-           << std::endl
-           << "        cbOffset: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->cbOffset
-           << std::endl
-           << "        crMult: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->crMult
-           << std::endl
-           << "        crLumaMult: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->crLumaMult
-           << std::endl
-           << "        crOffset: "
-           << pConfig->encodeCodecConfig.av1Config.filmGrainParams->crOffset
-           << std::endl;
-      }
     }
-
     return os.str();
   }
 };

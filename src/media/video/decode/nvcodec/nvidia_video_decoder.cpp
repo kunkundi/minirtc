@@ -51,9 +51,8 @@ int NvidiaVideoDecoder::Init() {
     return -1;
   }
 
-  decoder =
-      new NvDecoder(cuda_context_, false, cudaVideoCodec_H264, true, false,
-                    nullptr, nullptr, false, 4096, 2160, 1000, false);
+  decoder = new NvDecoder(cuda_context_, false, cudaVideoCodec_H264, true,
+                          false, nullptr, nullptr, 4096, 2160, 1000, false);
 
   if (!decoded_frame_) {
     decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,

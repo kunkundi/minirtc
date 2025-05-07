@@ -1,28 +1,12 @@
 /*
- * This copyright notice applies to this header file only:
+ * Copyright 2017-2021 NVIDIA Corporation.  All rights reserved.
  *
- * Copyright (c) 2010-2024 NVIDIA Corporation
+ * Please refer to the NVIDIA end user license agreement (EULA) associated
+ * with this source code for terms and conditions that govern your use of
+ * this software. Any use, reproduction, disclosure, or distribution of
+ * this software and related documentation outside the terms of the EULA
+ * is strictly prohibited.
  *
- * Permission is hereby granted, free of charge, to any person
- * obtaining a copy of this software and associated documentation
- * files (the "Software"), to deal in the Software without
- * restriction, including without limitation the rights to use,
- * copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the software, and to permit persons to whom the
- * software is furnished to do so, subject to the following
- * conditions:
- *
- * The above copyright notice and this permission notice shall be
- * included in all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
- * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
- * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
- * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
- * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
- * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
- * OTHER DEALINGS IN THE SOFTWARE.
  */
 
 #pragma once
@@ -40,18 +24,6 @@
 
 #include "NvCodecUtils.h"
 #include "nvcuvid.h"
-
-#define MAX_FRM_CNT 32
-
-typedef enum {
-  SEI_TYPE_TIME_CODE_H264 = 1,
-  SEI_TYPE_USER_DATA_REGISTERED = 4,
-  SEI_TYPE_USER_DATA_UNREGISTERED = 5,
-  SEI_TYPE_TIME_CODE = 136,
-  SEI_TYPE_MASTERING_DISPLAY_COLOR_VOLUME = 137,
-  SEI_TYPE_CONTENT_LIGHT_LEVEL_INFO = 144,
-  SEI_TYPE_ALTERNATIVE_TRANSFER_CHARACTERISTICS = 147
-} SEI_H264_HEVC_MPEG2_PAYLOAD_TYPE;
 
 /**
  * @brief Exception class for error reporting from the decode API.
@@ -124,8 +96,7 @@ class NvDecoder {
   NvDecoder(CUcontext cuContext, bool bUseDeviceFrame, cudaVideoCodec eCodec,
             bool bLowLatency = false, bool bDeviceFramePitched = false,
             const Rect *pCropRect = NULL, const Dim *pResizeDim = NULL,
-            bool extract_user_SEI_Message = false, int maxWidth = 0,
-            int maxHeight = 0, unsigned int clkRate = 1000,
+            int maxWidth = 0, int maxHeight = 0, unsigned int clkRate = 1000,
             bool force_zero_latency = false);
   ~NvDecoder();
 
@@ -315,14 +286,25 @@ class NvDecoder {
   // stop the timer
   double stopTimer() { return m_stDecode_time.Stop(); }
 
- protected:
-  /**
-  *   @brief  This function gets called when a sequence is ready to be decoded.
-  The function also gets called when there is format change
-  */
-  virtual int HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat);
+  void setDecoderSessionID(int sessionID) { decoderSessionID = sessionID; }
+  int getDecoderSessionID() { return decoderSessionID; }
+
+  // Session overhead refers to decoder initialization and deinitialization time
+  static void addDecoderSessionOverHead(int sessionID, int64_t duration) {
+    sessionOverHead[sessionID] += duration;
+  }
+  static int64_t getDecoderSessionOverHead(int sessionID) {
+    return sessionOverHead[sessionID];
+  }
 
  private:
+  int decoderSessionID;  // Decoder session identifier. Used to gather session
+                         // level stats.
+  static std::map<int, int64_t>
+      sessionOverHead;  // Records session overhead of
+                        // initialization+deinitialization time. Format is
+                        // (thread id, duration)
+
   /**
    *   @brief  Callback function to be registered for getting a callback when
    * decoding of sequence starts
@@ -360,13 +342,10 @@ class NvDecoder {
   }
 
   /**
-   *   @brief  Callback function to be registered for getting a callback when
-   * all the unregistered user SEI Messages are parsed for a frame.
-   */
-  static int CUDAAPI
-  HandleSEIMessagesProc(void *pUserData, CUVIDSEIMESSAGEINFO *pSEIMessageInfo) {
-    return ((NvDecoder *)pUserData)->GetSEIMessage(pSEIMessageInfo);
-  }
+  *   @brief  This function gets called when a sequence is ready to be decoded.
+  The function also gets called when there is format change
+  */
+  int HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat);
 
   /**
    *   @brief  This function gets called when a picture is ready to be decoded.
@@ -385,13 +364,6 @@ class NvDecoder {
    * one operating points
    */
   int GetOperatingPoint(CUVIDOPERATINGPOINTINFO *pOPInfo);
-
-  /**
-   *   @brief  This function gets called when all unregistered user SEI messages
-   * are parsed for a frame
-   */
-  int GetSEIMessage(CUVIDSEIMESSAGEINFO *pSEIMessageInfo);
-
   /**
    *   @brief  This function reconfigure decoder if there is a change in
    * sequence params.
@@ -422,10 +394,7 @@ class NvDecoder {
   // timestamps of decoded frames
   std::vector<int64_t> m_vTimestamp;
   int m_nDecodedFrame = 0, m_nDecodedFrameReturned = 0;
-  int m_nDecodePicCnt = 0, m_nPicNumInDecodeOrder[MAX_FRM_CNT];
-  CUVIDSEIMESSAGEINFO *m_pCurrSEIMessage = NULL;
-  CUVIDSEIMESSAGEINFO m_SEIMessagesDisplayOrder[MAX_FRM_CNT];
-  FILE *m_fpSEI = NULL;
+  int m_nDecodePicCnt = 0, m_nPicNumInDecodeOrder[32];
   bool m_bEndDecodeDone = false;
   std::mutex m_mtxVPFrame;
   int m_nFrameAlloc = 0;
@@ -449,5 +418,4 @@ class NvDecoder {
   // latency for All-Intra and IPPP sequences, the below flag will enable
   // the display callback immediately after the decode callback.
   bool m_bForce_zero_latency = false;
-  bool m_bExtractSEIMessage = false;
 };
