@@ -194,6 +194,7 @@ int NvidiaVideoEncoder::Encode(
       encoded_frame.SetEncodedHeight(encoder_->GetEncodeHeight());
       encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
       encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+      LOG_ERROR("1 {}x{}", encoded_frame.Width(), encoded_frame.Height());
       on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_H264_STREAM
       fwrite((unsigned char *)packet.data(), 1, packet.size(), file_h264_);
