@@ -8,14 +8,14 @@ DataChannelSend::~DataChannelSend() {}
 
 DataChannelSend::DataChannelSend(
     std::shared_ptr<IceAgent> ice_agent,
-    std::shared_ptr<PacedSender> packet_sender,
     std::shared_ptr<IOStatistics> ice_io_statistics)
-    : paced_sender_(packet_sender),
-      ice_agent_(ice_agent),
-      ice_io_statistics_(ice_io_statistics) {}
+    : ice_agent_(ice_agent),
+      ice_io_statistics_(ice_io_statistics),
+      rtp_data_sender_(std::make_unique<RtpDataSender>(ice_io_statistics)) {}
 
-void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type) {
-  rtp_data_sender_ = std::make_unique<RtpDataSender>(ice_io_statistics_);
+void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
+                                 std::shared_ptr<PacedSender> packet_sender) {
+  paced_sender_ = packet_sender;
   rtp_packetizer_ =
       RtpPacketizer::Create(payload_type, rtp_data_sender_->GetSsrc());
 

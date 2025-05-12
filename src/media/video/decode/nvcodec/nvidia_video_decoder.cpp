@@ -141,8 +141,8 @@ int NvidiaVideoDecoder::Decode(
               received_frame->CapturedTimestamp());
           decoded_frame_->SetDecodedTimestamp(clock_->CurrentTime());
 
-          LOG_WARN("2 {}x{}", decoded_frame_->DecodedWidth(),
-                   decoded_frame_->DecodedHeight());
+          // LOG_WARN("2 {}x{}", decoded_frame_->DecodedWidth(),
+          //          decoded_frame_->DecodedHeight());
 
 #ifdef SAVE_DECODED_NV12_STREAM
           fwrite((unsigned char *)decoded_frame_->Buffer(), 1,

@@ -16,12 +16,12 @@ class AudioChannelSend {
  public:
   AudioChannelSend();
   AudioChannelSend(std::shared_ptr<IceAgent> ice_agent,
-                   std::shared_ptr<PacedSender> packet_sender,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
   ~AudioChannelSend();
 
  public:
-  void Initialize(rtp::PAYLOAD_TYPE payload_type);
+  void Initialize(rtp::PAYLOAD_TYPE payload_type,
+                  std::shared_ptr<PacedSender> packet_sender);
   void Destroy();
 
   uint32_t GetSsrc() {

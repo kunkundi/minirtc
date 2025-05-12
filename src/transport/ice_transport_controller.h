@@ -41,17 +41,24 @@ class IceTransportController
     : public std::enable_shared_from_this<IceTransportController>,
       public ThreadBase {
  public:
-  IceTransportController(std::shared_ptr<SystemClock> clock);
+  IceTransportController(std::shared_ptr<SystemClock> clock,
+                         std::shared_ptr<IceAgent> ice_agent,
+                         std::shared_ptr<IOStatistics> ice_io_statistics);
   ~IceTransportController();
 
  public:
   void Create(std::string remote_user_id,
               rtp::PAYLOAD_TYPE video_codec_payload_type,
-              bool hardware_acceleration, std::shared_ptr<IceAgent> ice_agent,
-              std::shared_ptr<IOStatistics> ice_io_statistics,
-              OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
-              OnReceiveData on_receive_data, void *user_data);
+              bool hardware_acceleration, OnReceiveVideo on_receive_video,
+              OnReceiveAudio on_receive_audio, OnReceiveData on_receive_data,
+              void *user_data);
   void Destroy();
+
+  uint32_t AddVideoChannel(const std::string &channel_name);
+
+  uint32_t AddAudioChannel(const std::string &channel_name);
+
+  uint32_t AddDataChannel(const std::string &channel_name);
 
   int SendVideo(const XVideoFrame *video_frame);
   int SendAudio(const char *data, size_t size);
@@ -95,6 +102,12 @@ class IceTransportController
   std::unique_ptr<VideoChannelSend> video_channel_send_ = nullptr;
   std::unique_ptr<AudioChannelSend> audio_channel_send_ = nullptr;
   std::unique_ptr<DataChannelSend> data_channel_send_ = nullptr;
+
+  std::map<std::string, std::unique_ptr<VideoChannelSend>>
+      video_channel_senders_;
+  std::map<std::string, std::unique_ptr<AudioChannelSend>>
+      audio_channel_senders_;
+  std::map<std::string, std::unique_ptr<DataChannelSend>> data_channel_senders_;
 
   std::unique_ptr<VideoChannelReceive> video_channel_receive_ = nullptr;
   std::unique_ptr<AudioChannelReceive> audio_channel_receive_ = nullptr;

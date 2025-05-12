@@ -25,7 +25,6 @@ class VideoChannelSend {
  public:
   VideoChannelSend(std::shared_ptr<SystemClock> clock,
                    std::shared_ptr<IceAgent> ice_agent,
-                   std::shared_ptr<PacedSender> packet_sender,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
   ~VideoChannelSend();
 
@@ -37,7 +36,8 @@ class VideoChannelSend {
       uint32_t payload_size, int64_t captured_timestamp_us);
 
  public:
-  void Initialize(rtp::PAYLOAD_TYPE payload_type);
+  void Initialize(rtp::PAYLOAD_TYPE payload_type,
+                  std::shared_ptr<PacedSender> packet_sender);
   void Destroy();
 
   uint32_t GetSsrc() { return ssrc_; }

@@ -92,11 +92,17 @@ class IceTransport {
 
   int SendAnswer();
 
+  int AddVideoStream(const std::string &stream_id);
+  int AddAudioStream(const std::string &stream_id);
+  int AddDataStream(const std::string &stream_id);
+
   std::vector<rtp::PAYLOAD_TYPE> GetNegotiatedCapabilities();
 
  private:
-  int AppendLocalCapabilitiesToOffer(const std::string &remote_sdp);
-  int AppendLocalCapabilitiesToAnswer(const std::string &remote_sdp);
+  int AppendLocalCapabilitiesToOffer(const std::string &local_sdp);
+  int AppendLocalCapabilitiesToAnswer(const std::string &local_sdp);
+  void ParseSsrcFromSdpAndRemove(std::string &sdp_block,
+                                 std::map<std::string, uint32_t> &ssrc_map);
   std::string GetRemoteCapabilities(const std::string &remote_sdp);
 
   bool NegotiateVideoPayloadType(const std::string &remote_sdp);
@@ -155,6 +161,15 @@ class IceTransport {
   bool enable_turn_ = false;
   bool use_reliable_ice_ = false;
   bool force_turn_ = false;
+
+  std::map<std::string, uint32_t> video_senders_ssrc_;
+  std::map<std::string, uint32_t> audio_senders_ssrc_;
+  std::map<std::string, uint32_t> data_senders_ssrc_;
+
+  std::map<std::string, uint32_t> remote_video_senders_ssrc_;
+  std::map<std::string, uint32_t> remote_audio_senders_ssrc_;
+  std::map<std::string, uint32_t> remote_data_senders_ssrc_;
+
   std::vector<int> support_video_payload_types_;
   std::vector<int> support_audio_payload_types_;
   std::vector<int> support_data_payload_types_;

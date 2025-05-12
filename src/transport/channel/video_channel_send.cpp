@@ -8,13 +8,11 @@
 
 VideoChannelSend::VideoChannelSend(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
-    std::shared_ptr<PacedSender> packet_sender,
     std::shared_ptr<IOStatistics> ice_io_statistics)
     : ice_agent_(ice_agent),
-      paced_sender_(packet_sender),
+      ice_io_statistics_(ice_io_statistics),
       ssrc_(GenerateUniqueSsrc()),
       rtx_ssrc_(GenerateUniqueSsrc()),
-      ice_io_statistics_(ice_io_statistics),
       delta_ntp_internal_ms_(clock->CurrentNtpInMilliseconds() -
                              clock->CurrentTimeMs()),
       rtp_packet_history_(clock),
@@ -37,7 +35,9 @@ VideoChannelSend::~VideoChannelSend() {
 #endif
 }
 
-void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type) {
+void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
+                                  std::shared_ptr<PacedSender> packet_sender) {
+  paced_sender_ = packet_sender;
   rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
   task_queue_history_ = std::make_shared<TaskQueue>("rtp pakcet history");
 }

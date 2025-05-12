@@ -101,6 +101,10 @@ class PeerConnection {
 
   int Leave(const std::string &transmission_id);
 
+  int AddVideoStream(const char *stream_id);
+  int AddAudioStream(const char *stream_id);
+  int AddDataStream(const char *stream_id);
+
   int ReleaseAllIceTransmission();
 
   int Destroy();
@@ -156,6 +160,10 @@ class PeerConnection {
   std::vector<int> video_payload_types_ = {rtp::PAYLOAD_TYPE::H264,
                                            rtp::PAYLOAD_TYPE::AV1};
   std::vector<int> audio_payload_types_ = {rtp::PAYLOAD_TYPE::OPUS};
+
+  std::vector<std::string> video_stream_ids_;
+  std::vector<std::string> audio_stream_ids_;
+  std::vector<std::string> data_stream_ids_;
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;

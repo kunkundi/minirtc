@@ -133,6 +133,12 @@ DLLAPI int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id,
 
 DLLAPI int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id);
 
+DLLAPI int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id);
+
+DLLAPI int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id);
+
+DLLAPI int AddDataStream(PeerPtr* peer_ptr, const char* stream_id);
+
 DLLAPI int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame);
 
 DLLAPI int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size);

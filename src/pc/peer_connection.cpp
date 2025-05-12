@@ -310,12 +310,30 @@ int PeerConnection::Leave(const std::string &transmission_id) {
   return 0;
 }
 
+int PeerConnection::AddVideoStream(const char *stream_id) {
+  video_stream_ids_.push_back(stream_id);
+  return 0;
+}
+
+int PeerConnection::AddAudioStream(const char *stream_id) {
+  audio_stream_ids_.push_back(stream_id);
+  return 0;
+}
+
+int PeerConnection::AddDataStream(const char *stream_id) {
+  data_stream_ids_.push_back(stream_id);
+  return 0;
+}
+
 int PeerConnection::ReleaseAllIceTransmission() {
   for (auto &user_id_it : ice_transport_list_) {
     user_id_it.second->DestroyIceTransmission();
   }
   ice_transport_list_.clear();
   is_ice_transport_ready_.clear();
+  video_stream_ids_.clear();
+  audio_stream_ids_.clear();
+  data_stream_ids_.clear();
   return 0;
 }
 
@@ -627,6 +645,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
             turn_server_port_, cfg_turn_server_username_,
             cfg_turn_server_password_,
             av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264);
+
         ice_transport_list_[remote_user_id]->JoinTransmission();
       }
 
@@ -683,6 +702,16 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
       if (trickle_ice_) {
         sdp_without_cands_ = remote_sdp;
+        for (auto &stream_id : video_stream_ids_) {
+          ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
+        }
+        for (auto &stream_id : audio_stream_ids_) {
+          ice_transport_list_[remote_user_id]->AddAudioStream(stream_id);
+        }
+        for (auto &stream_id : data_stream_ids_) {
+          ice_transport_list_[remote_user_id]->AddDataStream(stream_id);
+        }
+
         ice_transport_list_[remote_user_id]->SendAnswer();
       }
       ice_transport_list_[remote_user_id]->GatherCandidates();
