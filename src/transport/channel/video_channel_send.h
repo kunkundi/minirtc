@@ -23,7 +23,8 @@
 
 class VideoChannelSend {
  public:
-  VideoChannelSend(std::shared_ptr<SystemClock> clock,
+  VideoChannelSend(const std::string& channel_name,
+                   std::shared_ptr<SystemClock> clock,
                    std::shared_ptr<IceAgent> ice_agent,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
   ~VideoChannelSend();
@@ -61,6 +62,7 @@ class VideoChannelSend {
   int32_t ReSendPacket(uint16_t packet_id);
 
  private:
+  std::string channel_name_;
   std::shared_ptr<PacedSender> paced_sender_ = nullptr;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;

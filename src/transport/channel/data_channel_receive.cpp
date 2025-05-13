@@ -5,10 +5,13 @@
 DataChannelReceive::DataChannelReceive() {}
 
 DataChannelReceive::DataChannelReceive(
+    const std::string &channel_name, uint32_t ssrc,
     std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics,
     std::function<void(const char *, size_t)> on_receive_data)
-    : ice_agent_(ice_agent),
+    : channel_name_(channel_name),
+      ssrc_(ssrc),
+      ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
       on_receive_data_(on_receive_data) {}
 

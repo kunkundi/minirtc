@@ -124,7 +124,8 @@ int AddDataStream(PeerPtr *peer_ptr, const char *stream_id) {
   return peer_ptr->peer_connection->AddDataStream(stream_id);
 }
 
-int SendVideoFrame(PeerPtr *peer_ptr, const XVideoFrame *video_frame) {
+int SendVideoFrame(PeerPtr *peer_ptr, const XVideoFrame *video_frame,
+                   const char *stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -138,12 +139,13 @@ int SendVideoFrame(PeerPtr *peer_ptr, const XVideoFrame *video_frame) {
     return -1;
   }
 
-  peer_ptr->peer_connection->SendVideoFrame(video_frame);
+  peer_ptr->peer_connection->SendVideoFrame(video_frame, stream_id);
 
   return 0;
 }
 
-int SendAudioFrame(PeerPtr *peer_ptr, const char *data, size_t size) {
+int SendAudioFrame(PeerPtr *peer_ptr, const char *data, size_t size,
+                   const char *stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -154,12 +156,13 @@ int SendAudioFrame(PeerPtr *peer_ptr, const char *data, size_t size) {
     return -1;
   }
 
-  peer_ptr->peer_connection->SendAudioFrame(data, size);
+  peer_ptr->peer_connection->SendAudioFrame(data, size, stream_id);
 
   return 0;
 }
 
-int SendDataFrame(PeerPtr *peer_ptr, const char *data, size_t size) {
+int SendDataFrame(PeerPtr *peer_ptr, const char *data, size_t size,
+                  const char *stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -170,7 +173,7 @@ int SendDataFrame(PeerPtr *peer_ptr, const char *data, size_t size) {
     return -1;
   }
 
-  peer_ptr->peer_connection->SendDataFrame(data, size);
+  peer_ptr->peer_connection->SendDataFrame(data, size, stream_id);
 
   return 0;
 }

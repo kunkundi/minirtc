@@ -54,23 +54,29 @@ class IceTransportController
               void *user_data);
   void Destroy();
 
-  uint32_t AddVideoChannel(const std::string &channel_name);
+  uint32_t AddVideoSendChannel(const std::string &channel_name);
+  uint32_t AddAudioSendChannel(const std::string &channel_name);
+  uint32_t AddDataSendChannel(const std::string &channel_name);
 
-  uint32_t AddAudioChannel(const std::string &channel_name);
+  uint32_t AddVideoReceiveChannel(const std::string &channel_name,
+                                  uint32_t ssrc);
+  uint32_t AddAudioReceiveChannel(const std::string &channel_name,
+                                  uint32_t ssrc);
+  uint32_t AddDataReceiveChannel(const std::string &channel_name,
+                                 uint32_t ssrc);
 
-  uint32_t AddDataChannel(const std::string &channel_name);
-
-  int SendVideo(const XVideoFrame *video_frame);
-  int SendAudio(const char *data, size_t size);
-  int SendData(const char *data, size_t size);
+  int SendVideo(const XVideoFrame *video_frame,
+                const std::string &channel_name);
+  int SendAudio(const char *data, size_t size, const std::string &channel_name);
+  int SendData(const char *data, size_t size, const std::string &channel_name);
 
   void FullIntraRequest() { b_force_i_frame_ = true; }
 
   void UpdateNetworkAvaliablity(bool network_available);
 
-  int OnReceiveVideoRtpPacket(const char *data, size_t size);
-  int OnReceiveAudioRtpPacket(const char *data, size_t size);
-  int OnReceiveDataRtpPacket(const char *data, size_t size);
+  int OnReceiveVideoRtpPacket(const char *data, size_t size, uint32_t ssrc);
+  int OnReceiveAudioRtpPacket(const char *data, size_t size, uint32_t ssrc);
+  int OnReceiveDataRtpPacket(const char *data, size_t size, uint32_t ssrc);
 
   void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame);
   void OnReceiveCompleteAudio(const char *data, size_t size);
@@ -109,6 +115,17 @@ class IceTransportController
       audio_channel_senders_;
   std::map<std::string, std::unique_ptr<DataChannelSend>> data_channel_senders_;
 
+  std::map<std::string, std::unique_ptr<VideoChannelReceive>>
+      video_channel_receivers_;
+  std::map<std::string, std::unique_ptr<AudioChannelReceive>>
+      audio_channel_receivers_;
+  std::map<std::string, std::unique_ptr<DataChannelReceive>>
+      data_channel_receivers_;
+
+  std::map<uint32_t, std::string> video_channel_receivers_name_;
+  std::map<uint32_t, std::string> audio_channel_receivers_name_;
+  std::map<uint32_t, std::string> data_channel_receivers_name_;
+
   std::unique_ptr<VideoChannelReceive> video_channel_receive_ = nullptr;
   std::unique_ptr<AudioChannelReceive> audio_channel_receive_ = nullptr;
   std::unique_ptr<DataChannelReceive> data_channel_receive_ = nullptr;
@@ -137,6 +154,7 @@ class IceTransportController
   std::shared_ptr<TaskQueue> task_queue_decode_;
   webrtc::DataSize congestion_window_size_;
   bool is_congested_ = false;
+  std::string last_active_stream_;
 
  private:
   std::unique_ptr<VideoEncoder> video_encoder_ = nullptr;

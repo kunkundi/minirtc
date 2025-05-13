@@ -68,21 +68,6 @@ void IceTransportController::Create(std::string remote_user_id,
   CreateVideoCodec(clock_, video_codec_payload_type, hardware_acceleration);
   CreateAudioCodec();
 
-  for (auto& video_channel_sender : video_channel_senders_) {
-    video_channel_sender.second->Initialize(video_codec_payload_type,
-                                            paced_sender_);
-  }
-
-  for (auto& audio_channel_sender : audio_channel_senders_) {
-    audio_channel_sender.second->Initialize(rtp::PAYLOAD_TYPE::OPUS,
-                                            paced_sender_);
-  }
-
-  for (auto& audio_channel_sender : audio_channel_senders_) {
-    audio_channel_sender.second->Initialize(rtp::PAYLOAD_TYPE::OPUS,
-                                            paced_sender_);
-  }
-
   task_queue_cc_ = std::make_shared<TaskQueue>("congest control");
   task_queue_encode_ = std::make_shared<TaskQueue>("encode");
   task_queue_decode_ = std::make_shared<TaskQueue>("decode");
@@ -96,6 +81,7 @@ void IceTransportController::Create(std::string remote_user_id,
   paced_sender_->SetOnSentPacketFunc(
       [this](std::unique_ptr<webrtc::RtpPacketToSend> packet) {
         if (ice_agent_) {
+          last_active_stream_ = packet->get_stream_name();
           webrtc::Timestamp now = webrtc_clock_->CurrentTime();
           ice_agent_->Send((const char*)packet->Buffer().data(),
                            packet->Size());
@@ -105,8 +91,10 @@ void IceTransportController::Create(std::string remote_user_id,
             switch (packet->packet_type().value()) {
               case webrtc::RtpPacketMediaType::kVideo:
               case webrtc::RtpPacketMediaType::kRetransmission:
-                if (video_channel_send_) {
-                  video_channel_send_->OnSentRtpPacket(std::move(packet));
+                if (video_channel_senders_.find(last_active_stream_) !=
+                    video_channel_senders_.end()) {
+                  video_channel_senders_[last_active_stream_]->OnSentRtpPacket(
+                      std::move(packet));
                 }
                 break;
               default:
@@ -119,106 +107,202 @@ void IceTransportController::Create(std::string remote_user_id,
   paced_sender_->SetGeneratePaddingFunc(
       [this](uint32_t size, int64_t captured_timestamp_us)
           -> std::vector<std::unique_ptr<RtpPacket>> {
-        return video_channel_send_->GeneratePadding(size,
-                                                    captured_timestamp_us);
+        return video_channel_senders_.begin()->second->GeneratePadding(
+            size, captured_timestamp_us);
       });
 
   resolution_adapter_ = std::make_unique<ResolutionAdapter>();
 
-  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-  video_channel_receive_ = std::make_unique<VideoChannelReceive>(
-      clock_, ice_agent_, ice_io_statistics_,
-      [this, weak_self](std::unique_ptr<ReceivedFrame> received_frame) {
-        if (auto self = weak_self.lock()) {
-          OnReceiveCompleteFrame(std::move(received_frame));
-        }
-      });
+  for (auto& video_channel_sender : video_channel_senders_) {
+    video_channel_sender.second->Initialize(video_codec_payload_type,
+                                            paced_sender_);
+  }
 
-  audio_channel_receive_ = std::make_unique<AudioChannelReceive>(
-      ice_agent_, ice_io_statistics_,
-      [this, weak_self](const char* data, size_t size) {
-        if (auto self = weak_self.lock()) {
-          OnReceiveCompleteAudio(data, size);
-        }
-      });
+  for (auto& audio_channel_sender : audio_channel_senders_) {
+    audio_channel_sender.second->Initialize(rtp::PAYLOAD_TYPE::OPUS,
+                                            paced_sender_);
+  }
 
-  data_channel_receive_ = std::make_unique<DataChannelReceive>(
-      ice_agent_, ice_io_statistics_,
-      [this, weak_self](const char* data, size_t size) {
-        if (auto self = weak_self.lock()) {
-          OnReceiveCompleteData(data, size);
-        }
-      });
+  for (auto& data_channel_sender : data_channel_senders_) {
+    data_channel_sender.second->Initialize(rtp::PAYLOAD_TYPE::DATA,
+                                           paced_sender_);
+  }
 
-  video_channel_receive_->Initialize(video_codec_payload_type);
-  audio_channel_receive_->Initialize(rtp::PAYLOAD_TYPE::OPUS);
-  data_channel_receive_->Initialize(rtp::PAYLOAD_TYPE::DATA);
+  for (auto& video_channel_receiver : video_channel_receivers_) {
+    video_channel_receiver.second->Initialize(video_codec_payload_type);
+  }
+
+  for (auto& audio_channel_receiver : audio_channel_receivers_) {
+    audio_channel_receiver.second->Initialize(rtp::PAYLOAD_TYPE::OPUS);
+  }
+
+  for (auto& data_channel_receiver : data_channel_receivers_) {
+    data_channel_receiver.second->Initialize(rtp::PAYLOAD_TYPE::DATA);
+  }
 }
 
 void IceTransportController::Destroy() {
   is_running_.store(false);
 
-  if (video_channel_send_) {
-    video_channel_send_->Destroy();
+  for (auto& video_channel_sender : video_channel_senders_) {
+    video_channel_sender.second->Destroy();
   }
 
-  if (audio_channel_send_) {
-    audio_channel_send_->Destroy();
+  for (auto& audio_channel_sender : audio_channel_senders_) {
+    audio_channel_sender.second->Destroy();
   }
 
-  if (data_channel_send_) {
-    data_channel_send_->Destroy();
+  for (auto& data_channel_sender : data_channel_senders_) {
+    data_channel_sender.second->Destroy();
   }
 
-  if (video_channel_receive_) {
-    video_channel_receive_->Destroy();
+  for (auto& video_channel_receiver : video_channel_receivers_) {
+    video_channel_receiver.second->Destroy();
   }
 
-  if (audio_channel_receive_) {
-    audio_channel_receive_->Destroy();
+  for (auto& audio_channel_receiver : audio_channel_receivers_) {
+    audio_channel_receiver.second->Destroy();
   }
 
-  if (data_channel_receive_) {
-    data_channel_receive_->Destroy();
+  for (auto& data_channel_receiver : data_channel_receivers_) {
+    data_channel_receiver.second->Destroy();
   }
+
+  video_channel_senders_.clear();
+  audio_channel_senders_.clear();
+  data_channel_senders_.clear();
+  video_channel_receivers_.clear();
+  audio_channel_receivers_.clear();
+  data_channel_receivers_.clear();
 
   Stop();
 }
 
-uint32_t IceTransportController::AddVideoChannel(
+uint32_t IceTransportController::AddVideoSendChannel(
     const std::string& channel_name) {
+  if (video_channel_senders_.find(channel_name) !=
+      video_channel_senders_.end()) {
+    return video_channel_senders_[channel_name]->GetSsrc();
+  }
+
   video_channel_senders_[channel_name] = std::make_unique<VideoChannelSend>(
-      clock_, ice_agent_, ice_io_statistics_);
+      channel_name, clock_, ice_agent_, ice_io_statistics_);
   if (!video_channel_senders_[channel_name]) {
-    LOG_ERROR("Video Channel [] create failed", channel_name);
+    LOG_ERROR("Video Channel [{}] create failed", channel_name);
     return -1;
   }
+
   return video_channel_senders_[channel_name]->GetSsrc();
 }
 
-uint32_t IceTransportController::AddAudioChannel(
+uint32_t IceTransportController::AddAudioSendChannel(
     const std::string& channel_name) {
-  audio_channel_senders_[channel_name] =
-      std::make_unique<AudioChannelSend>(ice_agent_, ice_io_statistics_);
+  if (audio_channel_senders_.find(channel_name) !=
+      audio_channel_senders_.end()) {
+    return audio_channel_senders_[channel_name]->GetSsrc();
+  }
+
+  audio_channel_senders_[channel_name] = std::make_unique<AudioChannelSend>(
+      channel_name, ice_agent_, ice_io_statistics_);
   if (!audio_channel_senders_[channel_name]) {
-    LOG_ERROR("Audio Channel [] create failed", channel_name);
+    LOG_ERROR("Audio Channel [{}] create failed", channel_name);
     return -1;
   }
+
   return audio_channel_senders_[channel_name]->GetSsrc();
 }
 
-uint32_t IceTransportController::AddDataChannel(
+uint32_t IceTransportController::AddDataSendChannel(
     const std::string& channel_name) {
-  data_channel_senders_[channel_name] =
-      std::make_unique<DataChannelSend>(ice_agent_, ice_io_statistics_);
+  if (data_channel_senders_.find(channel_name) != data_channel_senders_.end()) {
+    return data_channel_senders_[channel_name]->GetSsrc();
+  }
+  data_channel_senders_[channel_name] = std::make_unique<DataChannelSend>(
+      channel_name, ice_agent_, ice_io_statistics_);
   if (!data_channel_senders_[channel_name]) {
-    LOG_ERROR("Data Channel [] create failed", channel_name);
+    LOG_ERROR("Data Channel [{}] create failed", channel_name);
     return -1;
   }
+
   return data_channel_senders_[channel_name]->GetSsrc();
 }
 
-int IceTransportController::SendVideo(const XVideoFrame* video_frame) {
+uint32_t IceTransportController::AddVideoReceiveChannel(
+    const std::string& channel_name, uint32_t ssrc) {
+  if (video_channel_receivers_.find(channel_name) !=
+      video_channel_receivers_.end()) {
+    return -1;
+  }
+
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  video_channel_receivers_[channel_name] =
+      std::make_unique<VideoChannelReceive>(
+          channel_name, ssrc, clock_, ice_agent_, ice_io_statistics_,
+          [this, weak_self](std::unique_ptr<ReceivedFrame> received_frame) {
+            if (auto self = weak_self.lock()) {
+              OnReceiveCompleteFrame(std::move(received_frame));
+            }
+          });
+  if (!video_channel_receivers_[channel_name]) {
+    LOG_ERROR("Data Channel [{}:{}] create failed", channel_name);
+    return -1;
+  }
+
+  video_channel_receivers_name_[ssrc] = channel_name;
+  return 0;
+}
+
+uint32_t IceTransportController::AddAudioReceiveChannel(
+    const std::string& channel_name, uint32_t ssrc) {
+  if (audio_channel_receivers_.find(channel_name) !=
+      audio_channel_receivers_.end()) {
+    return -1;
+  }
+
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  audio_channel_receivers_[channel_name] =
+      std::make_unique<AudioChannelReceive>(
+          channel_name, ssrc, ice_agent_, ice_io_statistics_,
+          [this, weak_self](const char* data, size_t size) {
+            if (auto self = weak_self.lock()) {
+              OnReceiveCompleteAudio(data, size);
+            }
+          });
+  if (!audio_channel_receivers_[channel_name]) {
+    LOG_ERROR("Data Channel [{}:{}] create failed", channel_name);
+    return -1;
+  }
+  audio_channel_receivers_name_[ssrc] = channel_name;
+
+  return 0;
+}
+
+uint32_t IceTransportController::AddDataReceiveChannel(
+    const std::string& channel_name, uint32_t ssrc) {
+  if (data_channel_receivers_.find(channel_name) !=
+      data_channel_receivers_.end()) {
+    return -1;
+  }
+
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  data_channel_receivers_[channel_name] = std::make_unique<DataChannelReceive>(
+      channel_name, ssrc, ice_agent_, ice_io_statistics_,
+      [this, weak_self](const char* data, size_t size) {
+        if (auto self = weak_self.lock()) {
+          OnReceiveCompleteData(data, size);
+        }
+      });
+  if (!data_channel_receivers_[channel_name]) {
+    LOG_ERROR("Data Channel [{}:{}] create failed", channel_name);
+    return -1;
+  }
+  data_channel_receivers_name_[ssrc] = channel_name;
+
+  return 0;
+}
+
+int IceTransportController::SendVideo(const XVideoFrame* video_frame,
+                                      const std::string& channel_name) {
   if (!video_encoder_) {
     LOG_ERROR("Video Encoder not created");
     return -1;
@@ -234,46 +318,51 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame) {
 
   if (task_queue_encode_ && video_encoder_) {
     auto video_frame_copy = std::make_shared<XVideoFrame>(*video_frame);
-    task_queue_encode_->PostTask([this, video_frame_copy]() mutable {
-      XVideoFrame new_frame;
-      new_frame.data = nullptr;
-      new_frame.width = video_frame_copy->width;
-      new_frame.height = video_frame_copy->height;
-      new_frame.size = video_frame_copy->size;
-      new_frame.captured_timestamp = video_frame_copy->captured_timestamp;
-      if (target_width_.has_value() && target_height_.has_value() &&
-          target_width_.value() < video_frame_copy->width &&
-          target_height_.value() < video_frame_copy->height) {
-        resolution_adapter_->ResolutionDowngrade(
-            video_frame_copy.get(), target_width_.value(),
-            target_height_.value(), &new_frame);
-      } else {
-        new_frame.data = new char[video_frame_copy->size];
-        memcpy((void*)new_frame.data, video_frame_copy->data,
-               video_frame_copy->size);
-      }
+    task_queue_encode_->PostTask(
+        [this, video_frame_copy, channel_name]() mutable {
+          XVideoFrame new_frame;
+          new_frame.data = nullptr;
+          new_frame.width = video_frame_copy->width;
+          new_frame.height = video_frame_copy->height;
+          new_frame.size = video_frame_copy->size;
+          new_frame.captured_timestamp = video_frame_copy->captured_timestamp;
+          if (target_width_.has_value() && target_height_.has_value() &&
+              target_width_.value() < video_frame_copy->width &&
+              target_height_.value() < video_frame_copy->height) {
+            resolution_adapter_->ResolutionDowngrade(
+                video_frame_copy.get(), target_width_.value(),
+                target_height_.value(), &new_frame);
+          } else {
+            new_frame.data = new char[video_frame_copy->size];
+            memcpy((void*)new_frame.data, video_frame_copy->data,
+                   video_frame_copy->size);
+          }
 
-      RawFrame raw_frame((const uint8_t*)new_frame.data, new_frame.size,
-                         new_frame.width, new_frame.height);
-      raw_frame.SetCapturedTimestamp(video_frame_copy->captured_timestamp);
-      delete[] new_frame.data;
+          RawFrame raw_frame((const uint8_t*)new_frame.data, new_frame.size,
+                             new_frame.width, new_frame.height);
+          raw_frame.SetCapturedTimestamp(video_frame_copy->captured_timestamp);
+          delete[] new_frame.data;
 
-      int ret = video_encoder_->Encode(
-          std::move(raw_frame),
-          [this](const EncodedFrame& encoded_frame) -> int {
-            for (auto& [stream_id, video_sender] : video_channel_senders_) {
-              video_sender->SendVideo(encoded_frame);
-            }
-
-            return 0;
-          });
-    });
+          int ret = video_encoder_->Encode(
+              std::move(raw_frame),
+              [this, channel_name](const EncodedFrame& encoded_frame) -> int {
+                if (video_channel_senders_.find(channel_name) !=
+                    video_channel_senders_.end()) {
+                  return video_channel_senders_[channel_name]->SendVideo(
+                      encoded_frame);
+                } else {
+                  LOG_ERROR("Video channel [{}] not found", channel_name);
+                  return -1;
+                }
+              });
+        });
   }
 
   return 0;
 }
 
-int IceTransportController::SendAudio(const char* data, size_t size) {
+int IceTransportController::SendAudio(const char* data, size_t size,
+                                      const std::string& channel_name) {
   if (!audio_encoder_) {
     LOG_ERROR("Audio Encoder not created");
     return -1;
@@ -281,20 +370,27 @@ int IceTransportController::SendAudio(const char* data, size_t size) {
 
   int ret = audio_encoder_->Encode(
       (uint8_t*)data, size,
-      [this](char* encoded_audio_buffer, size_t size) -> int {
-        if (audio_channel_send_) {
-          audio_channel_send_->SendAudio(encoded_audio_buffer, size);
+      [this, channel_name](char* encoded_audio_buffer, size_t size) -> int {
+        if (audio_channel_senders_.find(channel_name) !=
+            audio_channel_senders_.end()) {
+          return audio_channel_senders_[channel_name]->SendAudio(
+              encoded_audio_buffer, size);
+        } else {
+          LOG_ERROR("Audio channel [{}] not found", channel_name);
+          return -1;
         }
-
-        return 0;
       });
 
   return ret;
 }
 
-int IceTransportController::SendData(const char* data, size_t size) {
-  if (data_channel_send_) {
-    data_channel_send_->SendData(data, size);
+int IceTransportController::SendData(const char* data, size_t size,
+                                     const std::string& channel_name) {
+  if (data_channel_senders_.find(channel_name) != data_channel_senders_.end()) {
+    return data_channel_senders_[channel_name]->SendData(data, size);
+  } else {
+    LOG_ERROR("Data channel [{}] not found", channel_name);
+    return -1;
   }
 
   return 0;
@@ -315,27 +411,46 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
 }
 
 int IceTransportController::OnReceiveVideoRtpPacket(const char* data,
-                                                    size_t size) {
-  if (video_channel_receive_) {
-    return video_channel_receive_->OnReceiveRtpPacket(data, size);
+                                                    size_t size,
+                                                    uint32_t ssrc) {
+  if (video_channel_receivers_name_.find(ssrc) !=
+      video_channel_receivers_name_.end()) {
+    std::string channel_name = video_channel_receivers_name_[ssrc];
+    if (video_channel_receivers_.find(channel_name) !=
+        video_channel_receivers_.end()) {
+      return video_channel_receivers_[channel_name]->OnReceiveRtpPacket(data,
+                                                                        size);
+    }
   }
-
   return -1;
 }
 
 int IceTransportController::OnReceiveAudioRtpPacket(const char* data,
-                                                    size_t size) {
-  if (audio_channel_receive_) {
-    return audio_channel_receive_->OnReceiveRtpPacket(data, size);
+                                                    size_t size,
+                                                    uint32_t ssrc) {
+  if (audio_channel_receivers_name_.find(ssrc) !=
+      audio_channel_receivers_name_.end()) {
+    std::string channel_name = audio_channel_receivers_name_[ssrc];
+    if (audio_channel_receivers_.find(channel_name) !=
+        audio_channel_receivers_.end()) {
+      return audio_channel_receivers_[channel_name]->OnReceiveRtpPacket(data,
+                                                                        size);
+    }
   }
 
   return -1;
 }
 
 int IceTransportController::OnReceiveDataRtpPacket(const char* data,
-                                                   size_t size) {
-  if (data_channel_receive_) {
-    return data_channel_receive_->OnReceiveRtpPacket(data, size);
+                                                   size_t size, uint32_t ssrc) {
+  if (data_channel_receivers_name_.find(ssrc) !=
+      data_channel_receivers_name_.end()) {
+    std::string channel_name = data_channel_receivers_name_[ssrc];
+    if (data_channel_receivers_.find(channel_name) !=
+        data_channel_receivers_.end()) {
+      return data_channel_receivers_[channel_name]->OnReceiveRtpPacket(data,
+                                                                       size);
+    }
   }
 
   return -1;

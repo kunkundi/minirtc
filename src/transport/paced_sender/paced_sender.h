@@ -37,7 +37,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   int Send() { return 0; }
 
   int EnqueueRtpPackets(std::vector<std::unique_ptr<RtpPacket>>& rtp_packets,
-                        int64_t captured_timestamp_us);
+                        int64_t captured_timestamp_us,
+                        const std::string& stream_name);
 
   int EnqueueRtpPackets(
       std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>& rtp_packets);

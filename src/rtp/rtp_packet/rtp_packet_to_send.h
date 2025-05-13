@@ -156,6 +156,11 @@ class RtpPacketToSend : public ::RtpPacket {
   bool send_as_ect1() const { return send_as_ect1_; }
   void set_send_as_ect1() { send_as_ect1_ = true; }
 
+  void set_stream_name(const std::string& stream_name) {
+    stream_name_ = stream_name;
+  }
+  std::string get_stream_name() { return stream_name_; }
+
  private:
   webrtc::Timestamp capture_time_ = webrtc::Timestamp::Zero();
   std::optional<webrtc::RtpPacketMediaType> packet_type_;
@@ -173,6 +178,7 @@ class RtpPacketToSend : public ::RtpPacket {
   std::optional<TimeDelta> time_in_send_queue_;
 
  private:
+  std::string stream_name_;
   std::vector<uint8_t> rtp_packet_frame_;
 };
 

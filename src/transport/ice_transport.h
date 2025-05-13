@@ -75,11 +75,14 @@ class IceTransport {
 
   int SetTransmissionId(const std::string &transmission_id);
 
-  int SendVideoFrame(const XVideoFrame *video_frame);
+  int SendVideoFrame(const XVideoFrame *video_frame,
+                     const std::string &stream_name);
 
-  int SendAudioFrame(const char *data, size_t size);
+  int SendAudioFrame(const char *data, size_t size,
+                     const std::string &stream_name);
 
-  int SendDataFrame(const char *data, size_t size);
+  int SendDataFrame(const char *data, size_t size,
+                    const std::string &stream_name);
 
  public:
   int GatherCandidates();
@@ -102,7 +105,8 @@ class IceTransport {
   int AppendLocalCapabilitiesToOffer(const std::string &local_sdp);
   int AppendLocalCapabilitiesToAnswer(const std::string &local_sdp);
   void ParseSsrcFromSdpAndRemove(std::string &sdp_block,
-                                 std::map<std::string, uint32_t> &ssrc_map);
+                                 std::map<std::string, uint32_t> &ssrc_map,
+                                 const std::string &media_type);
   std::string GetRemoteCapabilities(const std::string &remote_sdp);
 
   bool NegotiateVideoPayloadType(const std::string &remote_sdp);
@@ -162,13 +166,21 @@ class IceTransport {
   bool use_reliable_ice_ = false;
   bool force_turn_ = false;
 
+  std::vector<std::string> video_stream_ids_;
+  std::vector<std::string> audio_stream_ids_;
+  std::vector<std::string> data_stream_ids_;
+
+  std::vector<std::string> remote_video_stream_ids_;
+  std::vector<std::string> remote_audio_stream_ids_;
+  std::vector<std::string> remote_data_stream_ids_;
+
   std::map<std::string, uint32_t> video_senders_ssrc_;
   std::map<std::string, uint32_t> audio_senders_ssrc_;
   std::map<std::string, uint32_t> data_senders_ssrc_;
 
-  std::map<std::string, uint32_t> remote_video_senders_ssrc_;
-  std::map<std::string, uint32_t> remote_audio_senders_ssrc_;
-  std::map<std::string, uint32_t> remote_data_senders_ssrc_;
+  std::map<std::string, uint32_t> video_receivers_ssrc_;
+  std::map<std::string, uint32_t> audio_receivers_ssrc_;
+  std::map<std::string, uint32_t> data_receivers_ssrc_;
 
   std::vector<int> support_video_payload_types_;
   std::vector<int> support_audio_payload_types_;

@@ -7,9 +7,11 @@
 // #define SAVE_RTP_SENT_STREAM
 
 VideoChannelSend::VideoChannelSend(
-    std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
+    const std::string& channel_name, std::shared_ptr<SystemClock> clock,
+    std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics)
-    : ice_agent_(ice_agent),
+    : channel_name_(channel_name),
+      ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
       ssrc_(GenerateUniqueSsrc()),
       rtx_ssrc_(GenerateUniqueSsrc()),
@@ -107,7 +109,7 @@ int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
     fwrite((unsigned char*)encoded_frame.Buffer(), 1, encoded_frame.Size(),
            file_rtp_sent_);
 #endif
-    paced_sender_->EnqueueRtpPackets(rtp_packets, rtp_timestamp);
+    paced_sender_->EnqueueRtpPackets(rtp_packets, rtp_timestamp, channel_name_);
   }
 
   return 0;

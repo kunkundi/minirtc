@@ -7,9 +7,10 @@ AudioChannelSend::AudioChannelSend() {}
 AudioChannelSend::~AudioChannelSend() {}
 
 AudioChannelSend::AudioChannelSend(
-    std::shared_ptr<IceAgent> ice_agent,
+    const std::string &channel_name, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics)
-    : ice_agent_(ice_agent),
+    : channel_name_(channel_name),
+      ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
       rtp_audio_sender_(std::make_unique<RtpAudioSender>(ice_io_statistics)) {}
 

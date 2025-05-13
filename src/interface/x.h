@@ -139,11 +139,14 @@ DLLAPI int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id);
 
 DLLAPI int AddDataStream(PeerPtr* peer_ptr, const char* stream_id);
 
-DLLAPI int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame);
+DLLAPI int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
+                          const char* stream_id);
 
-DLLAPI int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size);
+DLLAPI int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                          const char* stream_id);
 
-DLLAPI int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size);
+DLLAPI int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                         const char* stream_id);
 
 DLLAPI int64_t GetSystemTimeMicros(PeerPtr* peer_ptr);
 

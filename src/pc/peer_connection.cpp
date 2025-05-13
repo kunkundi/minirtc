@@ -371,7 +371,8 @@ SignalStatus PeerConnection::GetSignalStatus() {
   return signal_status_;
 }
 
-int PeerConnection::SendVideoFrame(const XVideoFrame *video_frame) {
+int PeerConnection::SendVideoFrame(const XVideoFrame *video_frame,
+                                   const char *stream_id) {
   if (ice_transport_list_.empty()) {
     return -1;
   }
@@ -381,13 +382,14 @@ int PeerConnection::SendVideoFrame(const XVideoFrame *video_frame) {
       continue;
     }
 
-    ice_trans.second->SendVideoFrame(video_frame);
+    ice_trans.second->SendVideoFrame(video_frame, stream_id);
   }
 
   return 0;
 }
 
-int PeerConnection::SendAudioFrame(const char *data, size_t size) {
+int PeerConnection::SendAudioFrame(const char *data, size_t size,
+                                   const char *stream_id) {
   if (ice_transport_list_.empty()) {
     return -1;
   }
@@ -396,18 +398,19 @@ int PeerConnection::SendAudioFrame(const char *data, size_t size) {
     if (!is_ice_transport_ready_[ice_trans.first]) {
       continue;
     }
-    ice_trans.second->SendAudioFrame(data, size);
+    ice_trans.second->SendAudioFrame(data, size, stream_id);
   }
 
   return 0;
 }
 
-int PeerConnection::SendDataFrame(const char *data, size_t size) {
+int PeerConnection::SendDataFrame(const char *data, size_t size,
+                                  const char *stream_id) {
   for (auto &ice_trans : ice_transport_list_) {
     if (!is_ice_transport_ready_[ice_trans.first]) {
       continue;
     }
-    ice_trans.second->SendDataFrame(data, size);
+    ice_trans.second->SendDataFrame(data, size, stream_id);
   }
   return 0;
 }
@@ -646,6 +649,16 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
             cfg_turn_server_password_,
             av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264);
 
+        for (auto &stream_id : video_stream_ids_) {
+          ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
+        }
+        for (auto &stream_id : audio_stream_ids_) {
+          ice_transport_list_[remote_user_id]->AddAudioStream(stream_id);
+        }
+        for (auto &stream_id : data_stream_ids_) {
+          ice_transport_list_[remote_user_id]->AddDataStream(stream_id);
+        }
+
         ice_transport_list_[remote_user_id]->JoinTransmission();
       }
 
@@ -693,6 +706,16 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
         ice_transport_list_[remote_user_id]->SetTransmissionId(transmission_id);
       }
 
+      for (auto &stream_id : video_stream_ids_) {
+        ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
+      }
+      for (auto &stream_id : audio_stream_ids_) {
+        ice_transport_list_[remote_user_id]->AddAudioStream(stream_id);
+      }
+      for (auto &stream_id : data_stream_ids_) {
+        ice_transport_list_[remote_user_id]->AddDataStream(stream_id);
+      }
+
       std::string remote_sdp = msg.remote_sdp;
       int ret = ice_transport_list_[remote_user_id]->SetRemoteSdp(remote_sdp);
       if (0 != ret) {
@@ -702,16 +725,6 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
       if (trickle_ice_) {
         sdp_without_cands_ = remote_sdp;
-        for (auto &stream_id : video_stream_ids_) {
-          ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
-        }
-        for (auto &stream_id : audio_stream_ids_) {
-          ice_transport_list_[remote_user_id]->AddAudioStream(stream_id);
-        }
-        for (auto &stream_id : data_stream_ids_) {
-          ice_transport_list_[remote_user_id]->AddDataStream(stream_id);
-        }
-
         ice_transport_list_[remote_user_id]->SendAnswer();
       }
       ice_transport_list_[remote_user_id]->GatherCandidates();

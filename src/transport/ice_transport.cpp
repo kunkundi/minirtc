@@ -189,18 +189,28 @@ void IceTransport::OnNewSelectedPair(NiceAgent *agent, guint stream_id,
                                 remote_user_id_.size(), user_data_);
 }
 
+uint32_t GetRtpSsrc(const char *buffer, size_t size) {
+  uint32_t ssrc = 0;
+  if (size >= 12) {
+    memcpy(&ssrc, buffer + 8, 4);
+    ssrc = ntohl(ssrc);
+  }
+  return ssrc;
+}
+
 void IceTransport::OnReceiveBuffer(NiceAgent *agent, guint stream_id,
                                    guint component_id, guint size,
                                    gchar *buffer, gpointer user_ptr) {
   if (!is_closed_) {
     if (CheckIsRtpPacket(buffer, size)) {
+      uint32_t ssrc = GetRtpSsrc(buffer, size);
       if (CheckIsVideoPacket(buffer, size) && ice_transport_controller_) {
-        ice_transport_controller_->OnReceiveVideoRtpPacket(buffer, size);
+        ice_transport_controller_->OnReceiveVideoRtpPacket(buffer, size, ssrc);
       } else if (CheckIsAudioPacket(buffer, size) &&
                  ice_transport_controller_) {
-        ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size);
+        ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size, ssrc);
       } else if (CheckIsDataPacket(buffer, size) && ice_transport_controller_) {
-        ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size);
+        ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size, ssrc);
       }
     } else if (CheckIsRtcpPacket(buffer, size)) {
       // LOG_ERROR("Rtcp packet [{}]", (uint8_t)(buffer[1]));
@@ -490,7 +500,7 @@ int IceTransport::SendOffer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  // LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
+  LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send offer", user_id_, remote_user_id_);
@@ -506,7 +516,7 @@ int IceTransport::SendAnswer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  // LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
+  LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send answer", user_id_, remote_user_id_);
@@ -516,20 +526,17 @@ int IceTransport::SendAnswer() {
 }
 
 int IceTransport::AddVideoStream(const std::string &stream_id) {
-  video_senders_ssrc_[stream_id] =
-      ice_transport_controller_->AddVideoChannel(stream_id);
+  video_stream_ids_.push_back(stream_id);
   return 0;
 }
 
 int IceTransport::AddAudioStream(const std::string &stream_id) {
-  audio_senders_ssrc_[stream_id] =
-      ice_transport_controller_->AddAudioChannel(stream_id);
+  audio_stream_ids_.push_back(stream_id);
   return 0;
 }
 
 int IceTransport::AddDataStream(const std::string &stream_id) {
-  data_senders_ssrc_[stream_id] =
-      ice_transport_controller_->AddDataChannel(stream_id);
+  data_stream_ids_.push_back(stream_id);
   return 0;
 }
 
@@ -588,6 +595,50 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
     }
   }
 
+  std::string video_ssrc_lines;
+  std::string audio_ssrc_lines;
+  std::string data_ssrc_lines;
+
+  for (auto &stream_id : video_stream_ids_) {
+    uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
+    video_ssrc_lines +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
+
+  for (auto &stream_id : audio_stream_ids_) {
+    uint32_t ssrc = ice_transport_controller_->AddAudioSendChannel(stream_id);
+    audio_ssrc_lines +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
+
+  for (auto &stream_id : data_stream_ids_) {
+    uint32_t ssrc = ice_transport_controller_->AddDataSendChannel(stream_id);
+    data_ssrc_lines +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
+
+  auto insert_ssrc = [&](const std::string &media_tag,
+                         const std::string &ssrc_lines) {
+    size_t m_line_start = local_sdp_.find("m=" + media_tag);
+    if (m_line_start == std::string::npos) return;
+
+    size_t m_line_end = local_sdp_.find("\n", m_line_start);
+    if (m_line_end == std::string::npos) m_line_end = local_sdp_.length();
+
+    size_t next_m_line = local_sdp_.find("\nm=", m_line_end);
+    if (next_m_line == std::string::npos) {
+      next_m_line = local_sdp_.length();
+    } else {
+      next_m_line += 1;  // skip '\n'
+    }
+
+    local_sdp_.insert(next_m_line, ssrc_lines);
+  };
+
+  insert_ssrc("video", video_ssrc_lines);
+  insert_ssrc("audio", audio_ssrc_lines);
+  insert_ssrc("data", data_ssrc_lines);
+
   return 0;
 }
 
@@ -605,18 +656,30 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
   std::string negotiated_data_pt =
       protocol + std::to_string(negotiated_data_pt_);
 
-  auto insert_ssrc_lines =
-      [](const std::map<std::string, uint32_t> &senders_map) -> std::string {
-    std::string lines;
-    for (const auto &[sender_id, ssrc] : senders_map) {
-      lines += "a=ssrc:" + std::to_string(ssrc) + " name:" + sender_id + "\n";
-    }
-    return lines;
-  };
+  std::string video_ssrc_lines;
+  std::string audio_ssrc_lines;
+  std::string data_ssrc_lines;
 
-  std::string video_ssrc_lines = insert_ssrc_lines(video_senders_ssrc_);
-  std::string audio_ssrc_lines = insert_ssrc_lines(audio_senders_ssrc_);
-  std::string data_ssrc_lines = insert_ssrc_lines(data_senders_ssrc_);
+  for (auto &stream_id : video_stream_ids_) {
+    uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
+    video_senders_ssrc_[stream_id] = ssrc;
+    video_ssrc_lines +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
+
+  for (auto &stream_id : audio_stream_ids_) {
+    uint32_t ssrc = ice_transport_controller_->AddAudioSendChannel(stream_id);
+    audio_senders_ssrc_[stream_id] = ssrc;
+    audio_ssrc_lines +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
+
+  for (auto &stream_id : data_stream_ids_) {
+    uint32_t ssrc = ice_transport_controller_->AddDataSendChannel(stream_id);
+    data_senders_ssrc_[stream_id] = ssrc;
+    data_ssrc_lines +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
 
   auto replace_capability_and_insert_ssrc = [&](const std::string &media_tag,
                                                 const std::string &capability,
@@ -655,14 +718,14 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
 }
 
 void IceTransport::ParseSsrcFromSdpAndRemove(
-    std::string &sdp_block, std::map<std::string, uint32_t> &ssrc_map) {
+    std::string &sdp_block, std::map<std::string, uint32_t> &ssrc_map,
+    const std::string &media_type) {
   std::istringstream sdp_stream(sdp_block);
   std::string line;
   std::ostringstream new_sdp_block;
 
   while (std::getline(sdp_stream, line)) {
     if (line.find("a=ssrc:") == 0) {
-      // 解析 a=ssrc 行
       size_t ssrc_pos = strlen("a=ssrc:");
       size_t space_pos = line.find(" ", ssrc_pos);
       if (space_pos == std::string::npos) continue;
@@ -674,14 +737,19 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
       if (attribute.find("name:") == 0) {
         std::string sender_id = attribute.substr(strlen("name:"));
         ssrc_map[sender_id] = ssrc;
+        if (media_type == "video") {
+          remote_video_stream_ids_.push_back(sender_id);
+        } else if (media_type == "audio") {
+          remote_audio_stream_ids_.push_back(sender_id);
+        } else if (media_type == "data") {
+          remote_data_stream_ids_.push_back(sender_id);
+        }
       }
     } else {
-      // 如果不是 a=ssrc: 行，保留该行
       new_sdp_block << line << "\n";
     }
   }
 
-  // 将新的 sdp_block 更新回原始 block
   sdp_block = new_sdp_block.str();
 }
 
@@ -696,10 +764,69 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
   std::size_t data_end = remote_sdp.find("a=candidate");
   std::size_t candidate_start = data_end;
 
+  std::map<std::string, uint32_t> video_ssrc_map;
+  std::map<std::string, uint32_t> audio_ssrc_map;
+  std::map<std::string, uint32_t> data_ssrc_map;
+
+  if (video_start != std::string::npos && video_end != std::string::npos) {
+    video_sdp = remote_sdp.substr(video_start, video_end - video_start);
+    ParseSsrcFromSdpAndRemove(video_sdp, video_ssrc_map, "video");
+    video_receivers_ssrc_ = video_ssrc_map;
+    media_stream_sdp += video_sdp;
+  }
+
+  if (audio_start != std::string::npos && audio_end != std::string::npos) {
+    audio_sdp = remote_sdp.substr(audio_start, audio_end - audio_start);
+    ParseSsrcFromSdpAndRemove(audio_sdp, audio_ssrc_map, "audio");
+    audio_receivers_ssrc_ = audio_ssrc_map;
+    // media_stream_sdp += audio_sdp;
+  }
+
+  if (data_start != std::string::npos && data_end != std::string::npos) {
+    data_sdp = remote_sdp.substr(data_start, data_end - data_start);
+    ParseSsrcFromSdpAndRemove(data_sdp, data_ssrc_map, "data");
+    data_receivers_ssrc_ = data_ssrc_map;
+    // media_stream_sdp += data_sdp;
+  }
+
+  if (candidate_start != std::string::npos) {
+    media_stream_sdp += remote_sdp.substr(candidate_start);
+  }
+
+  for (const auto &entry : video_receivers_ssrc_) {
+    ice_transport_controller_->AddVideoReceiveChannel(entry.first,
+                                                      entry.second);
+  }
+  for (const auto &entry : audio_receivers_ssrc_) {
+    ice_transport_controller_->AddAudioReceiveChannel(entry.first,
+                                                      entry.second);
+  }
+  for (const auto &entry : data_receivers_ssrc_) {
+    ice_transport_controller_->AddDataReceiveChannel(entry.first, entry.second);
+  }
+
   if (!remote_capabilities_got_) {
     if (!NegotiateVideoPayloadType(remote_sdp)) return std::string();
     if (!NegotiateAudioPayloadType(remote_sdp)) return std::string();
     if (!NegotiateDataPayloadType(remote_sdp)) return std::string();
+
+    if (!offer_peer_) {
+      for (auto &stream_id : video_stream_ids_) {
+        uint32_t ssrc =
+            ice_transport_controller_->AddVideoSendChannel(stream_id);
+        video_senders_ssrc_[stream_id] = ssrc;
+      }
+      for (auto &stream_id : audio_stream_ids_) {
+        uint32_t ssrc =
+            ice_transport_controller_->AddAudioSendChannel(stream_id);
+        audio_senders_ssrc_[stream_id] = ssrc;
+      }
+      for (auto &stream_id : data_stream_ids_) {
+        uint32_t ssrc =
+            ice_transport_controller_->AddDataSendChannel(stream_id);
+        data_senders_ssrc_[stream_id] = ssrc;
+      }
+    }
 
     if (ice_transport_controller_) {
       ice_transport_controller_->Create(
@@ -709,52 +836,6 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
     }
 
     remote_capabilities_got_ = true;
-  }
-
-  std::map<std::string, uint32_t> video_ssrc_map;
-  std::map<std::string, uint32_t> audio_ssrc_map;
-  std::map<std::string, uint32_t> data_ssrc_map;
-
-  if (video_start != std::string::npos && video_end != std::string::npos) {
-    video_sdp = remote_sdp.substr(video_start, video_end - video_start);
-    ParseSsrcFromSdpAndRemove(video_sdp, video_ssrc_map);
-    video_senders_ssrc_ = video_ssrc_map;
-    media_stream_sdp += video_sdp;
-  }
-
-  if (audio_start != std::string::npos && audio_end != std::string::npos) {
-    audio_sdp = remote_sdp.substr(audio_start, audio_end - audio_start);
-    ParseSsrcFromSdpAndRemove(audio_sdp, audio_ssrc_map);
-    audio_senders_ssrc_ = audio_ssrc_map;
-    // media_stream_sdp += audio_sdp;
-  }
-
-  if (data_start != std::string::npos && data_end != std::string::npos) {
-    data_sdp = remote_sdp.substr(data_start, data_end - data_start);
-    ParseSsrcFromSdpAndRemove(data_sdp, data_ssrc_map);
-    data_senders_ssrc_ = data_ssrc_map;
-    // media_stream_sdp += data_sdp;
-  }
-
-  if (candidate_start != std::string::npos) {
-    media_stream_sdp += remote_sdp.substr(candidate_start);
-  }
-
-  // Debug 输出 SSRC 映射
-  for (const auto &entry : video_senders_ssrc_) {
-    LOG_ERROR("!!!!!!!!!!!!!!!!!!!! Video sender: {} → SSRC {}", entry.first,
-              entry.second);
-    ice_transport_controller_->AddVideoChannel(entry.first);
-  }
-  for (const auto &entry : audio_senders_ssrc_) {
-    LOG_ERROR("!!!!!!!!!!!!!!!!!!!! Audio sender: {} → SSRC {}", entry.first,
-              entry.second);
-    ice_transport_controller_->AddAudioChannel(entry.first);
-  }
-  for (const auto &entry : data_senders_ssrc_) {
-    LOG_ERROR("!!!!!!!!!!!!!!!!!!!! Data sender: {} → SSRC {}", entry.first,
-              entry.second);
-    ice_transport_controller_->AddDataChannel(entry.first);
   }
 
   return media_stream_sdp;
@@ -956,7 +1037,8 @@ std::vector<rtp::PAYLOAD_TYPE> IceTransport::GetNegotiatedCapabilities() {
   return {negotiated_video_pt_, negotiated_audio_pt_, negotiated_data_pt_};
 }
 
-int IceTransport::SendVideoFrame(const XVideoFrame *video_frame) {
+int IceTransport::SendVideoFrame(const XVideoFrame *video_frame,
+                                 const std::string &stream_name) {
   if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
       state_ != NICE_COMPONENT_STATE_READY) {
     LOG_ERROR("Ice is not connected, state = [{}]",
@@ -965,13 +1047,14 @@ int IceTransport::SendVideoFrame(const XVideoFrame *video_frame) {
   }
 
   if (ice_transport_controller_) {
-    return ice_transport_controller_->SendVideo(video_frame);
+    return ice_transport_controller_->SendVideo(video_frame, stream_name);
   }
 
   return -1;
 }
 
-int IceTransport::SendAudioFrame(const char *data, size_t size) {
+int IceTransport::SendAudioFrame(const char *data, size_t size,
+                                 const std::string &stream_name) {
   if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
       state_ != NICE_COMPONENT_STATE_READY) {
     LOG_ERROR("Ice is not connected, state = [{}]",
@@ -980,13 +1063,14 @@ int IceTransport::SendAudioFrame(const char *data, size_t size) {
   }
 
   if (ice_transport_controller_) {
-    return ice_transport_controller_->SendAudio(data, size);
+    return ice_transport_controller_->SendAudio(data, size, stream_name);
   }
 
   return -1;
 }
 
-int IceTransport::SendDataFrame(const char *data, size_t size) {
+int IceTransport::SendDataFrame(const char *data, size_t size,
+                                const std::string &stream_name) {
   if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
       state_ != NICE_COMPONENT_STATE_READY) {
     LOG_ERROR("Ice is not connected, state = [{}]",
@@ -995,7 +1079,7 @@ int IceTransport::SendDataFrame(const char *data, size_t size) {
   }
 
   if (ice_transport_controller_) {
-    return ice_transport_controller_->SendData(data, size);
+    return ice_transport_controller_->SendData(data, size, stream_name);
   }
 
   return -1;

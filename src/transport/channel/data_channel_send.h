@@ -15,7 +15,8 @@
 class DataChannelSend {
  public:
   DataChannelSend();
-  DataChannelSend(std::shared_ptr<IceAgent> ice_agent,
+  DataChannelSend(const std::string& channel_name,
+                  std::shared_ptr<IceAgent> ice_agent,
                   std::shared_ptr<IOStatistics> ice_io_statistics);
   ~DataChannelSend();
 
@@ -36,6 +37,7 @@ class DataChannelSend {
   void OnReceiverReport(const ReceiverReport& receiver_report) {}
 
  private:
+  std::string channel_name_;
   std::shared_ptr<PacedSender> paced_sender_ = nullptr;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
