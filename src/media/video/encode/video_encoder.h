@@ -10,11 +10,12 @@
 
 #include "clock/system_clock.h"
 #include "encoded_frame.h"
+#include "media_codec.h"
 #include "raw_frame.h"
 #include "x.h"
 
 #define I_FRAME_INTERVAL 3000
-class VideoEncoder {
+class VideoEncoder : public MediaCodec {
  public:
   virtual int Init() = 0;
 

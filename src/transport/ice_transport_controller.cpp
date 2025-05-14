@@ -65,8 +65,7 @@ void IceTransportController::Create(std::string remote_user_id,
   on_receive_data_ = on_receive_data;
   user_data_ = user_data;
 
-  CreateVideoCodec(clock_, video_codec_payload_type, hardware_acceleration);
-  CreateAudioCodec();
+  CreateCodecs(clock_, video_codec_payload_type, hardware_acceleration);
 
   task_queue_cc_ = std::make_shared<TaskQueue>("congest control");
   task_queue_encode_ = std::make_shared<TaskQueue>("encode");
@@ -91,10 +90,10 @@ void IceTransportController::Create(std::string remote_user_id,
             switch (packet->packet_type().value()) {
               case webrtc::RtpPacketMediaType::kVideo:
               case webrtc::RtpPacketMediaType::kRetransmission:
-                if (video_channel_senders_.find(last_active_stream_) !=
-                    video_channel_senders_.end()) {
-                  video_channel_senders_[last_active_stream_]->OnSentRtpPacket(
-                      std::move(packet));
+                if (stream_senders_.find(last_active_stream_) !=
+                    stream_senders_.end()) {
+                  stream_senders_[last_active_stream_]
+                      ->transceiver->OnSentRtpPacket(std::move(packet));
                 }
                 break;
               default:
@@ -107,231 +106,336 @@ void IceTransportController::Create(std::string remote_user_id,
   paced_sender_->SetGeneratePaddingFunc(
       [this](uint32_t size, int64_t captured_timestamp_us)
           -> std::vector<std::unique_ptr<RtpPacket>> {
-        return video_channel_senders_.begin()->second->GeneratePadding(
-            size, captured_timestamp_us);
+        if (stream_senders_.find(last_active_stream_) !=
+            stream_senders_.end()) {
+          return stream_senders_[last_active_stream_]
+              ->transceiver->GeneratePadding(size, captured_timestamp_us);
+        } else {
+          return {};
+        }
       });
 
   resolution_adapter_ = std::make_unique<ResolutionAdapter>();
 
-  for (auto& video_channel_sender : video_channel_senders_) {
-    video_channel_sender.second->Initialize(video_codec_payload_type,
-                                            paced_sender_);
+  for (auto& [_, context] : stream_senders_) {
+    if (context) {
+      if (context->type == StreamType::kVideo) {
+        context->transceiver->Initialize(video_codec_payload_type,
+                                         paced_sender_);
+      } else if (context->type == StreamType::kAudio) {
+        context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS,
+                                         paced_sender_);
+      } else if (context->type == StreamType::kData) {
+        context->transceiver->Initialize(rtp::PAYLOAD_TYPE::DATA,
+                                         paced_sender_);
+      }
+    }
   }
 
-  for (auto& audio_channel_sender : audio_channel_senders_) {
-    audio_channel_sender.second->Initialize(rtp::PAYLOAD_TYPE::OPUS,
-                                            paced_sender_);
-  }
-
-  for (auto& data_channel_sender : data_channel_senders_) {
-    data_channel_sender.second->Initialize(rtp::PAYLOAD_TYPE::DATA,
-                                           paced_sender_);
-  }
-
-  for (auto& video_channel_receiver : video_channel_receivers_) {
-    video_channel_receiver.second->Initialize(video_codec_payload_type);
-  }
-
-  for (auto& audio_channel_receiver : audio_channel_receivers_) {
-    audio_channel_receiver.second->Initialize(rtp::PAYLOAD_TYPE::OPUS);
-  }
-
-  for (auto& data_channel_receiver : data_channel_receivers_) {
-    data_channel_receiver.second->Initialize(rtp::PAYLOAD_TYPE::DATA);
+  for (auto& [_, context] : stream_receivers_) {
+    if (context) {
+      if (context->type == StreamType::kVideo) {
+        context->transceiver->Initialize(video_codec_payload_type);
+      } else if (context->type == StreamType::kAudio) {
+        context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS);
+      } else if (context->type == StreamType::kData) {
+        context->transceiver->Initialize(rtp::PAYLOAD_TYPE::DATA);
+      }
+    }
   }
 }
 
 void IceTransportController::Destroy() {
   is_running_.store(false);
 
-  for (auto& video_channel_sender : video_channel_senders_) {
-    video_channel_sender.second->Destroy();
+  for (auto& [_, context] : stream_senders_) {
+    if (context) {
+      if (context->type == StreamType::kVideo) {
+        context->transceiver->Destroy();
+      } else if (context->type == StreamType::kAudio) {
+        context->transceiver->Destroy();
+      } else if (context->type == StreamType::kData) {
+        context->transceiver->Destroy();
+      }
+    }
   }
 
-  for (auto& audio_channel_sender : audio_channel_senders_) {
-    audio_channel_sender.second->Destroy();
+  for (auto& [_, context] : stream_receivers_) {
+    if (context) {
+      if (context->type == StreamType::kVideo) {
+        context->transceiver->Destroy();
+      } else if (context->type == StreamType::kAudio) {
+        context->transceiver->Destroy();
+      } else if (context->type == StreamType::kData) {
+        context->transceiver->Destroy();
+      }
+    }
   }
 
-  for (auto& data_channel_sender : data_channel_senders_) {
-    data_channel_sender.second->Destroy();
-  }
-
-  for (auto& video_channel_receiver : video_channel_receivers_) {
-    video_channel_receiver.second->Destroy();
-  }
-
-  for (auto& audio_channel_receiver : audio_channel_receivers_) {
-    audio_channel_receiver.second->Destroy();
-  }
-
-  for (auto& data_channel_receiver : data_channel_receivers_) {
-    data_channel_receiver.second->Destroy();
-  }
-
-  video_channel_senders_.clear();
-  audio_channel_senders_.clear();
-  data_channel_senders_.clear();
-  video_channel_receivers_.clear();
-  audio_channel_receivers_.clear();
-  data_channel_receivers_.clear();
+  stream_senders_.clear();
+  stream_receivers_.clear();
 
   Stop();
 }
 
 uint32_t IceTransportController::AddVideoSendChannel(
     const std::string& channel_name) {
-  if (video_channel_senders_.find(channel_name) !=
-      video_channel_senders_.end()) {
-    return video_channel_senders_[channel_name]->GetSsrc();
+  auto it = stream_senders_.find(channel_name);
+  if (it != stream_senders_.end() && it->second) {
+    uint32_t ssrc =
+        it->second->transceiver ? it->second->transceiver->GetSsrc() : 0;
+    LOG_ERROR("Stream sender [{}] already exist with ssrc [{}]", channel_name,
+              ssrc);
+    return ssrc;
   }
 
-  video_channel_senders_[channel_name] = std::make_unique<VideoChannelSend>(
-      channel_name, clock_, ice_agent_, ice_io_statistics_);
-  if (!video_channel_senders_[channel_name]) {
-    LOG_ERROR("Video Channel [{}] create failed", channel_name);
-    return -1;
+  auto& context = stream_senders_[channel_name];
+  if (!context) {
+    context = std::make_shared<StreamContext>();
+    context->name = channel_name;
+    context->type = StreamType::kVideo;
+    context->direction = StreamDirection::kSend;
   }
-
-  return video_channel_senders_[channel_name]->GetSsrc();
+  if (!context->transceiver) {
+    context->transceiver = std::make_shared<VideoChannelSend>(
+        channel_name, clock_, ice_agent_, ice_io_statistics_);
+    if (!context->transceiver) {
+      LOG_ERROR("Video stream sender [{}] create failed", channel_name);
+      return -1;
+    }
+    context->ssrc = context->transceiver->GetSsrc();
+  }
+  return context->transceiver ? context->transceiver->GetSsrc() : 0;
 }
 
 uint32_t IceTransportController::AddAudioSendChannel(
     const std::string& channel_name) {
-  if (audio_channel_senders_.find(channel_name) !=
-      audio_channel_senders_.end()) {
-    return audio_channel_senders_[channel_name]->GetSsrc();
+  auto it = stream_senders_.find(channel_name);
+  if (it != stream_senders_.end() && !it->second) {
+    uint32_t ssrc =
+        it->second->transceiver ? it->second->transceiver->GetSsrc() : 0;
+    LOG_ERROR("Stream sender [{}] already exists with ssrc [{}]", channel_name,
+              ssrc);
+    return ssrc;
   }
 
-  audio_channel_senders_[channel_name] = std::make_unique<AudioChannelSend>(
-      channel_name, ice_agent_, ice_io_statistics_);
-  if (!audio_channel_senders_[channel_name]) {
-    LOG_ERROR("Audio Channel [{}] create failed", channel_name);
-    return -1;
+  auto& context = stream_senders_[channel_name];
+  if (!context) {
+    context = std::make_shared<StreamContext>();
+    context->name = channel_name;
+    context->type = StreamType::kAudio;
+    context->direction = StreamDirection::kSend;
   }
-
-  return audio_channel_senders_[channel_name]->GetSsrc();
+  if (!context->transceiver) {
+    context->transceiver = std::make_shared<AudioChannelSend>(
+        channel_name, ice_agent_, ice_io_statistics_);
+    if (!context->transceiver) {
+      LOG_ERROR("Audio stream sender [{}] create failed", channel_name);
+      return -1;
+    }
+    context->ssrc = context->transceiver->GetSsrc();
+  }
+  return context->transceiver ? context->transceiver->GetSsrc() : 0;
 }
 
 uint32_t IceTransportController::AddDataSendChannel(
     const std::string& channel_name) {
-  if (data_channel_senders_.find(channel_name) != data_channel_senders_.end()) {
-    return data_channel_senders_[channel_name]->GetSsrc();
+  auto it = stream_senders_.find(channel_name);
+  if (it != stream_senders_.end() && !it->second) {
+    uint32_t ssrc =
+        it->second->transceiver ? it->second->transceiver->GetSsrc() : 0;
+    LOG_ERROR("Stream sender [{}] already exists with ssrc [{}]", channel_name,
+              ssrc);
+    return ssrc;
   }
-  data_channel_senders_[channel_name] = std::make_unique<DataChannelSend>(
-      channel_name, ice_agent_, ice_io_statistics_);
-  if (!data_channel_senders_[channel_name]) {
-    LOG_ERROR("Data Channel [{}] create failed", channel_name);
-    return -1;
+  auto& context = stream_senders_[channel_name];
+  if (!context) {
+    context = std::make_shared<StreamContext>();
+    context->name = channel_name;
+    context->type = StreamType::kData;
+    context->direction = StreamDirection::kSend;
   }
-
-  return data_channel_senders_[channel_name]->GetSsrc();
+  if (!context->transceiver) {
+    context->transceiver = std::make_shared<DataChannelSend>(
+        channel_name, ice_agent_, ice_io_statistics_);
+    if (!context->transceiver) {
+      LOG_ERROR("Data stream sender [{}] create failed", channel_name);
+      return -1;
+    }
+    context->ssrc = context->transceiver->GetSsrc();
+  }
+  return context->transceiver ? context->transceiver->GetSsrc() : 0;
 }
 
 uint32_t IceTransportController::AddVideoReceiveChannel(
     const std::string& channel_name, uint32_t ssrc) {
-  if (video_channel_receivers_.find(channel_name) !=
-      video_channel_receivers_.end()) {
-    return -1;
+  auto it = stream_receivers_.find(channel_name);
+  if (it != stream_receivers_.end() && !it->second) {
+    LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
+              channel_name, ssrc);
+    return ssrc;
+  }
+  auto& context = stream_receivers_[channel_name];
+  if (!context) {
+    context = std::make_shared<StreamContext>();
+    context->name = channel_name;
+    context->type = StreamType::kVideo;
+    context->direction = StreamDirection::kReceive;
+    context->ssrc = ssrc;
+    ssrc_to_name_[ssrc] = channel_name;
   }
 
-  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-  video_channel_receivers_[channel_name] =
-      std::make_unique<VideoChannelReceive>(
-          channel_name, ssrc, clock_, ice_agent_, ice_io_statistics_,
-          [this, weak_self](std::unique_ptr<ReceivedFrame> received_frame) {
-            if (auto self = weak_self.lock()) {
-              OnReceiveCompleteFrame(std::move(received_frame));
-            }
-          });
-  if (!video_channel_receivers_[channel_name]) {
-    LOG_ERROR("Data Channel [{}:{}] create failed", channel_name);
-    return -1;
+  if (!context->transceiver) {
+    std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+    context->transceiver = std::make_shared<VideoChannelReceive>(
+        channel_name, ssrc, clock_, ice_agent_, ice_io_statistics_,
+        [this, weak_self,
+         channel_name](std::unique_ptr<ReceivedFrame> received_frame) {
+          if (auto self = weak_self.lock()) {
+            OnReceiveCompleteFrame(std::move(received_frame), channel_name);
+          }
+        });
+
+    if (!context->transceiver) {
+      LOG_ERROR("Video stream receiver [{}:{}] create failed", channel_name,
+                ssrc);
+      return 0;
+    }
   }
 
-  video_channel_receivers_name_[ssrc] = channel_name;
-  return 0;
+  return ssrc;
 }
 
 uint32_t IceTransportController::AddAudioReceiveChannel(
     const std::string& channel_name, uint32_t ssrc) {
-  if (audio_channel_receivers_.find(channel_name) !=
-      audio_channel_receivers_.end()) {
-    return -1;
+  auto it = stream_receivers_.find(channel_name);
+  if (it != stream_receivers_.end() && !it->second) {
+    LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
+              channel_name, ssrc);
+    return ssrc;
+  }
+  auto& context = stream_receivers_[channel_name];
+  if (!context) {
+    context = std::make_shared<StreamContext>();
+    context->name = channel_name;
+    context->type = StreamType::kAudio;
+    context->direction = StreamDirection::kReceive;
+    context->ssrc = ssrc;
+    ssrc_to_name_[ssrc] = channel_name;
   }
 
-  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-  audio_channel_receivers_[channel_name] =
-      std::make_unique<AudioChannelReceive>(
-          channel_name, ssrc, ice_agent_, ice_io_statistics_,
-          [this, weak_self](const char* data, size_t size) {
-            if (auto self = weak_self.lock()) {
-              OnReceiveCompleteAudio(data, size);
-            }
-          });
-  if (!audio_channel_receivers_[channel_name]) {
-    LOG_ERROR("Data Channel [{}:{}] create failed", channel_name);
-    return -1;
+  if (!context->transceiver) {
+    std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+    context->transceiver = std::make_shared<AudioChannelReceive>(
+        channel_name, ssrc, ice_agent_, ice_io_statistics_,
+        [this, weak_self, channel_name](const char* data, size_t size) {
+          if (auto self = weak_self.lock()) {
+            OnReceiveCompleteAudio(data, size, channel_name);
+          }
+        });
+    if (!context->transceiver) {
+      LOG_ERROR("Audio stream receiver [{}:{}] create failed", channel_name,
+                ssrc);
+      return 0;
+    }
   }
-  audio_channel_receivers_name_[ssrc] = channel_name;
 
-  return 0;
+  return ssrc;
 }
 
 uint32_t IceTransportController::AddDataReceiveChannel(
     const std::string& channel_name, uint32_t ssrc) {
-  if (data_channel_receivers_.find(channel_name) !=
-      data_channel_receivers_.end()) {
-    return -1;
+  auto it = stream_receivers_.find(channel_name);
+  if (it == stream_receivers_.end() || !it->second) {
+    LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
+              channel_name, ssrc);
+    return ssrc;
+  }
+  auto& context = stream_receivers_[channel_name];
+  if (!context) {
+    context = std::make_shared<StreamContext>();
+    context->name = channel_name;
+    context->type = StreamType::kData;
+    context->direction = StreamDirection::kReceive;
+    context->ssrc = ssrc;
+    ssrc_to_name_[ssrc] = channel_name;
   }
 
-  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-  data_channel_receivers_[channel_name] = std::make_unique<DataChannelReceive>(
-      channel_name, ssrc, ice_agent_, ice_io_statistics_,
-      [this, weak_self](const char* data, size_t size) {
-        if (auto self = weak_self.lock()) {
-          OnReceiveCompleteData(data, size);
-        }
-      });
-  if (!data_channel_receivers_[channel_name]) {
-    LOG_ERROR("Data Channel [{}:{}] create failed", channel_name);
-    return -1;
+  if (!context->transceiver) {
+    std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+    context->transceiver = std::make_shared<DataChannelReceive>(
+        channel_name, ssrc, ice_agent_, ice_io_statistics_,
+        [this, weak_self, channel_name](const char* data, size_t size) {
+          if (auto self = weak_self.lock()) {
+            OnReceiveCompleteData(data, size, channel_name);
+          }
+        });
+    if (!context->transceiver) {
+      LOG_ERROR("Data stream receiver [{}:{}] create failed", channel_name,
+                ssrc);
+      return 0;
+    }
   }
-  data_channel_receivers_name_[ssrc] = channel_name;
 
-  return 0;
+  return ssrc;
+}
+
+bool IceTransportController::CheckSteamContext(
+    const std::string& channel_name,
+    const std::shared_ptr<StreamContext>& context) {
+  if (!context) {
+    LOG_ERROR("Stream context [{}] not found", channel_name);
+    return false;
+  }
+
+  if (!context->transceiver) {
+    LOG_ERROR("Stream transceiver [{}] not found", channel_name);
+    return false;
+  }
+
+  if (context->type != StreamType::kData && !context->codec) {
+    LOG_ERROR("Stream codec [{}] not found", channel_name);
+    return false;
+  }
+
+  return true;
 }
 
 int IceTransportController::SendVideo(const XVideoFrame* video_frame,
                                       const std::string& channel_name) {
-  if (!video_encoder_) {
-    LOG_ERROR("Video Encoder not created");
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || !it->second) {
+    LOG_ERROR("Failed to find stream sender [{}]", channel_name);
     return -1;
   }
-  source_width_ = video_frame->width;
-  source_height_ = video_frame->height;
+  auto& context = it->second;
+  if (!CheckSteamContext(channel_name, context)) {
+    return -1;
+  }
 
   if (b_force_i_frame_) {
-    video_encoder_->ForceIdr();
+    context->codec->ForceIdr();
     LOG_INFO("Force I frame");
     b_force_i_frame_ = false;
   }
 
-  if (task_queue_encode_ && video_encoder_) {
+  if (task_queue_encode_) {
     auto video_frame_copy = std::make_shared<XVideoFrame>(*video_frame);
     task_queue_encode_->PostTask(
-        [this, video_frame_copy, channel_name]() mutable {
+        [this, video_frame_copy, channel_name, context]() mutable {
           XVideoFrame new_frame;
           new_frame.data = nullptr;
           new_frame.width = video_frame_copy->width;
           new_frame.height = video_frame_copy->height;
           new_frame.size = video_frame_copy->size;
           new_frame.captured_timestamp = video_frame_copy->captured_timestamp;
-          if (target_width_.has_value() && target_height_.has_value() &&
-              target_width_.value() < video_frame_copy->width &&
-              target_height_.value() < video_frame_copy->height) {
+          if (context->target_width.has_value() &&
+              context->target_height.has_value() &&
+              context->target_width.value() < video_frame_copy->width &&
+              context->target_height.value() < video_frame_copy->height) {
             resolution_adapter_->ResolutionDowngrade(
-                video_frame_copy.get(), target_width_.value(),
-                target_height_.value(), &new_frame);
+                video_frame_copy.get(), context->target_width.value(),
+                context->target_height.value(), &new_frame);
           } else {
             new_frame.data = new char[video_frame_copy->size];
             memcpy((void*)new_frame.data, video_frame_copy->data,
@@ -343,17 +447,11 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
           raw_frame.SetCapturedTimestamp(video_frame_copy->captured_timestamp);
           delete[] new_frame.data;
 
-          int ret = video_encoder_->Encode(
+          int ret = context->codec->Encode(
               std::move(raw_frame),
-              [this, channel_name](const EncodedFrame& encoded_frame) -> int {
-                if (video_channel_senders_.find(channel_name) !=
-                    video_channel_senders_.end()) {
-                  return video_channel_senders_[channel_name]->SendVideo(
-                      encoded_frame);
-                } else {
-                  LOG_ERROR("Video channel [{}] not found", channel_name);
-                  return -1;
-                }
+              [this, channel_name,
+               context](const EncodedFrame& encoded_frame) -> int {
+                return context->transceiver->SendVideo(encoded_frame);
               });
         });
   }
@@ -363,22 +461,21 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 
 int IceTransportController::SendAudio(const char* data, size_t size,
                                       const std::string& channel_name) {
-  if (!audio_encoder_) {
-    LOG_ERROR("Audio Encoder not created");
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || !it->second) {
+    LOG_ERROR("Failed to find stream sender [{}]", channel_name);
+    return -1;
+  }
+  auto& context = it->second;
+  if (!CheckSteamContext(channel_name, context)) {
     return -1;
   }
 
-  int ret = audio_encoder_->Encode(
+  int ret = context->codec->Encode(
       (uint8_t*)data, size,
-      [this, channel_name](char* encoded_audio_buffer, size_t size) -> int {
-        if (audio_channel_senders_.find(channel_name) !=
-            audio_channel_senders_.end()) {
-          return audio_channel_senders_[channel_name]->SendAudio(
-              encoded_audio_buffer, size);
-        } else {
-          LOG_ERROR("Audio channel [{}] not found", channel_name);
-          return -1;
-        }
+      [this, channel_name, context](char* encoded_audio_buffer,
+                                    size_t size) -> int {
+        return context->transceiver->SendAudio(encoded_audio_buffer, size);
       });
 
   return ret;
@@ -386,12 +483,17 @@ int IceTransportController::SendAudio(const char* data, size_t size,
 
 int IceTransportController::SendData(const char* data, size_t size,
                                      const std::string& channel_name) {
-  if (data_channel_senders_.find(channel_name) != data_channel_senders_.end()) {
-    return data_channel_senders_[channel_name]->SendData(data, size);
-  } else {
-    LOG_ERROR("Data channel [{}] not found", channel_name);
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || !it->second) {
+    LOG_ERROR("Failed to find stream sender [{}]", channel_name);
     return -1;
   }
+  auto& context = it->second;
+  if (!CheckSteamContext(channel_name, context)) {
+    return -1;
+  }
+
+  return context->transceiver->SendData(data, size);
 
   return 0;
 }
@@ -413,13 +515,11 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
 int IceTransportController::OnReceiveVideoRtpPacket(const char* data,
                                                     size_t size,
                                                     uint32_t ssrc) {
-  if (video_channel_receivers_name_.find(ssrc) !=
-      video_channel_receivers_name_.end()) {
-    std::string channel_name = video_channel_receivers_name_[ssrc];
-    if (video_channel_receivers_.find(channel_name) !=
-        video_channel_receivers_.end()) {
-      return video_channel_receivers_[channel_name]->OnReceiveRtpPacket(data,
-                                                                        size);
+  if (ssrc_to_name_.find(ssrc) != ssrc_to_name_.end()) {
+    std::string channel_name = ssrc_to_name_[ssrc];
+    if (stream_receivers_.find(channel_name) != stream_receivers_.end()) {
+      return stream_receivers_[channel_name]->transceiver->OnReceiveRtpPacket(
+          data, size);
     }
   }
   return -1;
@@ -428,13 +528,11 @@ int IceTransportController::OnReceiveVideoRtpPacket(const char* data,
 int IceTransportController::OnReceiveAudioRtpPacket(const char* data,
                                                     size_t size,
                                                     uint32_t ssrc) {
-  if (audio_channel_receivers_name_.find(ssrc) !=
-      audio_channel_receivers_name_.end()) {
-    std::string channel_name = audio_channel_receivers_name_[ssrc];
-    if (audio_channel_receivers_.find(channel_name) !=
-        audio_channel_receivers_.end()) {
-      return audio_channel_receivers_[channel_name]->OnReceiveRtpPacket(data,
-                                                                        size);
+  if (ssrc_to_name_.find(ssrc) != ssrc_to_name_.end()) {
+    std::string channel_name = ssrc_to_name_[ssrc];
+    if (stream_receivers_.find(channel_name) != stream_receivers_.end()) {
+      return stream_receivers_[channel_name]->transceiver->OnReceiveRtpPacket(
+          data, size);
     }
   }
 
@@ -443,13 +541,11 @@ int IceTransportController::OnReceiveAudioRtpPacket(const char* data,
 
 int IceTransportController::OnReceiveDataRtpPacket(const char* data,
                                                    size_t size, uint32_t ssrc) {
-  if (data_channel_receivers_name_.find(ssrc) !=
-      data_channel_receivers_name_.end()) {
-    std::string channel_name = data_channel_receivers_name_[ssrc];
-    if (data_channel_receivers_.find(channel_name) !=
-        data_channel_receivers_.end()) {
-      return data_channel_receivers_[channel_name]->OnReceiveRtpPacket(data,
-                                                                       size);
+  if (ssrc_to_name_.find(ssrc) != ssrc_to_name_.end()) {
+    std::string channel_name = ssrc_to_name_[ssrc];
+    if (stream_receivers_.find(channel_name) != stream_receivers_.end()) {
+      return stream_receivers_[channel_name]->transceiver->OnReceiveRtpPacket(
+          data, size);
     }
   }
 
@@ -457,12 +553,22 @@ int IceTransportController::OnReceiveDataRtpPacket(const char* data,
 }
 
 void IceTransportController::OnReceiveCompleteFrame(
-    std::unique_ptr<ReceivedFrame> received_frame) {
-  task_queue_decode_->PostTask([this, received_frame =
-                                          std::move(received_frame)]() mutable {
+    std::unique_ptr<ReceivedFrame> received_frame,
+    const std::string& channel_name) {
+  task_queue_decode_->PostTask([this,
+                                received_frame = std::move(received_frame),
+                                channel_name]() mutable {
     uint64_t t = clock_->CurrentTime();
-    if (video_decoder_) {
-      int num_frame_returned = video_decoder_->Decode(
+    auto it = stream_receivers_.find(channel_name);
+    if (it == stream_receivers_.end() || !it->second) {
+      LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
+      return;
+    }
+    auto& context = it->second;
+    if (!CheckSteamContext(channel_name, context)) {
+      return;
+    } else {
+      int num_frame_returned = context->codec->Decode(
           std::move(received_frame), [this](const DecodedFrame* decoded_frame) {
             if (on_receive_video_ && decoded_frame) {
               XVideoFrame x_video_frame;
@@ -487,43 +593,153 @@ void IceTransportController::OnReceiveCompleteFrame(
   });
 }
 
-void IceTransportController::OnReceiveCompleteAudio(const char* data,
-                                                    size_t size) {
-  int num_frame_returned = audio_decoder_->Decode(
-      (uint8_t*)data, size, [this](uint8_t* data, int size) {
-        if (on_receive_audio_) {
-          on_receive_audio_((const char*)data, size, remote_user_id_.data(),
-                            remote_user_id_.size(), user_data_);
-        }
-      });
+void IceTransportController::OnReceiveCompleteAudio(
+    const char* data, size_t size, const std::string& channel_name) {
+  auto it = stream_receivers_.find(channel_name);
+  if (it == stream_receivers_.end() || !it->second) {
+    LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
+    return;
+  }
+  auto& context = it->second;
+  if (!CheckSteamContext(channel_name, context)) {
+    return;
+  } else {
+    int num_frame_returned = context->codec->Decode(
+        (uint8_t*)data, size, [this](uint8_t* data, int size) {
+          if (on_receive_audio_) {
+            on_receive_audio_((const char*)data, size, remote_user_id_.data(),
+                              remote_user_id_.size(), user_data_);
+          }
+        });
+  }
 }
 
-void IceTransportController::OnReceiveCompleteData(const char* data,
-                                                   size_t size) {
+void IceTransportController::OnReceiveCompleteData(
+    const char* data, size_t size, const std::string& channel_name) {
   if (on_receive_data_) {
     on_receive_data_(data, size, remote_user_id_.data(), remote_user_id_.size(),
                      user_data_);
   }
 }
 
-int IceTransportController::CreateVideoCodec(std::shared_ptr<SystemClock> clock,
-                                             rtp::PAYLOAD_TYPE video_pt,
-                                             bool hardware_acceleration) {
+int IceTransportController::CreateStreamCodecs(
+    std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
+    bool av1_encoding) {
+  bool video_sender_first_time = true;
+  bool audio_sender_first_time = true;
+  bool video_receiver_first_time = true;
+  bool audio_receiver_first_time = true;
+  for (auto& [channel_name, context] : stream_senders_) {
+    if (!context) {
+      LOG_ERROR("Failed to find stream sender [{}]", channel_name);
+      return -1;
+    }
+
+    if (context->type == StreamType::kVideo) {
+      if (!context->codec) {
+        context->codec = VideoEncoderFactory::CreateVideoEncoder(
+            clock, hardware_acceleration, av1_encoding);
+        if (!context->codec) {
+          context->codec =
+              VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
+          LOG_ERROR(
+              "Create encoder for [{}] failed, try to use software H.264 "
+              "encoder",
+              channel_name);
+        }
+        if (!context->codec || 0 != context->codec->Init()) {
+          LOG_ERROR("Encoder [{}] init failed", channel_name);
+          return -1;
+        }
+        if (video_sender_first_time) {
+          if (!stream_senders_.empty()) {
+            LOG_INFO("Use video encoder [{}]",
+                     context->codec->GetEncoderName());
+            video_sender_first_time = false;
+          }
+        }
+      }
+    } else if (context->type == StreamType::kAudio) {
+      if (!context->codec) {
+        context->codec =
+            std::make_shared<AudioEncoder>(AudioEncoder(48000, 1, 480));
+        if (!context->codec || 0 != context->codec->Init()) {
+          LOG_ERROR("Audio encoder [{}] init failed", channel_name);
+          return -1;
+        }
+        if (audio_receiver_first_time) {
+          LOG_INFO("Use audio encoder [{}]", context->codec->GetEncoderName());
+          audio_receiver_first_time = false;
+        }
+      }
+    }
+  }
+
+  for (auto& [channel_name, context] : stream_receivers_) {
+    if (!context) {
+      LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
+      return -1;
+    }
+    if (!context->codec) {
+      if (context->type == StreamType::kVideo) {
+        context->codec = VideoDecoderFactory::CreateVideoDecoder(
+            clock, hardware_acceleration, av1_encoding);
+        if (!context->codec) {
+          context->codec =
+              VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
+          LOG_ERROR(
+              "Create decoder for [{}] failed, try to use software H.264 "
+              "decoder",
+              channel_name);
+        }
+        if (!context->codec || context->codec->Init()) {
+          LOG_ERROR("Decoder [{}] init failed", channel_name);
+          return -1;
+        }
+        if (video_receiver_first_time) {
+          LOG_INFO("Use video decoder [{}]", context->codec->GetEncoderName());
+        }
+      } else if (context->type == StreamType::kAudio) {
+        context->codec =
+            std::make_shared<AudioDecoder>(AudioDecoder(48000, 1, 480));
+        if (!context->codec || 0 != context->codec->Init()) {
+          LOG_ERROR("Audio decoder [{}] init failed", channel_name);
+          return -1;
+        }
+        if (audio_receiver_first_time) {
+          LOG_INFO("Create audio decoder [{}] finish",
+                   context->codec->GetDecoderName());
+          audio_receiver_first_time = false;
+        }
+      }
+    }
+  }
+
+  if (!stream_receivers_.empty()) {
+    LOG_INFO("Use video decoder [{}]",
+             stream_receivers_.begin()->second->codec->GetEncoderName());
+  }
+
+  return 0;
+}
+
+int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
+                                         rtp::PAYLOAD_TYPE video_pt,
+                                         bool hardware_acceleration) {
   if (video_codec_inited_) {
     return 0;
   }
 
   hardware_acceleration_ = hardware_acceleration;
 
+  int ret = -1;
+
   if (rtp::PAYLOAD_TYPE::AV1 == video_pt) {
     if (hardware_acceleration_) {
       hardware_acceleration_ = false;
       LOG_WARN("Only support software codec for AV1");
     }
-    video_encoder_ =
-        VideoEncoderFactory::CreateVideoEncoder(clock, false, true);
-    video_decoder_ =
-        VideoDecoderFactory::CreateVideoDecoder(clock, false, true);
+    ret = CreateStreamCodecs(clock, false, true);
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
 #ifdef __APPLE__
     if (hardware_acceleration_) {
@@ -531,97 +747,33 @@ int IceTransportController::CreateVideoCodec(std::shared_ptr<SystemClock> clock,
       LOG_WARN(
           "MacOS not support hardware acceleration, use default software "
           "codec");
-      video_encoder_ =
-          VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-      video_decoder_ =
-          VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
     } else {
-      video_encoder_ =
-          VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-      video_decoder_ =
-          VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
     }
+    ret = CreateStreamCodecs(clock, false, false);
 #else
-    if (hardware_acceleration_) {
-      if (0 == LoadNvCodecDll()) {
-        load_nvcodec_dll_success_ = true;
-        video_encoder_ =
-            VideoEncoderFactory::CreateVideoEncoder(clock, true, false);
-        video_decoder_ =
-            VideoDecoderFactory::CreateVideoDecoder(clock, true, false);
-      } else {
-        LOG_WARN(
-            "Hardware accelerated codec not available, use default software "
-            "codec");
-        video_encoder_ =
-            VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-        video_decoder_ =
-            VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
-      }
-    } else {
-      video_encoder_ =
-          VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-      video_decoder_ =
-          VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
+    bool use_hardware = false;
+    if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
+      load_nvcodec_dll_success_ = true;
+      use_hardware = true;
+    } else if (hardware_acceleration_) {
+      LOG_WARN(
+          "Hardware accelerated codec not available, use default software "
+          "codec");
     }
+
+    ret = CreateStreamCodecs(clock, use_hardware, false);
 #endif
   }
 
-  if (!video_encoder_) {
-    video_encoder_ =
-        VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-    LOG_ERROR("Create encoder failed, try to use software H.264 encoder");
-  }
-  if (!video_encoder_ || 0 != video_encoder_->Init()) {
-    LOG_ERROR("Encoder init failed");
-    return -1;
-  }
-
-  if (!video_decoder_) {
-    video_decoder_ =
-        VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
-    LOG_ERROR("Create decoder failed, try to use software H.264 decoder");
-  }
-  if (!video_decoder_ || video_decoder_->Init()) {
-    LOG_ERROR("Decoder init failed");
-    return -1;
-  }
-
-  video_codec_inited_ = true;
-  LOG_INFO("Create video codec [{}|{}] finish",
-           video_encoder_->GetEncoderName(), video_decoder_->GetDecoderName());
-
-  return 0;
-}
-
-int IceTransportController::CreateAudioCodec() {
-  if (audio_codec_inited_) {
-    return 0;
-  }
-
-  audio_encoder_ = std::make_unique<AudioEncoder>(AudioEncoder(48000, 1, 480));
-  if (!audio_encoder_ || 0 != audio_encoder_->Init()) {
-    LOG_ERROR("Audio encoder init failed");
-    return -1;
-  }
-
-  audio_decoder_ = std::make_unique<AudioDecoder>(AudioDecoder(48000, 1, 480));
-  if (!audio_decoder_ || 0 != audio_decoder_->Init()) {
-    LOG_ERROR("Audio decoder init failed");
-    return -1;
-  }
-
-  audio_codec_inited_ = true;
-  LOG_INFO("Create audio codec [{}|{}] finish",
-           audio_encoder_->GetEncoderName(), audio_decoder_->GetDecoderName());
-
-  return 0;
+  return ret;
 }
 
 void IceTransportController::OnSenderReport(const SenderReport& sender_report) {
-  video_channel_receive_->OnSenderReport(sender_report);
-  audio_channel_receive_->OnSenderReport(sender_report);
-  data_channel_receive_->OnSenderReport(sender_report);
+  for (auto& [_, context] : stream_receivers_) {
+    if (context && context->transceiver) {
+      context->transceiver->OnSenderReport(sender_report);
+    }
+  }
 }
 
 void IceTransportController::OnReceiverReport(
@@ -695,8 +847,11 @@ void IceTransportController::OnCongestionControlFeedback(
 
 void IceTransportController::OnReceiveNack(
     const std::vector<uint16_t>& nack_sequence_numbers) {
-  if (video_channel_send_) {
-    video_channel_send_->OnReceiveNack(nack_sequence_numbers);
+  for (auto& [_, context] : stream_senders_) {
+    if (context && context->type == StreamType::kVideo &&
+        context->transceiver) {
+      context->transceiver->OnReceiveNack(nack_sequence_numbers);
+    }
   }
 }
 
@@ -741,27 +896,34 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                                     ? target_bitrate_
                                     : update.target_rate->target_rate.bps())
                              : target_bitrate_;
-    if (target_bitrate != target_bitrate_ && video_encoder_) {
-      target_bitrate_ = target_bitrate;
-      int width, height, target_width, target_height;
-      if (!video_encoder_->GetResolution(&width, &height)) {
-        if (0 == resolution_adapter_->GetResolution(target_bitrate_, width,
-                                                    height, &target_width,
-                                                    &target_height)) {
-          if (target_width != target_width_ ||
-              target_height != target_height_) {
-            target_width_ = target_width;
-            target_height_ = target_height;
 
-            b_force_i_frame_ = true;
+    if (target_bitrate != target_bitrate_ && !stream_senders_.empty()) {
+      target_bitrate_ = target_bitrate;
+      int sub_target_bitrate = target_bitrate / stream_senders_.size();
+      for (auto& [channel_name, context] : stream_senders_) {
+        if (context->codec) {
+          int width, height, target_width, target_height;
+          if (!context->codec->GetResolution(&width, &height)) {
+            if (0 == resolution_adapter_->GetResolution(
+                         sub_target_bitrate, width, height, &target_width,
+                         &target_height)) {
+              if (target_width != context->target_width ||
+                  target_height != context->target_height) {
+                context->target_width = target_width;
+                context->target_height = target_height;
+
+                b_force_i_frame_ = true;
+              }
+            } else if (context->target_width.has_value() &&
+                       context->target_height.has_value()) {
+              context->target_width.reset();
+              context->target_height.reset();
+            }
           }
-        } else if (target_width_.has_value() && target_height_.has_value()) {
-          target_width_.reset();
-          target_height_.reset();
+          context->codec->SetTargetBitrate(sub_target_bitrate);
+          // LOG_WARN("Set target bitrate [{}]bps", sub_target_bitrate);
         }
       }
-      video_encoder_->SetTargetBitrate(target_bitrate_);
-      // LOG_WARN("Set target bitrate [{}]bps", target_bitrate_);
     }
     UpdateControlState();
   }

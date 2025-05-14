@@ -10,9 +10,9 @@
 #include <functional>
 
 #include "dav1d/dav1d.h"
-#include "video_decoder.h"
+#include "media_codec.h"
 
-class Dav1dAv1Decoder : public VideoDecoder {
+class Dav1dAv1Decoder : public MediaCodec {
  public:
   Dav1dAv1Decoder(std::shared_ptr<SystemClock> clock);
   virtual ~Dav1dAv1Decoder();

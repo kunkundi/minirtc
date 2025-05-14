@@ -15,9 +15,10 @@
 
 #include "clock/system_clock.h"
 #include "decoded_frame.h"
+#include "media_codec.h"
 #include "received_frame.h"
 
-class VideoDecoder {
+class VideoDecoder : public MediaCodec {
  public:
   virtual int Init() = 0;
 

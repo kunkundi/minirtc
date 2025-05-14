@@ -755,35 +755,46 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
 
 std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
   std::string media_stream_sdp;
-  std::string video_sdp, audio_sdp, data_sdp;
+
+  // 获取各个 media 的位置
   std::size_t video_start = remote_sdp.find("m=video");
-  std::size_t video_end = remote_sdp.find("m=audio");
-  std::size_t audio_start = video_end;
-  std::size_t audio_end = remote_sdp.find("m=data");
-  std::size_t data_start = audio_end;
-  std::size_t data_end = remote_sdp.find("a=candidate");
-  std::size_t candidate_start = data_end;
+  std::size_t audio_start = remote_sdp.find("m=audio");
+  std::size_t data_start = remote_sdp.find("m=data");
+  std::size_t candidate_start = remote_sdp.find("a=candidate");
+
+  std::size_t end_of_sdp = remote_sdp.length();
 
   std::map<std::string, uint32_t> video_ssrc_map;
   std::map<std::string, uint32_t> audio_ssrc_map;
   std::map<std::string, uint32_t> data_ssrc_map;
 
-  if (video_start != std::string::npos && video_end != std::string::npos) {
-    video_sdp = remote_sdp.substr(video_start, video_end - video_start);
+  if (video_start != std::string::npos) {
+    std::size_t video_end = std::min(
+        {audio_start != std::string::npos ? audio_start : end_of_sdp,
+         data_start != std::string::npos ? data_start : end_of_sdp,
+         candidate_start != std::string::npos ? candidate_start : end_of_sdp});
+    std::string video_sdp =
+        remote_sdp.substr(video_start, video_end - video_start);
     ParseSsrcFromSdpAndRemove(video_sdp, video_ssrc_map, "video");
     video_receivers_ssrc_ = video_ssrc_map;
     media_stream_sdp += video_sdp;
   }
 
-  if (audio_start != std::string::npos && audio_end != std::string::npos) {
-    audio_sdp = remote_sdp.substr(audio_start, audio_end - audio_start);
+  if (audio_start != std::string::npos) {
+    std::size_t audio_end = std::min(
+        {data_start != std::string::npos ? data_start : end_of_sdp,
+         candidate_start != std::string::npos ? candidate_start : end_of_sdp});
+    std::string audio_sdp =
+        remote_sdp.substr(audio_start, audio_end - audio_start);
     ParseSsrcFromSdpAndRemove(audio_sdp, audio_ssrc_map, "audio");
     audio_receivers_ssrc_ = audio_ssrc_map;
     // media_stream_sdp += audio_sdp;
   }
 
-  if (data_start != std::string::npos && data_end != std::string::npos) {
-    data_sdp = remote_sdp.substr(data_start, data_end - data_start);
+  if (data_start != std::string::npos) {
+    std::size_t data_end =
+        candidate_start != std::string::npos ? candidate_start : end_of_sdp;
+    std::string data_sdp = remote_sdp.substr(data_start, data_end - data_start);
     ParseSsrcFromSdpAndRemove(data_sdp, data_ssrc_map, "data");
     data_receivers_ssrc_ = data_ssrc_map;
     // media_stream_sdp += data_sdp;
@@ -793,19 +804,20 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
     media_stream_sdp += remote_sdp.substr(candidate_start);
   }
 
-  for (const auto &entry : video_receivers_ssrc_) {
-    ice_transport_controller_->AddVideoReceiveChannel(entry.first,
-                                                      entry.second);
-  }
-  for (const auto &entry : audio_receivers_ssrc_) {
-    ice_transport_controller_->AddAudioReceiveChannel(entry.first,
-                                                      entry.second);
-  }
-  for (const auto &entry : data_receivers_ssrc_) {
-    ice_transport_controller_->AddDataReceiveChannel(entry.first, entry.second);
-  }
-
   if (!remote_capabilities_got_) {
+    for (const auto &entry : video_receivers_ssrc_) {
+      ice_transport_controller_->AddVideoReceiveChannel(entry.first,
+                                                        entry.second);
+    }
+    for (const auto &entry : audio_receivers_ssrc_) {
+      ice_transport_controller_->AddAudioReceiveChannel(entry.first,
+                                                        entry.second);
+    }
+    for (const auto &entry : data_receivers_ssrc_) {
+      ice_transport_controller_->AddDataReceiveChannel(entry.first,
+                                                       entry.second);
+    }
+
     if (!NegotiateVideoPayloadType(remote_sdp)) return std::string();
     if (!NegotiateAudioPayloadType(remote_sdp)) return std::string();
     if (!NegotiateDataPayloadType(remote_sdp)) return std::string();

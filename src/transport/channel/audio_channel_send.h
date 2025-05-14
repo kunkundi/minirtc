@@ -8,17 +8,18 @@
 #define _AUDIO_CHANNEL_SEND_H_
 
 #include "ice_agent.h"
+#include "media_channel.h"
 #include "paced_sender.h"
 #include "rtp_audio_sender.h"
 #include "rtp_packetizer.h"
 
-class AudioChannelSend {
+class AudioChannelSend : public MediaChannel {
  public:
   AudioChannelSend();
   AudioChannelSend(const std::string& channel_name,
                    std::shared_ptr<IceAgent> ice_agent,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
-  ~AudioChannelSend();
+  virtual ~AudioChannelSend();
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,

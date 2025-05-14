@@ -21,6 +21,8 @@
 #include "data_channel_receive.h"
 #include "data_channel_send.h"
 #include "ice_agent.h"
+#include "media_channel.h"
+#include "media_codec.h"
 #include "paced_sender.h"
 #include "resolution_adapter.h"
 #include "task_queue.h"
@@ -78,9 +80,12 @@ class IceTransportController
   int OnReceiveAudioRtpPacket(const char *data, size_t size, uint32_t ssrc);
   int OnReceiveDataRtpPacket(const char *data, size_t size, uint32_t ssrc);
 
-  void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame);
-  void OnReceiveCompleteAudio(const char *data, size_t size);
-  void OnReceiveCompleteData(const char *data, size_t size);
+  void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame,
+                              const std::string &channel_name);
+  void OnReceiveCompleteAudio(const char *data, size_t size,
+                              const std::string &channel_name);
+  void OnReceiveCompleteData(const char *data, size_t size,
+                             const std::string &channel_name);
 
  public:
   void OnSenderReport(const SenderReport &sender_report);
@@ -90,9 +95,10 @@ class IceTransportController
   void OnReceiveNack(const std::vector<uint16_t> &nack_sequence_numbers);
 
  private:
-  int CreateVideoCodec(std::shared_ptr<SystemClock> clock,
-                       rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
-  int CreateAudioCodec();
+  int CreateCodecs(std::shared_ptr<SystemClock> clock,
+                   rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
+  int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
+                         bool hardware_acceleration, bool av1_encoding);
 
  private:
   void OnSentPacket(const webrtc::RtpPacketToSend &packet);
@@ -105,30 +111,30 @@ class IceTransportController
   bool Process() override;
 
  private:
-  std::unique_ptr<VideoChannelSend> video_channel_send_ = nullptr;
-  std::unique_ptr<AudioChannelSend> audio_channel_send_ = nullptr;
-  std::unique_ptr<DataChannelSend> data_channel_send_ = nullptr;
+  enum class StreamType { kAudio, kVideo, kData };
+  enum class StreamDirection { kSend, kReceive };
 
-  std::map<std::string, std::unique_ptr<VideoChannelSend>>
-      video_channel_senders_;
-  std::map<std::string, std::unique_ptr<AudioChannelSend>>
-      audio_channel_senders_;
-  std::map<std::string, std::unique_ptr<DataChannelSend>> data_channel_senders_;
+  class StreamContext {
+   public:
+    std::string name;
+    std::optional<uint32_t> ssrc;
+    StreamType type;
+    StreamDirection direction;
 
-  std::map<std::string, std::unique_ptr<VideoChannelReceive>>
-      video_channel_receivers_;
-  std::map<std::string, std::unique_ptr<AudioChannelReceive>>
-      audio_channel_receivers_;
-  std::map<std::string, std::unique_ptr<DataChannelReceive>>
-      data_channel_receivers_;
+    std::optional<int> target_width;
+    std::optional<int> target_height;
 
-  std::map<uint32_t, std::string> video_channel_receivers_name_;
-  std::map<uint32_t, std::string> audio_channel_receivers_name_;
-  std::map<uint32_t, std::string> data_channel_receivers_name_;
+    std::shared_ptr<MediaChannel> transceiver;
+    std::shared_ptr<MediaCodec> codec;
+  };
 
-  std::unique_ptr<VideoChannelReceive> video_channel_receive_ = nullptr;
-  std::unique_ptr<AudioChannelReceive> audio_channel_receive_ = nullptr;
-  std::unique_ptr<DataChannelReceive> data_channel_receive_ = nullptr;
+  bool CheckSteamContext(const std::string &channel_name,
+                         const std::shared_ptr<StreamContext> &context);
+
+  std::map<std::string, std::shared_ptr<StreamContext>> stream_senders_;
+  std::map<std::string, std::shared_ptr<StreamContext>> stream_receivers_;
+
+  std::map<uint32_t, std::string> ssrc_to_name_;
 
   OnReceiveVideo on_receive_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;
@@ -157,21 +163,18 @@ class IceTransportController
   std::string last_active_stream_;
 
  private:
-  std::unique_ptr<VideoEncoder> video_encoder_ = nullptr;
-  std::unique_ptr<VideoDecoder> video_decoder_ = nullptr;
   std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
   bool b_force_i_frame_;
   bool video_codec_inited_;
   bool load_nvcodec_dll_success_;
   bool hardware_acceleration_;
-  int source_width_;
-  int source_height_;
-  std::optional<int> target_width_;
-  std::optional<int> target_height_;
 
  private:
   std::unique_ptr<AudioEncoder> audio_encoder_ = nullptr;
   std::unique_ptr<AudioDecoder> audio_decoder_ = nullptr;
+  std::map<std::string, std::unique_ptr<AudioEncoder>> audio_encoders_;
+  std::map<std::string, std::unique_ptr<AudioDecoder>> audio_decoders_;
+
   bool audio_codec_inited_ = false;
 
  private:

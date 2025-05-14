@@ -5,9 +5,9 @@
 
 #include "NvEncoderCuda.h"
 #include "log.h"
-#include "video_encoder.h"
+#include "media_codec.h"
 
-class NvidiaVideoEncoder : public VideoEncoder {
+class NvidiaVideoEncoder : public MediaCodec {
  public:
   NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock);
   virtual ~NvidiaVideoEncoder();

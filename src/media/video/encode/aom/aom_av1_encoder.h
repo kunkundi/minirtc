@@ -13,7 +13,7 @@
 #include "aom/aom_codec.h"
 #include "aom/aom_encoder.h"
 #include "aom/aomcx.h"
-#include "video_encoder.h"
+#include "media_codec.h"
 
 typedef struct {
   uint64_t obu_header_size;
@@ -29,7 +29,7 @@ typedef struct {
   int spatial_id;
 } OBU_t;
 
-class AomAv1Encoder : public VideoEncoder {
+class AomAv1Encoder : public MediaCodec {
  public:
   AomAv1Encoder(std::shared_ptr<SystemClock> clock);
   virtual ~AomAv1Encoder();

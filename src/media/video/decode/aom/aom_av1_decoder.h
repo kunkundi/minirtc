@@ -12,9 +12,9 @@
 #include "aom/aom_codec.h"
 #include "aom/aom_decoder.h"
 #include "aom/aomdx.h"
-#include "video_decoder.h"
+#include "media_codec.h"
 
-class AomAv1Decoder : public VideoDecoder {
+class AomAv1Decoder : public MediaCodec {
  public:
   AomAv1Decoder(std::shared_ptr<SystemClock> clock);
   virtual ~AomAv1Decoder();

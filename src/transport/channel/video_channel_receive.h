@@ -9,9 +9,10 @@
 
 #include "clock/system_clock.h"
 #include "ice_agent.h"
+#include "media_channel.h"
 #include "rtp_video_receiver.h"
 
-class VideoChannelReceive {
+class VideoChannelReceive : public MediaChannel {
  public:
   VideoChannelReceive();
   VideoChannelReceive(const std::string &channel_name, uint32_t ssrc,
@@ -21,7 +22,7 @@ class VideoChannelReceive {
                       std::function<void(std::unique_ptr<ReceivedFrame>)>
                           on_receive_complete_frame);
 
-  ~VideoChannelReceive();
+  virtual ~VideoChannelReceive();
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type);

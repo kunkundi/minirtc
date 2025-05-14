@@ -8,16 +8,17 @@
 #define _DATA_CHANNEL_RECEIVE_H_
 
 #include "ice_agent.h"
+#include "media_channel.h"
 #include "rtp_data_receiver.h"
 
-class DataChannelReceive {
+class DataChannelReceive : public MediaChannel {
  public:
   DataChannelReceive();
   DataChannelReceive(const std::string &channel_name, uint32_t ssrc,
                      std::shared_ptr<IceAgent> ice_agent,
                      std::shared_ptr<IOStatistics> ice_io_statistics,
                      std::function<void(const char *, size_t)> on_receive_data);
-  ~DataChannelReceive();
+  virtual ~DataChannelReceive();
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type);

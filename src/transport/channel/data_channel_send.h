@@ -8,17 +8,18 @@
 #define _DATA_CHANNEL_SEND_H_
 
 #include "ice_agent.h"
+#include "media_channel.h"
 #include "paced_sender.h"
 #include "rtp_data_sender.h"
 #include "rtp_packetizer.h"
 
-class DataChannelSend {
+class DataChannelSend : public MediaChannel {
  public:
   DataChannelSend();
   DataChannelSend(const std::string& channel_name,
                   std::shared_ptr<IceAgent> ice_agent,
                   std::shared_ptr<IOStatistics> ice_io_statistics);
-  ~DataChannelSend();
+  virtual ~DataChannelSend();
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,

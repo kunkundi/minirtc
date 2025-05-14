@@ -4,9 +4,9 @@
 #include <functional>
 
 #include "NvDecoder.h"
-#include "video_decoder.h"
+#include "media_codec.h"
 
-class NvidiaVideoDecoder : public VideoDecoder {
+class NvidiaVideoDecoder : public MediaCodec {
  public:
   NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock);
   virtual ~NvidiaVideoDecoder();

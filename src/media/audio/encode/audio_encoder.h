@@ -13,12 +13,13 @@
 #include <thread>
 #include <vector>
 
+#include "media_codec.h"
 #include "opus/opus.h"
 
-class AudioEncoder {
+class AudioEncoder : public MediaCodec {
  public:
   AudioEncoder(int sample_rate, int channel_num, int frame_size);
-  ~AudioEncoder();
+  virtual ~AudioEncoder();
 
  public:
   int Init();

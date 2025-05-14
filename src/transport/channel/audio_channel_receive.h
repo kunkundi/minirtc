@@ -8,9 +8,10 @@
 #define _AUDIO_CHANNEL_RECEIVE_H_
 
 #include "ice_agent.h"
+#include "media_channel.h"
 #include "rtp_audio_receiver.h"
 
-class AudioChannelReceive {
+class AudioChannelReceive : public MediaChannel {
  public:
   AudioChannelReceive();
   AudioChannelReceive(
@@ -18,7 +19,7 @@ class AudioChannelReceive {
       std::shared_ptr<IceAgent> ice_agent,
       std::shared_ptr<IOStatistics> ice_io_statistics,
       std::function<void(const char *, size_t)> on_receive_audio);
-  ~AudioChannelReceive();
+  virtual ~AudioChannelReceive();
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type);

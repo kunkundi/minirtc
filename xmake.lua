@@ -218,7 +218,7 @@ target("media")
         "src/media/audio/decode",
         "src/media/resolution_adapter",
         "src/media/video/assemble_frame",
-        "src/interface", {public = true})
+        "src/interface", "src/media", {public = true})
 
 target("pc")
     set_kind("object")

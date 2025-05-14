@@ -16,12 +16,13 @@
 #include <vector>
 
 #include "audio_frame.h"
+#include "media_codec.h"
 #include "opus/opus.h"
 
-class AudioDecoder {
+class AudioDecoder : public MediaCodec {
  public:
   AudioDecoder(int sample_rate, int channel_num, int frame_size);
-  ~AudioDecoder();
+  virtual ~AudioDecoder();
 
  public:
   int Init();

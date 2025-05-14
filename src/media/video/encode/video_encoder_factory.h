@@ -3,13 +3,13 @@
 
 #include <memory>
 
-#include "video_encoder.h"
+#include "media_codec.h"
 class VideoEncoderFactory {
  public:
   VideoEncoderFactory();
   ~VideoEncoderFactory();
 
-  static std::unique_ptr<VideoEncoder> CreateVideoEncoder(
+  static std::unique_ptr<MediaCodec> CreateVideoEncoder(
       std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
       bool av1_encoding);
 

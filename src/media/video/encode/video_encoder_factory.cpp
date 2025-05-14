@@ -15,7 +15,7 @@ VideoEncoderFactory::VideoEncoderFactory() {}
 
 VideoEncoderFactory::~VideoEncoderFactory() {}
 
-std::unique_ptr<VideoEncoder> VideoEncoderFactory::CreateVideoEncoder(
+std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     bool av1_encoding) {
   if (av1_encoding) {

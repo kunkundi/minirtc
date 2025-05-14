@@ -15,9 +15,9 @@
 #include <functional>
 #include <vector>
 
-#include "video_encoder.h"
+#include "media_codec.h"
 
-class OpenH264Encoder : public VideoEncoder {
+class OpenH264Encoder : public MediaCodec {
  public:
   OpenH264Encoder(std::shared_ptr<SystemClock> clock);
   virtual ~OpenH264Encoder();

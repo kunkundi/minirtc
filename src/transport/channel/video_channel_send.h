@@ -14,6 +14,7 @@
 #include "congestion_control_feedback.h"
 #include "encoded_frame.h"
 #include "ice_agent.h"
+#include "media_channel.h"
 #include "paced_sender.h"
 #include "rtp_packet_history.h"
 #include "rtp_packetizer.h"
@@ -21,13 +22,13 @@
 #include "task_queue.h"
 #include "transport_feedback_adapter.h"
 
-class VideoChannelSend {
+class VideoChannelSend : public MediaChannel {
  public:
   VideoChannelSend(const std::string& channel_name,
                    std::shared_ptr<SystemClock> clock,
                    std::shared_ptr<IceAgent> ice_agent,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
-  ~VideoChannelSend();
+  virtual ~VideoChannelSend();
 
   void OnSentRtpPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet);
 

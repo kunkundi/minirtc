@@ -14,9 +14,9 @@
 
 #include <functional>
 
-#include "video_decoder.h"
+#include "media_codec.h"
 
-class OpenH264Decoder : public VideoDecoder {
+class OpenH264Decoder : public MediaCodec {
  public:
   OpenH264Decoder(std::shared_ptr<SystemClock> clock);
   virtual ~OpenH264Decoder();
