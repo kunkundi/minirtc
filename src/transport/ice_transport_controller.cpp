@@ -346,7 +346,7 @@ uint32_t IceTransportController::AddAudioReceiveChannel(
 uint32_t IceTransportController::AddDataReceiveChannel(
     const std::string& channel_name, uint32_t ssrc) {
   auto it = stream_receivers_.find(channel_name);
-  if (it == stream_receivers_.end() || !it->second) {
+  if (it != stream_receivers_.end() && !it->second) {
     LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
               channel_name, ssrc);
     return ssrc;
@@ -451,6 +451,7 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
               std::move(raw_frame),
               [this, channel_name,
                context](const EncodedFrame& encoded_frame) -> int {
+                context->last_active_time = clock_->CurrentTimeMs();
                 return context->transceiver->SendVideo(encoded_frame);
               });
         });
@@ -475,6 +476,7 @@ int IceTransportController::SendAudio(const char* data, size_t size,
       (uint8_t*)data, size,
       [this, channel_name, context](char* encoded_audio_buffer,
                                     size_t size) -> int {
+        context->last_active_time = clock_->CurrentTimeMs();
         return context->transceiver->SendAudio(encoded_audio_buffer, size);
       });
 
@@ -493,6 +495,7 @@ int IceTransportController::SendData(const char* data, size_t size,
     return -1;
   }
 
+  context->last_active_time = clock_->CurrentTimeMs();
   return context->transceiver->SendData(data, size);
 
   return 0;
@@ -899,7 +902,22 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
 
     if (target_bitrate != target_bitrate_ && !stream_senders_.empty()) {
       target_bitrate_ = target_bitrate;
-      int sub_target_bitrate = target_bitrate / stream_senders_.size();
+
+      int count = 0;
+      for (auto& [_, context] : stream_senders_) {
+        if (context->last_active_time.has_value()) {
+          if (clock_->CurrentTimeMs() - context->last_active_time.value() <
+              100) {
+            count++;
+          }
+        }
+      }
+
+      if (count == 0) {
+        return;
+      }
+
+      int sub_target_bitrate = target_bitrate / count;
       for (auto& [channel_name, context] : stream_senders_) {
         if (context->codec) {
           int width, height, target_width, target_height;

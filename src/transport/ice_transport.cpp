@@ -500,7 +500,7 @@ int IceTransport::SendOffer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
+  // LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send offer", user_id_, remote_user_id_);
@@ -516,7 +516,7 @@ int IceTransport::SendAnswer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
+  // LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send answer", user_id_, remote_user_id_);
@@ -601,18 +601,21 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
 
   for (auto &stream_id : video_stream_ids_) {
     uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
+    video_senders_ssrc_[stream_id] = ssrc;
     video_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
 
   for (auto &stream_id : audio_stream_ids_) {
     uint32_t ssrc = ice_transport_controller_->AddAudioSendChannel(stream_id);
+    video_senders_ssrc_[stream_id] = ssrc;
     audio_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
 
   for (auto &stream_id : data_stream_ids_) {
     uint32_t ssrc = ice_transport_controller_->AddDataSendChannel(stream_id);
+    video_senders_ssrc_[stream_id] = ssrc;
     data_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
@@ -681,6 +684,13 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
 
+  if (ice_transport_controller_) {
+    ice_transport_controller_->Create(
+        remote_user_id_, negotiated_video_pt_, hardware_acceleration_,
+        on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
+    ice_transport_controller_->Start();
+  }
+
   auto replace_capability_and_insert_ssrc = [&](const std::string &media_tag,
                                                 const std::string &capability,
                                                 const std::string &ssrc_lines) {
@@ -711,8 +721,6 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
                                      audio_ssrc_lines);
   replace_capability_and_insert_ssrc("data", negotiated_data_pt,
                                      data_ssrc_lines);
-
-  LOG_ERROR("local sdp: {}", local_sdp_);
 
   return 0;
 }
@@ -822,25 +830,7 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
     if (!NegotiateAudioPayloadType(remote_sdp)) return std::string();
     if (!NegotiateDataPayloadType(remote_sdp)) return std::string();
 
-    if (!offer_peer_) {
-      for (auto &stream_id : video_stream_ids_) {
-        uint32_t ssrc =
-            ice_transport_controller_->AddVideoSendChannel(stream_id);
-        video_senders_ssrc_[stream_id] = ssrc;
-      }
-      for (auto &stream_id : audio_stream_ids_) {
-        uint32_t ssrc =
-            ice_transport_controller_->AddAudioSendChannel(stream_id);
-        audio_senders_ssrc_[stream_id] = ssrc;
-      }
-      for (auto &stream_id : data_stream_ids_) {
-        uint32_t ssrc =
-            ice_transport_controller_->AddDataSendChannel(stream_id);
-        data_senders_ssrc_[stream_id] = ssrc;
-      }
-    }
-
-    if (ice_transport_controller_) {
+    if (ice_transport_controller_ && offer_peer_) {
       ice_transport_controller_->Create(
           remote_user_id_, negotiated_video_pt_, hardware_acceleration_,
           on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);

@@ -123,6 +123,7 @@ class IceTransportController
 
     std::optional<int> target_width;
     std::optional<int> target_height;
+    std::optional<int64_t> last_active_time;
 
     std::shared_ptr<MediaChannel> transceiver;
     std::shared_ptr<MediaCodec> codec;
