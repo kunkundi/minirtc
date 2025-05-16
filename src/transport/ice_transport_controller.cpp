@@ -919,7 +919,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
 
       int sub_target_bitrate = target_bitrate / count;
       for (auto& [channel_name, context] : stream_senders_) {
-        if (context->codec) {
+        if (context->codec && context->type == StreamType::kVideo) {
           int width, height, target_width, target_height;
           if (!context->codec->GetResolution(&width, &height)) {
             if (0 == resolution_adapter_->GetResolution(
