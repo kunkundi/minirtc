@@ -30,6 +30,7 @@ elseif is_os("linux") then
 elseif is_os("macosx") then
     add_ldflags("-Wl,-ld_classic")
     add_cxflags("-Wno-unused-variable")
+    add_frameworks("VideoToolbox")
 end
 
 target("log")
@@ -199,6 +200,7 @@ target("media")
         "src/media/video/decode/*.cpp",
         "src/media/video/encode/openh264/*.cpp",
         "src/media/video/decode/openh264/*.cpp",
+        "src/media/video/encode/video_toolbox/*.mm",
         "src/media/video/encode/aom/*.cpp",
         "src/media/video/decode/dav1d/*.cpp",
         "src/media/video/decode/aom/*.cpp")

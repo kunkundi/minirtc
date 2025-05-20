@@ -421,6 +421,8 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 
   if (task_queue_encode_) {
     auto video_frame_copy = std::make_shared<XVideoFrame>(*video_frame);
+    video_frame_copy->data = new char[video_frame->size];
+    memcpy((void*)video_frame_copy->data, video_frame->data, video_frame->size);
     task_queue_encode_->PostTask(
         [this, video_frame_copy, channel_name, context]() mutable {
           XVideoFrame new_frame;
@@ -454,6 +456,7 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
                 context->last_active_time = clock_->CurrentTimeMs();
                 return context->transceiver->SendVideo(encoded_frame);
               });
+          delete video_frame_copy->data;
         });
   }
 
@@ -747,12 +750,10 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
 #ifdef __APPLE__
     if (hardware_acceleration_) {
       hardware_acceleration_ = false;
-      LOG_WARN(
-          "MacOS not support hardware acceleration, use default software "
-          "codec");
+      ret = CreateStreamCodecs(clock, true, false);
     } else {
+      ret = CreateStreamCodecs(clock, false, false);
     }
-    ret = CreateStreamCodecs(clock, false, false);
 #else
     bool use_hardware = false;
     if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
