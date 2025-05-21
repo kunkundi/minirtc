@@ -10,6 +10,7 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <shared_mutex>
 
 #include "audio_decoder.h"
 #include "audio_encoder.h"
@@ -186,6 +187,7 @@ class PeerConnection {
  private:
   std::map<std::string, std::shared_ptr<IceTransport>> ice_transport_list_;
   std::map<std::string, bool> is_ice_transport_ready_;
+  std::shared_mutex ice_transport_list_mutex_;
 
   std::function<void(std::string, const std::string &)> on_ice_status_change_ =
       nullptr;

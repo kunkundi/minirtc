@@ -373,6 +373,8 @@ SignalStatus PeerConnection::GetSignalStatus() {
 
 int PeerConnection::SendVideoFrame(const XVideoFrame *video_frame,
                                    const char *stream_id) {
+  std::shared_lock lock(ice_transport_list_mutex_);
+
   if (ice_transport_list_.empty()) {
     return -1;
   }
@@ -390,6 +392,8 @@ int PeerConnection::SendVideoFrame(const XVideoFrame *video_frame,
 
 int PeerConnection::SendAudioFrame(const char *data, size_t size,
                                    const char *stream_id) {
+  std::shared_lock lock(ice_transport_list_mutex_);
+
   if (ice_transport_list_.empty()) {
     return -1;
   }
@@ -406,6 +410,8 @@ int PeerConnection::SendAudioFrame(const char *data, size_t size,
 
 int PeerConnection::SendDataFrame(const char *data, size_t size,
                                   const char *stream_id) {
+  std::shared_lock lock(ice_transport_list_mutex_);
+
   for (auto &ice_trans : ice_transport_list_) {
     if (!is_ice_transport_ready_[ice_trans.first]) {
       continue;
@@ -628,6 +634,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
       LOG_INFO("]");
 
       for (auto &remote_user_id : user_id_list) {
+        std::unique_lock lock(ice_transport_list_mutex_);
         ice_transport_list_[remote_user_id] = std::make_shared<IceTransport>(
             clock_, true, transmission_id, user_id_, remote_user_id,
             ws_transport_, on_ice_status_change_, user_data_);
@@ -668,6 +675,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
       std::string user_id = msg.user_id;
       LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
                (void *)this, user_id);
+      std::unique_lock lock(ice_transport_list_mutex_);
       auto user_id_it = ice_transport_list_.find(user_id);
       if (user_id_it != ice_transport_list_.end()) {
         user_id_it->second->DestroyIceTransmission();
@@ -680,6 +688,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
     case IceWorkMsg::Type::Offer: {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
+      std::unique_lock lock(ice_transport_list_mutex_);
       if (ice_transport_list_.end() ==
           ice_transport_list_.find(remote_user_id)) {
         // Enable TURN for answer peer by default
@@ -734,6 +743,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
     case IceWorkMsg::Type::Answer: {
       std::string remote_user_id = msg.remote_user_id;
       std::string remote_sdp = msg.remote_sdp;
+      std::shared_lock lock(ice_transport_list_mutex_);
       if (ice_transport_list_.find(remote_user_id) !=
           ice_transport_list_.end()) {
         int ret = ice_transport_list_[remote_user_id]->SetRemoteSdp(remote_sdp);
@@ -757,7 +767,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
       // LOG_INFO("[{}] receive new candidate from [{}]:[{}]", user_id_,
       //          remote_user_id, new_candidate);
-
+      std::shared_lock lock(ice_transport_list_mutex_);
       if (ice_transport_list_.find(remote_user_id) !=
           ice_transport_list_.end()) {
         ice_transport_list_[remote_user_id]->SetRemoteSdp(sdp_without_cands_ +
