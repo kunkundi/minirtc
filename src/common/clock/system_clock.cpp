@@ -34,8 +34,8 @@ int64_t SystemClock::CurrentTimeNs() {
   if (timebase.denom == 0 && mach_timebase_info(&timebase) != KERN_SUCCESS) {
     return -1;  // Error case for macOS timebase info retrieval
   }
-  ticks = static_cast<int64_t>(mach_absolute_time() * timebase.numer) /
-          timebase.denom;
+  uint64_t abs_time = mach_absolute_time();
+  ticks = static_cast<int64_t>((abs_time * timebase.numer) / timebase.denom);
 
 #elif defined(__linux__)
   constexpr int64_t kNumNanosecsPerSec = 1000000000;
@@ -47,23 +47,13 @@ int64_t SystemClock::CurrentTimeNs() {
           static_cast<int64_t>(ts.tv_nsec);
 
 #elif defined(_WIN32)
-  static volatile LONG last_timegettime = 0;
-  static volatile int64_t num_wrap_timegettime = 0;
-  volatile LONG* last_timegettime_ptr = &last_timegettime;
+  static LARGE_INTEGER freq;
+  static BOOL initialized = QueryPerformanceFrequency(&freq);
+  if (!initialized) return -1;
+  LARGE_INTEGER counter;
+  if (!QueryPerformanceCounter(&counter)) return -1;
+  return static_cast<int64_t>(counter.QuadPart) * 1000000000LL / freq.QuadPart;
 
-  DWORD now = timeGetTime();
-  DWORD old = InterlockedExchange(last_timegettime_ptr, now);
-
-  if (now < old) {
-    // Handle wraparound (when timeGetTime() wraps around after ~49.7 days)
-    if (old > 0xf0000000 && now < 0x0fffffff) {
-      num_wrap_timegettime++;
-    }
-  }
-
-  // Convert milliseconds to nanoseconds and add wraparound offset
-  ticks = static_cast<int64_t>(now) + (num_wrap_timegettime << 32);
-  ticks *= 1000000;
 #endif
 
   return ticks;
@@ -92,16 +82,17 @@ int64_t SystemClock::CurrentNtpTimeMs() {
 
 int64_t SystemClock::CurrentUtcTimeNs() {
 #if defined(__linux__)
-  struct timeval time;
-  gettimeofday(&time, nullptr);
-  return (static_cast<int64_t>(time.tv_sec) * 1000000000 + time.tv_usec * 1000);
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
 #elif defined(_WIN32)
-  FILETIME file_time;
-  GetSystemTimeAsFileTime(&file_time);
-  int64_t file_time_100ns =
-      ((int64_t)file_time.dwHighDateTime << 32) | file_time.dwLowDateTime;
-  constexpr int64_t kUnixEpochFileTimeOffsetIn100ns = 116444736000000000LL;
-  return (file_time_100ns - kUnixEpochFileTimeOffsetIn100ns) * 100;
+  uint64_t file_time_100ns =
+      (static_cast<uint64_t>(file_time.dwHighDateTime) << 32) |
+      file_time.dwLowDateTime;
+  constexpr uint64_t kUnixEpochFileTimeOffsetIn100ns = 116444736000000000ULL;
+  return static_cast<int64_t>(file_time_100ns -
+                              kUnixEpochFileTimeOffsetIn100ns) *
+         100;
 #elif defined(__APPLE__)
   struct timespec ts;
   if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
