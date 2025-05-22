@@ -77,41 +77,46 @@ void IceTransportController::Create(std::string remote_user_id,
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(2000));
+  std::weak_ptr<IceTransportController> weak_this = shared_from_this();
   paced_sender_->SetOnSentPacketFunc(
-      [this](std::unique_ptr<webrtc::RtpPacketToSend> packet) {
-        if (ice_agent_) {
-          last_active_stream_ = packet->get_stream_name();
-          webrtc::Timestamp now = webrtc_clock_->CurrentTime();
-          ice_agent_->Send((const char*)packet->Buffer().data(),
-                           packet->Size());
-          OnSentPacket(*packet);
+      [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+        if (auto self = weak_this.lock()) {
+          if (self->ice_agent_) {
+            self->last_active_stream_ = packet->get_stream_name();
+            webrtc::Timestamp now = self->webrtc_clock_->CurrentTime();
+            self->ice_agent_->Send((const char*)packet->Buffer().data(),
+                                   packet->Size());
+            self->OnSentPacket(*packet);
 
-          if (packet->packet_type().has_value()) {
-            switch (packet->packet_type().value()) {
-              case webrtc::RtpPacketMediaType::kVideo:
-              case webrtc::RtpPacketMediaType::kRetransmission:
-                if (stream_senders_.find(last_active_stream_) !=
-                    stream_senders_.end()) {
-                  stream_senders_[last_active_stream_]
-                      ->transceiver->OnSentRtpPacket(std::move(packet));
-                }
-                break;
-              default:
-                break;
+            if (packet->packet_type().has_value()) {
+              switch (packet->packet_type().value()) {
+                case webrtc::RtpPacketMediaType::kVideo:
+                case webrtc::RtpPacketMediaType::kRetransmission:
+                  if (self->stream_senders_.find(self->last_active_stream_) !=
+                      self->stream_senders_.end()) {
+                    self->stream_senders_[self->last_active_stream_]
+                        ->transceiver->OnSentRtpPacket(std::move(packet));
+                  }
+                  break;
+                default:
+                  break;
+              }
             }
           }
         }
       });
 
   paced_sender_->SetGeneratePaddingFunc(
-      [this](uint32_t size, int64_t captured_timestamp_us)
+      [weak_this](uint32_t size, int64_t captured_timestamp_us)
           -> std::vector<std::unique_ptr<RtpPacket>> {
-        if (stream_senders_.find(last_active_stream_) !=
-            stream_senders_.end()) {
-          return stream_senders_[last_active_stream_]
-              ->transceiver->GeneratePadding(size, captured_timestamp_us);
-        } else {
-          return {};
+        if (auto self = weak_this.lock()) {
+          if (self->stream_senders_.find(self->last_active_stream_) !=
+              self->stream_senders_.end()) {
+            return self->stream_senders_[self->last_active_stream_]
+                ->transceiver->GeneratePadding(size, captured_timestamp_us);
+          } else {
+            return {};
+          }
         }
       });
 
@@ -420,44 +425,48 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
   }
 
   if (task_queue_encode_) {
-    auto video_frame_copy = std::make_shared<XVideoFrame>(*video_frame);
-    video_frame_copy->data = new char[video_frame->size];
-    memcpy((void*)video_frame_copy->data, video_frame->data, video_frame->size);
-    task_queue_encode_->PostTask(
-        [this, video_frame_copy, channel_name, context]() mutable {
-          XVideoFrame new_frame;
-          new_frame.data = nullptr;
-          new_frame.width = video_frame_copy->width;
-          new_frame.height = video_frame_copy->height;
-          new_frame.size = video_frame_copy->size;
-          new_frame.captured_timestamp = video_frame_copy->captured_timestamp;
-          if (context->target_width.has_value() &&
-              context->target_height.has_value() &&
-              context->target_width.value() < video_frame_copy->width &&
-              context->target_height.value() < video_frame_copy->height) {
-            resolution_adapter_->ResolutionDowngrade(
-                video_frame_copy.get(), context->target_width.value(),
-                context->target_height.value(), &new_frame);
-          } else {
-            new_frame.data = new char[video_frame_copy->size];
-            memcpy((void*)new_frame.data, video_frame_copy->data,
-                   video_frame_copy->size);
-          }
+    RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
+                       video_frame->width, video_frame->height);
+    raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
 
-          RawFrame raw_frame((const uint8_t*)new_frame.data, new_frame.size,
-                             new_frame.width, new_frame.height);
-          raw_frame.SetCapturedTimestamp(video_frame_copy->captured_timestamp);
-          delete[] new_frame.data;
+    if (context->target_width.has_value() &&
+        context->target_height.has_value() &&
+        context->target_width.value() < raw_frame.Width() &&
+        context->target_height.value() < raw_frame.Height()) {
+      RawFrame scaled_frame(context->target_width.value() *
+                            context->target_height.value() * 3 / 2);
 
-          int ret = context->codec->Encode(
-              std::move(raw_frame),
-              [this, channel_name,
-               context](const EncodedFrame& encoded_frame) -> int {
-                context->last_active_time = clock_->CurrentTimeMs();
-                return context->transceiver->SendVideo(encoded_frame);
-              });
-          delete video_frame_copy->data;
-        });
+      scaled_frame.SetWidth(context->target_width.value());
+      scaled_frame.SetHeight(context->target_height.value());
+      scaled_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
+
+      resolution_adapter_->ResolutionDowngrade(
+          raw_frame, context->target_width.value(),
+          context->target_height.value(), scaled_frame);
+
+      task_queue_encode_->PostTask([this,
+                                    scaled_frame = std::move(scaled_frame),
+                                    channel_name, context]() mutable {
+        int ret = context->codec->Encode(
+            std::move(scaled_frame),
+            [this, channel_name,
+             context](const EncodedFrame& encoded_frame) -> int {
+              context->last_active_time = clock_->CurrentTimeMs();
+              return context->transceiver->SendVideo(encoded_frame);
+            });
+      });
+    } else {
+      task_queue_encode_->PostTask([this, raw_frame = std::move(raw_frame),
+                                    channel_name, context]() mutable {
+        int ret = context->codec->Encode(
+            std::move(raw_frame),
+            [this, channel_name,
+             context](const EncodedFrame& encoded_frame) -> int {
+              context->last_active_time = clock_->CurrentTimeMs();
+              return context->transceiver->SendVideo(encoded_frame);
+            });
+      });
+    }
   }
 
   return 0;
