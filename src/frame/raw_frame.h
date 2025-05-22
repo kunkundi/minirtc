@@ -15,6 +15,7 @@ class RawFrame : public VideoFrame {
       : VideoFrame(buffer, size, width, height) {}
   RawFrame(size_t size, uint32_t width, uint32_t height)
       : VideoFrame(size, width, height) {}
+  RawFrame(size_t size) : VideoFrame(size) {}
   RawFrame(const uint8_t *buffer, size_t size) : VideoFrame(buffer, size) {}
   RawFrame() = default;
   ~RawFrame() = default;
