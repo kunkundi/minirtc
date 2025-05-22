@@ -101,7 +101,7 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   //  0: auto (dynamic imp. internal encoder)
   //  1: single thread (default value)
   // >1: number of threads
-  encoder_params_.iMultipleThreadIdc = 8;
+  encoder_params_.iMultipleThreadIdc = std::thread::hardware_concurrency();
   // The base spatial layer 0 is the only one we use.
   encoder_params_.sSpatialLayers[0].iVideoWidth = encoder_params_.iPicWidth;
   encoder_params_.sSpatialLayers[0].iVideoHeight = encoder_params_.iPicHeight;
@@ -257,107 +257,28 @@ int OpenH264Encoder::Encode(
     return -1;
   }
 
-#if 1
-  size_t required_capacity = 0;
-  size_t fragments_count = 0;
-  for (int layer = 0; layer < info.iLayerNum; ++layer) {
-    const SLayerBSInfo &layerInfo = info.sLayerInfo[layer];
-    for (int nal = 0; nal < layerInfo.iNalCount; ++nal, ++fragments_count) {
-      required_capacity += layerInfo.pNalLengthInByte[nal];
-    }
-  }
-
+  // info.iLayerNum == 1
   size_t frag = 0;
-  size_t encoded_frame_size = 0;
   for (int layer = 0; layer < info.iLayerNum; ++layer) {
     const SLayerBSInfo &layerInfo = info.sLayerInfo[layer];
     size_t layer_len = 0;
     for (int nal = 0; nal < layerInfo.iNalCount; ++nal, ++frag) {
       layer_len += layerInfo.pNalLengthInByte[nal];
     }
-    memcpy(encoded_frame_ + encoded_frame_size, layerInfo.pBsBuf, layer_len);
-    encoded_frame_size += layer_len;
-  }
-  encoded_frame_size_ = encoded_frame_size;
-
-  if (on_encoded_image) {
-    EncodedFrame encoded_frame(encoded_frame_, encoded_frame_size_,
-                               raw_frame_.iPicWidth, raw_frame_.iPicHeight);
-    encoded_frame.SetFrameType(frame_type);
-    encoded_frame.SetEncodedWidth(raw_frame_.iPicWidth);
-    encoded_frame.SetEncodedHeight(raw_frame_.iPicHeight);
-    encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
-    encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
-    on_encoded_image(encoded_frame);
-#ifdef SAVE_ENCODED_H264_STREAM
-    fwrite(encoded_frame_, 1, encoded_frame_size_, file_h264_);
-#endif
-  }
-#else
-  if (info.eFrameType == videoFrameTypeInvalid) {
-    LOG_ERROR("videoFrameTypeInvalid");
-    return -1;
-  }
-
-  int temporal_id = 0;
-
-  int encoded_frame_size = 0;
-
-  if (info.eFrameType != videoFrameTypeSkip) {
-    int layer = 0;
-    while (layer < info.iLayerNum) {
-      SLayerBSInfo *pLayerBsInfo = &(info.sLayerInfo[layer]);
-      if (pLayerBsInfo != NULL) {
-        int layer_size = 0;
-        temporal_id = pLayerBsInfo->uiTemporalId;
-        int nal_index = pLayerBsInfo->iNalCount - 1;
-        do {
-          layer_size += pLayerBsInfo->pNalLengthInByte[nal_index];
-          --nal_index;
-        } while (nal_index >= 0);
-        memcpy(encoded_frame_ + encoded_frame_size, pLayerBsInfo->pBsBuf,
-               layer_size);
-        encoded_frame_size += layer_size;
-      }
-      ++layer;
-    }
-
-    got_output = true;
-
-  } else {
-    is_keyframe = false;
-  }
-
-  if (encoded_frame_size > 0) {
-    encoded_frame_size_ = encoded_frame_size;
-
     if (on_encoded_image) {
+      EncodedFrame encoded_frame(layerInfo.pBsBuf, layer_len,
+                                 raw_frame_.iPicWidth, raw_frame_.iPicHeight);
       encoded_frame.SetFrameType(frame_type);
       encoded_frame.SetEncodedWidth(raw_frame_.iPicWidth);
       encoded_frame.SetEncodedHeight(raw_frame_.iPicHeight);
-      encoded_frame.SetCapturedTimestamp(raw_frame.captured_timestamp);
+      encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
       encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
-      on_encoded_image((char *)encoded_frame_, frame_type);
+      on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_H264_STREAM
-      fwrite(encoded_frame_, 1, encoded_frame_size_, file_h264_);
+      fwrite(layerInfo.pBsBuf, layer_len, file_h264_);
 #endif
-    }
-
-    EVideoFrameType ft_temp = info.eFrameType;
-    if (ft_temp == 1 || ft_temp == 2) {
-      is_keyframe = true;
-    } else if (ft_temp == 3) {
-      is_keyframe = false;
-      if (temporal_) {
-        if (temporal_id == 0 || temporal_id == 1) {
-          is_keyframe = true;
-        }
-      }
-    } else {
-      is_keyframe = false;
     }
   }
-#endif
 
   return 0;
 }
