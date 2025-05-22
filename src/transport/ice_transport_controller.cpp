@@ -117,6 +117,8 @@ void IceTransportController::Create(std::string remote_user_id,
           } else {
             return {};
           }
+        } else {
+          return {};
         }
       });
 

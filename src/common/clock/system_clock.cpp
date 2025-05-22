@@ -86,6 +86,8 @@ int64_t SystemClock::CurrentUtcTimeNs() {
   clock_gettime(CLOCK_REALTIME, &ts);
   return static_cast<int64_t>(ts.tv_sec) * 1000000000LL + ts.tv_nsec;
 #elif defined(_WIN32)
+  FILETIME file_time;
+  GetSystemTimeAsFileTime(&file_time);
   uint64_t file_time_100ns =
       (static_cast<uint64_t>(file_time.dwHighDateTime) << 32) |
       file_time.dwLowDateTime;
