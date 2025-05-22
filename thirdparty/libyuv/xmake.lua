@@ -9,7 +9,7 @@ package("libyuv")
     add_deps("cmake")
 
     on_install("windows", "linux", "macosx", "android", "cross", "bsd", "mingw", function (package)
-        local configs = {"-DTEST=OFF"}
+        local configs = {"-DTEST=OFF -DENABLE_SSE2=1 -DENABLE_AVX2=1"}
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
         
         io.replace("CMakeLists.txt", "INSTALL ( PROGRAMS ${CMAKE_BINARY_DIR}/yuvconvert			DESTINATION bin )", "", {plain = true})
