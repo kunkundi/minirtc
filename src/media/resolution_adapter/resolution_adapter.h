@@ -9,20 +9,24 @@
 
 #include <vector>
 
+#include "raw_frame.h"
 #include "resolution_bitrate_limits.h"
 #include "x.h"
 
 class ResolutionAdapter {
  public:
-  ResolutionAdapter() = default;
-  ~ResolutionAdapter() = default;
+  ResolutionAdapter();
+  ~ResolutionAdapter();
 
  public:
   int GetResolution(int target_bitrate, int current_width, int current_height,
                     int* target_width, int* target_height);
 
   int ResolutionDowngrade(const XVideoFrame* video_frame, int target_width,
-                          int target_height, XVideoFrame* new_frame);
+                          int target_height, XVideoFrame* scaled_frame);
+
+  int ResolutionDowngrade(const RawFrame& video_frame, int target_width,
+                          int target_height, RawFrame& scaled_frame);
 
  public:
   std::vector<ResolutionBitrateLimits> GetBitrateLimits() {
@@ -36,6 +40,9 @@ class ResolutionAdapter {
   }
 
   int SetTargetBitrate(int bitrate);
+
+ private:
+  std::vector<uint8_t> tmp_buffer_;
 };
 
 #endif

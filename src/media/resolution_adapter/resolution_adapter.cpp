@@ -3,6 +3,12 @@
 #include "libyuv.h"
 #include "log.h"
 
+constexpr size_t MAX_RESOLUTION_WIDTH = 3840 * 2160;
+
+ResolutionAdapter::ResolutionAdapter() {}
+
+ResolutionAdapter::~ResolutionAdapter() {}
+
 int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
                                      int current_height, int* target_width,
                                      int* target_height) {
@@ -46,24 +52,56 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
 
 int ResolutionAdapter::ResolutionDowngrade(const XVideoFrame* video_frame,
                                            int target_width, int target_height,
-                                           XVideoFrame* new_frame) {
+                                           XVideoFrame* scaled_frame) {
   if (target_width <= 0 || target_height <= 0) {
     return -1;
   }
 
-  new_frame->width = target_width;
-  new_frame->height = target_height;
-  new_frame->size = target_width * target_height * 3 / 2;
-  new_frame->data = new char[new_frame->size];
+  scaled_frame->width = target_width;
+  scaled_frame->height = target_height;
+  scaled_frame->size = target_width * target_height * 3 / 2;
+  scaled_frame->data = new char[scaled_frame->size];
 
-  libyuv::NV12Scale((const uint8_t*)(video_frame->data), video_frame->width,
-                    (const uint8_t*)(video_frame->data +
-                                     video_frame->width * video_frame->height),
-                    video_frame->width, video_frame->width, video_frame->height,
-                    (uint8_t*)(new_frame->data), target_width,
-                    (uint8_t*)(new_frame->data + target_width * target_height),
-                    target_width, target_width, target_height,
-                    libyuv::kFilterLinear);
+  libyuv::NV12Scale(
+      (const uint8_t*)(video_frame->data), video_frame->width,
+      (const uint8_t*)(video_frame->data +
+                       video_frame->width * video_frame->height),
+      video_frame->width, video_frame->width, video_frame->height,
+      (uint8_t*)(scaled_frame->data), target_width,
+      (uint8_t*)(scaled_frame->data + target_width * target_height),
+      target_width, target_width, target_height, libyuv::kFilterLinear);
+
+  return 0;
+}
+
+int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
+                                           int target_width, int target_height,
+                                           RawFrame& scaled_frame) {
+  if (target_width <= 0 || target_height <= 0) {
+    return -1;
+  }
+
+  int scaled_resolution = target_width * target_height * 3 / 2;
+  if (scaled_resolution > tmp_buffer_.size()) {
+    tmp_buffer_.resize(scaled_resolution);
+  }
+
+  const int src_width = video_frame.Width();
+  const int src_height = video_frame.Height();
+  const uint8_t* y_plane = video_frame.Buffer();
+  const uint8_t* uv_plane = y_plane + src_width * src_height;
+
+  uint8_t* dst_y = tmp_buffer_.data();
+  uint8_t* dst_uv = dst_y + target_width * target_height;
+
+  libyuv::NV12Scale(y_plane, src_width, uv_plane, src_width, src_width,
+                    src_height, dst_y, target_width, dst_uv, target_width,
+                    target_width, target_height, libyuv::kFilterLinear);
+
+  scaled_frame.UpdateBuffer(tmp_buffer_.data(), scaled_resolution);
+  scaled_frame.SetWidth(target_width);
+  scaled_frame.SetHeight(target_height);
+  scaled_frame.SetSize(scaled_resolution);
 
   return 0;
 }
