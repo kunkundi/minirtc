@@ -40,11 +40,6 @@ class CopyOnWriteBuffer {
 
   const uint8_t* data() const { return block_ ? block_->data : nullptr; }
 
-  uint8_t* data() {
-    EnsureUnique();
-    return block_ ? block_->data : nullptr;
-  }
-
   size_t size() const { return block_ ? block_->size : 0; }
 
   size_t capacity() const { return block_ ? block_->capacity : 0; }
