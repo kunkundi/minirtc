@@ -63,6 +63,8 @@ class OpenH264Encoder : public MediaCodec {
   unsigned char* encoded_image_ = nullptr;
   FILE* file_h264_ = nullptr;
   FILE* file_nv12_ = nullptr;
+  std::string h264_file_name_;
+  std::string nv12_file_name_;
   unsigned char* nv12_data_ = nullptr;
   unsigned int seq_ = 0;
 

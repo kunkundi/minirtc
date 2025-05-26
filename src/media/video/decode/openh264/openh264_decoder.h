@@ -35,8 +35,10 @@ class OpenH264Decoder : public MediaCodec {
   DecodedFrame* decoded_frame_ = nullptr;
   bool get_first_keyframe_ = false;
   bool skip_frame_ = false;
-  FILE* nv12_stream_ = nullptr;
-  FILE* h264_stream_ = nullptr;
+  FILE* file_nv12_ = nullptr;
+  FILE* file_h264_ = nullptr;
+  std::string h264_file_name_;
+  std::string nv12_file_name_;
   uint32_t frame_width_ = 1280;
   uint32_t frame_height_ = 720;
 

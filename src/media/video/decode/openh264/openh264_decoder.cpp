@@ -55,32 +55,36 @@ OpenH264Decoder::~OpenH264Decoder() {
   }
 
 #ifdef SAVE_DECODED_NV12_STREAM
-  if (nv12_stream_) {
-    fflush(nv12_stream_);
-    nv12_stream_ = nullptr;
+  if (file_nv12_) {
+    fflush(file_nv12_);
+    file_nv12_ = nullptr;
   }
 #endif
 
 #ifdef SAVE_RECEIVED_H264_STREAM
-  if (h264_stream_) {
-    fflush(h264_stream_);
-    h264_stream_ = nullptr;
+  if (file_h264_) {
+    fflush(file_h264_);
+    file_h264_ = nullptr;
   }
 #endif
 }
 
 int OpenH264Decoder::Init() {
 #ifdef SAVE_DECODED_NV12_STREAM
-  nv12_stream_ = fopen("nv12_receive_.yuv", "w+b");
-  if (!nv12_stream_) {
-    LOG_WARN("Fail to open nv12_receive_.yuv");
+  nv12_file_name_ = "decoded_nv12_stream_" +
+                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
+  file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
+  if (!file_nv12_) {
+    LOG_WARN("Fail to open {}", nv12_file_name_.c_str());
   }
 #endif
 
 #ifdef SAVE_RECEIVED_H264_STREAM
-  h264_stream_ = fopen("h264_receive.h264", "w+b");
-  if (!h264_stream_) {
-    LOG_WARN("Fail to open h264_receive.h264");
+  h264_file_name_ = "received_h264_stream_" +
+                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".h264";
+  file_h264_ = fopen(h264_file_name_.c_str(), "w+b");
+  if (!file_h264_) {
+    LOG_WARN("Fail to open {}", h264_file_name_.c_str());
   }
 #endif
 
@@ -127,7 +131,7 @@ int OpenH264Decoder::Decode(
   }
 
 #ifdef SAVE_RECEIVED_H264_STREAM
-  fwrite((unsigned char *)data, 1, size, h264_stream_);
+  fwrite((unsigned char *)data, 1, size, file_h264_);
 #endif
 
   if (size > 4 && (*(data + 4) & 0x1f) == 0x07) {
@@ -202,7 +206,7 @@ int OpenH264Decoder::Decode(
 
 #ifdef SAVE_DECODED_NV12_STREAM
       fwrite((unsigned char *)decoded_frame_->Buffer(), 1,
-             decoded_frame_->Size(), nv12_stream_);
+             decoded_frame_->Size(), file_nv12_);
 #endif
       on_receive_decoded_frame(decoded_frame_);
     }

@@ -164,16 +164,20 @@ int OpenH264Encoder::Init() {
   openh264_encoder_->SetOption(ENCODER_OPTION_DATAFORMAT, &video_format_);
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
-  file_nv12_ = fopen("received_nv12_stream.yuv", "w+b");
+  nv12_file_name_ = "received_nv12_stream_" +
+                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
+  file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
   if (!file_nv12_) {
-    LOG_WARN("Fail to open received_nv12_stream.yuv");
+    LOG_WARN("Fail to open {}", nv12_file_name_.c_str());
   }
 #endif
 
 #ifdef SAVE_ENCODED_H264_STREAM
-  file_h264_ = fopen("encoded_h264_stream.h264", "w+b");
+  h264_file_name_ = "encoded_h264_stream_" +
+                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".h264";
+  file_h264_ = fopen(h264_file_name_.c_str(), "w+b");
   if (!file_h264_) {
-    LOG_WARN("Fail to open encoded_h264_stream.h264");
+    LOG_WARN("Fail to open {}", h264_file_name_.c_str());
   }
 #endif
 

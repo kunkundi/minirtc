@@ -38,6 +38,8 @@ class Dav1dAv1Decoder : public MediaCodec {
 
   FILE *file_av1_ = nullptr;
   FILE *file_nv12_ = nullptr;
+  std::string av1_file_name_;
+  std::string nv12_file_name_;
 
   bool first_ = false;
 

@@ -251,16 +251,20 @@ int AomAv1Encoder::Init() {
                                    frame_height_, 1, nullptr);
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
-  file_nv12_ = fopen("received_nv12_stream.yuv", "w+b");
+  nv12_file_name_ = "received_nv12_stream_" +
+                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
+  file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
   if (!file_nv12_) {
-    LOG_ERROR("Fail to open received_nv12_stream.yuv");
+    LOG_ERROR("Fail to open {}", nv12_file_name_.c_str());
   }
 #endif
 
 #ifdef SAVE_ENCODED_AV1_STREAM
-  file_av1_ = fopen("encoded_av1_stream.ivf", "w+b");
+  av1_file_name_ = "encoded_h264_stream_" +
+                   std::to_string(reinterpret_cast<uintptr_t>(this)) + ".ivf";
+  file_av1_ = fopen(av1_file_name_.c_str(), "w+b");
   if (!file_av1_) {
-    LOG_ERROR("Fail to open encoded_av1_stream.ivf");
+    LOG_ERROR("Fail to open {}", av1_file_name_.c_str());
   }
 #endif
 

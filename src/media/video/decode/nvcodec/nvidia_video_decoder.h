@@ -32,6 +32,8 @@ class NvidiaVideoDecoder : public MediaCodec {
 
   FILE* file_h264_ = nullptr;
   FILE* file_nv12_ = nullptr;
+  std::string h264_file_name_;
+  std::string nv12_file_name_;
 };
 
 #endif
