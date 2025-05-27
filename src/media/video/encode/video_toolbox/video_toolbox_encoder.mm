@@ -114,6 +114,7 @@ int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
                        kVTProfileLevel_H264_Main_AutoLevel);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_MoreFramesBeforeStart, kCFBooleanFalse);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
+  VTSessionSetProperty(session_, kVTCompressionPropertyKey_ProfileLevel, kVTProfileLevel_H264_Baseline_5_2);
 
   CFNumberRef frameIntervalRef =
       CFNumberCreate(kCFAllocatorDefault, kCFNumberIntType, &keyframe_interval_);

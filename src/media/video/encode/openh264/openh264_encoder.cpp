@@ -110,6 +110,7 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
       encoder_params_.iTargetBitrate;
   encoder_params_.sSpatialLayers[0].iMaxSpatialBitrate =
       encoder_params_.iMaxBitrate;
+  encoder_params_.sSpatialLayers[0].uiLevelIdc = LEVEL_5_2;
 
   // SingleNalUnit
   encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
