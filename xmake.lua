@@ -201,6 +201,7 @@ target("media")
         "src/media/video/encode/openh264/*.cpp",
         "src/media/video/decode/openh264/*.cpp",
         "src/media/video/encode/video_toolbox/*.mm",
+        "src/media/video/decode/video_toolbox/*.mm",
         "src/media/video/encode/aom/*.cpp",
         "src/media/video/decode/dav1d/*.cpp",
         "src/media/video/decode/aom/*.cpp")
@@ -208,6 +209,8 @@ target("media")
         "src/media/video/decode",
         "src/media/video/encode/openh264",
         "src/media/video/decode/openh264",
+        "src/media/video/encode/video_toolbox",
+        "src/media/video/decode/video_toolbox",
         "src/media/video/encode/aom",
         "src/media/video/decode/dav1d",
         "src/media/video/decode/aom", {public = true})

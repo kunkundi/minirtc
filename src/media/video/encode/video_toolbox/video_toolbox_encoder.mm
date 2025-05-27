@@ -403,6 +403,6 @@ int VideoToolboxEncoder::GetResolution(int* width, int* height) {
   return impl_->GetResolution(width, height);
 }
 
-std::string VideoToolboxEncoder::GetEncoderName() { return "VideoToolbox H264 Encoder"; }
+std::string VideoToolboxEncoder::GetEncoderName() { return "VideoToolboxH264"; }
 
 int VideoToolboxEncoder::Release() { return impl_->Release(); }

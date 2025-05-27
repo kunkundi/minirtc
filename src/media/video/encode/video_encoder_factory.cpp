@@ -1,13 +1,12 @@
 #include "video_encoder_factory.h"
 
-#if __APPLE__
 #include "aom/aom_av1_encoder.h"
 #include "openh264/openh264_encoder.h"
+
+#if __APPLE__
 #include "video_toolbox/video_toolbox_encoder.h"
 #else
-#include "aom/aom_av1_encoder.h"
 #include "nvcodec/nvidia_video_encoder.h"
-#include "openh264/openh264_encoder.h"
 #endif
 
 #include "log.h"
@@ -31,7 +30,6 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 #else
     if (hardware_acceleration) {
       if (CheckIsHardwareAccerlerationSupported()) {
-        LOG_INFO("Use Nvidia encoder");
         return std::make_unique<NvidiaVideoEncoder>(NvidiaVideoEncoder(clock));
       } else {
         return nullptr;
