@@ -1,43 +1,150 @@
 #include "video_toolbox_decoder.h"
 #include <CoreMedia/CoreMedia.h>
 #include <VideoToolbox/VideoToolbox.h>
+#include <arpa/inet.h>
 #include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
 
-// 提取第一个SPS和PPS
-static bool ExtractSPSPPS(const std::vector<uint8_t>& data, std::vector<uint8_t>& sps,
-                          std::vector<uint8_t>& pps) {
-  size_t pos = 0;
-  while (pos + 4 < data.size()) {
-    size_t start = pos;
-    while (start + 3 < data.size() &&
-           !(data[start] == 0 && data[start + 1] == 0 &&
-             ((data[start + 2] == 1) || (data[start + 2] == 0 && data[start + 3] == 1))))
-      ++start;
-    if (start + 3 >= data.size()) break;
-    size_t start_code_len = (data[start + 2] == 1) ? 3 : 4;
-    size_t nalu_start = start + start_code_len;
-    size_t nalu_end = nalu_start;
-    while (nalu_end + 3 < data.size() &&
-           !(data[nalu_end] == 0 && data[nalu_end + 1] == 0 &&
-             ((data[nalu_end + 2] == 1) || (data[nalu_end + 2] == 0 && data[nalu_end + 3] == 1))))
-      ++nalu_end;
-    if (nalu_start >= data.size() || nalu_end > data.size() || nalu_start >= nalu_end) break;
-    uint8_t type = data[nalu_start] & 0x1F;
-    if (type == 7 && sps.empty()) sps.assign(data.begin() + nalu_start, data.begin() + nalu_end);
-    if (type == 8 && pps.empty()) pps.assign(data.begin() + nalu_start, data.begin() + nalu_end);
-    pos = nalu_end;
-    if (!sps.empty() && !pps.empty()) break;
+struct NaluUnit {
+  const uint8_t* data;
+  size_t size;
+  uint8_t type;
+};
+
+std::vector<NaluUnit> ExtractNalUnits(const uint8_t* buffer, size_t size) {
+  std::vector<NaluUnit> nalus;
+
+  size_t i = 0;
+  while (i + 4 < size) {
+    // 查找 start code
+    size_t start_code_len = 0;
+    if (buffer[i] == 0x00 && buffer[i + 1] == 0x00) {
+      if (buffer[i + 2] == 0x01) {
+        start_code_len = 3;
+      } else if (buffer[i + 2] == 0x00 && buffer[i + 3] == 0x01) {
+        start_code_len = 4;
+      }
+    }
+
+    if (start_code_len == 0) {
+      ++i;
+      continue;
+    }
+
+    size_t nalu_start = i + start_code_len;
+
+    // 查找下一个起始码
+    size_t next_start = nalu_start;
+    while (next_start + 4 < size) {
+      if (buffer[next_start] == 0x00 && buffer[next_start + 1] == 0x00 &&
+          (buffer[next_start + 2] == 0x01 ||
+           (buffer[next_start + 2] == 0x00 && buffer[next_start + 3] == 0x01))) {
+        break;
+      }
+      ++next_start;
+    }
+
+    size_t nalu_size = next_start - nalu_start;
+    if (nalu_size > 0 && nalu_start + nalu_size <= size) {
+      uint8_t type = buffer[nalu_start] & 0x1F;
+      nalus.push_back(NaluUnit{buffer + nalu_start, nalu_size, type});
+    }
+
+    i = next_start;
   }
+
+  return nalus;
+}
+
+bool ExtractSpsPps(const uint8_t* buffer, size_t size, std::vector<uint8_t>& sps,
+                   std::vector<uint8_t>& pps) {
+  auto nalus = ExtractNalUnits(buffer, size);
+  for (const auto& nalu : nalus) {
+    if (nalu.type == 7) {
+      sps.assign(nalu.data, nalu.data + nalu.size);
+    } else if (nalu.type == 8) {
+      pps.assign(nalu.data, nalu.data + nalu.size);
+    }
+  }
+
   return !sps.empty() && !pps.empty();
+}
+
+std::vector<NaluUnit> ExtractVideoNalUnits(const uint8_t* buffer, size_t size) {
+  auto all_nalus = ExtractNalUnits(buffer, size);
+  std::vector<NaluUnit> filtered;
+  for (const auto& nalu : all_nalus) {
+    if (nalu.type != 7 && nalu.type != 8) {
+      filtered.push_back(nalu);
+    }
+  }
+  return filtered;
+}
+
+std::vector<uint8_t> ConvertAnnexBToAVCCFiltered(const uint8_t* data, size_t size) {
+  std::vector<uint8_t> avcc_data;
+  auto nalus = ExtractVideoNalUnits(data, size);
+  for (const auto& nalu : nalus) {
+    uint32_t len = htonl(static_cast<uint32_t>(nalu.size));
+    avcc_data.insert(avcc_data.end(), reinterpret_cast<uint8_t*>(&len),
+                     reinterpret_cast<uint8_t*>(&len) + 4);
+    avcc_data.insert(avcc_data.end(), nalu.data, nalu.data + nalu.size);
+  }
+  return avcc_data;
 }
 
 // 简单的转换函数
 static std::unique_ptr<DecodedFrame> ConvertToDecodedFrame(CVImageBufferRef imageBuffer,
                                                            CMTime pts) {
-  return std::unique_ptr<DecodedFrame>(new DecodedFrame());
+  if (!imageBuffer || !CVPixelBufferIsPlanar(imageBuffer)) {
+    return nullptr;
+  }
+
+  CVPixelBufferRef pixelBuffer = static_cast<CVPixelBufferRef>(imageBuffer);
+  CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+
+  size_t width = CVPixelBufferGetWidth(pixelBuffer);
+  size_t height = CVPixelBufferGetHeight(pixelBuffer);
+  size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
+  size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
+
+  const uint8_t* y_plane =
+      static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
+  const uint8_t* uv_plane =
+      static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
+
+  // NV12: Y plane (W*H) + interleaved UV plane (W*H/2)
+  size_t nv12_size = y_stride * height + uv_stride * height / 2;
+
+  size_t nv12_frame_capacity = width * height * 3 / 2;
+  uint8_t* nv12_frame = new uint8_t[nv12_size];
+  std::unique_ptr<DecodedFrame> frame = std::make_unique<DecodedFrame>(
+      nv12_size, static_cast<uint32_t>(width), static_cast<uint32_t>(height));
+
+  // Copy Y plane
+  for (size_t i = 0; i < height; ++i) {
+    memcpy(nv12_frame + i * width, y_plane + i * y_stride, width);
+  }
+
+  // Copy UV plane
+  uint8_t* uv_dst = nv12_frame + width * height;
+  for (size_t i = 0; i < height / 2; ++i) {
+    memcpy(uv_dst + i * width, uv_plane + i * uv_stride, width);
+  }
+
+  frame->UpdateBuffer(nv12_frame, nv12_size);
+  frame->SetWidth(width);
+  frame->SetHeight(height);
+  frame->SetDecodedWidth(static_cast<uint32_t>(width));
+  frame->SetDecodedHeight(static_cast<uint32_t>(height));
+  frame->SetDecodedTimestamp(static_cast<int64_t>(CMTimeGetSeconds(pts) * 1'000'000));
+
+  CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+
+  delete[] nv12_frame;
+  return frame;
 }
 
 class VideoToolboxDecoder::Impl {
@@ -62,65 +169,62 @@ class VideoToolboxDecoder::Impl {
 
   int Decode(std::unique_ptr<ReceivedFrame> frame,
              std::function<void(const DecodedFrame*)> on_decoded_cb) {
-    if (!frame) return -1;
-
-    std::vector<uint8_t> sps, pps;
-    std::vector<uint8_t> data(frame->Buffer(), frame->Buffer() + frame->Size());
-    if (!ExtractSPSPPS(data, sps, pps)) {
-      LOG_ERROR("Failed to extract SPS/PPS from frame data");
+    if (!frame) {
+      LOG_ERROR("Received frame is null");
       return -1;
     }
 
-    if (sps != last_sps_ || pps != last_pps_) {
-      if (!CreateSession(sps, pps)) {
-        LOG_ERROR("Failed to create decompression session");
+    const uint8_t* data = frame->Buffer();
+    size_t size = frame->Size();
+
+    if (size > 4 && (*(data + 4) & 0x1f) == 0x07) {
+      std::vector<uint8_t> sps, pps;
+      if (!ExtractSpsPps(data, size, sps, pps)) {
+        LOG_ERROR("Failed to extract SPS/PPS from frame data");
         return -1;
       }
-      last_sps_ = sps;
-      last_pps_ = pps;
+
+      if (sps != last_sps_ || pps != last_pps_) {
+        if (!CreateSession(sps, pps)) {
+          LOG_ERROR("Failed to create decompression session");
+          return -1;
+        }
+        last_sps_ = sps;
+        last_pps_ = pps;
+      }
     }
 
-    if (!decompression_session_) return -1;
+    auto avcc_data = ConvertAnnexBToAVCCFiltered(frame->Buffer(), frame->Size());
+    const uint8_t* data1 = avcc_data.data();
+    size_t size1 = avcc_data.size();
 
-    // 转换为AVCC格式
-    std::vector<uint8_t> avcc_data;
-    size_t pos = 0;
-    while (pos + 4 < data.size()) {
-      size_t start = pos;
-      while (start + 3 < data.size() &&
-             !(data[start] == 0 && data[start + 1] == 0 &&
-               ((data[start + 2] == 1) || (data[start + 2] == 0 && data[start + 3] == 1))))
-        ++start;
-      if (start + 3 >= data.size()) break;
-      size_t start_code_len = (data[start + 2] == 1) ? 3 : 4;
-      size_t nalu_start = start + start_code_len;
-      size_t nalu_end = nalu_start;
-      while (nalu_end + 3 < data.size() &&
-             !(data[nalu_end] == 0 && data[nalu_end + 1] == 0 &&
-               ((data[nalu_end + 2] == 1) || (data[nalu_end + 2] == 0 && data[nalu_end + 3] == 1))))
-        ++nalu_end;
-      if (nalu_start >= data.size() || nalu_end > data.size() || nalu_start >= nalu_end) break;
-      uint32_t len = htonl(static_cast<uint32_t>(nalu_end - nalu_start));
-      avcc_data.insert(avcc_data.end(), reinterpret_cast<uint8_t*>(&len),
-                       reinterpret_cast<uint8_t*>(&len) + 4);
-      avcc_data.insert(avcc_data.end(), data.begin() + nalu_start, data.begin() + nalu_end);
-      pos = nalu_end;
+    if (!decompression_session_) {
+      LOG_ERROR("Decompression session is not initialized");
+      return -1;
     }
 
     // 创建CMBlockBuffer
     CMBlockBufferRef block_buffer = nullptr;
     OSStatus status = CMBlockBufferCreateWithMemoryBlock(
-        nullptr, avcc_data.data(), avcc_data.size(), kCFAllocatorNull, nullptr, 0, avcc_data.size(),
-        0, &block_buffer);
-    if (status != kCMBlockBufferNoErr) return -1;
+        nullptr, (void*)data1, size1, kCFAllocatorNull, nullptr, 0, size1, 0, &block_buffer);
+    if (status != kCMBlockBufferNoErr) {
+      LOG_ERROR("Failed to create block buffer");
+      return -1;
+    }
 
     // 创建CMSampleBuffer
     CMSampleBufferRef sample_buffer = nullptr;
     CMSampleTimingInfo timing = {};
+    timing.duration = kCMTimeInvalid;
+    timing.presentationTimeStamp = CMTimeMake(frame->ReceivedTimestamp(), 1000);  // 假设 Pts 是毫秒
+    timing.decodeTimeStamp = kCMTimeInvalid;
     status = CMSampleBufferCreateReady(nullptr, block_buffer, format_desc_, 1, 1, &timing, 0,
                                        nullptr, &sample_buffer);
     CFRelease(block_buffer);
-    if (status != noErr) return -1;
+    if (status != noErr) {
+      LOG_ERROR("Failed to create sample buffer");
+      return -1;
+    }
 
     // 送入解码
     VTDecodeFrameFlags flags = kVTDecodeFrame_EnableAsynchronousDecompression;
@@ -150,7 +254,10 @@ class VideoToolboxDecoder::Impl {
     const size_t sizes[] = {sps.size(), pps.size()};
     OSStatus status = CMVideoFormatDescriptionCreateFromH264ParameterSets(nullptr, 2, sets, sizes,
                                                                           4, &format_desc_);
-    if (status != noErr) return false;
+    if (status != noErr) {
+      LOG_ERROR("Failed to create format description from SPS/PPS");
+      return false;
+    }
 
     VTDecompressionOutputCallbackRecord callback = {};
     callback.decompressionOutputCallback = &DecodeCallback;
