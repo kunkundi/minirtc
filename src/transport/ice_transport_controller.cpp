@@ -642,10 +642,10 @@ void IceTransportController::OnReceiveCompleteData(
 int IceTransportController::CreateStreamCodecs(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     bool av1_encoding) {
-  bool video_sender_first_time = true;
-  bool audio_sender_first_time = true;
-  bool video_receiver_first_time = true;
-  bool audio_receiver_first_time = true;
+  bool video_sender_init_first_time = true;
+  bool audio_sender_init_first_time = true;
+  bool video_receiver_init_first_time = true;
+  bool audio_receiver_init_first_time = true;
   for (auto& [channel_name, context] : stream_senders_) {
     if (!context) {
       LOG_ERROR("Failed to find stream sender [{}]", channel_name);
@@ -668,11 +668,11 @@ int IceTransportController::CreateStreamCodecs(
           LOG_ERROR("Encoder [{}] init failed", channel_name);
           return -1;
         }
-        if (video_sender_first_time) {
+        if (video_sender_init_first_time) {
           if (!stream_senders_.empty()) {
             LOG_INFO("Use video encoder [{}]",
                      context->codec->GetEncoderName());
-            video_sender_first_time = false;
+            video_sender_init_first_time = false;
           }
         }
       }
@@ -684,9 +684,9 @@ int IceTransportController::CreateStreamCodecs(
           LOG_ERROR("Audio encoder [{}] init failed", channel_name);
           return -1;
         }
-        if (audio_receiver_first_time) {
+        if (audio_sender_init_first_time) {
           LOG_INFO("Use audio encoder [{}]", context->codec->GetEncoderName());
-          audio_receiver_first_time = false;
+          audio_sender_init_first_time = false;
         }
       }
     }
@@ -713,8 +713,9 @@ int IceTransportController::CreateStreamCodecs(
           LOG_ERROR("Decoder [{}] init failed", channel_name);
           return -1;
         }
-        if (video_receiver_first_time) {
-          LOG_INFO("Use video decoder [{}]", context->codec->GetEncoderName());
+        if (video_receiver_init_first_time) {
+          LOG_INFO("Use video decoder [{}]", context->codec->GetDecoderName());
+          video_receiver_init_first_time = false;
         }
       } else if (context->type == StreamType::kAudio) {
         context->codec =
@@ -723,18 +724,13 @@ int IceTransportController::CreateStreamCodecs(
           LOG_ERROR("Audio decoder [{}] init failed", channel_name);
           return -1;
         }
-        if (audio_receiver_first_time) {
+        if (audio_receiver_init_first_time) {
           LOG_INFO("Create audio decoder [{}] finish",
                    context->codec->GetDecoderName());
-          audio_receiver_first_time = false;
+          audio_receiver_init_first_time = false;
         }
       }
     }
-  }
-
-  if (!stream_receivers_.empty()) {
-    LOG_INFO("Use video decoder [{}]",
-             stream_receivers_.begin()->second->codec->GetEncoderName());
   }
 
   return 0;

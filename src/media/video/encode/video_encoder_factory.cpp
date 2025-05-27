@@ -20,15 +20,12 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     bool av1_encoding) {
   if (av1_encoding) {
-    LOG_INFO("Use AOM encoder");
     return std::make_unique<AomAv1Encoder>(AomAv1Encoder(clock));
   } else {
 #if __APPLE__
     if (hardware_acceleration) {
-      LOG_INFO("Use VideoToolbox encoder");
       return std::make_unique<VideoToolboxEncoder>(VideoToolboxEncoder(clock));
     } else {
-      LOG_INFO("Use OpenH264 encoder");
       return std::make_unique<OpenH264Encoder>(OpenH264Encoder(clock));
     }
 #else
@@ -40,7 +37,6 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
         return nullptr;
       }
     } else {
-      LOG_INFO("Use OpenH264 encoder");
       return std::make_unique<OpenH264Encoder>(OpenH264Encoder(clock));
     }
 #endif
