@@ -28,6 +28,7 @@ elseif is_os("linux") then
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
 elseif is_os("macosx") then
+    -- add_ldflags("-fsanitize=address")
     add_ldflags("-Wl,-ld_classic")
     add_cxflags("-Wno-unused-variable")
     add_frameworks("VideoToolbox")
