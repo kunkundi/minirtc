@@ -8,10 +8,6 @@
 NvidiaVideoDecoder::NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 NvidiaVideoDecoder::~NvidiaVideoDecoder() {
-  if (decoded_frame_) {
-    delete decoded_frame_;
-  }
-
 #ifdef SAVE_DECODED_NV12_STREAM
   if (file_nv12_) {
     fflush(file_nv12_);
@@ -28,9 +24,18 @@ NvidiaVideoDecoder::~NvidiaVideoDecoder() {
   }
 #endif
 
+  if (decoder_) {
+    delete decoder_;
+    decoder_ = nullptr;
+  }
+
   if (cuda_context_) {
     cuCtxDestroy(cuda_context_);
     cuda_context_ = nullptr;
+  }
+
+  if (decoded_frame_) {
+    delete decoded_frame_;
   }
 }
 
@@ -51,8 +56,8 @@ int NvidiaVideoDecoder::Init() {
     return -1;
   }
 
-  decoder = new NvDecoder(cuda_context_, false, cudaVideoCodec_H264, true,
-                          false, nullptr, nullptr, 4096, 4096, 1000, false);
+  decoder_ = new NvDecoder(cuda_context_, false, cudaVideoCodec_H264, true,
+                           false, nullptr, nullptr, 4096, 4096, 1000, false);
 
   if (!decoded_frame_) {
     decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,
@@ -83,7 +88,7 @@ int NvidiaVideoDecoder::Init() {
 int NvidiaVideoDecoder::Decode(
     std::unique_ptr<ReceivedFrame> received_frame,
     std::function<void(const DecodedFrame *)> on_receive_decoded_frame) {
-  if (!decoder) {
+  if (!decoder_) {
     return -1;
   }
 
@@ -98,56 +103,26 @@ int NvidiaVideoDecoder::Decode(
     LOG_INFO("Receive key frame");
   }
 
-  int num_frame_returned = decoder->Decode(data, (int)size);
+  int num_frame_returned = decoder_->Decode(data, (int)size);
   for (size_t i = 0; i < num_frame_returned; ++i) {
-    cudaVideoSurfaceFormat format = decoder->GetOutputFormat();
+    cudaVideoSurfaceFormat format = decoder_->GetOutputFormat();
     if (format == cudaVideoSurfaceFormat_NV12) {
       uint8_t *decoded_frame_buffer = nullptr;
-      decoded_frame_buffer = decoder->GetFrame();
+      decoded_frame_buffer = decoder_->GetFrame();
       if (decoded_frame_buffer) {
         if (on_receive_decoded_frame) {
-          // int c_w, c_h, w, h, r_w, r_h;
-          // c_w = decoder->GetVideoFormatInfo().coded_width;
-          // c_h = decoder->GetVideoFormatInfo().coded_height;
-          // w = decoder->GetWidth();
-          // h = decoder->GetHeight();
-
-          // if (c_w > c_h && w > h || c_w < c_h && w < h) {
-          //   r_w = w;
-          //   r_h = h;
-          // } else {
-          //   r_w = h;
-          //   r_h = w;
-          // }
-
-          // LOG_WARN("{} {} {} {} | {} {} {}",
-          //          decoder->GetVideoFormatInfo().coded_width,
-          //          decoder->GetVideoFormatInfo().coded_height,
-          //          decoder->GetVideoFormatInfo().display_area.right,
-          //          decoder->GetVideoFormatInfo().display_area.bottom,
-          //          decoder->GetWidth(), decoder->GetHeight(),
-          //          decoder->GetDecodeWidth());
-
-          // decoded_frame_->UpdateBuffer(decoded_frame_buffer, r_w * r_h * 3 /
-          // 2); decoded_frame_->SetWidth(r_w); decoded_frame_->SetHeight(r_h);
-          // decoded_frame_->SetDecodedWidth(r_w);
-          // decoded_frame_->SetDecodedHeight(r_h);
           decoded_frame_->UpdateBuffer(
               decoded_frame_buffer,
-              decoder->GetWidth() * decoder->GetHeight() * 3 / 2);
-          decoded_frame_->SetWidth(decoder->GetWidth());
-          decoded_frame_->SetHeight(decoder->GetHeight());
-          decoded_frame_->SetDecodedWidth(decoder->GetWidth());
-          decoded_frame_->SetDecodedHeight(decoder->GetHeight());
+              decoder_->GetWidth() * decoder_->GetHeight() * 3 / 2);
+          decoded_frame_->SetWidth(decoder_->GetWidth());
+          decoded_frame_->SetHeight(decoder_->GetHeight());
+          decoded_frame_->SetDecodedWidth(decoder_->GetWidth());
+          decoded_frame_->SetDecodedHeight(decoder_->GetHeight());
           decoded_frame_->SetReceivedTimestamp(
               received_frame->ReceivedTimestamp());
           decoded_frame_->SetCapturedTimestamp(
               received_frame->CapturedTimestamp());
           decoded_frame_->SetDecodedTimestamp(clock_->CurrentTime());
-
-          // LOG_WARN("2 {}x{}", decoded_frame_->DecodedWidth(),
-          //          decoded_frame_->DecodedHeight());
-
 #ifdef SAVE_DECODED_NV12_STREAM
           fwrite((unsigned char *)decoded_frame_->Buffer(), 1,
                  decoded_frame_->Size(), file_nv12_);

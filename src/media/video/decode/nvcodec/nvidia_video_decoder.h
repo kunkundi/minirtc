@@ -21,7 +21,7 @@ class NvidiaVideoDecoder : public MediaCodec {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  NvDecoder* decoder = nullptr;
+  NvDecoder* decoder_ = nullptr;
   CUcontext cuda_context_ = NULL;
   CUdevice cuda_device_ = 0;
   DecodedFrame* decoded_frame_ = nullptr;

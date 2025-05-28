@@ -160,6 +160,11 @@ void IceTransportController::Create(std::string remote_user_id,
 void IceTransportController::Destroy() {
   is_running_.store(false);
 
+  task_queue_cc_->ClearTasks();
+  task_queue_encode_->ClearTasks();
+  task_queue_decode_->ClearTasks();
+  task_queue_trans_fb_->ClearTasks();
+
   for (auto& [_, context] : stream_senders_) {
     if (context) {
       if (context->type == StreamType::kVideo) {
