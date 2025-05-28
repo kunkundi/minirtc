@@ -35,8 +35,6 @@ class VideoToolboxEncoder : public MediaCodec {
 
   std::string GetEncoderName();
 
-  int Release();
-
  private:
   static void OutputCallback(void* outputCallbackRefCon,
                              void* sourceFrameRefCon, OSStatus status,

@@ -1,3 +1,9 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2025-05-28
+ * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _VIDEO_TOOLBOX_DECODER_H_
 #define _VIDEO_TOOLBOX_DECODER_H_
 
@@ -21,4 +27,4 @@ class VideoToolboxDecoder : public VideoDecoder {
   std::shared_ptr<Impl> impl_;
 };
 
-#endif  // _VIDEO_TOOLBOX_DECODER_H_
+#endif
