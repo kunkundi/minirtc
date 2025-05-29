@@ -8,32 +8,6 @@
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_H264_STREAM
 
-void CopyYuvWithStride(uint8_t *src_y, uint8_t *src_u, uint8_t *src_v,
-                       int width, int height, int stride_y, int stride_u,
-                       int stride_v, uint8_t *yuv420p_frame) {
-  int actual_stride_y = width;
-  int actual_stride_u = width / 2;
-  int actual_stride_v = width / 2;
-
-  for (int row = 0; row < height; row++) {
-    memcpy(yuv420p_frame, src_y, actual_stride_y);
-    src_y += stride_y;
-    yuv420p_frame += actual_stride_y;
-  }
-
-  for (int row = 0; row < height / 2; row++) {
-    memcpy(yuv420p_frame, src_u, actual_stride_u);
-    src_u += stride_u;
-    yuv420p_frame += actual_stride_u;
-  }
-
-  for (int row = 0; row < height / 2; row++) {
-    memcpy(yuv420p_frame, src_v, actual_stride_v);
-    src_v += stride_v;
-    yuv420p_frame += actual_stride_v;
-  }
-}
-
 OpenH264Decoder::OpenH264Decoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 OpenH264Decoder::~OpenH264Decoder() {
@@ -177,23 +151,24 @@ int OpenH264Decoder::Decode(
 
   if (sDstBufInfo.iBufferStatus == 1) {
     if (on_receive_decoded_frame) {
-      CopyYuvWithStride(
-          yuv420p_planes_[0], yuv420p_planes_[1], yuv420p_planes_[2],
-          sDstBufInfo.UsrData.sSystemBuffer.iWidth,
-          sDstBufInfo.UsrData.sSystemBuffer.iHeight,
-          sDstBufInfo.UsrData.sSystemBuffer.iStride[0],
-          sDstBufInfo.UsrData.sSystemBuffer.iStride[1],
-          sDstBufInfo.UsrData.sSystemBuffer.iStride[2], yuv420p_frame_);
+      int stride_y = sDstBufInfo.UsrData.sSystemBuffer.iStride[0];
+      int stride_u = sDstBufInfo.UsrData.sSystemBuffer.iStride[1];
+      int stride_v = sDstBufInfo.UsrData.sSystemBuffer.iStride[1];
 
-      libyuv::I420ToNV12(
-          (const uint8_t *)yuv420p_frame_, frame_width_,
-          (const uint8_t *)yuv420p_frame_ + frame_width_ * frame_height_,
-          frame_width_ / 2,
-          (const uint8_t *)yuv420p_frame_ +
-              frame_width_ * frame_height_ * 5 / 4,
-          frame_width_ / 2, (uint8_t *)nv12_frame_, frame_width_,
-          (uint8_t *)nv12_frame_ + frame_width_ * frame_height_, frame_width_,
-          frame_width_, frame_height_);
+      libyuv::I420Copy(
+          yuv420p_planes_[0], stride_y, yuv420p_planes_[1], stride_u,
+          yuv420p_planes_[2], stride_v, yuv420p_frame_, frame_width_,
+          yuv420p_frame_ + frame_width_ * frame_height_, frame_width_ / 2,
+          yuv420p_frame_ + frame_width_ * frame_height_ * 5 / 4,
+          frame_width_ / 2, frame_width_, frame_height_);
+
+      libyuv::I420ToNV12(yuv420p_frame_, frame_width_,
+                         yuv420p_frame_ + frame_width_ * frame_height_,
+                         frame_width_ / 2,
+                         yuv420p_frame_ + frame_width_ * frame_height_ * 5 / 4,
+                         frame_width_ / 2, nv12_frame_, frame_width_,
+                         nv12_frame_ + frame_width_ * frame_height_,
+                         frame_width_, frame_width_, frame_height_);
 
       decoded_frame_->UpdateBuffer(nv12_frame_, nv12_frame_capacity_);
       decoded_frame_->SetWidth(received_frame->Width());
