@@ -221,7 +221,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // Protects against ProcessPackets reentry from packet sent receipts.
   bool processing_packets_ = false;
 
-  std::shared_ptr<TaskQueue> task_queue_;
+  std::shared_ptr<TaskQueue> task_queue_pacer_;
   int64_t transport_seq_ = 0;
   std::map<int32_t, int16_t> ssrc_seq_;
 

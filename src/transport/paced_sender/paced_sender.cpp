@@ -20,7 +20,7 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
       include_overhead_(false),
       last_send_time_(webrtc::Timestamp::Millis(0)),
       last_call_time_(webrtc::Timestamp::Millis(0)),
-      task_queue_(task_queue) {}
+      task_queue_pacer_(task_queue) {}
 
 PacedSender::~PacedSender() { is_shutdown_ = true; }
 
@@ -82,7 +82,7 @@ void PacedSender::SetPacingRates(webrtc::DataRate pacing_rate,
 
 void PacedSender::EnqueuePackets(
     std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> packets) {
-  task_queue_->PostTask([this, packets = std::move(packets)]() mutable {
+  task_queue_pacer_->PostTask([this, packets = std::move(packets)]() mutable {
     for (auto &packet : packets) {
       size_t packet_size = packet->payload_size() + packet->padding_size();
       if (include_overhead_) {
@@ -97,7 +97,7 @@ void PacedSender::EnqueuePackets(
 
 void PacedSender::EnqueuePacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
-  task_queue_->PostTask([this, packet = std::move(packet)]() mutable {
+  task_queue_pacer_->PostTask([this, packet = std::move(packet)]() mutable {
     size_t packet_size = packet->payload_size() + packet->padding_size();
     if (include_overhead_) {
       packet_size += packet->headers_size();
@@ -110,7 +110,7 @@ void PacedSender::EnqueuePacket(
 }
 
 void PacedSender::RemovePacketsForSsrc(uint32_t ssrc) {
-  task_queue_->PostTask([this, ssrc] {
+  task_queue_pacer_->PostTask([this, ssrc] {
     pacing_controller_.RemovePacketsForSsrc(ssrc);
     MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
   });
@@ -238,7 +238,7 @@ void PacedSender::MaybeProcessPackets(
   if (next_process_time_.IsMinusInfinity() ||
       next_process_time_ > next_send_time) {
     // Prefer low precision if allowed and not probing.
-    task_queue_->PostDelayedTask(
+    task_queue_pacer_->PostDelayedTask(
         [this, next_send_time]() { MaybeProcessPackets(next_send_time); },
         time_to_next_process.RoundUpTo(webrtc::TimeDelta::Millis(1)).ms());
     next_process_time_ = next_send_time;

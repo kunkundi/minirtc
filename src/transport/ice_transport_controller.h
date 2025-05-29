@@ -26,6 +26,7 @@
 #include "paced_sender.h"
 #include "resolution_adapter.h"
 #include "task_queue.h"
+#include "task_queue_lock_free.h"
 #include "transport_feedback_adapter.h"
 #include "video_channel_receive.h"
 #include "video_channel_send.h"
@@ -157,9 +158,9 @@ class IceTransportController
   std::unique_ptr<CongestionControl> controller_;
   BitrateProber prober_;
   std::shared_ptr<TaskQueue> task_queue_cc_;
-  std::shared_ptr<TaskQueue> task_queue_encode_;
-  std::shared_ptr<TaskQueue> task_queue_decode_;
-  std::shared_ptr<TaskQueue> task_queue_trans_fb_;
+  std::shared_ptr<TaskQueueLockFree> task_queue_encode_;
+  std::shared_ptr<TaskQueueLockFree> task_queue_decode_;
+  std::shared_ptr<TaskQueueLockFree> task_queue_trans_fb_;
   webrtc::DataSize congestion_window_size_;
   bool is_congested_ = false;
   std::string last_active_stream_;

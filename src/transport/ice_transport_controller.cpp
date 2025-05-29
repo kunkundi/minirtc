@@ -30,16 +30,16 @@ IceTransportController::IceTransportController(
 
 IceTransportController::~IceTransportController() {
   if (task_queue_cc_) {
-    task_queue_cc_->ClearTasks();
+    task_queue_cc_->Stop();
   }
   if (task_queue_encode_) {
-    task_queue_encode_->ClearTasks();
+    task_queue_encode_->Stop();
   }
   if (task_queue_decode_) {
-    task_queue_decode_->ClearTasks();
+    task_queue_decode_->Stop();
   }
   if (task_queue_trans_fb_) {
-    task_queue_trans_fb_->ClearTasks();
+    task_queue_trans_fb_->Stop();
   }
 
   user_data_ = nullptr;
@@ -71,10 +71,10 @@ void IceTransportController::Create(std::string remote_user_id,
   CreateCodecs(clock_, video_codec_payload_type, hardware_acceleration);
 
   task_queue_cc_ = std::make_shared<TaskQueue>("congest control");
-  task_queue_encode_ = std::make_shared<TaskQueue>("encode");
-  task_queue_decode_ = std::make_shared<TaskQueue>("decode");
+  task_queue_encode_ = std::make_shared<TaskQueueLockFree>("encode");
+  task_queue_decode_ = std::make_shared<TaskQueueLockFree>("decode");
   task_queue_trans_fb_ =
-      std::make_shared<TaskQueue>("transport feedback adapter");
+      std::make_shared<TaskQueueLockFree>("transport feedback adapter");
 
   controller_ = std::make_unique<CongestionControl>();
   paced_sender_ =
@@ -160,10 +160,10 @@ void IceTransportController::Create(std::string remote_user_id,
 void IceTransportController::Destroy() {
   is_running_.store(false);
 
-  task_queue_cc_->ClearTasks();
-  task_queue_encode_->ClearTasks();
-  task_queue_decode_->ClearTasks();
-  task_queue_trans_fb_->ClearTasks();
+  task_queue_cc_->Stop();
+  task_queue_encode_->Stop();
+  task_queue_decode_->Stop();
+  task_queue_trans_fb_->Stop();
 
   for (auto& [_, context] : stream_senders_) {
     if (context) {
