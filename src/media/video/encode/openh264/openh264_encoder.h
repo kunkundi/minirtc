@@ -52,8 +52,8 @@ class OpenH264Encoder : public MediaCodec {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  uint32_t frame_width_ = 1280;
-  uint32_t frame_height_ = 720;
+  uint32_t frame_width_ = 3840;
+  uint32_t frame_height_ = 2160;
   int key_frame_interval_ = 3000;
   int target_bitrate_ = 10000000;
   int max_bitrate_ = 10000000;

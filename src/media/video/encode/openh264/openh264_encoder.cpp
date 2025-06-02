@@ -89,19 +89,21 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   encoder_params_.iPicWidth = width;
   encoder_params_.iPicHeight = height;
   encoder_params_.iTargetBitrate = target_bitrate_;
-  encoder_params_.iMaxBitrate = max_bitrate_;
+  encoder_params_.iMaxBitrate = UNSPECIFIED_BIT_RATE;
   encoder_params_.iRCMode = RC_BITRATE_MODE;
-  encoder_params_.fMaxFrameRate = 60;
-  encoder_params_.bEnableFrameSkip = false;
+  encoder_params_.fMaxFrameRate = 30;
+  encoder_params_.bEnableFrameSkip = true;
   encoder_params_.uiIntraPeriod = key_frame_interval_;
+  encoder_params_.eSpsPpsIdStrategy = SPS_LISTING;
   encoder_params_.uiMaxNalSize = 0;
-  encoder_params_.iMaxQp = 38;
-  encoder_params_.iMinQp = 16;
+  encoder_params_.iMaxQp = 37;
+  encoder_params_.iMinQp = 24;
   // Threading model: use auto.
   //  0: auto (dynamic imp. internal encoder)
   //  1: single thread (default value)
   // >1: number of threads
-  encoder_params_.iMultipleThreadIdc = std::thread::hardware_concurrency();
+  encoder_params_.iMultipleThreadIdc =
+      std::min((int)std::thread::hardware_concurrency() / 2, 8);
   // The base spatial layer 0 is the only one we use.
   encoder_params_.sSpatialLayers[0].iVideoWidth = encoder_params_.iPicWidth;
   encoder_params_.sSpatialLayers[0].iVideoHeight = encoder_params_.iPicHeight;
@@ -115,11 +117,9 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   // SingleNalUnit
   encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
   encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceMode =
-      SM_SIZELIMITED_SLICE;
-  encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint =
-      static_cast<unsigned int>(max_payload_size_);
-  LOG_INFO("Encoder is configured with NALU constraint: {} bytes",
-           max_payload_size_);
+      SM_SINGLE_SLICE;
+  // encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint =
+  //     static_cast<unsigned int>(max_payload_size_);
 
   return ret;
 }
@@ -128,6 +128,13 @@ int OpenH264Encoder::ResetEncodeResolution(unsigned int width,
                                            unsigned int height) {
   frame_width_ = width;
   frame_height_ = height;
+
+  if (openh264_encoder_) {
+    openh264_encoder_->Uninitialize();
+  } else {
+    LOG_ERROR("Invalid openh264 encoder");
+    return -1;
+  }
 
   if (0 != InitEncoderParams(width, height)) {
     LOG_ERROR("Reset encoder params [{}x{}] failed", width, height);
@@ -236,20 +243,20 @@ int OpenH264Encoder::Encode(
   }
 
   raw_frame_ = {0};
-  raw_frame_.iPicWidth = raw_frame.Width();
-  raw_frame_.iPicHeight = raw_frame.Height();
-  raw_frame_.iColorFormat = video_format_;
-  raw_frame_.uiTimeStamp =
-      std::chrono::system_clock::now().time_since_epoch().count();
+  raw_frame_.iPicWidth = encoder_params_.iPicWidth;
+  raw_frame_.iPicHeight = encoder_params_.iPicHeight;
+  raw_frame_.iColorFormat = EVideoFormatType::videoFormatI420;
+  raw_frame_.uiTimeStamp = raw_frame.CapturedTimestamp();
 
-  raw_frame_.iStride[0] = raw_frame.Width();
-  raw_frame_.iStride[1] = raw_frame.Width() >> 1;
-  raw_frame_.iStride[2] = raw_frame.Width() >> 1;
+  raw_frame_.iStride[0] = encoder_params_.iPicWidth;
+  raw_frame_.iStride[1] = raw_frame_.iStride[2] =
+      encoder_params_.iPicWidth >> 1;
   raw_frame_.pData[0] = (unsigned char *)yuv420p_frame_;
-  raw_frame_.pData[1] =
-      raw_frame_.pData[0] + raw_frame.Width() * raw_frame.Height();
+  raw_frame_.pData[1] = raw_frame_.pData[0] +
+                        encoder_params_.iPicWidth * encoder_params_.iPicHeight;
   raw_frame_.pData[2] =
-      raw_frame_.pData[1] + (raw_frame.Width() * raw_frame.Height() >> 2);
+      raw_frame_.pData[1] +
+      (encoder_params_.iPicWidth * encoder_params_.iPicHeight >> 2);
 
   SFrameBSInfo info;
   memset(&info, 0, sizeof(SFrameBSInfo));
@@ -262,16 +269,19 @@ int OpenH264Encoder::Encode(
     return -1;
   }
 
-  // info.iLayerNum == 1
-  size_t frag = 0;
+  if (info.eFrameType == videoFrameTypeSkip) {
+    return 0;
+  }
+
   for (int layer = 0; layer < info.iLayerNum; ++layer) {
     const SLayerBSInfo &layerInfo = info.sLayerInfo[layer];
     size_t layer_len = 0;
-    for (int nal = 0; nal < layerInfo.iNalCount; ++nal, ++frag) {
+    for (int nal = 0; nal < layerInfo.iNalCount; ++nal) {
       layer_len += layerInfo.pNalLengthInByte[nal];
     }
+
     if (on_encoded_image) {
-      EncodedFrame encoded_frame(layerInfo.pBsBuf, layer_len,
+      EncodedFrame encoded_frame(info.sLayerInfo[layer].pBsBuf, layer_len,
                                  raw_frame_.iPicWidth, raw_frame_.iPicHeight);
       encoded_frame.SetFrameType(frame_type);
       encoded_frame.SetEncodedWidth(raw_frame_.iPicWidth);
@@ -280,7 +290,7 @@ int OpenH264Encoder::Encode(
       encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
       on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_H264_STREAM
-      fwrite(layerInfo.pBsBuf, layer_len, file_h264_);
+      fwrite(encoded_frame.Buffer(), 1, encoded_frame.Size(), file_h264_);
 #endif
     }
   }
@@ -304,13 +314,17 @@ int OpenH264Encoder::SetTargetBitrate(int bitrate) {
   target_bitrate_ = bitrate;
   encoder_params_.iTargetBitrate = target_bitrate_;
 
-  return openh264_encoder_->SetOption(ENCODER_OPTION_BITRATE, &target_bitrate_);
+  SBitrateInfo target_bitrate;
+  memset(&target_bitrate, 0, sizeof(SBitrateInfo));
+  target_bitrate.iLayer = SPATIAL_LAYER_ALL, target_bitrate.iBitrate = bitrate;
+  return openh264_encoder_->SetOption(ENCODER_OPTION_BITRATE, &target_bitrate);
 }
 
 int OpenH264Encoder::Release() {
   if (openh264_encoder_) {
     openh264_encoder_->Uninitialize();
     WelsDestroySVCEncoder(openh264_encoder_);
+    openh264_encoder_ = nullptr;
   }
 
   return 0;
