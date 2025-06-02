@@ -26,6 +26,16 @@ class RtpPacketizerAv1 : public RtpPacketizer {
   };
 
  private:
+  void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
+  void SetAv1AggrHeader(int z, int y, int w, int n) {
+    av1_aggr_header_ = 0;
+    if (z) av1_aggr_header_ |= (1 << 7);
+    if (y) av1_aggr_header_ |= (1 << 6);
+    if (w) av1_aggr_header_ |= w << 4;
+    if (n) av1_aggr_header_ |= (1 << 3);
+  }
+
+ private:
   uint8_t version_;
   bool has_padding_;
   bool has_extension_;
@@ -40,6 +50,8 @@ class RtpPacketizerAv1 : public RtpPacketizer {
   uint16_t extension_profile_;
   uint16_t extension_len_;
   uint8_t* extension_data_;
+
+  uint8_t av1_aggr_header_ = 0;
 
  private:
   std::vector<uint8_t> rtp_packet_frame_;

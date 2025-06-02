@@ -12,5 +12,7 @@ bool RtpPacketAv1::GetFrameHeaderInfo() {
   w_ = av1_aggr_header_ >> 4 & 0x03;
   n_ = av1_aggr_header_ >> 3 & 0x01;
 
+  add_offset_to_payload(1);
+
   return true;
 }

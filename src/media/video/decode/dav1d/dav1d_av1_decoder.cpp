@@ -93,11 +93,6 @@ int Dav1dAv1Decoder::Init() {
     LOG_ERROR("Dav1d AV1 decoder open failed");
   }
 
-  if (!decoded_frame_) {
-    decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,
-                                      frame_width_, frame_height_);
-  }
-
 #ifdef SAVE_DECODED_NV12_STREAM
   nv12_file_name_ = "decoded_nv12_stream_" +
                     std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
@@ -198,6 +193,11 @@ int Dav1dAv1Decoder::Decode(
         (uint8_t *)nv12_frame_, frame_width_,
         (uint8_t *)nv12_frame_ + frame_width_ * frame_height_, frame_width_,
         frame_width_, frame_height_);
+  }
+
+  if (!decoded_frame_) {
+    decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,
+                                      frame_width_, frame_height_);
   }
 
   decoded_frame_->UpdateBuffer(nv12_frame_, nv12_frame_capacity_);

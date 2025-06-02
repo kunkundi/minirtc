@@ -428,24 +428,15 @@ void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
 }
 
 void RtpVideoReceiver::ProcessAv1RtpPacket(RtpPacketAv1& rtp_packet_av1) {
-  // LOG_ERROR("recv payload size = {}, sequence_number_ = {}",
-  //           rtp_packet.PayloadSize(), rtp_packet.SequenceNumber());
-
-  if (rtp::PAYLOAD_TYPE::AV1 == rtp_packet_av1.PayloadType()) {
-    incomplete_av1_frame_list_[rtp_packet_av1.SequenceNumber()] =
-        rtp_packet_av1;
-    bool complete = CheckIsAv1FrameCompleted(rtp_packet_av1);
-    if (!complete) {
+  if (!fec_enable_) {
+    if (rtp::PAYLOAD_TYPE::AV1 == rtp_packet_av1.PayloadType()) {
+      incomplete_av1_frame_list_[rtp_packet_av1.SequenceNumber()] =
+          rtp_packet_av1;
+      CheckIsAv1FrameCompleted(rtp_packet_av1);
+    } else if (rtp::PAYLOAD_TYPE::AV1 - 1 == rtp_packet_av1.PayloadType()) {
+      padding_sequence_numbers_.insert(rtp_packet_av1.SequenceNumber());
     }
   }
-
-  // std::vector<Obu> obus =
-  //     ParseObus((uint8_t*)rtp_packet.Payload(), rtp_packet.PayloadSize());
-  // for (int i = 0; i < obus.size(); i++) {
-  //   LOG_ERROR("2 [{}|{}] Obu size = [{}], Obu type [{}]", i, obus.size(),
-  //             obus[i].size_,
-  //             ObuTypeToString((OBU_TYPE)ObuType(obus[i].header_)));
-  // }
 }
 
 bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
@@ -576,55 +567,98 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
 }
 
 bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
+  uint32_t timestamp = rtp_packet_av1.Timestamp();
+  uint16_t seq = rtp_packet_av1.SequenceNumber();
+
+  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+  if (pending_frames_.find(timestamp) == pending_frames_.end()) {
+    pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
+  }
+
+  if (rtp_packet_av1.Av1FrameStart()) {
+    fua_start_sequence_numbers_[timestamp] = seq;
+  }
   if (rtp_packet_av1.Av1FrameEnd()) {
-    uint16_t end_seq = rtp_packet_av1.SequenceNumber();
-    uint16_t start = end_seq;
-    while (end_seq--) {
-      auto it = incomplete_av1_frame_list_.find(end_seq);
-      if (it == incomplete_av1_frame_list_.end()) {
-        // The last fragment has already received. If all fragments are in
-        // order, then some fragments lost in tranmission and need to be
-        // repaired using FEC
-        // return false;
-      } else if (!it->second.Av1FrameStart()) {
-        continue;
-      } else if (it->second.Av1FrameStart()) {
-        start = it->second.SequenceNumber();
-        break;
-      } else {
-        LOG_WARN("What happened?")
-        return false;
-      }
-    }
-
-    if (start <= rtp_packet_av1.SequenceNumber()) {
-      if (!nv12_data_) {
-        nv12_data_ = new uint8_t[NV12_BUFFER_SIZE];
-      }
-
-      size_t complete_frame_size = 0;
-      for (; start <= rtp_packet_av1.SequenceNumber(); start++) {
-        const uint8_t* obu_frame = incomplete_av1_frame_list_[start].Payload();
-        size_t obu_frame_size = incomplete_av1_frame_list_[start].PayloadSize();
-        memcpy(nv12_data_ + complete_frame_size, obu_frame, obu_frame_size);
-
-        complete_frame_size += obu_frame_size;
-        incomplete_av1_frame_list_.erase(start);
-      }
-
-      ReceivedFrame received_frame(nv12_data_, complete_frame_size);
-      received_frame.SetReceivedTimestamp(clock_->CurrentTime().us());
-      received_frame.SetCapturedTimestamp(
-          (static_cast<int64_t>(rtp_packet_av1.Timestamp()) /
-               rtp::kMsToRtpTimestamp -
-           delta_ntp_internal_ms_) *
-          1000);
-      compelete_video_frame_queue_.push(received_frame);
-
-      return true;
+    fua_end_sequence_numbers_[timestamp] = seq;
+    if (missing_sequence_numbers_wait_time_.find(timestamp) ==
+        missing_sequence_numbers_wait_time_.end()) {
+      missing_sequence_numbers_wait_time_[timestamp] =
+          clock_->CurrentTime().ms();
     }
   }
-  return false;
+
+  if (fua_end_sequence_numbers_.find(timestamp) ==
+      fua_end_sequence_numbers_.end()) {
+    return false;
+  }
+  uint16_t end_seq = fua_end_sequence_numbers_[timestamp];
+
+  if (fua_start_sequence_numbers_.find(timestamp) ==
+      fua_start_sequence_numbers_.end()) {
+    return false;
+  }
+  uint16_t start_seq = fua_start_sequence_numbers_[timestamp];
+
+  // 超时处理
+  auto missing_seqs_wait_ts_iter =
+      missing_sequence_numbers_wait_time_.find(timestamp);
+  if (missing_seqs_wait_ts_iter != missing_sequence_numbers_wait_time_.end()) {
+    if (clock_->CurrentTime().ms() - missing_seqs_wait_ts_iter->second >
+        MAX_WAIT_TIME_MS) {
+      missing_sequence_numbers_wait_time_.erase(missing_seqs_wait_ts_iter);
+      LOG_WARN(
+          "AV1 retransmit packet [seq {} | ts {}] timeout, remove pending "
+          "frame",
+          seq, timestamp);
+      pending_frames_.erase(timestamp);
+      return false;
+    }
+  }
+
+  for (uint16_t sequence_number = start_seq; sequence_number <= end_seq;
+       ++sequence_number) {
+    if (incomplete_av1_frame_list_.find(sequence_number) ==
+        incomplete_av1_frame_list_.end()) {
+      return false;
+    }
+  }
+
+  // Pop complete AV1 frame
+  size_t complete_frame_size = 0;
+  for (uint16_t s = start_seq; s <= end_seq; ++s) {
+    complete_frame_size += incomplete_av1_frame_list_[s].PayloadSize();
+  }
+
+  if (!nv12_data_) {
+    nv12_data_ = new uint8_t[NV12_BUFFER_SIZE];
+  } else if (complete_frame_size > NV12_BUFFER_SIZE) {
+    delete[] nv12_data_;
+    nv12_data_ = new uint8_t[complete_frame_size];
+  }
+
+  uint8_t* dest = nv12_data_;
+  for (uint16_t s = start_seq; s <= end_seq; ++s) {
+    size_t payload_size = incomplete_av1_frame_list_[s].PayloadSize();
+    memcpy(dest, incomplete_av1_frame_list_[s].Payload(), payload_size);
+    dest += payload_size;
+    incomplete_av1_frame_list_.erase(s);
+  }
+
+  std::unique_ptr<ReceivedFrame> received_frame =
+      std::make_unique<ReceivedFrame>(nv12_data_, complete_frame_size);
+  received_frame->SetReceivedTimestamp(clock_->CurrentTime().us());
+  received_frame->SetCapturedTimestamp(
+      (static_cast<int64_t>(timestamp) / rtp::kMsToRtpTimestamp -
+       delta_ntp_internal_ms_) *
+      1000);
+
+  fua_start_sequence_numbers_.erase(timestamp);
+  fua_end_sequence_numbers_.erase(timestamp);
+  missing_sequence_numbers_wait_time_.erase(timestamp);
+
+  pending_frames_[timestamp] = {std::move(received_frame), true,
+                                clock_->CurrentTime().ms()};
+  return true;
 }
 
 void RtpVideoReceiver::SetSendDataFunc(

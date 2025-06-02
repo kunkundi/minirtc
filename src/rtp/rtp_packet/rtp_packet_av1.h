@@ -17,28 +17,16 @@ class RtpPacketAv1 : public RtpPacket {
  public:
   bool GetFrameHeaderInfo();
 
+  // 帧起始条件
   bool Av1FrameStart() {
-    // return !z_ && !y_;
-
-    if (z_ == 0 && y_ == 0 && w_ == 1) {
-      return true;
-    } else if (z_ == 0 && y_ == 1 && w_ == 1) {
-      return true;
-    } else {
-      return false;
-    }
+    // 完整帧，或分片的第一个 packet
+    return (z_ == 0) || (z_ == 1 && y_ == 1);
   }
 
+  // 帧结束条件
   bool Av1FrameEnd() {
-    // return z_ && !y_;
-
-    if (z_ == 0 && y_ == 0 && w_ == 1) {
-      return true;
-    } else if (z_ == 1 && y_ == 0 && w_ == 1) {
-      return true;
-    } else {
-      return false;
-    }
+    // 完整帧，或分片的最后一个 packet
+    return (z_ == 0) || (z_ == 1 && y_ == 0);
   }
 
  private:
