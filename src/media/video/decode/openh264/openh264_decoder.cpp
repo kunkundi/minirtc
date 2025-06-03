@@ -70,17 +70,35 @@ int OpenH264Decoder::Init() {
     return -1;
   }
 
-  SDecodingParam sDecParam;
+  long ret = -1;
+  int trace_level = WELS_LOG_QUIET;
+  ret = openh264_decoder_->SetOption(DECODER_OPTION_TRACE_LEVEL, &trace_level);
+  if (ret != cmResultSuccess) {
+    LOG_ERROR("Failed to set decoder trace level");
+    return -1;
+  }
 
+  // 1 thread for decoding, do not use more threads
+  int decode_thread_count = 1;
+  ret = openh264_decoder_->SetOption(DECODER_OPTION_NUM_OF_THREADS,
+                                     &decode_thread_count);
+  if (ret != cmResultSuccess) {
+    LOG_ERROR("Decoder SetOption NUM_OF_THREADS failed, ret {}", ret);
+    return -1;
+  }
+
+  SDecodingParam sDecParam;
   memset(&sDecParam, 0, sizeof(SDecodingParam));
   sDecParam.uiTargetDqLayer = UCHAR_MAX;
-  sDecParam.eEcActiveIdc = ERROR_CON_SLICE_COPY;
-  sDecParam.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_DEFAULT;
+  sDecParam.eEcActiveIdc = ERROR_CON_SLICE_MV_COPY_CROSS_IDR_FREEZE_RES_CHANGE;
+  sDecParam.sVideoProperty.size = sizeof(sDecParam.sVideoProperty);
+  sDecParam.sVideoProperty.eVideoBsType = VIDEO_BITSTREAM_AVC;
 
-  openh264_decoder_->Initialize(&sDecParam);
-
-  int trace_level = WELS_LOG_QUIET;
-  openh264_decoder_->SetOption(DECODER_OPTION_TRACE_LEVEL, &trace_level);
+  ret = openh264_decoder_->Initialize(&sDecParam);
+  if (ret != cmResultSuccess) {
+    LOG_ERROR("Failed to initialize OpenH264 decoder, ret {}", ret);
+    return -1;
+  }
 
   if (!decoded_frame_) {
     decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,
@@ -115,10 +133,10 @@ int OpenH264Decoder::Decode(
   SBufferInfo sDstBufInfo;
   memset(&sDstBufInfo, 0, sizeof(SBufferInfo));
 
-  int ret = openh264_decoder_->DecodeFrameNoDelay(
+  DECODING_STATE ret = openh264_decoder_->DecodeFrameNoDelay(
       data, (int)size, yuv420p_planes_, &sDstBufInfo);
   if (ret != 0) {
-    LOG_ERROR("Failed to decode frame, error code: {}", ret);
+    LOG_ERROR("Failed to decode frame, error code: {}", (int)ret);
     return -1;
   }
 

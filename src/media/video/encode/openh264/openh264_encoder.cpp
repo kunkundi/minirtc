@@ -151,20 +151,28 @@ int OpenH264Encoder::Init() {
     return -1;
   }
 
+  long ret = -1;
   int trace_level = WELS_LOG_QUIET;
-  openh264_encoder_->SetOption(ENCODER_OPTION_TRACE_LEVEL, &trace_level);
+  ret = openh264_encoder_->SetOption(ENCODER_OPTION_TRACE_LEVEL, &trace_level);
+  if (ret != cmResultSuccess) {
+    LOG_ERROR("Failed to set encoder trace level");
+  }
 
   // Create encoder parameters based on the layer configuration.
   InitEncoderParams(frame_width_, frame_height_);
 
-  if (openh264_encoder_->InitializeExt(&encoder_params_) != 0) {
+  ret = openh264_encoder_->InitializeExt(&encoder_params_);
+  if (ret != cmResultSuccess) {
     LOG_ERROR("Failed to initialize OpenH264 encoder");
-    // Release();
     return -1;
   }
 
   video_format_ = EVideoFormatType::videoFormatI420;
-  openh264_encoder_->SetOption(ENCODER_OPTION_DATAFORMAT, &video_format_);
+  ret = openh264_encoder_->SetOption(ENCODER_OPTION_DATAFORMAT, &video_format_);
+  if (ret != cmResultSuccess) {
+    LOG_ERROR("Failed to set encoder data format");
+    return -1;
+  }
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +
