@@ -36,8 +36,8 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
         width = resolution.width;
         height = resolution.height;
       }
-      width = (width / 16) * 16;
-      height = (height / 16) * 16;
+      // width = (width / 16) * 16;
+      // height = (height / 16) * 16;
       *target_width = width;
       *target_height = height;
       return 0;
