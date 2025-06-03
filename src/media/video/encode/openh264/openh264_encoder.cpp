@@ -115,9 +115,9 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   encoder_params_.sSpatialLayers[0].uiLevelIdc = LEVEL_5_2;
 
   // SingleNalUnit
-  encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceNum = 1;
+  encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceNum = 0;
   encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceMode =
-      SM_SINGLE_SLICE;
+      SM_FIXEDSLCNUM_SLICE;
   // encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint =
   //     static_cast<unsigned int>(max_payload_size_);
 
