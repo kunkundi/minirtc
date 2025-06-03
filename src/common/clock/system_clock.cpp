@@ -27,35 +27,48 @@ int64_t SystemClock::ConvertToNtpTime(int64_t time_us) {
 }
 
 int64_t SystemClock::CurrentTimeNs() {
-  int64_t ticks = -1;  // Default to error case
-
+  int64_t ticks;
 #if defined(__APPLE__)
   static mach_timebase_info_data_t timebase;
-  if (timebase.denom == 0 && mach_timebase_info(&timebase) != KERN_SUCCESS) {
-    return -1;  // Error case for macOS timebase info retrieval
+  if (timebase.denom == 0) {
+    // Get the timebase if this is the first time we run.
+    // Recommended by Apple's QA1398.
+    if (mach_timebase_info(&timebase) != KERN_SUCCESS) {
+    }
   }
-  uint64_t abs_time = mach_absolute_time();
-  ticks = static_cast<int64_t>((abs_time * timebase.numer) / timebase.denom);
-
+  // Use timebase to convert absolute time tick units into nanoseconds.
+  const auto mul = [](uint64_t a, uint32_t b) -> int64_t {
+    return webrtc::dchecked_cast<int64_t>(a * b);
+  };
+  ticks = mul(mach_absolute_time(), timebase.numer) / timebase.denom;
 #elif defined(__linux__)
   constexpr int64_t kNumNanosecsPerSec = 1000000000;
   struct timespec ts;
-  if (clock_gettime(CLOCK_MONOTONIC, &ts) != 0) {
-    return -1;  // Error case for POSIX clock retrieval
-  }
-  ticks = static_cast<int64_t>(ts.tv_sec) * kNumNanosecsPerSec +
+  // TODO(deadbeef): Do we need to handle the case when CLOCK_MONOTONIC is not
+  // supported?
+  clock_gettime(CLOCK_MONOTONIC, &ts);
+  ticks = kNumNanosecsPerSec * static_cast<int64_t>(ts.tv_sec) +
           static_cast<int64_t>(ts.tv_nsec);
-
 #elif defined(_WIN32)
-  static LARGE_INTEGER freq;
-  static BOOL initialized = QueryPerformanceFrequency(&freq);
-  if (!initialized) return -1;
-  LARGE_INTEGER counter;
-  if (!QueryPerformanceCounter(&counter)) return -1;
-  return static_cast<int64_t>(counter.QuadPart) * 1000000000LL / freq.QuadPart;
-
+  static volatile LONG last_timegettime = 0;
+  static volatile int64_t num_wrap_timegettime = 0;
+  volatile LONG* last_timegettime_ptr = &last_timegettime;
+  DWORD now = timeGetTime();
+  // Atomically update the last gotten time
+  DWORD old = InterlockedExchange(last_timegettime_ptr, now);
+  if (now < old) {
+    // If now is earlier than old, there may have been a race between threads.
+    // 0x0fffffff ~3.1 days, the code will not take that long to execute
+    // so it must have been a wrap around.
+    if (old > 0xf0000000 && now < 0x0fffffff) {
+      num_wrap_timegettime++;
+    }
+  }
+  ticks = now + (num_wrap_timegettime << 32);
+  // TODO(deadbeef): Calculate with nanosecond precision. Otherwise, we're
+  // just wasting a multiply and divide when doing Time() on Windows.
+  ticks = ticks * 1000000LL;  // Convert milliseconds to nanoseconds
 #endif
-
   return ticks;
 }
 
