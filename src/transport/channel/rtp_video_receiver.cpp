@@ -11,7 +11,7 @@
 
 #define NV12_BUFFER_SIZE (1280 * 720 * 3 / 2)
 #define RTCP_RR_INTERVAL 1000
-#define MAX_WAIT_TIME_MS 200     // 20ms
+#define MAX_WAIT_TIME_MS 50      // 50ms
 #define NACK_UPDATE_INTERVAL 20  // 20ms
 
 RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock)
@@ -215,62 +215,6 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
       }
     }
     ProcessH264RtpPacket(rtp_packet_h264);
-
-    // std::unique_ptr<RtpPacketH264> rtp_packet_h264 =
-    //     std::make_unique<RtpPacketH264>();
-    // if (rtp_packet.Buffer().data() != nullptr && rtp_packet.Size() > 0 &&
-    //     rtp_packet_h264->Build(rtp_packet.Buffer().data(),
-    //     rtp_packet.Size())) {
-    //   rtp_packet_h264->GetFrameHeaderInfo();
-
-    //   if (rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX) {
-    //     size_t osn_offset = rtp_packet.HeaderSize();
-    //     uint16_t osn = rtp_packet.Buffer().data()[osn_offset] << 8 |
-    //                    rtp_packet.Buffer().data()[osn_offset + 1];
-    //     nack_->OnReceivedPacket(osn, true);
-    //   } else {
-    //     receive_side_congestion_controller_.OnReceivedPacket(
-    //         rtp_packet_received, MediaType::VIDEO);
-    //     nack_->OnReceivedPacket(rtp_packet.SequenceNumber(), false);
-    //   }
-
-    //   rtp::NAL_UNIT_TYPE nalu_type = rtp_packet_h264->NalUnitType();
-    //   if (rtp::NAL_UNIT_TYPE::NALU == nalu_type) {
-    //     ReceivedFrame received_frame(rtp_packet_h264->Payload(),
-    //                                  rtp_packet_h264->PayloadSize());
-    //     received_frame.SetReceivedTimestamp(clock_->CurrentTime().us());
-    //     received_frame.SetCapturedTimestamp(
-    //         (static_cast<int64_t>(rtp_packet_h264->Timestamp()) /
-    //              rtp::kMsToRtpTimestamp -
-    //          delta_ntp_internal_ms_) *
-    //         1000);
-    //     compelete_video_frame_queue_.push(received_frame);
-    //   } else if (rtp::NAL_UNIT_TYPE::FU_A == nalu_type) {
-    //     std::vector<std::unique_ptr<RtpPacketH264>> complete_frame =
-    //         h264_frame_assembler_.InsertPacket(std::move(rtp_packet_h264));
-    //     if (!complete_frame.empty()) {
-    //       uint8_t* nv12_data_ = new uint8_t[NV12_BUFFER_SIZE];
-    //       uint8_t* dest = nv12_data_;
-    //       size_t complete_frame_size = 0;
-    //       for (auto& frame : complete_frame) {
-    //         memcpy(dest, frame->Payload(), frame->PayloadSize());
-    //         dest += frame->PayloadSize();
-    //         complete_frame_size += frame->PayloadSize();
-    //       }
-
-    //       ReceivedFrame received_frame(nv12_data_, complete_frame_size);
-    //       received_frame.SetReceivedTimestamp(clock_->CurrentTime().us());
-    //       received_frame.SetCapturedTimestamp(
-    //           (static_cast<int64_t>(complete_frame[0]->Timestamp()) /
-    //                rtp::kMsToRtpTimestamp -
-    //            delta_ntp_internal_ms_) *
-    //           1000);
-    //       compelete_video_frame_queue_.push(received_frame);
-
-    //       delete[] nv12_data_;
-    //     }
-    //   }
-    // }
   }
 }
 
@@ -278,16 +222,6 @@ void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
   if (!fec_enable_) {
     rtp::NAL_UNIT_TYPE nalu_type = rtp_packet_h264.NalUnitType();
     if (rtp::NAL_UNIT_TYPE::NALU == nalu_type) {
-      // ReceivedFrame received_frame(rtp_packet_h264.Payload(),
-      //                              rtp_packet_h264.PayloadSize());
-      // received_frame.SetReceivedTimestamp(clock_->CurrentTime().us());
-      // received_frame.SetCapturedTimestamp(
-      //     (static_cast<int64_t>(rtp_packet_h264.Timestamp()) /
-      //          rtp::kMsToRtpTimestamp -
-      //      delta_ntp_internal_ms_) *
-      //     1000);
-      // compelete_video_frame_queue_.push(received_frame);
-
       std::unique_ptr<ReceivedFrame> received_frame =
           std::make_unique<ReceivedFrame>(rtp_packet_h264.Payload(),
                                           rtp_packet_h264.PayloadSize());
@@ -445,11 +379,6 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
   uint32_t timestamp = rtp_packet_h264.Timestamp();
   uint16_t seq, start_seq, end_seq;
 
-  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
-  if (pending_frames_.find(timestamp) == pending_frames_.end()) {
-    pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
-  }
-
   if (is_rtx) {
     seq = rtp_packet_h264.GetOsn();
   } else {
@@ -461,6 +390,11 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
   }
 
   if (is_end) {
+    std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+    if (pending_frames_.find(timestamp) == pending_frames_.end()) {
+      pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
+    }
+
     fua_end_sequence_numbers_[timestamp] = seq;
     if (missing_sequence_numbers_wait_time_.find(timestamp) ==
         missing_sequence_numbers_wait_time_.end()) {
@@ -558,11 +492,12 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
   fua_start_sequence_numbers_.erase(timestamp);
   fua_end_sequence_numbers_.erase(timestamp);
   missing_sequence_numbers_wait_time_.erase(timestamp);
-  // compelete_video_frame_queue_.push(received_frame);
 
   std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
-  pending_frames_[timestamp] = {std::move(received_frame), true,
-                                clock_->CurrentTime().ms()};
+  if (pending_frames_.find(timestamp) != pending_frames_.end()) {
+    pending_frames_[timestamp] = {std::move(received_frame), true,
+                                  clock_->CurrentTime().ms()};
+  }
   return true;
 }
 
@@ -570,9 +505,11 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   uint32_t timestamp = rtp_packet_av1.Timestamp();
   uint16_t seq = rtp_packet_av1.SequenceNumber();
 
-  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
-  if (pending_frames_.find(timestamp) == pending_frames_.end()) {
-    pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
+  {
+    std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+    if (pending_frames_.find(timestamp) == pending_frames_.end()) {
+      pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
+    }
   }
 
   if (rtp_packet_av1.Av1FrameStart()) {
@@ -656,8 +593,11 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   fua_end_sequence_numbers_.erase(timestamp);
   missing_sequence_numbers_wait_time_.erase(timestamp);
 
-  pending_frames_[timestamp] = {std::move(received_frame), true,
-                                clock_->CurrentTime().ms()};
+  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+  if (pending_frames_.find(timestamp) != pending_frames_.end()) {
+    pending_frames_[timestamp] = {std::move(received_frame), true,
+                                  clock_->CurrentTime().ms()};
+  }
   return true;
 }
 
@@ -744,27 +684,6 @@ bool RtpVideoReceiver::Process() {
     return false;
   }
 
-  // if (!compelete_video_frame_queue_.isEmpty()) {
-  //   std::optional<ReceivedFrame> video_frame =
-  //       compelete_video_frame_queue_.pop();
-  //   if (on_receive_complete_frame_ && video_frame) {
-  //     // auto now_complete_frame_ts =
-  //     //     std::chrono::duration_cast<std::chrono::milliseconds>(
-  //     //         std::chrono::system_clock::now().time_since_epoch())
-  //     //         .count();
-  //     // uint32_t duration = now_complete_frame_ts -
-  //     // last_complete_frame_ts_; LOG_ERROR("Duration {}", duration);
-  //     // last_complete_frame_ts_ = now_complete_frame_ts;
-
-  //     on_receive_complete_frame_(*video_frame);
-  //     // #ifdef SAVE_RTP_RECV_STREAM
-  //     //       fwrite((unsigned char*)video_frame.Buffer(), 1,
-  //     //       video_frame.Size(),
-  //     //              file_rtp_recv_);
-  //     // #endif
-  //   }
-  // }
-
   std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
   if (pending_frames_.empty()) {
     return false;
@@ -774,10 +693,6 @@ bool RtpVideoReceiver::Process() {
   while (it != pending_frames_.end()) {
     if (it->second.is_complete) {
       if (on_receive_complete_frame_) {
-        auto data = it->second.frame->Buffer();
-        if (data == nullptr) {
-          LOG_WARN("data is nullptr!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!");
-        }
         on_receive_complete_frame_(std::move(it->second.frame));
       }
       it = pending_frames_.erase(it);
@@ -786,7 +701,7 @@ bool RtpVideoReceiver::Process() {
           MAX_WAIT_TIME_MS) {
         LOG_WARN("pending frame [ts {}] timeout, remove it", it->first);
         it = pending_frames_.erase(it);
-        // pending_frames_.clear();
+        // // pending_frames_.clear();
         RequestKeyFrame();
         return false;
       } else {

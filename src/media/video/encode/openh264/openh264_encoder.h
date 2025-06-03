@@ -75,8 +75,6 @@ class OpenH264Encoder : public MediaCodec {
   SSourcePicture raw_frame_;
   unsigned char* yuv420p_frame_ = nullptr;
   size_t yuv420p_frame_capacity_ = 0;
-  uint8_t* encoded_frame_ = nullptr;
-  size_t encoded_frame_capacity_ = 0;
   size_t encoded_frame_size_ = 0;
   bool got_output = false;
   bool is_keyframe = false;

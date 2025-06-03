@@ -63,11 +63,6 @@ OpenH264Encoder::~OpenH264Encoder() {
     yuv420p_frame_ = nullptr;
   }
 
-  if (encoded_frame_) {
-    delete[] encoded_frame_;
-    encoded_frame_ = nullptr;
-  }
-
   Release();
 }
 
@@ -117,7 +112,7 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   // SingleNalUnit
   encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceNum = 0;
   encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceMode =
-      SM_FIXEDSLCNUM_SLICE;
+      SM_FIXEDSLCNUM_SLICE;  // enabled dynamic slicing for multi-thread
   // encoder_params_.sSpatialLayers[0].sSliceArgument.uiSliceSizeConstraint =
   //     static_cast<unsigned int>(max_payload_size_);
 
@@ -213,17 +208,6 @@ int OpenH264Encoder::Encode(
     yuv420p_frame_capacity_ = raw_frame.Size();
     delete[] yuv420p_frame_;
     yuv420p_frame_ = new unsigned char[yuv420p_frame_capacity_];
-  }
-
-  if (!encoded_frame_) {
-    encoded_frame_capacity_ = raw_frame.Size();
-    encoded_frame_ = new unsigned char[encoded_frame_capacity_];
-  }
-
-  if (encoded_frame_capacity_ < raw_frame.Size()) {
-    encoded_frame_capacity_ = raw_frame.Size();
-    delete[] encoded_frame_;
-    encoded_frame_ = new unsigned char[encoded_frame_capacity_];
   }
 
   if (raw_frame.Width() != frame_width_ ||
