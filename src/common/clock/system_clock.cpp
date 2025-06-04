@@ -38,7 +38,7 @@ int64_t SystemClock::CurrentTimeNs() {
   }
   // Use timebase to convert absolute time tick units into nanoseconds.
   const auto mul = [](uint64_t a, uint32_t b) -> int64_t {
-    return webrtc::dchecked_cast<int64_t>(a * b);
+    return static_cast<int64_t>(a * b);
   };
   ticks = mul(mach_absolute_time(), timebase.numer) / timebase.denom;
 #elif defined(__linux__)
