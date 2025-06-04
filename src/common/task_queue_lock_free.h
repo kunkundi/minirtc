@@ -1,6 +1,6 @@
 /*
  * @Author: DI JUNKUN
- * @Date: 2025-05-29
+ * @Date: 2025-06-04
  * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
  */
 
@@ -27,6 +27,7 @@ class TaskQueueLockFree {
       : task_name_(std::move(task_name)),
         log_enabled_(log_enabled),
         stop_flag_(false) {
+    workers_.reserve(numThreads);
     for (size_t i = 0; i < numThreads; ++i) {
       workers_.emplace_back([this]() { this->WorkerThread(); });
     }
@@ -38,17 +39,21 @@ class TaskQueueLockFree {
     task_queue_.enqueue(std::move(task));
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      // notify one thread that new work is available
       cond_var_.notify_one();
     }
   }
 
   void Stop() {
-    stop_flag_.store(true, std::memory_order_relaxed);
+    bool expected = false;
+    if (!stop_flag_.compare_exchange_strong(expected, true)) {
+      return;
+    }
+
     {
       std::lock_guard<std::mutex> lock(mutex_);
       cond_var_.notify_all();
     }
+
     for (std::thread& worker : workers_) {
       if (worker.joinable()) {
         worker.join();
@@ -78,21 +83,25 @@ class TaskQueueLockFree {
       }
 
       std::unique_lock<std::mutex> lock(mutex_);
-      if (stop_flag_.load(std::memory_order_relaxed)) break;
       cond_var_.wait(lock, [this] {
         return stop_flag_.load(std::memory_order_relaxed) ||
-               !task_queue_.size_approx() == 0;
+               task_queue_.size_approx() > 0;
       });
+
+      if (stop_flag_.load(std::memory_order_relaxed)) {
+        break;
+      }
     }
   }
 
+ private:
   std::string task_name_;
   bool log_enabled_;
-  std::atomic<bool> stop_flag_;
+
+  std::atomic<bool> stop_flag_{false};
   moodycamel::ConcurrentQueue<AnyInvocable<void()>> task_queue_;
   std::vector<std::thread> workers_;
 
-  // 用于事件驱动唤醒线程
   std::mutex mutex_;
   std::condition_variable cond_var_;
 };
