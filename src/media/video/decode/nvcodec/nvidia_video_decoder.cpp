@@ -5,6 +5,8 @@
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_H264_STREAM
 
+#include "bitstream_parser.h"
+
 NvidiaVideoDecoder::NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 NvidiaVideoDecoder::~NvidiaVideoDecoder() {
@@ -99,8 +101,17 @@ int NvidiaVideoDecoder::Decode(
   fwrite((unsigned char *)data, 1, size, file_h264_);
 #endif
 
-  if ((*(data + 4) & 0x1f) == 0x07) {
+  if ((data[4] & 0x1f) == 0x07) {
+    auto start = std::chrono::high_resolution_clock::now();
     LOG_INFO("Receive key frame");
+    int width = 0, height = 0;
+    ParseSPSResolution(data + 4, size - 4, width, height);
+    if (width != frame_width_ || height != frame_height_) {
+      delete decoder_;
+      decoder_ =
+          new NvDecoder(cuda_context_, false, cudaVideoCodec_H264, true, false,
+                        nullptr, nullptr, 4096, 4096, 1000, false);
+    }
   }
 
   int num_frame_returned = decoder_->Decode(data, (int)size);
@@ -109,15 +120,16 @@ int NvidiaVideoDecoder::Decode(
     if (format == cudaVideoSurfaceFormat_NV12) {
       uint8_t *decoded_frame_buffer = nullptr;
       decoded_frame_buffer = decoder_->GetFrame();
+      frame_width_ = decoder_->GetWidth();
+      frame_height_ = decoder_->GetHeight();
       if (decoded_frame_buffer) {
         if (on_receive_decoded_frame) {
-          decoded_frame_->UpdateBuffer(
-              decoded_frame_buffer,
-              decoder_->GetWidth() * decoder_->GetHeight() * 3 / 2);
-          decoded_frame_->SetWidth(decoder_->GetWidth());
-          decoded_frame_->SetHeight(decoder_->GetHeight());
-          decoded_frame_->SetDecodedWidth(decoder_->GetWidth());
-          decoded_frame_->SetDecodedHeight(decoder_->GetHeight());
+          decoded_frame_->UpdateBuffer(decoded_frame_buffer,
+                                       frame_width_ * frame_height_ * 3 / 2);
+          decoded_frame_->SetWidth(frame_width_);
+          decoded_frame_->SetHeight(frame_height_);
+          decoded_frame_->SetDecodedWidth(frame_width_);
+          decoded_frame_->SetDecodedHeight(frame_height_);
           decoded_frame_->SetReceivedTimestamp(
               received_frame->ReceivedTimestamp());
           decoded_frame_->SetCapturedTimestamp(
