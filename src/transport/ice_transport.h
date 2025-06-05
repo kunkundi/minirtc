@@ -44,14 +44,14 @@ class IceTransport {
   int SetLocalCapabilities(bool hardware_acceleration, bool use_trickle_ice,
                            bool use_reliable_ice, bool enable_turn,
                            bool force_turn,
+                           rtp::PAYLOAD_TYPE prefered_video_payload_type,
                            std::vector<int> &video_payload_types,
                            std::vector<int> &audio_payload_types);
 
   int InitIceTransmission(std::string &stun_ip, int stun_port,
                           std::string &turn_ip, int turn_port,
                           std::string &turn_username,
-                          std::string &turn_password,
-                          rtp::PAYLOAD_TYPE video_codec_payload_type);
+                          std::string &turn_password);
 
   int DestroyIceTransmission();
 
@@ -226,7 +226,7 @@ class IceTransport {
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
 
  private:
-  rtp::PAYLOAD_TYPE video_codec_payload_type_;
+  rtp::PAYLOAD_TYPE prefered_video_payload_type_;
   bool remote_capabilities_got_ = false;
   rtp::PAYLOAD_TYPE remote_prefered_video_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE remote_prefered_audio_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;

@@ -27,27 +27,28 @@ IceTransport::IceTransport(
 
 IceTransport::~IceTransport() {}
 
-int IceTransport::SetLocalCapabilities(bool hardware_acceleration,
-                                       bool use_trickle_ice,
-                                       bool use_reliable_ice, bool enable_turn,
-                                       bool force_turn,
-                                       std::vector<int> &video_payload_types,
-                                       std::vector<int> &audio_payload_types) {
+int IceTransport::SetLocalCapabilities(
+    bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
+    bool enable_turn, bool force_turn,
+    rtp::PAYLOAD_TYPE prefered_video_payload_type,
+    std::vector<int> &video_payload_types,
+    std::vector<int> &audio_payload_types) {
   hardware_acceleration_ = hardware_acceleration;
   use_trickle_ice_ = use_trickle_ice;
   use_reliable_ice_ = use_reliable_ice;
   enable_turn_ = enable_turn;
   force_turn_ = force_turn;
+  prefered_video_payload_type_ = prefered_video_payload_type;
   support_video_payload_types_ = video_payload_types;
   support_audio_payload_types_ = audio_payload_types;
   support_data_payload_types_ = {rtp::PAYLOAD_TYPE::DATA};
   return 0;
 }
 
-int IceTransport::InitIceTransmission(
-    std::string &stun_ip, int stun_port, std::string &turn_ip, int turn_port,
-    std::string &turn_username, std::string &turn_password,
-    rtp::PAYLOAD_TYPE video_codec_payload_type) {
+int IceTransport::InitIceTransmission(std::string &stun_ip, int stun_port,
+                                      std::string &turn_ip, int turn_port,
+                                      std::string &turn_username,
+                                      std::string &turn_password) {
   ice_agent_ = std::make_unique<IceAgent>(
       offer_peer_, use_trickle_ice_, use_reliable_ice_, enable_turn_,
       force_turn_, stun_ip, stun_port, turn_ip, turn_port, turn_username,
@@ -548,7 +549,7 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
   std::string audio_capabilities = "UDP/TLS/RTP/SAVPF 111";
   std::string data_capabilities = "UDP/TLS/RTP/SAVPF 120";
 
-  switch (video_codec_payload_type_) {
+  switch (prefered_video_payload_type_) {
     case rtp::PAYLOAD_TYPE::H264: {
       preferred_video_pt = std::to_string(rtp::PAYLOAD_TYPE::H264);
       video_capabilities += preferred_video_pt + " 97 98 99";

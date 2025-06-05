@@ -641,7 +641,9 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
         ice_transport_list_[remote_user_id]->SetLocalCapabilities(
             hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
-            false, video_payload_types_, audio_payload_types_);
+            false,
+            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+            video_payload_types_, audio_payload_types_);
 
         ice_transport_list_[remote_user_id]->SetOnReceiveFunc(
             on_receive_video_frame_, on_receive_audio_buffer_,
@@ -653,8 +655,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
         ice_transport_list_[remote_user_id]->InitIceTransmission(
             cfg_stun_server_ip_, stun_server_port_, cfg_turn_server_ip_,
             turn_server_port_, cfg_turn_server_username_,
-            cfg_turn_server_password_,
-            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264);
+            cfg_turn_server_password_);
 
         for (auto &stream_id : video_stream_ids_) {
           ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
@@ -698,7 +699,9 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
         ice_transport_list_[remote_user_id]->SetLocalCapabilities(
             hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
-            false, video_payload_types_, audio_payload_types_);
+            false,
+            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+            video_payload_types_, audio_payload_types_);
 
         ice_transport_list_[remote_user_id]->SetOnReceiveFunc(
             on_receive_video_frame_, on_receive_audio_buffer_,
@@ -710,8 +713,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
         ice_transport_list_[remote_user_id]->InitIceTransmission(
             cfg_stun_server_ip_, stun_server_port_, cfg_turn_server_ip_,
             turn_server_port_, cfg_turn_server_username_,
-            cfg_turn_server_password_,
-            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264);
+            cfg_turn_server_password_);
         ice_transport_list_[remote_user_id]->SetTransmissionId(transmission_id);
       }
 
