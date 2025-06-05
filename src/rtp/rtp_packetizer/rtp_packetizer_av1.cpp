@@ -72,12 +72,18 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
     }
   };
 
-  for (const auto& obu : obus) {
+  for (size_t i = 0; i < obus.size(); ++i) {
+    const auto& obu = obus[i];
     if (obu.size <= MAX_NALU_LEN) {
       ++sequence_number_;
-      SetAv1AggrHeader(0, 0, 1, 0);
+      bool is_last = (i == (obus.size() - 1));
+      int z = (i > 0) ? 1 : 0;
+      int y = (!is_last) ? 1 : 0;
+      int w = 1;
+      int n = (ObuType(obu.header) == kObuTypeSequenceHeader) ? 1 : 0;
+      SetAv1AggrHeader(z, y, w, n);
 
-      BuildRtpHeader(true);  // marker = 1
+      BuildRtpHeader(is_last);
       AppendCsrcsAndExtensions();
       rtp_packet_frame_.push_back(av1_aggr_header_);
       rtp_packet_frame_.insert(rtp_packet_frame_.end(), obu.payload.begin(),
@@ -88,13 +94,14 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
     } else {
       size_t packet_num = (obu.size + MAX_NALU_LEN - 1) / MAX_NALU_LEN;
 
-      for (size_t i = 0; i < packet_num; ++i) {
+      for (size_t j = 0; j < packet_num; ++j) {
         ++sequence_number_;
-        bool is_last = (i == packet_num - 1);
-        size_t offset = i * MAX_NALU_LEN;
-        size_t size = is_last ? (obu.size - offset) : MAX_NALU_LEN;
+        bool is_last = (i == (obus.size() - 1)) && (j == (packet_num - 1));
+        size_t offset = j * MAX_NALU_LEN;
+        size_t size =
+            j == (packet_num - 1) ? (obu.size - offset) : MAX_NALU_LEN;
 
-        int z = (i > 0) ? 1 : 0;
+        int z = (i > 0 || j > 0) ? 1 : 0;
         int y = (!is_last) ? 1 : 0;
         int w = 1;
         int n = (ObuType(obu.header) == kObuTypeSequenceHeader) ? 1 : 0;

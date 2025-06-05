@@ -142,11 +142,6 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
   last_received_timestamp_ = rtp_packet_received.Timestamp();
   last_receive_time_ = now;
 
-#ifdef SAVE_RTP_RECV_STREAM
-  fwrite((unsigned char*)rtp_packet.Payload(), 1, rtp_packet.PayloadSize(),
-         file_rtp_recv_);
-#endif
-
   last_recv_bytes_ = (uint32_t)rtp_packet.PayloadSize();
   total_rtp_payload_recv_ += (uint32_t)rtp_packet.PayloadSize();
   total_rtp_packets_recv_++;
@@ -199,6 +194,10 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
     RtpPacketAv1 rtp_packet_av1;
     rtp_packet_av1.Build(rtp_packet.Buffer().data(), rtp_packet.Size());
     rtp_packet_av1.GetFrameHeaderInfo();
+#ifdef SAVE_RTP_RECV_STREAM
+    fwrite((unsigned char*)rtp_packet_av1.Payload(), 1,
+           rtp_packet_av1.PayloadSize(), file_rtp_recv_);
+#endif
     ProcessAv1RtpPacket(rtp_packet_av1);
   } else if (rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::H264 ||
              rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::H264 - 1 ||
@@ -206,6 +205,10 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
     RtpPacketH264 rtp_packet_h264;
     if (rtp_packet_h264.Build(rtp_packet.Buffer().data(), rtp_packet.Size())) {
       rtp_packet_h264.GetFrameHeaderInfo();
+#ifdef SAVE_RTP_RECV_STREAM
+      fwrite((unsigned char*)rtp_packet_h264.Payload(), 1,
+             rtp_packet_h264.PayloadSize(), file_rtp_recv_);
+#endif
       if (rtp_packet.PayloadType() != rtp::PAYLOAD_TYPE::RTX) {
         receive_side_congestion_controller_.OnReceivedPacket(
             rtp_packet_received, MediaType::VIDEO);
@@ -536,7 +539,7 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   }
   uint16_t start_seq = fua_start_sequence_numbers_[timestamp];
 
-  // 超时处理
+  // timeout
   auto missing_seqs_wait_ts_iter =
       missing_sequence_numbers_wait_time_.find(timestamp);
   if (missing_seqs_wait_ts_iter != missing_sequence_numbers_wait_time_.end()) {

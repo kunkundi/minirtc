@@ -19,14 +19,24 @@ class RtpPacketAv1 : public RtpPacket {
 
   // 帧起始条件
   bool Av1FrameStart() {
-    // 完整帧，或分片的第一个 packet
-    return (z_ == 0) || (z_ == 1 && y_ == 1);
+    if (z_ == 0 && y_ == 0 && w_ == 1) {
+      return true;
+    } else if (z_ == 0 && y_ == 1 & w_ == 1) {
+      return true;
+    } else {
+      return false;
+    }
   }
 
   // 帧结束条件
   bool Av1FrameEnd() {
-    // 完整帧，或分片的最后一个 packet
-    return (z_ == 0) || (z_ == 1 && y_ == 0);
+    if (z_ == 0 && y_ == 0 && w_ == 1) {
+      return true;
+    } else if (z_ == 1 && y_ == 0 & w_ == 1) {
+      return true;
+    } else {
+      return false;
+    }
   }
 
  private:
