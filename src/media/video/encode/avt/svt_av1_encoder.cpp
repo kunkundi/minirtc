@@ -6,8 +6,17 @@
 #include "log.h"
 
 // #define SAVE_RECEIVED_NV12_STREAM
-// #define SAVE_ENCODED_H264_STREAM
+// #define SAVE_ENCODED_AV1_STREAM
 
+#define INPUT_SIZE_240p_TH 0x28500    // 0.165 Million
+#define INPUT_SIZE_360p_TH 0x4CE00    // 0.315 Million
+#define INPUT_SIZE_480p_TH 0xA1400    // 0.661 Million
+#define INPUT_SIZE_720p_TH 0x16DA00   // 1.5 Million
+#define INPUT_SIZE_1080p_TH 0x535200  // 5.46 Million
+#define INPUT_SIZE_4K_TH 0x140A000    // 21 Million
+#define INPUT_SIZE_8K_TH 0X5028000    // 84 Million
+#define EB_OUTPUTSTREAMBUFFERSIZE_MACRO(ResolutionSize) \
+  ((ResolutionSize) < (INPUT_SIZE_720p_TH) ? 0x1E8480 : 0x2DC6C0)
 static void Nv12ToI420(unsigned char *Src_data, int src_width, int src_height,
                        unsigned char *Dst_data) {
   // NV12
@@ -42,14 +51,42 @@ SvtAv1Encoder::SvtAv1Encoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 
 SvtAv1Encoder::~SvtAv1Encoder() {
+#ifdef SAVE_RECEIVED_NV12_STREAM
+  if (file_nv12_) {
+    fflush(file_nv12_);
+    fclose(file_nv12_);
+    file_nv12_ = nullptr;
+  }
+#endif
+
+#ifdef SAVE_ENCODED_AV1_STREAM
+  if (file_av1_) {
+    fflush(file_av1_);
+    fclose(file_av1_);
+    file_av1_ = nullptr;
+  }
+#endif
+  Release();
+}
+
+void SvtAv1Encoder::Release() {
   if (svt_av1_encoder_) {
+    EbBufferHeaderType stream_header_buffer;
+    memset(&stream_header_buffer, 0, sizeof(stream_header_buffer));
+    stream_header_buffer.pic_type = EB_AV1_INVALID_PICTURE;
+    stream_header_buffer.flags = EB_BUFFERFLAG_EOS;
+    svt_av1_enc_send_picture(svt_av1_encoder_, &stream_header_buffer);
     svt_av1_enc_deinit(svt_av1_encoder_);
     svt_av1_enc_deinit_handle(svt_av1_encoder_);
     svt_av1_encoder_ = nullptr;
   }
 
   if (stream_header_buffer_) {
-    svt_av1_enc_stream_header_release(stream_header_buffer_);
+    if (stream_header_buffer_->p_buffer) {
+      free(stream_header_buffer_->p_buffer);
+      stream_header_buffer_->p_buffer = nullptr;
+    }
+    free(stream_header_buffer_);
     stream_header_buffer_ = nullptr;
   }
 
@@ -58,45 +95,105 @@ SvtAv1Encoder::~SvtAv1Encoder() {
 }
 
 int SvtAv1Encoder::Init() {
+#ifdef SAVE_RECEIVED_NV12_STREAM
+  nv12_file_name_ = "received_nv12_stream_" +
+                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
+  file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
+  if (!file_nv12_) {
+    LOG_ERROR("Fail to open {}", nv12_file_name_.c_str());
+  }
+#endif
+
+#ifdef SAVE_ENCODED_AV1_STREAM
+  av1_file_name_ = "encoded_h264_stream_" +
+                   std::to_string(reinterpret_cast<uintptr_t>(this)) + ".ivf";
+  file_av1_ = fopen(av1_file_name_.c_str(), "w+b");
+  if (!file_av1_) {
+    LOG_ERROR("Fail to open {}", av1_file_name_.c_str());
+  }
+#endif
+  return Reconfigure(frame_width_, frame_height_);
+}
+
+int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   EbErrorType ret;
-  ret = svt_av1_enc_init_handle(&svt_av1_encoder_, &enc_config_);
-  if (ret != EB_ErrorNone) return -1;
+
+  if (svt_av1_encoder_) {
+    EbBufferHeaderType stream_header_buffer;
+    memset(&stream_header_buffer, 0, sizeof(stream_header_buffer));
+    stream_header_buffer.pic_type = EB_AV1_INVALID_PICTURE;
+    stream_header_buffer.flags = EB_BUFFERFLAG_EOS;
+    svt_av1_enc_send_picture(svt_av1_encoder_, &stream_header_buffer);
+    svt_av1_enc_deinit(svt_av1_encoder_);
+    svt_av1_enc_deinit_handle(svt_av1_encoder_);
+    svt_av1_encoder_ = nullptr;
+  }
+
+  if (!svt_av1_encoder_) {
+    ret = svt_av1_enc_init_handle(&svt_av1_encoder_, &enc_config_);
+    if (ret != EB_ErrorNone) {
+      LOG_ERROR("Fail to init svt_av1_encoder_");
+      return -1;
+    }
+  }
+
+  if (stream_header_buffer_) {
+    if (stream_header_buffer_->p_buffer) {
+      delete[] stream_header_buffer_->p_buffer;
+      stream_header_buffer_->p_buffer = nullptr;
+    }
+    delete stream_header_buffer_;
+    stream_header_buffer_ = nullptr;
+  }
 
   // Set default config
-  frame_width_ = 1920;
-  frame_height_ = 1080;
+  frame_width_ = frame_width;
+  frame_height_ = frame_height;
   enc_config_.source_width = frame_width_;
   enc_config_.source_height = frame_height_;
   enc_config_.encoder_color_format = EB_YUV420;
-  enc_config_.frame_rate_numerator = 30;
-  enc_config_.frame_rate_denominator = 1;
   enc_config_.encoder_bit_depth = 8;
-  enc_config_.rate_control_mode = 1;  // VBR
+  enc_config_.frame_rate_numerator = 60;
+  enc_config_.frame_rate_denominator = 1;
+  enc_config_.enc_mode = 10;
+  enc_config_.rate_control_mode = SVT_AV1_RC_MODE_CBR;
+  enc_config_.pred_structure = SVT_AV1_PRED_LOW_DELAY_B;
   enc_config_.target_bit_rate = max_bitrate_;
-  enc_config_.max_qp_allowed = 63;
+  enc_config_.max_qp_allowed = 60;
   enc_config_.min_qp_allowed = 10;
-  enc_config_.intra_period_length = I_FRAME_INTERVAL / 1000 * 30;
+  enc_config_.intra_period_length = I_FRAME_INTERVAL;
+  // enc_config_.intra_refresh_type = SVT_AV1_KF_REFRESH;
+  enc_config_.level = 52;
+  // enc_config_.qp = 63;
+  // enc_config_.screen_content_mode = 1;
+  // enc_config_.sframe_dist = I_FRAME_INTERVAL;
 
-  const size_t luma_size = enc_config_.source_width *
-                           enc_config_.source_height *
-                           (enc_config_.encoder_bit_depth > 8 ? 2 : 1);
+  svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
+  if (ret != EB_ErrorNone) {
+    LOG_ERROR("svt_av1_enc_set_parameter failed");
+    return -1;
+  }
 
-  EbSvtIOFormat *in_data;
+  ret = svt_av1_enc_init(svt_av1_encoder_);
+  if (ret != EB_ErrorNone) {
+    LOG_ERROR("svt_av1_enc_init failed");
+    return -1;
+  }
 
-  stream_header_buffer_ =
-      (EbBufferHeaderType *)calloc(1, sizeof(EbBufferHeaderType));
+  stream_header_buffer_ = new EbBufferHeaderType;
   if (!stream_header_buffer_) {
     LOG_ERROR("Failed to allocate stream header buffer");
     return -1;
   }
-  stream_header_buffer_->p_buffer = (uint8_t *)calloc(1, sizeof(EbSvtIOFormat));
+  stream_header_buffer_->size = sizeof(EbBufferHeaderType);
+  stream_header_buffer_->p_buffer =
+      new uint8_t[EB_OUTPUTSTREAMBUFFERSIZE_MACRO(frame_width * frame_height)];
   if (!stream_header_buffer_->p_buffer) {
     LOG_ERROR("Failed to allocate input picture buffer");
-    free(stream_header_buffer_);
+    delete stream_header_buffer_;
     stream_header_buffer_ = nullptr;
     return -1;
   }
-  stream_header_buffer_->size = sizeof(*stream_header_buffer_);
 
   yuv420p_frame_capacity_ = frame_width_ * frame_height_ * 3 / 2;
   yuv420p_frame_ = new uint8_t[yuv420p_frame_capacity_];
@@ -157,41 +254,60 @@ int SvtAv1Encoder::Encode(
   stream_header_buffer_->flags = 0;
   stream_header_buffer_->p_app_private = nullptr;
   stream_header_buffer_->pts = raw_frame.CapturedTimestamp();
-  svt_metadata_array_free(&stream_header_buffer_->metadata);
+  stream_header_buffer_->metadata = nullptr;
 
   VideoFrameType frame_type;
   if (0 == seq_++ % key_frame_interval_ || force_idr_) {
     stream_header_buffer_->pic_type = EB_AV1_KEY_PICTURE;
+    force_idr_ = false;
   } else {
     stream_header_buffer_->pic_type = EB_AV1_INVALID_PICTURE;
+    // stream_header_buffer_->qp = 10;
   }
 
   EbErrorType ret;
   ret = svt_av1_enc_send_picture(svt_av1_encoder_, stream_header_buffer_);
   if (ret != EB_ErrorNone) {
     LOG_ERROR("Failed to send picture");
-    return 1;
+    return -1;
   }
 
-  // EbBufferHeaderType *output_packet = NULL;
-  // while (true) {
-  //   EbErrorType packet_ret =
-  //       svt_av1_enc_get_packet(svt_av1_encoder_, &output_packet, 0);
-  //   if (packet_ret == EB_NoErrorEmptyQueue) {
-  //     break;
-  //   }
-  //   if (packet_ret != EB_ErrorNone) {
-  //     LOG_ERROR("Failed to get packet");
-  //     break;
-  //   }
+  EbBufferHeaderType *output_packet = NULL;
 
-  //   if (output_packet && output_packet->n_filled_len > 0) {
-  //     LOG_INFO("Encoded frame size: {} bytes", output_packet->n_filled_len);
-  //     // 处理 encoded_frame...
-  //   }
+  EbErrorType packet_ret =
+      svt_av1_enc_get_packet(svt_av1_encoder_, &output_packet, 0);
+  if (packet_ret == EB_NoErrorEmptyQueue) {
+    LOG_INFO("No packet available");
+    return 0;
+  }
+  if (packet_ret != EB_ErrorNone) {
+    LOG_ERROR("Failed to get packet");
+    return -1;
+  }
 
-  //   svt_av1_enc_release_out_buffer(&output_packet);
-  // }
+  if (output_packet && output_packet->n_filled_len > 0) {
+    if (on_encoded_image) {
+      EncodedFrame encoded_frame(output_packet->p_buffer,
+                                 output_packet->n_filled_len, frame_width_,
+                                 frame_height_);
+      encoded_frame.SetFrameType((output_packet->pic_type == EB_AV1_KEY_PICTURE)
+                                     ? kVideoFrameKey
+                                     : kVideoFrameDelta);
+      encoded_frame.SetEncodedWidth(frame_width_);
+      encoded_frame.SetEncodedHeight(frame_height_);
+      encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
+      encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+      on_encoded_image(encoded_frame);
+#ifdef SAVE_ENCODED_AV1_STREAM
+      fwrite(encoded_frame.Buffer(), 1, encoded_frame.Size(), file_av1_);
+#endif
+    }
+  }
+
+  if (output_packet) {
+    svt_av1_enc_release_out_buffer(&output_packet);
+  }
+  output_packet = nullptr;
 
   return 0;
 }
@@ -220,15 +336,5 @@ int SvtAv1Encoder::ResetEncodeResolution(unsigned int width,
   LOG_INFO("Reset encode resolution from [{}x{}] to [{}x{}]]", frame_width_,
            frame_height_, width, height);
 
-  frame_width_ = width;
-  frame_height_ = height;
-
-  enc_config_.source_width = frame_width_;
-  enc_config_.source_height = frame_height_;
-
-  EbErrorType ret;
-  ret = svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
-  if (ret != EB_ErrorNone) return -2;
-
-  return 0;
+  return Reconfigure(width, height);
 }

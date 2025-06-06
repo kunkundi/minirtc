@@ -105,8 +105,6 @@ int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
                                (uint32_t)encoded_frame.Size(), rtp_timestamp,
                                true);
 
-    LOG_ERROR("send packet num = {}", rtp_packets.size());
-
 #ifdef SAVE_RTP_SENT_STREAM
     fwrite((unsigned char*)encoded_frame.Buffer(), 1, encoded_frame.Size(),
            file_rtp_sent_);

@@ -32,6 +32,10 @@ class SvtAv1Encoder : public VideoEncoder {
   int ResetEncodeResolution(unsigned int width, unsigned int height);
 
  private:
+  int Reconfigure(uint32_t frame_width, uint32_t frame_height);
+  void Release();
+
+ private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
   EbComponentType* svt_av1_encoder_ = nullptr;
   EbSvtAv1EncConfiguration enc_config_ = {};
