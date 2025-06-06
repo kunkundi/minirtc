@@ -13,8 +13,8 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
     "ASIO_HAS_CSTDINT", "ASIO_HAS_STD_ARRAY",  "ASIO_HAS_STD_SYSTEM_ERROR",
     "NOMINMAX")
 
-add_requires("asio 1.24.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2024.5.21", "aom 3.9.0", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
-add_packages("asio", "nlohmann_json", "spdlog", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "concurrentqueue")
+add_requires("asio 1.24.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2024.5.21", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+add_packages("asio", "nlohmann_json", "spdlog", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
 
 add_requires("vcpkg::libnice", {configs = {shared = false}})
 add_packages("vcpkg::libnice")
@@ -158,6 +158,7 @@ target("media")
         "src/media/video/encode/openh264/*.cpp",
         "src/media/video/decode/openh264/*.cpp",
         "src/media/video/encode/aom/*.cpp",
+        "src/media/video/encode/avt/*.cpp",
         "src/media/video/decode/dav1d/*.cpp",
         "src/media/video/decode/aom/*.cpp",
         "src/media/nvcodec/*.cpp")
@@ -168,6 +169,7 @@ target("media")
         "src/media/video/encode/openh264",
         "src/media/video/decode/openh264",
         "src/media/video/encode/aom",
+        "src/media/video/encode/avt",
         "src/media/video/decode/dav1d",
         "src/media/video/decode/aom",
         "src/media/nvcodec",
@@ -181,6 +183,7 @@ target("media")
         "src/media/video/encode/openh264/*.cpp",
         "src/media/video/decode/openh264/*.cpp",
         "src/media/video/encode/aom/*.cpp",
+        "src/media/video/encode/avt/*.cpp",
         "src/media/video/decode/dav1d/*.cpp",
         "src/media/video/decode/aom/*.cpp",
         "src/media/nvcodec/*.cpp")
@@ -191,6 +194,7 @@ target("media")
         "src/media/video/encode/openh264",
         "src/media/video/decode/openh264",
         "src/media/video/encode/aom",
+        "src/media/video/encode/avt",
         "src/media/video/decode/dav1d",
         "src/media/video/decode/aom",
         "src/media/nvcodec",
@@ -204,6 +208,7 @@ target("media")
         "src/media/video/encode/video_toolbox/*.mm",
         "src/media/video/decode/video_toolbox/*.mm",
         "src/media/video/encode/aom/*.cpp",
+        "src/media/video/encode/avt/*.cpp",
         "src/media/video/decode/dav1d/*.cpp",
         "src/media/video/decode/aom/*.cpp")
         add_includedirs("src/media/video/encode",
@@ -213,6 +218,7 @@ target("media")
         "src/media/video/encode/video_toolbox",
         "src/media/video/decode/video_toolbox",
         "src/media/video/encode/aom",
+        "src/media/video/encode/avt",
         "src/media/video/decode/dav1d",
         "src/media/video/decode/aom", {public = true})
     end

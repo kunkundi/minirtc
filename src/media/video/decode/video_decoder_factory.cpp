@@ -21,8 +21,7 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
     bool av1_encoding) {
   if (av1_encoding) {
     return std::make_unique<Dav1dAv1Decoder>(Dav1dAv1Decoder(clock));
-    // LOG_INFO("Use aom decoder");
-    // return std::make_unique<AomAv1Decoder>(AomAv1Decoder());
+    // return std::make_unique<AomAv1Decoder>(AomAv1Decoder(clock));
   } else {
 #if __APPLE__
     if (hardware_acceleration) {

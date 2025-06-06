@@ -16,10 +16,10 @@
   } while (0)
 
 constexpr int kQpMin = 10;
-constexpr int kQpMax = 40;
+constexpr int kQpMax = 30;
 constexpr int kUsageProfile = AOM_USAGE_REALTIME;
-constexpr int kMinQindex = 145;  // Min qindex threshold for QP scaling.
-constexpr int kMaxQindex = 205;  // Max qindex threshold for QP scaling.
+constexpr int kMinQindex = 58;  // Min qindex threshold for QP scaling.
+constexpr int kMaxQindex = 80;  // Max qindex threshold for QP scaling.
 constexpr int kBitDepth = 8;
 constexpr int kLagInFrames = 0;  // No look ahead.
 constexpr int kRtpTicksPerSecond = 90000;
@@ -142,20 +142,21 @@ int AomAv1Encoder::Init() {
   aom_av1_encoder_config_.g_threads = 8;
   aom_av1_encoder_config_.g_timebase.num = 1;
   aom_av1_encoder_config_.g_timebase.den = kRtpTicksPerSecond;
-  aom_av1_encoder_config_.rc_target_bitrate = target_bitrate_;  // kilobits/sec.
+  aom_av1_encoder_config_.rc_target_bitrate =
+      max_bitrate_ / 1000;  // kilobits/sec.
   aom_av1_encoder_config_.rc_dropframe_thresh =
       (!disable_frame_dropping_) ? 30 : 0;
   aom_av1_encoder_config_.g_input_bit_depth = kBitDepth;
   aom_av1_encoder_config_.kf_mode = AOM_KF_DISABLED;
   aom_av1_encoder_config_.rc_min_quantizer = kQpMin;
   aom_av1_encoder_config_.rc_max_quantizer = kQpMax;
-  aom_av1_encoder_config_.rc_undershoot_pct = 50;
-  aom_av1_encoder_config_.rc_overshoot_pct = 50;
-  aom_av1_encoder_config_.rc_buf_initial_sz = 600;
-  aom_av1_encoder_config_.rc_buf_optimal_sz = 600;
-  aom_av1_encoder_config_.rc_buf_sz = 1000;
   aom_av1_encoder_config_.g_usage = kUsageProfile;
   aom_av1_encoder_config_.g_error_resilient = 0;
+  // aom_av1_encoder_config_.rc_undershoot_pct = 50;
+  // aom_av1_encoder_config_.rc_overshoot_pct = 50;
+  // aom_av1_encoder_config_.rc_buf_initial_sz = 600;
+  // aom_av1_encoder_config_.rc_buf_optimal_sz = 600;
+  // aom_av1_encoder_config_.rc_buf_sz = 1000;
   // Low-latency settings.
   aom_av1_encoder_config_.rc_end_usage = AOM_CBR;    // cbr mode
   aom_av1_encoder_config_.g_pass = AOM_RC_ONE_PASS;  // One-pass rate control
@@ -180,15 +181,15 @@ int AomAv1Encoder::Init() {
   inited_ = true;
 
   // Set control parameters
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_SET_CPUUSED, 10);  // 6 - 10
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_SET_CPUUSED, 11);  // 6 - 11
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CDEF, 1);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_TPL_MODEL, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_DELTAQ_MODE, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_ORDER_HINT, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_AQ_MODE, 3);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_SET_MAX_INTRA_BITRATE_PCT, 300);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_COEFF_COST_UPD_FREQ, 3);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MODE_COST_UPD_FREQ, 3);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_COEFF_COST_UPD_FREQ, 2);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MODE_COST_UPD_FREQ, 2);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MV_COST_UPD_FREQ, 3);
 
   // if (codec_settings->mode == VideoCodecMode::kScreensharing) {
@@ -196,56 +197,59 @@ int AomAv1Encoder::Init() {
   //                                     AOM_CONTENT_SCREEN);
   //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PALETTE, 1);
   // } else {
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PALETTE, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PALETTE, 0);
   // }
 
-  if (aom_av1_encoder_config_.g_threads == 8) {
-    // Values passed to AV1E_SET_TILE_ROWS and AV1E_SET_TILE_COLUMNS are log2()
-    // based.
-    // Use 4 tile columns x 2 tile rows for 8 threads.
-    SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_ROWS, 1);
-    SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_COLUMNS, 2);
-  } else if (aom_av1_encoder_config_.g_threads == 4) {
-    // Use 2 tile columns x 2 tile rows for 4 threads.
-    SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_ROWS, 1);
-    SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_COLUMNS, 1);
-  } else {
-    SET_ENCODER_PARAM_OR_RETURN_ERROR(
-        AV1E_SET_TILE_COLUMNS,
-        static_cast<int>(log2(aom_av1_encoder_config_.g_threads)));
-  }
+  // if (aom_av1_encoder_config_.g_threads == 8) {
+  //   // Values passed to AV1E_SET_TILE_ROWS and AV1E_SET_TILE_COLUMNS are
+  //   log2()
+  //   // based.
+  //   // Use 4 tile columns x 2 tile rows for 8 threads.
+  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_ROWS, 4);
+  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_COLUMNS, 4);
+  // } else if (aom_av1_encoder_config_.g_threads == 4) {
+  //   // Use 2 tile columns x 2 tile rows for 4 threads.
+  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_ROWS, 2);
+  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_COLUMNS, 1);
+  // } else {
+  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(
+  //       AV1E_SET_TILE_COLUMNS,
+  //       static_cast<int>(log2(aom_av1_encoder_config_.g_threads)));
+  // }
 
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ROW_MT, 1);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_OBMC, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_NOISE_SENSITIVITY, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_WARPED_MOTION, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_GLOBAL_MOTION, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_REF_FRAME_MVS, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(
-      AV1E_SET_SUPERBLOCK_SIZE,
-      GetSuperblockSize(frame_width_, frame_height_,
-                        aom_av1_encoder_config_.g_threads));
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CFL_INTRA, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_SMOOTH_INTRA, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_ANGLE_DELTA, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_FILTER_INTRA, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_INTRA_DEFAULT_TX_ONLY, 1);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_DISABLE_TRELLIS_QUANT, 1);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_DIST_WTD_COMP, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_DIFF_WTD_COMP, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_DUAL_FILTER, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTERINTRA_COMP, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTERINTRA_WEDGE, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTRA_EDGE_FILTER, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTRABC, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_MASKED_COMP, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PAETH_INTRA, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_QM, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_RECT_PARTITIONS, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_RESTORATION, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_SMOOTH_INTERINTRA, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_TX64, 0);
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MAX_REFERENCE_FRAMES, 3);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TILE_COLUMNS, cfg_.g_threads >>
+  // 1); SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ROW_MT, 1);
+
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_OBMC, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_NOISE_SENSITIVITY, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_WARPED_MOTION, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_GLOBAL_MOTION, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_REF_FRAME_MVS, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(
+  //     AV1E_SET_SUPERBLOCK_SIZE,
+  //     GetSuperblockSize(frame_width_, frame_height_,
+  //                       aom_av1_encoder_config_.g_threads));
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CFL_INTRA, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_SMOOTH_INTRA, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_ANGLE_DELTA, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_FILTER_INTRA, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_INTRA_DEFAULT_TX_ONLY, 1);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_DISABLE_TRELLIS_QUANT, 1);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_DIST_WTD_COMP, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_DIFF_WTD_COMP, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_DUAL_FILTER, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTERINTRA_COMP, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTERINTRA_WEDGE, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTRA_EDGE_FILTER, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_INTRABC, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_MASKED_COMP, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PAETH_INTRA, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_QM, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_RECT_PARTITIONS, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_RESTORATION, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_SMOOTH_INTERINTRA, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_TX64, 0);
+  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MAX_REFERENCE_FRAMES, 3);
 
   frame_for_encode_ = aom_img_wrap(nullptr, AOM_IMG_FMT_NV12, frame_width_,
                                    frame_height_, 1, nullptr);
@@ -315,7 +319,7 @@ int AomAv1Encoder::Encode(
   frame_for_encode_->stride[AOM_PLANE_V] = 0;
 
   VideoFrameType frame_type;
-  if (0 == seq_++ % key_frame_interval_) {
+  if (0 == seq_++ % key_frame_interval_ || force_i_frame_) {
     force_i_frame_flags_ = AOM_EFLAG_FORCE_KF;
     frame_type = VideoFrameType::kVideoFrameKey;
   } else {
@@ -342,9 +346,11 @@ int AomAv1Encoder::Encode(
       memcpy(encoded_frame_, pkt->data.frame.buf, pkt->data.frame.sz);
       encoded_frame_size_ = pkt->data.frame.sz;
 
-      int qp = -1;
-      SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_GET_LAST_QUANTIZER, &qp);
-      // LOG_INFO("Encoded frame qp = {}", qp);
+      if (pkt->data.frame.flags & AOM_FRAME_IS_KEY) {
+        int qp = -1;
+        SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_GET_LAST_QUANTIZER, &qp);
+        LOG_INFO("Encoded frame qp = {}", qp);
+      }
 
       if (on_encoded_image) {
         EncodedFrame encoded_frame(encoded_frame_, encoded_frame_size_,
@@ -366,12 +372,18 @@ int AomAv1Encoder::Encode(
 }
 
 int AomAv1Encoder::ForceIdr() {
-  force_i_frame_flags_ = AOM_EFLAG_FORCE_KF;
+  force_i_frame_ = true;
   return 0;
 }
 
 int AomAv1Encoder::SetTargetBitrate(int bitrate) {
-  target_bitrate_ = bitrate;
+  target_bitrate_ = bitrate / 1000;
+  aom_av1_encoder_config_.rc_target_bitrate = target_bitrate_;
+  aom_codec_err_t error_code =
+      aom_codec_enc_config_set(&aom_av1_encoder_ctx_, &aom_av1_encoder_config_);
+  if (error_code != AOM_CODEC_OK) {
+    LOG_ERROR("Set bitrate failed, return {}", (int)error_code);
+  }
   return 0;
 }
 

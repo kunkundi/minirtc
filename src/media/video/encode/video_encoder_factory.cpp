@@ -1,6 +1,7 @@
 #include "video_encoder_factory.h"
 
 #include "aom/aom_av1_encoder.h"
+#include "avt/svt_av1_encoder.h"
 #include "openh264/openh264_encoder.h"
 
 #if __APPLE__
@@ -19,7 +20,8 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     bool av1_encoding) {
   if (av1_encoding) {
-    return std::make_unique<AomAv1Encoder>(AomAv1Encoder(clock));
+    // return std::make_unique<AomAv1Encoder>(AomAv1Encoder(clock));
+    return std::make_unique<SvtAv1Encoder>(SvtAv1Encoder(clock));
   } else {
 #if __APPLE__
     if (hardware_acceleration) {

@@ -91,13 +91,14 @@ class AomAv1Encoder : public MediaCodec {
   aom_image_t* frame_for_encode_ = nullptr;
   aom_codec_ctx_t aom_av1_encoder_ctx_;
   aom_codec_enc_cfg_t aom_av1_encoder_config_;
-  bool disable_frame_dropping_ = false;
+  bool disable_frame_dropping_ = true;
   bool inited_ = false;
   int64_t timestamp_ = 0;
   aom_enc_frame_flags_t force_i_frame_flags_ = 0;
   uint8_t* encoded_frame_ = nullptr;
   size_t encoded_frame_capacity_ = 0;
   size_t encoded_frame_size_ = 0;
+  bool force_i_frame_ = false;
 };
 
 #endif

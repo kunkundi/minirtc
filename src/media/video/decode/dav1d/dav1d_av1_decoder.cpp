@@ -208,7 +208,6 @@ int Dav1dAv1Decoder::Decode(
   decoded_frame_->SetReceivedTimestamp(received_frame->ReceivedTimestamp());
   decoded_frame_->SetCapturedTimestamp(received_frame->CapturedTimestamp());
   decoded_frame_->SetDecodedTimestamp(clock_->CurrentTime());
-
 #ifdef SAVE_DECODED_NV12_STREAM
   fwrite((unsigned char *)decoded_frame_->Buffer(), 1, decoded_frame_->Size(),
          file_nv12_);
