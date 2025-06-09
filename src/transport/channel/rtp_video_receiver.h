@@ -6,6 +6,7 @@
 #include <mutex>
 #include <queue>
 #include <set>
+#include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -112,7 +113,7 @@ class RtpVideoReceiver : public ThreadBase,
     int64_t arrival_time = 0;
   };
   std::map<uint32_t, PendingFrame> pending_frames_;
-  std::recursive_mutex pending_frames_mtx_;
+  std::shared_mutex pending_frames_mtx_;
 
  private:
   std::shared_ptr<IOStatistics> io_statistics_ = nullptr;

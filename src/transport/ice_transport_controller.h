@@ -6,6 +6,7 @@
 
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
 #define _ICE_TRANSPORT_CONTROLLER_H_
+#include <shared_mutex>
 
 #include "api/clock/clock.h"
 #include "api/transport/network_types.h"
@@ -135,6 +136,8 @@ class IceTransportController
 
   std::map<std::string, std::shared_ptr<StreamContext>> stream_senders_;
   std::map<std::string, std::shared_ptr<StreamContext>> stream_receivers_;
+  std::shared_mutex stream_senders_mutex_;
+  std::shared_mutex stream_receivers_mutex_;
 
   std::map<uint32_t, std::string> ssrc_to_name_;
 
@@ -167,7 +170,7 @@ class IceTransportController
 
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
-  bool b_force_i_frame_;
+  std::atomic<bool> b_force_i_frame_;
   bool video_codec_inited_;
   bool load_nvcodec_dll_success_;
   bool hardware_acceleration_;

@@ -251,6 +251,7 @@ int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
   init_params.encodeConfig->rcParams.averageBitRate = bitrate;
   init_params.encodeConfig->rcParams.maxBitRate = bitrate;
   reconfig_params.reInitEncodeParams = init_params;
+  reconfig_params.forceIDR = 0;
   return encoder_->Reconfigure(&reconfig_params) ? 0 : -1;
 }
 

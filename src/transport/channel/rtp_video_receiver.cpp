@@ -11,7 +11,7 @@
 
 #define NV12_BUFFER_SIZE (1280 * 720 * 3 / 2)
 #define RTCP_RR_INTERVAL 1000
-#define MAX_WAIT_TIME_MS 50      // 50ms
+#define MAX_WAIT_TIME_MS 100     // 100ms
 #define NACK_UPDATE_INTERVAL 20  // 20ms
 
 RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock)
@@ -83,7 +83,7 @@ RtpVideoReceiver::~RtpVideoReceiver() {
   incomplete_av1_frame_list_.clear();
   incomplete_frame_list_.clear();
 
-  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+  std::shared_lock lock(pending_frames_mtx_);
   pending_frames_.clear();
 
 #ifdef SAVE_RTP_RECV_STREAM
@@ -235,7 +235,7 @@ void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
            delta_ntp_internal_ms_) *
           1000);
 
-      std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+      std::shared_lock lock(pending_frames_mtx_);
       pending_frames_[rtp_packet_h264.Timestamp()] = {
           std::move(received_frame), true, clock_->CurrentTime().ms()};
     } else if (rtp::NAL_UNIT_TYPE::FU_A == nalu_type) {
@@ -393,9 +393,12 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
   }
 
   if (is_end) {
-    std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
-    if (pending_frames_.find(timestamp) == pending_frames_.end()) {
-      pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
+    {
+      std::shared_lock lock(pending_frames_mtx_);
+      if (pending_frames_.find(timestamp) == pending_frames_.end()) {
+        pending_frames_[timestamp] = {nullptr, false,
+                                      clock_->CurrentTime().ms()};
+      }
     }
 
     fua_end_sequence_numbers_[timestamp] = seq;
@@ -430,7 +433,7 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
         LOG_WARN(
             "retransmit packet [seq {} | ts {}] timeout, remove pending frame",
             seq, timestamp);
-        std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+        std::shared_lock lock(pending_frames_mtx_);
         pending_frames_.erase(timestamp);
         return false;
       }
@@ -496,7 +499,7 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
   fua_end_sequence_numbers_.erase(timestamp);
   missing_sequence_numbers_wait_time_.erase(timestamp);
 
-  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+  std::shared_lock lock(pending_frames_mtx_);
   if (pending_frames_.find(timestamp) != pending_frames_.end()) {
     pending_frames_[timestamp] = {std::move(received_frame), true,
                                   clock_->CurrentTime().ms()};
@@ -509,7 +512,7 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   uint16_t seq = rtp_packet_av1.SequenceNumber();
 
   {
-    std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+    std::shared_lock lock(pending_frames_mtx_);
     if (pending_frames_.find(timestamp) == pending_frames_.end()) {
       pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
     }
@@ -596,7 +599,7 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   fua_end_sequence_numbers_.erase(timestamp);
   missing_sequence_numbers_wait_time_.erase(timestamp);
 
-  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+  std::shared_lock lock(pending_frames_mtx_);
   if (pending_frames_.find(timestamp) != pending_frames_.end()) {
     pending_frames_[timestamp] = {std::move(received_frame), true,
                                   clock_->CurrentTime().ms()};
@@ -687,7 +690,7 @@ bool RtpVideoReceiver::Process() {
     return false;
   }
 
-  std::lock_guard<std::recursive_mutex> lock(pending_frames_mtx_);
+  std::shared_lock lock(pending_frames_mtx_);
   if (pending_frames_.empty()) {
     return false;
   }
@@ -703,8 +706,8 @@ bool RtpVideoReceiver::Process() {
       if (clock_->CurrentTime().ms() - it->second.arrival_time >
           MAX_WAIT_TIME_MS) {
         LOG_WARN("pending frame [ts {}] timeout, remove it", it->first);
-        it = pending_frames_.erase(it);
-        // // pending_frames_.clear();
+        // it = pending_frames_.erase(it);
+        pending_frames_.clear();
         RequestKeyFrame();
         return false;
       } else {

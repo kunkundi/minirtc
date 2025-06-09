@@ -102,7 +102,6 @@ int NvidiaVideoDecoder::Decode(
 #endif
 
   if ((data[4] & 0x1f) == 0x07) {
-    auto start = std::chrono::high_resolution_clock::now();
     LOG_INFO("Receive key frame");
     int width = 0, height = 0;
     ParseSPSResolution(data + 4, size - 4, width, height);
