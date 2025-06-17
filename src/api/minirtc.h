@@ -1,5 +1,5 @@
-#ifndef _X_H_
-#define _X_H_
+#ifndef _MINIRTC_H_
+#define _MINIRTC_H_
 
 #if defined(_MSC_VER)
 #define DLLAPI __declspec(dllexport)

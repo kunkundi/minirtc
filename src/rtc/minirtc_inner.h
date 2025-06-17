@@ -1,5 +1,5 @@
-#ifndef _X_INNER_H_
-#define _X_INNER_H_
+#ifndef _MINIRTC_INNER_H_
+#define _MINIRTC_INNER_H_
 
 #include "peer_connection.h"
 

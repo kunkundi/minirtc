@@ -1,4 +1,4 @@
-set_project("projectx")
+set_project("minirtc")
 set_version("0.0.1")
 set_license("LGPL-3.0")
 
@@ -230,19 +230,19 @@ target("media")
         "src/media/audio/decode",
         "src/media/resolution_adapter",
         "src/media/video/assemble_frame",
-        "src/interface", "src/media", {public = true})
+        "src/api", "src/media", {public = true})
 
 target("pc")
     set_kind("object")
     add_deps("log", "ws", "ice", "transport", "inih", "common")
     add_files("src/pc/*.cpp")
-    add_includedirs("src/pc", "src/interface", {public = true})
+    add_includedirs("src/pc", "src/api", {public = true})
 
-target("projectx")
+target("minirtc")
     set_kind("static")
     add_deps("log", "pc")
     add_files("src/rtc/*.cpp")
-    add_includedirs("src/rtc", "src/interface")
+    add_includedirs("src/rtc", "src/api")
 
     if is_os("windows") then
         add_linkdirs("thirdparty/nvcodec/lib/x64")
@@ -262,7 +262,7 @@ target("projectx")
 
     end
 
-    add_installfiles("src/interface/*.h", {prefixdir = "include"})
+    add_installfiles("src/api/*.h", {prefixdir = "include"})
     -- add_rules("utils.symbols.export_list", {symbols = {
     --     "CreatePeer",
     --     "DestroyPeer",
@@ -281,15 +281,15 @@ target("projectx")
 
 -- target("host")
 --     set_kind("binary")
---     add_deps("projectx")
+--     add_deps("minirtc")
 --     add_files("tests/peerconnection/host.cpp")
---     add_includedirs("src/interface")
+--     add_includedirs("src/api")
 
 -- target("guest")
 --     set_kind("binary")
---     add_deps("projectx")
+--     add_deps("minirtc")
 --     add_files("tests/peerconnection/guest.cpp")
---     add_includedirs("src/interface")
+--     add_includedirs("src/api")
 
 -- target("nicetest")
 --     set_kind("binary")

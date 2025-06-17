@@ -26,9 +26,9 @@
 #include "encoded_frame.h"
 #include "log.h"
 #include "media_codec.h"
+#include "minirtc.h"
 #include "raw_frame.h"
 #include "received_frame.h"
-#include "x.h"
 
 #define I_FRAME_INTERVAL 3000
 

@@ -9,9 +9,9 @@
 
 #include <vector>
 
+#include "minirtc.h"
 #include "raw_frame.h"
 #include "resolution_bitrate_limits.h"
-#include "x.h"
 
 class ResolutionAdapter {
  public:
