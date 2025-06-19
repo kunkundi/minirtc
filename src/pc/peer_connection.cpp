@@ -436,11 +436,20 @@ void PeerConnection::ProcessSignal(const std::string &signal) {
     case "login"_H: {
       if (j["status"].get<std::string>() == "success") {
         user_id_ = j["user_id"].get<std::string>();
+        std::string password;
+        std::string id_pasword;
+        if (j.contains("password")) {
+          password = j["password"].get<std::string>();
+          id_pasword = user_id_ + "@" + password;
+        } else {
+          password = "";
+          id_pasword = user_id_;
+        }
 
         XNetTrafficStats net_traffic_stats;
         memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
-        net_status_report_(user_id_.data(), user_id_.size(),
+        net_status_report_(id_pasword.data(), id_pasword.size(),
                            TraversalMode::UnknownMode, &net_traffic_stats,
                            user_id_.data(), user_id_.size(), user_data_);
         LOG_INFO("Login success with id [{}]", user_id_);
