@@ -125,11 +125,7 @@ DLLAPI void DestroyPeer(PeerPtr** peer_ptr);
 
 DLLAPI int Init(PeerPtr* peer_ptr);
 
-DLLAPI int CreateConnection(PeerPtr* peer_ptr, const char* transmission_id,
-                            const char* password);
-
-DLLAPI int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id,
-                          const char* password);
+DLLAPI int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id);
 
 DLLAPI int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id);
 

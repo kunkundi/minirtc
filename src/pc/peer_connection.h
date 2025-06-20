@@ -94,11 +94,7 @@ class PeerConnection {
  public:
   int Init(PeerConnectionParams params);
 
-  int Create(const std::string &transmission_id = "",
-             const std::string &password = "");
-
-  int Join(const std::string &transmission_id,
-           const std::string &password = "");
+  int Join(const std::string &transmission_id);
 
   int Leave(const std::string &transmission_id);
 
@@ -123,8 +119,7 @@ class PeerConnection {
 
   void ProcessSignal(const std::string &signal);
 
-  int RequestTransmissionMemberList(const std::string &transmission_id,
-                                    const std::string &password);
+  int RequestTransmissionMemberList(const std::string &transmission_id);
 
   int NegotiationFailed();
 
@@ -205,7 +200,6 @@ class PeerConnection {
   void *user_data_;
 
   bool inited_ = false;
-  std::string password_;
 
  private:
   bool b_force_i_frame_ = false;

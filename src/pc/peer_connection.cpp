@@ -223,33 +223,7 @@ int PeerConnection::Login() {
   return ret;
 }
 
-int PeerConnection::Create(const std::string &transmission_id,
-                           const std::string &password) {
-  if (SignalStatus::SignalConnected != GetSignalStatus()) {
-    LOG_ERROR("Signal not connected");
-    return -1;
-  }
-
-  int ret = 0;
-
-  local_transmission_id_ = transmission_id;
-  password_ = password;
-
-  json message = {{"type", "create_transmission"},
-                  {"user_id", user_id_},
-                  {"transmission_id", transmission_id},
-                  {"password", password}};
-
-  if (ws_transport_) {
-    ws_transport_->Send(message.dump());
-    LOG_INFO("Send create transmission request, transmission_id [{}]",
-             transmission_id);
-  }
-  return ret;
-}
-
-int PeerConnection::Join(const std::string &transmission_id,
-                         const std::string &password) {
+int PeerConnection::Join(const std::string &transmission_id) {
   if (SignalStatus::SignalConnected != GetSignalStatus()) {
     LOG_ERROR("Signal not connected");
     return -1;
@@ -258,11 +232,10 @@ int PeerConnection::Join(const std::string &transmission_id,
   int ret = 0;
 
   offer_peer_ = true;
-  password_ = password;
   leave_ = false;
 
   remote_transmission_id_ = transmission_id;
-  ret = RequestTransmissionMemberList(remote_transmission_id_, password_);
+  ret = RequestTransmissionMemberList(remote_transmission_id_);
   return ret;
 }
 
@@ -348,7 +321,7 @@ int PeerConnection::Destroy() {
 }
 
 int PeerConnection::RequestTransmissionMemberList(
-    const std::string &transmission_id, const std::string &password) {
+    const std::string &transmission_id) {
   if (SignalStatus::SignalConnected != GetSignalStatus()) {
     LOG_ERROR("Signal not connected");
     return -1;
@@ -357,8 +330,7 @@ int PeerConnection::RequestTransmissionMemberList(
   LOG_INFO("[{}] Request member list", user_id_);
 
   json message = {{"type", "query_user_id_list"},
-                  {"transmission_id", transmission_id},
-                  {"password", password}};
+                  {"transmission_id", transmission_id}};
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
@@ -435,21 +407,21 @@ void PeerConnection::ProcessSignal(const std::string &signal) {
   switch (HASH_STRING_PIECE(type.c_str())) {
     case "login"_H: {
       if (j["status"].get<std::string>() == "success") {
-        user_id_ = j["user_id"].get<std::string>();
+        std::string user_id_with_pwd = j["user_id"].get<std::string>();
         std::string password;
-        std::string id_pasword;
-        if (j.contains("password")) {
-          password = j["password"].get<std::string>();
-          id_pasword = user_id_ + "@" + password;
+
+        if (user_id_with_pwd.find("@") != std::string::npos) {
+          user_id_ = user_id_with_pwd.substr(0, user_id_with_pwd.find("@"));
+          password = user_id_with_pwd.substr(user_id_with_pwd.find("@") + 1);
         } else {
+          user_id_ = user_id_with_pwd;
           password = "";
-          id_pasword = user_id_;
         }
 
         XNetTrafficStats net_traffic_stats;
         memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
-        net_status_report_(id_pasword.data(), id_pasword.size(),
+        net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
                            TraversalMode::UnknownMode, &net_traffic_stats,
                            user_id_.data(), user_id_.size(), user_data_);
         LOG_INFO("Login success with id [{}]", user_id_);
@@ -632,7 +604,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
       if (user_id_list.empty()) {
         LOG_WARN("Wait for host create transmission [{}]", transmission_id);
         std::this_thread::sleep_for(std::chrono::seconds(1));
-        RequestTransmissionMemberList(transmission_id, password_);
+        RequestTransmissionMemberList(transmission_id);
         break;
       }
 

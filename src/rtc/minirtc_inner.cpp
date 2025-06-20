@@ -63,29 +63,15 @@ int Init(PeerPtr *peer_ptr) {
   return 0;
 }
 
-int CreateConnection(PeerPtr *peer_ptr, const char *transmission_id,
-                     const char *password) {
-  if (!peer_ptr || !peer_ptr->peer_connection) {
-    LOG_ERROR("Peer connection not created");
-    return -1;
-  }
-
-  LOG_INFO("CreateConnection [{}] with password [{}]", transmission_id,
-           password);
-
-  return peer_ptr->peer_connection->Create(transmission_id, password);
-}
-
-int JoinConnection(PeerPtr *peer_ptr, const char *transmission_id,
-                   const char *password) {
+int JoinConnection(PeerPtr *peer_ptr, const char *transmission_id) {
   int ret = -1;
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
   }
 
-  ret = peer_ptr->peer_connection->Join(transmission_id, password);
-  LOG_INFO("JoinConnection [{}] with password [{}]", transmission_id, password);
+  ret = peer_ptr->peer_connection->Join(transmission_id);
+  LOG_INFO("JoinConnection [{}]", transmission_id);
   return ret;
 }
 
