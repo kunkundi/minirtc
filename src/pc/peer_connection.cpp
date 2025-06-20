@@ -18,8 +18,14 @@ int PeerConnection::Init(PeerConnectionParams params) {
     LOG_INFO("Peer already inited");
     return 0;
   }
-  // Todo: checkout user_id unique or not
-  user_id_ = params.user_id;
+
+  user_id_with_pwd_ = params.user_id ? params.user_id : "";
+  auto at_pos = user_id_with_pwd_.find('@');
+  if (at_pos != std::string::npos) {
+    user_id_ = user_id_with_pwd_.substr(0, at_pos);
+  } else {
+    user_id_ = user_id_with_pwd_;
+  }
 
   if (params.use_cfg_file) {
     INIReader reader(params.cfg_path);
@@ -214,7 +220,7 @@ int PeerConnection::Login() {
 
   int ret = 0;
 
-  json message = {{"type", "login"}, {"user_id", user_id_}};
+  json message = {{"type", "login"}, {"user_id", user_id_with_pwd_}};
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
@@ -327,7 +333,7 @@ int PeerConnection::RequestTransmissionMemberList(
     return -1;
   }
 
-  LOG_INFO("[{}] Request member list", user_id_);
+  LOG_INFO("[{}] Request member list", transmission_id);
 
   json message = {{"type", "query_user_id_list"},
                   {"transmission_id", transmission_id}};
