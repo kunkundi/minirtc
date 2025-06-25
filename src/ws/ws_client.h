@@ -51,6 +51,11 @@ class WsClient {
   WsStatus GetStatus();
 
   // Callback
+  void OnSocketInit(client *c, websocketpp::connection_hdl hdl);
+
+  websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> OnTlsInit(
+      websocketpp::connection_hdl hdl);
+
   void OnOpen(client *c, websocketpp::connection_hdl hdl);
 
   void OnFail(client *c, websocketpp::connection_hdl hdl);
