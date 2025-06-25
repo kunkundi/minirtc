@@ -42,12 +42,22 @@ int WsClient::Connect(std::string const &uri) {
 
   client::connection_ptr con = m_endpoint_.get_connection(uri, ec);
 
+  if (!con) {
+    LOG_ERROR("Invalid connection, uri [{}], error msg [{}]", uri,
+              ec.message());
+    return -1;
+  }
+
   connection_handle_ = con->get_handle();
 
   if (ec) {
     LOG_ERROR("Connect initialization error: {}", ec.message());
     return -1;
   }
+
+  con->set_tls_init_handler([this](websocketpp::connection_hdl hdl) {
+    return this->on_tls_init(hdl);
+  });
 
   con->set_open_handler(
       websocketpp::lib::bind(&WsClient::OnOpen, this, &m_endpoint_,
@@ -83,6 +93,25 @@ int WsClient::Connect(std::string const &uri) {
   on_ws_status_(WsStatus::WsOpening);
 
   return 0;
+}
+
+std::shared_ptr<websocketpp::lib::asio::ssl::context> WsClient::on_tls_init(
+    websocketpp::connection_hdl) {
+  namespace asio = websocketpp::lib::asio;
+  auto ctx =
+      std::make_shared<asio::ssl::context>(asio::ssl::context::tlsv12_client);
+
+  try {
+    ctx->set_options(
+        asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+        asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
+    // ctx->load_verify_file("crossdesk.cn_bundle.crt");
+
+    ctx->set_verify_mode(websocketpp::lib::asio::ssl::verify_none);
+  } catch (std::exception &e) {
+    LOG_ERROR("TLS init error: {}", e.what());
+  }
+  return ctx;
 }
 
 void WsClient::Close(websocketpp::close::status::value code,

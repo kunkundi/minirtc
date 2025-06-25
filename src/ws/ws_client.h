@@ -17,9 +17,9 @@
 #include "websocketpp/client.hpp"
 #include "websocketpp/common/memory.hpp"
 #include "websocketpp/common/thread.hpp"
-#include "websocketpp/config/asio_no_tls_client.hpp"
+#include "websocketpp/config/asio_client.hpp"
 
-typedef websocketpp::client<websocketpp::config::asio_client> client;
+typedef websocketpp::client<websocketpp::config::asio_tls_client> client;
 
 enum WsStatus {
   WsOpening = 0,
@@ -83,6 +83,9 @@ class WsClient {
 
   std::function<void(const std::string &)> on_receive_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
+
+  std::shared_ptr<websocketpp::lib::asio::ssl::context> on_tls_init(
+      websocketpp::connection_hdl);
 };
 
 #endif

@@ -196,7 +196,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   clock_ = std::make_shared<SystemClock>();
   ws_transport_ = std::make_shared<WsClient>(on_receive_ws_msg_, on_ws_status_);
-  uri_ = "ws://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
+  uri_ = "wss://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
   if (ws_transport_) {
     ws_transport_->Connect(uri_);
   }
