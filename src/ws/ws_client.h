@@ -7,30 +7,32 @@
 #ifndef _WS_CLIENT_H_
 #define _WS_CLIENT_H_
 
+#include <atomic>
 #include <condition_variable>
-#include <map>
+#include <functional>
 #include <mutex>
-#include <sstream>
 #include <string>
 #include <thread>
 
 #include "websocketpp/client.hpp"
 #include "websocketpp/common/memory.hpp"
-#include "websocketpp/common/thread.hpp"
 #include "websocketpp/config/asio_client.hpp"
 
 typedef websocketpp::client<websocketpp::config::asio_tls_client> client;
+typedef websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context>
+    ssl_context_ptr;
 
 enum WsStatus {
   WsOpening = 0,
   WsOpened,
+  WsConnecting,
   WsFailed,
   WsClosed,
   WsReconnecting,
   WsServerClosed
 };
 
-class WsClient {
+class WsClient : public std::enable_shared_from_this<WsClient> {
  public:
   WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
            std::function<void(WsStatus)> on_ws_status_cb);
@@ -38,23 +40,23 @@ class WsClient {
   ~WsClient();
 
  public:
-  int Connect(std::string const &uri);
+  void Shutdown();
 
-  void Close(websocketpp::close::status::value code =
-                 websocketpp::close::status::going_away,
-             std::string reason = "");
+  int Connect(const std::string &uri, const std::string &cert_path);
 
-  void Send(std::string message);
+  int ReConnect();
 
-  void Ping(websocketpp::connection_hdl hdl);
+  void AsyncReConnect();
+
+  void Close();
+
+  void Send(const std::string &message);
 
   WsStatus GetStatus();
 
-  // Callback
-  void OnSocketInit(client *c, websocketpp::connection_hdl hdl);
+  // void OnSocketInit(client *c, websocketpp::connection_hdl hdl);
 
-  websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context> OnTlsInit(
-      websocketpp::connection_hdl hdl);
+  ssl_context_ptr OnTlsInit(websocketpp::connection_hdl hdl);
 
   void OnOpen(client *c, websocketpp::connection_hdl hdl);
 
@@ -71,26 +73,41 @@ class WsClient {
   void OnMessage(websocketpp::connection_hdl hdl, client::message_ptr msg);
 
  private:
-  client m_endpoint_;
+  void RegisterHandlers();
+
+  void StopThreads();
+
+  void RestartPingThread(websocketpp::connection_hdl hdl);
+
+  void PingLoop(websocketpp::connection_hdl hdl);
+
+  void SetStatus(WsStatus status);
+
+ private:
+  std::shared_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
+
   std::thread m_thread_;
   std::thread ping_thread_;
+  std::thread reconnect_thread_;
+
+  std::string uri_;
+  std::string cert_path_;
+
   std::atomic<bool> running_{false};
-  std::mutex mtx_;
-  unsigned int interval_ = 3;
+  std::atomic<bool> is_reconnecting_{false};
+  std::mutex ping_mtx_;
   std::condition_variable cond_var_;
+
   bool heartbeat_started_ = false;
+  unsigned int ping_interval_seconds_ = 3;
 
   WsStatus ws_status_ = WsStatus::WsClosed;
   int timeout_count_ = 0;
-  std::string uri_;
   bool destructed_ = false;
 
   std::function<void(const std::string &)> on_receive_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
-
-  std::shared_ptr<websocketpp::lib::asio::ssl::context> on_tls_init(
-      websocketpp::connection_hdl);
 };
 
 #endif

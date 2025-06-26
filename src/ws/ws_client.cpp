@@ -1,308 +1,313 @@
 #include "ws_client.h"
 
-#include <cstdlib>
+#include <chrono>
 #include <iostream>
-#include <sstream>
+#include <thread>
 
 #include "log.h"
 
 WsClient::WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
-    : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {
-  m_endpoint_.init_asio();
-  m_endpoint_.start_perpetual();
-
-  m_endpoint_.set_error_channels(websocketpp::log::elevel::all);
-  m_endpoint_.set_access_channels(websocketpp::log::alevel::none);
-
-  m_endpoint_.set_socket_init_handler(
-      websocketpp::lib::bind(&WsClient::OnSocketInit, this, &m_endpoint_,
-                             websocketpp::lib::placeholders::_1));
-
-  m_endpoint_.set_tls_init_handler(websocketpp::lib::bind(
-      &WsClient::OnTlsInit, this, websocketpp::lib::placeholders::_1));
-
-  m_endpoint_.set_open_handler(
-      websocketpp::lib::bind(&WsClient::OnOpen, this, &m_endpoint_,
-                             websocketpp::lib::placeholders::_1));
-  m_endpoint_.set_fail_handler(
-      websocketpp::lib::bind(&WsClient::OnFail, this, &m_endpoint_,
-                             websocketpp::lib::placeholders::_1));
-  m_endpoint_.set_close_handler(
-      websocketpp::lib::bind(&WsClient::OnClose, this, &m_endpoint_,
-                             websocketpp::lib::placeholders::_1));
-
-  m_endpoint_.set_ping_handler(websocketpp::lib::bind(
-      &WsClient::OnPing, this, websocketpp::lib::placeholders::_1,
-      websocketpp::lib::placeholders::_2));
-
-  m_endpoint_.set_pong_handler(websocketpp::lib::bind(
-      &WsClient::OnPong, this, websocketpp::lib::placeholders::_1,
-      websocketpp::lib::placeholders::_2));
-
-  m_endpoint_.set_pong_timeout(1000);
-
-  m_endpoint_.set_pong_timeout_handler(websocketpp::lib::bind(
-      &WsClient::OnPongTimeout, this, websocketpp::lib::placeholders::_1,
-      websocketpp::lib::placeholders::_2));
-
-  m_endpoint_.set_message_handler(websocketpp::lib::bind(
-      &WsClient::OnMessage, this, websocketpp::lib::placeholders::_1,
-      websocketpp::lib::placeholders::_2));
-
-  m_thread_ = std::thread(&client::run, &m_endpoint_);
-}
+    : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
 WsClient::~WsClient() {
   destructed_ = true;
-  running_ = false;
+  Shutdown();
+}
 
-  cond_var_.notify_one();
-  if (ping_thread_.joinable()) {
-    ping_thread_.join();
-    heartbeat_started_ = false;
+void WsClient::Shutdown() {
+  Close();
+
+  if (is_reconnecting_ && reconnect_thread_.joinable()) {
+    reconnect_thread_.join();
   }
 
-  m_endpoint_.stop_perpetual();
+  StopThreads();
+}
+
+void WsClient::StopThreads() {
+  if (!running_.exchange(false)) {
+    return;
+  }
+
+  cond_var_.notify_all();
+
+  if (ping_thread_.joinable()) {
+    ping_thread_.join();
+  }
+
+  m_endpoint_->stop_perpetual();
 
   if (m_thread_.joinable()) {
     m_thread_.join();
   }
+
+  m_endpoint_.reset();
+
+  heartbeat_started_ = false;
 }
 
-int WsClient::Connect(std::string const &uri) {
+void WsClient::RegisterHandlers() {
+  m_endpoint_->set_error_channels(websocketpp::log::elevel::none);
+  m_endpoint_->set_access_channels(websocketpp::log::alevel::none);
+
+  std::weak_ptr<WsClient> weak_self = shared_from_this();
+  // m_endpoint_->set_socket_init_handler(
+  //     websocketpp::lib::bind(&WsClient::OnSocketInit, this,
+  //     m_endpoint_.get(), websocketpp::lib::placeholders::_1));
+  m_endpoint_->set_tls_init_handler(
+      [weak_self](websocketpp::connection_hdl hdl) {
+        if (auto self = weak_self.lock()) {
+          return self->OnTlsInit(hdl);
+        }
+        return ssl_context_ptr();
+      });
+  m_endpoint_->set_open_handler(
+      [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
+        if (auto self = weak_self.lock()) {
+          self->OnOpen(endpoint.get(), hdl);
+        }
+      });
+  m_endpoint_->set_fail_handler(
+      [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
+        if (auto self = weak_self.lock()) {
+          self->OnFail(endpoint.get(), hdl);
+        }
+      });
+  m_endpoint_->set_close_handler(
+      [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
+        if (auto self = weak_self.lock()) {
+          self->OnClose(endpoint.get(), hdl);
+        }
+      });
+  m_endpoint_->set_ping_handler(
+      [weak_self](websocketpp::connection_hdl hdl, std::string msg) {
+        if (auto self = weak_self.lock()) {
+          return self->OnPing(hdl, msg);
+        }
+        return false;
+      });
+  m_endpoint_->set_pong_handler(
+      [weak_self](websocketpp::connection_hdl hdl, std::string msg) {
+        if (auto self = weak_self.lock()) {
+          return self->OnPong(hdl, msg);
+        }
+        return false;
+      });
+  m_endpoint_->set_pong_timeout_handler(
+      [weak_self](websocketpp::connection_hdl hdl, std::string msg) {
+        if (auto self = weak_self.lock()) {
+          self->OnPongTimeout(hdl, msg);
+        }
+      });
+  m_endpoint_->set_message_handler(
+      [weak_self](websocketpp::connection_hdl hdl, client::message_ptr msg) {
+        if (auto self = weak_self.lock()) {
+          self->OnMessage(hdl, msg);
+        }
+      });
+}
+
+int WsClient::Connect(const std::string &uri, const std::string &cert_path) {
   uri_ = uri;
+  cert_path_ = cert_path;
+
+  if (m_thread_.joinable()) {
+    m_thread_.join();
+  }
+
+  m_endpoint_.reset();
+  m_endpoint_ = std::make_unique<client>();
+  SetStatus(WsOpening);
+  m_endpoint_->init_asio();
+  m_endpoint_->start_perpetual();
+
+  RegisterHandlers();
+  SetStatus(WsOpened);
+  m_thread_ = std::thread([endpoint = m_endpoint_]() { endpoint->run(); });
+
+  LOG_INFO("m_thread id: {:p}", (void *)&m_thread_);
 
   websocketpp::lib::error_code ec;
-
-  client::connection_ptr con = m_endpoint_.get_connection(uri, ec);
-
-  if (ec) {
+  auto con = m_endpoint_->get_connection(uri, ec);
+  if (ec || !con) {
     LOG_ERROR("get_connection error: {}", ec.message());
     return -1;
   }
 
-  if (!con) {
-    LOG_ERROR("Invalid connection, uri [{}], error msg [{}]", uri,
-              ec.message());
-    return -1;
-  }
-
-  // con->set_tls_init_handler([this](websocketpp::connection_hdl hdl) {
-  //   return this->on_tls_init(hdl);
-  // });
-
-  // connection_handle_ = con->get_handle();
-
-  // if (ec) {
-  //   LOG_ERROR("Connect initialization error: {}", ec.message());
-  //   return -1;
-  // }
-
-  // con->set_open_handler(
-  //     websocketpp::lib::bind(&WsClient::OnOpen, this, &m_endpoint_,
-  //                            websocketpp::lib::placeholders::_1));
-  // con->set_fail_handler(
-  //     websocketpp::lib::bind(&WsClient::OnFail, this, &m_endpoint_,
-  //                            websocketpp::lib::placeholders::_1));
-  // con->set_close_handler(
-  //     websocketpp::lib::bind(&WsClient::OnClose, this, &m_endpoint_,
-  //                            websocketpp::lib::placeholders::_1));
-
-  // con->set_ping_handler(websocketpp::lib::bind(
-  //     &WsClient::OnPing, this, websocketpp::lib::placeholders::_1,
-  //     websocketpp::lib::placeholders::_2));
-
-  // con->set_pong_handler(websocketpp::lib::bind(
-  //     &WsClient::OnPong, this, websocketpp::lib::placeholders::_1,
-  //     websocketpp::lib::placeholders::_2));
-
-  // con->set_pong_timeout(1000);
-
-  // con->set_pong_timeout_handler(websocketpp::lib::bind(
-  //     &WsClient::OnPongTimeout, this, websocketpp::lib::placeholders::_1,
-  //     websocketpp::lib::placeholders::_2));
-
-  // con->set_message_handler(websocketpp::lib::bind(
-  //     &WsClient::OnMessage, this, websocketpp::lib::placeholders::_1,
-  //     websocketpp::lib::placeholders::_2));
-
-  m_endpoint_.connect(con);
-
-  ws_status_ = WsStatus::WsOpening;
-  on_ws_status_(WsStatus::WsOpening);
-
+  m_endpoint_->connect(con);
+  SetStatus(WsConnecting);
   return 0;
 }
 
-std::shared_ptr<websocketpp::lib::asio::ssl::context> WsClient::on_tls_init(
-    websocketpp::connection_hdl) {
-  namespace asio = websocketpp::lib::asio;
-  auto ctx =
-      std::make_shared<asio::ssl::context>(asio::ssl::context::tlsv12_client);
-
-  try {
-    ctx->set_options(
-        asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
-        asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
-    ctx->load_verify_file("crossdesk.cn_bundle.crt");
-
-    // ctx->set_verify_mode(websocketpp::lib::asio::ssl::verify_none);
-  } catch (std::exception &e) {
-    LOG_ERROR("TLS init error: {}", e.what());
+int WsClient::ReConnect() {
+  if (ws_status_ == WsReconnecting) {
+    LOG_INFO("Already reconnecting, ignore duplicate call.");
+    return 0;
   }
-  return ctx;
+
+  LOG_INFO("Reconnecting WebSocket...");
+  SetStatus(WsReconnecting);
+
+  websocketpp::lib::error_code ec;
+  if (!connection_handle_.expired()) {
+    auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
+    if (!ec && con && con->get_state() == websocketpp::session::state::open) {
+      m_endpoint_->close(connection_handle_,
+                         websocketpp::close::status::going_away, "Reconnect",
+                         ec);
+    }
+  }
+
+  StopThreads();
+
+  return Connect(uri_, cert_path_);
 }
 
-void WsClient::Close(websocketpp::close::status::value code,
-                     std::string reason) {
-  websocketpp::lib::error_code ec;
-  running_ = false;
-  m_endpoint_.close(connection_handle_, code, reason, ec);
-  if (ec) {
-    LOG_ERROR("Initiating close error: {}", ec.message());
-  }
-}
-
-void WsClient::Send(std::string message) {
-  websocketpp::lib::error_code ec;
-
-  auto con = m_endpoint_.get_con_from_hdl(connection_handle_, ec);
-  if (ec) {
-    LOG_ERROR("Send: get_con_from_hdl error: {}", ec.message());
-    return;
-  }
-  if (con->get_state() != websocketpp::session::state::open) {
-    LOG_WARN("Send: connection not open");
+void WsClient::AsyncReConnect() {
+  if (destructed_ || is_reconnecting_.exchange(true)) {
     return;
   }
 
-  m_endpoint_.send(connection_handle_, message,
-                   websocketpp::frame::opcode::text, ec);
+  std::shared_ptr<WsClient> self = shared_from_this();
+  reconnect_thread_ = std::thread([self]() {
+    if (self->destructed_) {
+      return;
+    }
+    self->ReConnect();
+  });
+  LOG_INFO("reconnect_thread id: {:p}", (void *)(&reconnect_thread_));
+}
+
+void WsClient::Close() {
+  if (connection_handle_.expired()) {
+    return;
+  }
+
+  websocketpp::lib::error_code ec;
+  auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
+  if (!ec && con && con->get_state() == websocketpp::session::state::open) {
+    m_endpoint_->close(connection_handle_, websocketpp::close::status::normal,
+                       "Client requested close", ec);
+  }
+}
+
+void WsClient::Send(const std::string &message) {
+  websocketpp::lib::error_code ec;
+  auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
+  if (ec || con->get_state() != websocketpp::session::state::open) {
+    LOG_WARN("Send failed: not connected or error: {}", ec.message());
+    return;
+  }
+  m_endpoint_->send(connection_handle_, message,
+                    websocketpp::frame::opcode::text, ec);
   if (ec) {
     LOG_ERROR("Sending message error: {}, [{}]", ec.message(), message);
-    return;
-  }
-}
-
-void WsClient::Ping(websocketpp::connection_hdl hdl) {
-  while (running_) {
-    {
-      std::unique_lock<std::mutex> lock(mtx_);
-      cond_var_.wait_for(lock, std::chrono::seconds(interval_),
-                         [this] { return !running_; });
-    }
-
-    if (!running_) {
-      break;
-    }
-
-    if (hdl.expired()) {
-      LOG_WARN("Websocket connection expired, reconnecting...");
-    } else {
-      auto con = m_endpoint_.get_con_from_hdl(hdl);
-      if (con && con->get_state() == websocketpp::session::state::open) {
-        websocketpp::lib::error_code ec;
-        m_endpoint_.ping(hdl, "", ec);
-        if (ec) {
-          LOG_ERROR("Ping error: {}", ec.message());
-          break;
-        }
-      }
-    }
   }
 }
 
 WsStatus WsClient::GetStatus() { return ws_status_; }
 
-void WsClient::OnSocketInit([[maybe_unused]] client *c,
-                            websocketpp::connection_hdl hdl) {
-  LOG_INFO("OnSocketInit");
+void WsClient::SetStatus(WsStatus status) {
+  ws_status_ = status;
+  if (on_ws_status_) {
+    on_ws_status_(status);
+  }
 }
 
-websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context>
-WsClient::OnTlsInit(websocketpp::connection_hdl hdl) {
-  LOG_INFO("OnTlsInit");
-
-  namespace asio = websocketpp::lib::asio;
-  auto ctx = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
-
-  try {
-    ctx->set_options(
-        asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
-        asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
-    ctx->load_verify_file("crossdesk.cn_bundle.crt");
-
-    // ctx->set_verify_mode(websocketpp::lib::asio::ssl::verify_none);
-  } catch (std::exception &e) {
-    LOG_ERROR("TLS init error: {}", e.what());
+void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
+  if (ping_thread_.joinable()) {
+    running_ = false;
+    cond_var_.notify_all();
+    ping_thread_.join();
   }
 
-  return ctx;
+  running_ = true;
+  ping_thread_ = std::thread(&WsClient::PingLoop, this, hdl);
+  LOG_INFO("ping_thread id: {:p}", (void *)&(ping_thread_));
+  heartbeat_started_ = true;
 }
 
-void WsClient::OnOpen([[maybe_unused]] client *c,
-                      websocketpp::connection_hdl hdl) {
-  LOG_INFO("Websocket connection opened");
-  connection_handle_ = hdl;
-  ws_status_ = WsStatus::WsOpened;
-  on_ws_status_(WsStatus::WsOpened);
+void WsClient::PingLoop(websocketpp::connection_hdl hdl) {
+  while (running_) {
+    std::unique_lock<std::mutex> lock(ping_mtx_);
+    cond_var_.wait_for(lock, std::chrono::seconds(ping_interval_seconds_),
+                       [this] { return !running_; });
+    if (!running_) break;
 
-  if (!heartbeat_started_) {
-    heartbeat_started_ = true;
-    running_ = true;
-    ping_thread_ = std::thread(&WsClient::Ping, this, hdl);
-  } else {
-    running_ = false;
-    cond_var_.notify_one();
-    if (ping_thread_.joinable()) {
-      ping_thread_.join();
-      running_ = true;
-      ping_thread_ = std::thread(&WsClient::Ping, this, hdl);
+    if (hdl.expired()) {
+      LOG_WARN("Websocket connection expired, cannot ping");
+      break;
+    }
+    auto con = m_endpoint_->get_con_from_hdl(hdl);
+    if (con && con->get_state() == websocketpp::session::state::open) {
+      websocketpp::lib::error_code ec;
+      m_endpoint_->ping(hdl, "", ec);
+      if (ec) {
+        LOG_ERROR("Ping error: {}", ec.message());
+        break;
+      }
     }
   }
 }
 
-void WsClient::OnFail([[maybe_unused]] client *c,
-                      websocketpp::connection_hdl hdl) {
-  ws_status_ = WsStatus::WsFailed;
-  on_ws_status_(WsStatus::WsFailed);
-  Connect(uri_);
+// void WsClient::OnSocketInit(client *, websocketpp::connection_hdl) {
+//   LOG_INFO("OnSocketInit");
+// }
+
+ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
+  namespace asio = websocketpp::lib::asio;
+  auto ctx = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
+  try {
+    ctx->set_options(
+        asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
+        asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
+    if (!cert_path_.empty()) ctx->load_verify_file(cert_path_);
+  } catch (std::exception &e) {
+    LOG_ERROR("TLS init error: {}", e.what());
+  }
+  return ctx;
 }
 
-void WsClient::OnClose([[maybe_unused]] client *c,
-                       websocketpp::connection_hdl hdl) {
-  ws_status_ = WsStatus::WsServerClosed;
-  on_ws_status_(WsStatus::WsServerClosed);
+void WsClient::OnOpen(client *, websocketpp::connection_hdl hdl) {
+  LOG_INFO("WebSocket connection opened");
+  connection_handle_ = hdl;
+  SetStatus(WsOpened);
+  RestartPingThread(hdl);
+}
 
-  if (running_) {
-    // try to reconnect
-    Connect(uri_);
+void WsClient::OnFail(client *c, websocketpp::connection_hdl hdl) {
+  auto con = c->get_con_from_hdl(hdl);
+  LOG_WARN("Connection failed: {}", con ? con->get_ec().message() : "unknown");
+  if (!destructed_) {
+    AsyncReConnect();
   }
 }
 
-bool WsClient::OnPing(websocketpp::connection_hdl hdl, std::string msg) {
-  return true;
-}
-
-bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
-  return true;
-}
-
-void WsClient::OnPongTimeout(websocketpp::connection_hdl hdl, std::string msg) {
-  if (timeout_count_ < 2) {
-    timeout_count_++;
-    return;
+void WsClient::OnClose(client *c, websocketpp::connection_hdl hdl) {
+  auto con = c->get_con_from_hdl(hdl);
+  LOG_WARN("Connection closed");
+  if (!destructed_) {
+    AsyncReConnect();
   }
+}
 
-  LOG_WARN("Pong timeout, reset connection");
-  // m_endpoint_.close(hdl, websocketpp::close::status::normal,
-  // "OnPongTimeout");
-  ws_status_ = WsStatus::WsReconnecting;
-  on_ws_status_(WsStatus::WsReconnecting);
-  m_endpoint_.reset();
+bool WsClient::OnPing(websocketpp::connection_hdl, std::string) { return true; }
+
+bool WsClient::OnPong(websocketpp::connection_hdl, std::string) {
+  timeout_count_ = 0;
+  return true;
+}
+
+void WsClient::OnPongTimeout(websocketpp::connection_hdl, std::string) {
+  if (++timeout_count_ >= 2) {
+    LOG_WARN("Pong timeout exceeded, reconnecting...");
+    AsyncReConnect();
+  }
 }
 
 void WsClient::OnMessage(websocketpp::connection_hdl, client::message_ptr msg) {
-  on_receive_msg_(msg->get_payload());
+  if (on_receive_msg_) {
+    on_receive_msg_(msg->get_payload());
+  }
 }

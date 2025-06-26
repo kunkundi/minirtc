@@ -198,7 +198,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   ws_transport_ = std::make_shared<WsClient>(on_receive_ws_msg_, on_ws_status_);
   uri_ = "wss://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
   if (ws_transport_) {
-    ws_transport_->Connect(uri_);
+    ws_transport_->Connect(uri_, "crossdesk.cn_bundle.crt");
   }
 
   StartIceWorker();
