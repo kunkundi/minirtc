@@ -123,10 +123,7 @@ int WsClient::Connect(const std::string &uri, const std::string &cert_path) {
   m_endpoint_->start_perpetual();
 
   RegisterHandlers();
-  SetStatus(WsOpened);
   m_thread_ = std::thread([endpoint = m_endpoint_]() { endpoint->run(); });
-
-  LOG_INFO("m_thread id: {:p}", (void *)&m_thread_);
 
   websocketpp::lib::error_code ec;
   auto con = m_endpoint_->get_connection(uri, ec);
