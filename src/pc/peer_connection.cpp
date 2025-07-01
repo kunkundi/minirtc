@@ -37,6 +37,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_turn_server_port_ = reader.Get("turn server", "port", "-1");
     cfg_turn_server_username_ = reader.Get("turn server", "username", "");
     cfg_turn_server_password_ = reader.Get("turn server", "password", "");
+    cfg_tls_cert_path_ = reader.Get("tls", "cert_path", "");
     cfg_hardware_acceleration_ =
         reader.Get("hardware acceleration", "turn_on", "false");
     cfg_av1_encoding_ = reader.Get("av1 encoding", "turn_on", "false");
@@ -62,6 +63,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     turn_server_port_ = params.turn_server_port;
     cfg_turn_server_username_ = params.turn_server_username;
     cfg_turn_server_password_ = params.turn_server_password;
+    cfg_tls_cert_path_ = params.tls_cert_path;
     hardware_acceleration_ = params.hardware_acceleration;
     av1_encoding_ = params.av1_encoding;
     enable_turn_ = params.enable_turn;
@@ -198,7 +200,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   ws_transport_ = std::make_shared<WsClient>(on_receive_ws_msg_, on_ws_status_);
   uri_ = "wss://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
   if (ws_transport_) {
-    ws_transport_->Connect(uri_, "crossdesk.cn_bundle.crt");
+    ws_transport_->Connect(uri_, cfg_turn_server_password_);
   }
 
   StartIceWorker();

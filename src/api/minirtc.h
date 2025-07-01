@@ -101,6 +101,7 @@ typedef struct {
   int turn_server_port;
   const char* turn_server_username;
   const char* turn_server_password;
+  const char* tls_cert_path;
   bool hardware_acceleration;
   bool av1_encoding;
   bool enable_turn;

@@ -224,7 +224,6 @@ void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
 
   running_ = true;
   ping_thread_ = std::thread(&WsClient::PingLoop, this, hdl);
-  LOG_INFO("ping_thread id: {:p}", (void *)&(ping_thread_));
   heartbeat_started_ = true;
 }
 
