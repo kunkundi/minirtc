@@ -173,7 +173,6 @@ void WsClient::AsyncReConnect() {
     }
     self->ReConnect();
   });
-  LOG_INFO("reconnect_thread id: {:p}", (void *)(&reconnect_thread_));
 }
 
 void WsClient::Close() {
@@ -258,7 +257,10 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
     ctx->set_options(
         asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
         asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
-    if (!cert_path_.empty()) ctx->load_verify_file(cert_path_);
+    ctx->set_verify_mode(asio::ssl::verify_peer);
+    if (!cert_path_.empty()) {
+      ctx->load_verify_file(cert_path_);
+    }
   } catch (std::exception &e) {
     LOG_ERROR("TLS init error: {}", e.what());
   }
