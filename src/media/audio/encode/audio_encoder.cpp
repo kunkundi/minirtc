@@ -53,7 +53,7 @@ int AudioEncoder::Encode(
   int input_samples_per_channel = static_cast<int>(size) / (2 * channel_num_);
   if (input_samples_per_channel != frame_size_) {
     LOG_ERROR(
-        "Input frame size mismatch: expected %d samples per channel, got %d",
+        "Input frame size mismatch: expected {} samples per channel, got {}",
         frame_size_, input_samples_per_channel);
     return -1;
   }
