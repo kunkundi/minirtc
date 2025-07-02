@@ -43,23 +43,28 @@ class MediaCodec {
   virtual int Encode(
       const RawFrame& raw_frame,
       std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
+    LOG_INFO("Not implemented");
     return 0;
   }
 
   virtual int Decode(
       std::unique_ptr<ReceivedFrame> received_frame,
       std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {
+    LOG_INFO("Not implemented");
     return 0;
   }
 
-  int Encode(const uint8_t* data, size_t size,
-             std::function<int(char* encoded_audio_buffer, size_t size)>
-                 on_encoded_audio_buffer) {
+  virtual int Encode(const uint8_t* data, size_t size,
+                     std::function<int(char* encoded_audio_buffer, size_t size)>
+                         on_encoded_audio_buffer) {
+    LOG_INFO("Not implemented");
     return 0;
   }
 
-  int Decode(const uint8_t* data, size_t size,
-             std::function<void(uint8_t*, int)> on_receive_decoded_frame) {
+  virtual int Decode(
+      const uint8_t* data, size_t size,
+      std::function<void(uint8_t*, int)> on_receive_decoded_frame) {
+    LOG_INFO("Not implemented");
     return 0;
   }
 

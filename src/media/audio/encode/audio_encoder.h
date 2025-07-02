@@ -8,9 +8,6 @@
 #define _AUDIO_ENCODER_H_
 
 #include <functional>
-#include <mutex>
-#include <queue>
-#include <thread>
 #include <vector>
 
 #include "media_codec.h"
@@ -21,7 +18,6 @@ class AudioEncoder : public MediaCodec {
   AudioEncoder(int sample_rate, int channel_num, int frame_size);
   virtual ~AudioEncoder();
 
- public:
   int Init();
 
   int Encode(const uint8_t* data, size_t size,
@@ -35,10 +31,6 @@ class AudioEncoder : public MediaCodec {
   int sample_rate_ = 48000;
   int channel_num_ = 1;
   int frame_size_ = 480;
-
-  std::queue<unsigned char> pcm_queue;
-  std::function<int(char* encoded_audio_buffer, size_t size)>
-      on_encoded_audio_buffer_ = nullptr;
 };
 
-#endif
+#endif  // _AUDIO_ENCODER_H_

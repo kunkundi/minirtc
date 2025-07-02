@@ -718,8 +718,7 @@ int IceTransportController::CreateStreamCodecs(
         }
       } else if (context->type == StreamType::kAudio) {
         if (!context->codec) {
-          context->codec =
-              std::make_shared<AudioEncoder>(AudioEncoder(48000, 1, 480));
+          context->codec = std::make_shared<AudioEncoder>(48000, 1, 480);
           if (!context->codec || 0 != context->codec->Init()) {
             LOG_ERROR("Audio encoder [{}] init failed", channel_name);
             return -1;

@@ -7,9 +7,6 @@
 #include "log.h"
 
 #define MAX_PACKET_SIZE 4000
-unsigned char output_data[MAX_PACKET_SIZE] = {0};
-static uint32_t last_ts = 0;
-static unsigned char out_data[MAX_PACKET_SIZE] = {0};
 
 AudioEncoder::AudioEncoder(int sample_rate, int channel_num, int frame_size)
     : sample_rate_(sample_rate),
@@ -19,32 +16,20 @@ AudioEncoder::AudioEncoder(int sample_rate, int channel_num, int frame_size)
 AudioEncoder::~AudioEncoder() {
   if (opus_encoder_) {
     opus_encoder_destroy(opus_encoder_);
+    opus_encoder_ = nullptr;
   }
 }
 
 int AudioEncoder::Init() {
-  last_ts = static_cast<uint32_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::steady_clock::now().time_since_epoch())
-          .count());
   int err;
-
   opus_encoder_ = opus_encoder_create(sample_rate_, channel_num_,
                                       OPUS_APPLICATION_VOIP, &err);
-
-  if (err != OPUS_OK || opus_encoder_ == NULL) {
-    LOG_ERROR("Create opus encoder failed");
+  if (err != OPUS_OK || opus_encoder_ == nullptr) {
+    LOG_ERROR("Create opus encoder failed: {}", opus_strerror(err));
+    return -1;
   }
 
-  // opus_encoder_ctl(opus_encoder_, OPUS_SET_VBR(0));
-  // opus_encoder_ctl(opus_encoder_, OPUS_SET_VBR_CONSTRAINT(true));
-  // opus_encoder_ctl(opus_encoder_,
-  //                  OPUS_SET_BITRATE(sample_rate_ * channel_num_));
-  // opus_encoder_ctl(opus_encoder_, OPUS_SET_COMPLEXITY(0));
-  // opus_encoder_ctl(opus_encoder_, OPUS_SET_SIGNAL(OPUS_APPLICATION_VOIP));
   opus_encoder_ctl(opus_encoder_, OPUS_SET_LSB_DEPTH(16));
-  // opus_encoder_ctl(opus_encoder_, OPUS_SET_DTX(0));
-  // opus_encoder_ctl(opus_encoder_, OPUS_SET_INBAND_FEC(1));
   opus_encoder_ctl(opus_encoder_,
                    OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
 
@@ -52,31 +37,37 @@ int AudioEncoder::Init() {
 }
 
 int AudioEncoder::Encode(
-    const uint8_t *data, size_t size,
-    std::function<int(char *encoded_audio_buffer, size_t size)>
+    const uint8_t* data, size_t size,
+    std::function<int(char* encoded_audio_buffer, size_t size)>
         on_encoded_audio_buffer) {
-  if (!on_encoded_audio_buffer_) {
-    on_encoded_audio_buffer_ = on_encoded_audio_buffer;
-  }
-
-  // uint32_t now_ts = static_cast<uint32_t>(
-  //     std::chrono::duration_cast<std::chrono::milliseconds>(
-  //         std::chrono::steady_clock::now().time_since_epoch())
-  //         .count());
-
-  // printf("1 Time cost: %d size: %d\n", now_ts - last_ts, size);
-  // last_ts = now_ts;
-
-  auto ret = opus_encode(opus_encoder_, (opus_int16 *)data, (int)size, out_data,
-                         MAX_PACKET_SIZE);
-  if (ret < 0) {
-    printf("opus decode failed, %d\n", ret);
+  if (!data || size == 0 || !on_encoded_audio_buffer) {
     return -1;
   }
 
-  if (on_encoded_audio_buffer_) {
-    on_encoded_audio_buffer_((char *)out_data, ret);
+  if (!opus_encoder_) {
+    LOG_ERROR("Opus encoder not initialized");
+    return -1;
   }
 
-  return 0;
+  // Ensure input frame size is correct
+  int input_samples_per_channel = static_cast<int>(size) / (2 * channel_num_);
+  if (input_samples_per_channel != frame_size_) {
+    LOG_ERROR(
+        "Input frame size mismatch: expected %d samples per channel, got %d",
+        frame_size_, input_samples_per_channel);
+    return -1;
+  }
+
+  // Local output buffer (thread-safe)
+  unsigned char out_data[MAX_PACKET_SIZE] = {0};
+
+  int ret =
+      opus_encode(opus_encoder_, reinterpret_cast<const opus_int16*>(data),
+                  frame_size_, out_data, MAX_PACKET_SIZE);
+  if (ret < 0) {
+    LOG_ERROR("Opus encode failed: %s", opus_strerror(ret));
+    return -1;
+  }
+
+  return on_encoded_audio_buffer(reinterpret_cast<char*>(out_data), ret);
 }
