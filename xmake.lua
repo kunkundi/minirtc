@@ -13,8 +13,8 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
     "ASIO_HAS_CSTDINT", "ASIO_HAS_STD_ARRAY",  "ASIO_HAS_STD_SYSTEM_ERROR",
     "NOMINMAX")
 
-add_requires("asio 1.24.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2024.5.21", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
-add_packages("asio", "nlohmann_json", "spdlog", "libnice", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
+add_requires("asio 1.24.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "websocketpp 0.8.2", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2024.5.21", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
 
 includes("thirdparty")
 
@@ -105,8 +105,7 @@ target("ws")
     set_kind("object")
     add_deps("log")
     add_files("src/ws/*.cpp")
-    add_includedirs("src/ws", 
-    "thirdparty/websocketpp/include", {public = true})
+    add_includedirs("src/ws", {public = true})
 
 target("rtp")
     set_kind("object")
