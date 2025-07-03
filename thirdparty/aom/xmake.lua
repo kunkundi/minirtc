@@ -6,7 +6,7 @@ package("aom")
     set_urls("https://aomedia.googlesource.com/aom.git")
     add_versions("v3.9.0", "6cab58c3925e0f4138e15a4ed510161ea83b6db1")
 
-    add_deps("cmake")
+    add_deps("cmake", "nasm")
 
     if is_os("windows") then
         add_defines("_CRT_SECURE_NO_WARNINGS")

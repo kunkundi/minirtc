@@ -13,11 +13,8 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
     "ASIO_HAS_CSTDINT", "ASIO_HAS_STD_ARRAY",  "ASIO_HAS_STD_SYSTEM_ERROR",
     "NOMINMAX")
 
-add_requires("asio 1.24.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2024.5.21", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
-add_packages("asio", "nlohmann_json", "spdlog", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
-
-add_requires("vcpkg::libnice", {configs = {shared = false}})
-add_packages("vcpkg::libnice")
+add_requires("asio 1.24.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2024.5.21", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+add_packages("asio", "nlohmann_json", "spdlog", "libnice", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
 
 includes("thirdparty")
 
@@ -247,11 +244,8 @@ target("minirtc")
     if is_os("windows") then
         add_linkdirs("thirdparty/nvcodec/lib/x64")
         add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
-        add_links("nice", "glib-2.0", "gio-2.0", "gmodule-2.0", "gobject-2.0",
-        "pcre2-8", "pcre2-16", "pcre2-32", "pcre2-posix", 
-        "zlib", "ffi", "libcrypto", "libssl", "intl", "iconv", 
-        "Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
-        "ws2_32", "Bcrypt", "windowsapp", "User32", "Strmiids", "Mfuuid",
+        add_links("Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
+        "ws2_32", "windowsapp", "User32", "Strmiids", "Mfuuid",
         "Secur32", "Bcrypt")
         add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
