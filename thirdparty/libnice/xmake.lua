@@ -5,7 +5,7 @@ package("libnice")
 
     add_urls("https://gitlab.freedesktop.org/libnice/libnice/-/archive/$(version)/libnice-$(version).tar.gz")
 
-    add_deps("meson", "glib 2.85.0", "openssl 1.1.1-w")
+    add_deps("meson", "glib 2.84.1", "openssl 1.1.1-w")
 
     on_install(function (package)
         local  configs = {
