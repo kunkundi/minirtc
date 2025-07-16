@@ -110,6 +110,7 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
   if (!last_receive_time_.has_value()) {
     last_extended_high_seq_num_ = sequence_number - 1;
     extended_high_seq_num_ = sequence_number - 1;
+    last_receive_time_ = now;
   }
 
   cumulative_loss_ += sequence_number - extended_high_seq_num_;
