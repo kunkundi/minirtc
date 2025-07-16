@@ -172,7 +172,7 @@ class UnitBase {
     return static_cast<const Unit_T&>(*this);
   }
 
-  int64_t value_;
+  int64_t value_ = 0;
 };
 
 // Extends UnitBase to provide operations for relative units, that is, units

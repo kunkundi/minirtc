@@ -207,6 +207,7 @@ int IceAgent::DestroyIceAgent() {
 
   destroyed_ = true;
   g_main_loop_quit(gloop_);
+  g_main_loop_unref(gloop_);
 
   if (nice_thread_.joinable()) {
     nice_thread_.join();
@@ -232,7 +233,10 @@ const char *IceAgent::GenerateLocalSdp() {
     return nullptr;
   }
 
-  video_stream_sdp_ = nice_agent_generate_local_sdp(agent_);
+  gchar *video_sdp_gstr = nice_agent_generate_local_sdp(agent_);
+  video_stream_sdp_ = video_sdp_gstr;
+  g_free(video_sdp_gstr);
+
   audio_stream_sdp_ = video_stream_sdp_;
   data_stream_sdp_ = video_stream_sdp_;
   local_sdp_ = video_stream_sdp_;

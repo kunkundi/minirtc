@@ -42,7 +42,7 @@ NvidiaVideoDecoder::~NvidiaVideoDecoder() {
 }
 
 int NvidiaVideoDecoder::Init() {
-  ck(cuInit(0));
+  CudaInitializer::Init();
   int nGpu = 0;
   int iGpu = 0;
 

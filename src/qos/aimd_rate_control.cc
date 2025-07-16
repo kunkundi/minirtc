@@ -38,8 +38,8 @@ AimdRateControl::AimdRateControl() : AimdRateControl(/* send_side =*/false) {}
 AimdRateControl::AimdRateControl(bool send_side)
     : min_configured_bitrate_(kCongestionControllerMinBitrate),
       max_configured_bitrate_(DataRate::KilobitsPerSec(30000)),
-      current_bitrate_(max_configured_bitrate_),
-      latest_estimated_throughput_(current_bitrate_),
+      current_bitrate_(DataRate::KilobitsPerSec(30000)),
+      latest_estimated_throughput_(DataRate::KilobitsPerSec(30000)),
       link_capacity_(),
       rate_control_state_(RateControlState::kRcHold),
       time_last_bitrate_change_(Timestamp::MinusInfinity()),

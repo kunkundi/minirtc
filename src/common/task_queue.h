@@ -106,9 +106,10 @@ class TaskQueue {
           }
           auto now = std::chrono::steady_clock::now();
           const auto& top = taskQueue_.top();
+          auto execute_time = top.execute_time;
 
-          if (top.execute_time > now) {
-            cond_var_.wait_until(lock, top.execute_time, [this, now]() {
+          if (execute_time > now) {
+            cond_var_.wait_until(lock, execute_time, [this, now]() {
               return stop_ || (!taskQueue_.empty() &&
                                taskQueue_.top().execute_time <=
                                    std::chrono::steady_clock::now());

@@ -6,6 +6,7 @@
 #include "NvEncoderCuda.h"
 #include "log.h"
 #include "media_codec.h"
+#include "nvcodec_common.h"
 
 class NvidiaVideoEncoder : public MediaCodec {
  public:

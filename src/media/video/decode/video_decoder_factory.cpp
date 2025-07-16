@@ -47,16 +47,6 @@ bool VideoDecoderFactory::CheckIsHardwareAccerlerationSupported() {
 #if __APPLE__
   return false;
 #else
-  CUresult cuResult;
-  CUvideoctxlock cudaCtxLock;
-  cuResult = cuvidCtxLockCreate(&cudaCtxLock, 0);
-  if (cuResult != CUDA_SUCCESS) {
-    LOG_WARN(
-        "System not support hardware accelerated decode, use default software "
-        "decoder");
-    return false;
-  }
-
-  return true;
+  return CheckIsCudaDecodeSupported();
 #endif
 }

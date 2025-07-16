@@ -73,7 +73,8 @@ CongestionControl::CongestionControl()
           AcknowledgedBitrateEstimatorInterface::Create()),
       pacing_factor_(kDefaultPaceMultiplier),
       min_total_allocated_bitrate_(DataRate::Zero()),
-      max_padding_rate_(DataRate::Zero()) {
+      max_padding_rate_(DataRate::Zero()),
+      last_loss_based_target_rate_(DataRate::Zero()) {
   NetworkControllerConfig config;
 
   config.constraints.at_time = Timestamp::PlusInfinity();
@@ -402,7 +403,9 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
     //   target_rate_msg.target_rate = loss_based_target_rate;
     //   target_rate_msg.cwnd_reduce_ratio = cwnd_reduce_ratio;
     // } else
-    { target_rate_msg.target_rate = pushback_target_rate; }
+    {
+      target_rate_msg.target_rate = pushback_target_rate;
+    }
     target_rate_msg.stable_target_rate = stable_target_rate;
     target_rate_msg.network_estimate.at_time = at_time;
     target_rate_msg.network_estimate.round_trip_time = round_trip_time;

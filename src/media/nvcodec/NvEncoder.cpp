@@ -49,8 +49,8 @@ NvEncoder::NvEncoder(NV_ENC_DEVICE_TYPE eDeviceType, void *pDevice,
     NVENC_THROW_ERROR("EncodeAPI not found", NV_ENC_ERR_NO_ENCODE_DEVICE);
   }
 
-  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS encodeSessionExParams = {
-      NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER};
+  NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS encodeSessionExParams = {0};
+  encodeSessionExParams.version = NV_ENC_OPEN_ENCODE_SESSION_EX_PARAMS_VER;
   encodeSessionExParams.device = m_pDevice;
   encodeSessionExParams.deviceType = m_eDeviceType;
   encodeSessionExParams.apiVersion = NVENCAPI_VERSION;

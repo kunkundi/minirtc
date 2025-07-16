@@ -45,27 +45,9 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 
 bool VideoEncoderFactory::CheckIsHardwareAccerlerationSupported() {
 #if __APPLE__
+  is_hardware_acceleration_supported = false;
   return false;
 #else
-  CUresult cuResult;
-  NV_ENCODE_API_FUNCTION_LIST functionList = {NV_ENCODE_API_FUNCTION_LIST_VER};
-
-  cuResult = cuInit(0);
-  if (cuResult != CUDA_SUCCESS) {
-    LOG_WARN(
-        "System not support hardware accelerated encode, use default software "
-        "encoder");
-    return false;
-  }
-
-  NVENCSTATUS nvEncStatus = NvEncodeAPICreateInstance(&functionList);
-  if (nvEncStatus != NV_ENC_SUCCESS) {
-    LOG_WARN(
-        "System not support hardware accelerated encode, use default software "
-        "encoder");
-    return false;
-  }
-
-  return true;
+  return CheckIsCudaEncodeSupported();
 #endif
 }

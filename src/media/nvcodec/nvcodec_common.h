@@ -11,10 +11,27 @@
 
 #include <iostream>
 #include <memory>
+#include <mutex>
+#include <optional>
 
 #include "NvCodecUtils.h"
 #include "NvEncoderCLIOptions.h"
 #include "NvEncoderCuda.h"
+#include "log.h"
+
+class CudaInitializer {
+ public:
+  static bool Init() {
+    static bool initialized = []() {
+      CUresult res = cuInit(0);
+      if (res != CUDA_SUCCESS) {
+        return false;
+      }
+      return true;
+    }();
+    return initialized;
+  }
+};
 
 void ShowHelpAndExit(const char *szBadOption = NULL);
 
@@ -22,5 +39,9 @@ void ParseCommandLine(int argc, char *argv[], char *szInputFileName,
                       int &nWidth, int &nHeight, NV_ENC_BUFFER_FORMAT &eFormat,
                       char *szOutputFileName, NvEncoderInitParam &initParam,
                       int &iGpu, int &iCase, int &nFrame);
+
+bool CheckIsCudaEncodeSupported();
+
+bool CheckIsCudaDecodeSupported();
 
 #endif

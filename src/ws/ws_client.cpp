@@ -36,13 +36,16 @@ void WsClient::StopThreads() {
     ping_thread_.join();
   }
 
-  m_endpoint_->stop_perpetual();
+  if (m_endpoint_) {
+    m_endpoint_->stop_perpetual();
+  }
 
   if (m_thread_.joinable()) {
     m_thread_.join();
   }
 
-  m_endpoint_.reset();
+  delete m_endpoint_;
+  m_endpoint_ = nullptr;
 
   heartbeat_started_ = false;
 }
@@ -65,19 +68,19 @@ void WsClient::RegisterHandlers() {
   m_endpoint_->set_open_handler(
       [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
         if (auto self = weak_self.lock()) {
-          self->OnOpen(endpoint.get(), hdl);
+          self->OnOpen(endpoint, hdl);
         }
       });
   m_endpoint_->set_fail_handler(
       [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
         if (auto self = weak_self.lock()) {
-          self->OnFail(endpoint.get(), hdl);
+          self->OnFail(endpoint, hdl);
         }
       });
   m_endpoint_->set_close_handler(
       [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
         if (auto self = weak_self.lock()) {
-          self->OnClose(endpoint.get(), hdl);
+          self->OnClose(endpoint, hdl);
         }
       });
   m_endpoint_->set_ping_handler(
@@ -112,12 +115,9 @@ int WsClient::Connect(const std::string &uri, const std::string &cert_path) {
   uri_ = uri;
   cert_path_ = cert_path;
 
-  if (m_thread_.joinable()) {
-    m_thread_.join();
-  }
+  StopThreads();
 
-  m_endpoint_.reset();
-  m_endpoint_ = std::make_unique<client>();
+  m_endpoint_ = new client();
   SetStatus(WsOpening);
   m_endpoint_->init_asio();
   m_endpoint_->start_perpetual();
@@ -129,6 +129,7 @@ int WsClient::Connect(const std::string &uri, const std::string &cert_path) {
   auto con = m_endpoint_->get_connection(uri, ec);
   if (ec || !con) {
     LOG_ERROR("get_connection error: {}", ec.message());
+    StopThreads();
     return -1;
   }
 

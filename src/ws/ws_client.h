@@ -84,7 +84,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void SetStatus(WsStatus status);
 
  private:
-  std::shared_ptr<client> m_endpoint_;
+  client *m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
 
   std::thread m_thread_;

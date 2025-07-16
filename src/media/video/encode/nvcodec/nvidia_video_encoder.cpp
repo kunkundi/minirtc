@@ -3,7 +3,6 @@
 #include <chrono>
 
 #include "log.h"
-#include "nvcodec_common.h"
 
 // #define SAVE_RECEIVED_NV12_STREAM
 // #define SAVE_ENCODED_H264_STREAM
@@ -34,6 +33,8 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
 
   if (encoder_) {
     encoder_->DestroyEncoder();
+    delete encoder_;
+    encoder_ = nullptr;
   }
 
   if (cuda_context_) {
@@ -43,7 +44,7 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
 }
 
 int NvidiaVideoEncoder::Init() {
-  ck(cuInit(0));
+  CudaInitializer::Init();
   int num_of_gpu = 0;
   ck(cuDeviceGetCount(&num_of_gpu));
   if (index_of_gpu_ < 0 || index_of_gpu_ >= num_of_gpu) {
@@ -58,7 +59,7 @@ int NvidiaVideoEncoder::Init() {
   ck(cuCtxCreate(&cuda_context_, 0, cuda_device_));
 
   encoder_ = new NvEncoderCuda(cuda_context_, frame_width_, frame_height_,
-                               buffer_format_, 0);
+                               buffer_format_, 0, false, false);
 
   NV_ENC_INITIALIZE_PARAMS init_params = {NV_ENC_INITIALIZE_PARAMS_VER};
   NV_ENC_CONFIG encodeConfig = {NV_ENC_CONFIG_VER};
@@ -218,7 +219,9 @@ int NvidiaVideoEncoder::ForceIdr() {
     return -1;
   }
 
-  NV_ENC_RECONFIGURE_PARAMS reconfig_params = {NV_ENC_RECONFIGURE_PARAMS_VER};
+  NV_ENC_RECONFIGURE_PARAMS reconfig_params;
+  memset(&reconfig_params, 0, sizeof(reconfig_params));
+  reconfig_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
   NV_ENC_INITIALIZE_PARAMS init_params = {NV_ENC_INITIALIZE_PARAMS_VER};
   NV_ENC_CONFIG encode_config = {NV_ENC_CONFIG_VER};
   init_params.encodeConfig = &encode_config;
@@ -241,6 +244,7 @@ int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
   }
 
   NV_ENC_RECONFIGURE_PARAMS reconfig_params;
+  memset(&reconfig_params, 0, sizeof(reconfig_params));
   reconfig_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
   NV_ENC_INITIALIZE_PARAMS init_params;
   NV_ENC_CONFIG encode_config = {NV_ENC_CONFIG_VER};
@@ -272,7 +276,9 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
   frame_width_ = width;
   frame_height_ = height;
 
-  NV_ENC_RECONFIGURE_PARAMS reconfig_params = {NV_ENC_RECONFIGURE_PARAMS_VER};
+  NV_ENC_RECONFIGURE_PARAMS reconfig_params;
+  memset(&reconfig_params, 0, sizeof(reconfig_params));
+  reconfig_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
   NV_ENC_INITIALIZE_PARAMS init_params = {NV_ENC_INITIALIZE_PARAMS_VER};
   NV_ENC_CONFIG encode_config = {NV_ENC_CONFIG_VER};
   init_params.encodeConfig = &encode_config;

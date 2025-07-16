@@ -108,3 +108,77 @@ void ParseCommandLine(int argc, char *argv[], char *szInputFileName,
   }
   initParam = NvEncoderInitParam(oss.str().c_str(), nullptr, true);
 }
+
+bool CheckIsCudaEncodeSupported() {
+  static std::optional<bool> is_hardware_acceleration_supported;
+  static std::mutex mtx_encoder;
+
+  std::lock_guard<std::mutex> lock(mtx_encoder);
+  if (is_hardware_acceleration_supported.has_value()) {
+    return is_hardware_acceleration_supported.value();
+  }
+
+  if (!CudaInitializer::Init()) {
+    LOG_WARN(
+        "System not support hardware accelerated encode, use default software "
+        "encoder");
+    is_hardware_acceleration_supported = false;
+    return false;
+  }
+
+  NV_ENCODE_API_FUNCTION_LIST functionList = {NV_ENCODE_API_FUNCTION_LIST_VER};
+  NVENCSTATUS nvEncStatus = NvEncodeAPICreateInstance(&functionList);
+  if (nvEncStatus != NV_ENC_SUCCESS) {
+    is_hardware_acceleration_supported = false;
+    return false;
+  }
+
+  is_hardware_acceleration_supported = true;
+  return true;
+}
+
+bool CheckIsCudaDecodeSupported() {
+  static std::optional<bool> cached_result;
+  static std::mutex mtx_decoder;
+
+  std::lock_guard<std::mutex> lock(mtx_decoder);
+  if (cached_result.has_value()) {
+    return cached_result.value();
+  }
+
+  CUresult cuResult;
+
+  if (!CudaInitializer::Init()) {
+    LOG_WARN(
+        "System not support hardware accelerated decode, use default software "
+        "decoder");
+    cached_result = false;
+    return false;
+  }
+
+  int deviceCount = 0;
+  cuResult = cuDeviceGetCount(&deviceCount);
+  if (cuResult != CUDA_SUCCESS || deviceCount == 0) {
+    LOG_ERROR("No CUDA devices found");
+    cached_result = false;
+    return false;
+  }
+
+  CUdevice cuDevice;
+  cuResult = cuDeviceGet(&cuDevice, 0);
+  if (cuResult != CUDA_SUCCESS) {
+    LOG_ERROR("cuDeviceGet failed");
+    cached_result = false;
+    return false;
+  }
+
+  CUcontext context;
+  cuResult = cuCtxCreate(&context, 0, cuDevice);
+  if (cuResult != CUDA_SUCCESS) {
+    LOG_ERROR("cuCtxCreate failed");
+    cached_result = false;
+    return false;
+  }
+
+  return cached_result.value();
+}

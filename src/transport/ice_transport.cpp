@@ -132,8 +132,10 @@ void IceTransport::OnNewLocalCandidate(NiceAgent *agent, guint stream_id,
     for (GSList *i = cands; i; i = i->next) {
       cand = (NiceCandidate *)i->data;
       if (g_strcmp0(cand->foundation, foundation) == 0) {
-        new_local_candidate_ =
+        gchar *new_local_candidate_gstr =
             nice_agent_generate_local_candidate_sdp(agent, cand);
+        new_local_candidate_ = new_local_candidate_gstr;
+        g_free(new_local_candidate_gstr);
 
         json message = {{"type", "new_candidate"},
                         {"transmission_id", transmission_id_},
