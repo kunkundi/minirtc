@@ -180,5 +180,5 @@ bool CheckIsCudaDecodeSupported() {
     return false;
   }
 
-  return cached_result.value();
+  return true;
 }
