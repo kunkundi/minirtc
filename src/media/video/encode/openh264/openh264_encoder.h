@@ -17,6 +17,8 @@
 
 #include "media_codec.h"
 
+namespace minirtc {
+
 class OpenH264Encoder : public MediaCodec {
  public:
   OpenH264Encoder(std::shared_ptr<SystemClock> clock);
@@ -79,5 +81,6 @@ class OpenH264Encoder : public MediaCodec {
   bool is_keyframe = false;
   int temporal_ = 1;
 };
+}  // namespace minirtc
 
 #endif

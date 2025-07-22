@@ -13,6 +13,7 @@
 #define DEFAULT_MTU 1500
 #define MAX_NALU_LEN 1400
 
+namespace minirtc {
 namespace rtp {
 
 typedef enum {
@@ -45,4 +46,5 @@ const int kVideoPayloadTypeFrequency = 90000;
 
 static int kMsToRtpTimestamp = 90;
 }  // namespace rtp
+}  // namespace minirtc
 #endif

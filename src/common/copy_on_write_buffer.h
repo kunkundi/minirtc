@@ -12,6 +12,8 @@
 #include <memory>
 #include <stdexcept>
 
+namespace minirtc {
+
 class CopyOnWriteBuffer {
  public:
   CopyOnWriteBuffer() = default;
@@ -92,5 +94,6 @@ class CopyOnWriteBuffer {
 
   std::shared_ptr<BufferBlock> block_;
 };
+}  // namespace minirtc
 
 #endif

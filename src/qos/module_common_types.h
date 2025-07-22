@@ -15,6 +15,7 @@
 
 #include <vector>
 
+namespace minirtc {
 namespace webrtc {
 
 // Interface used by the CallStats class to distribute call statistics.
@@ -62,5 +63,6 @@ class LossNotificationSender {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_INCLUDE_MODULE_COMMON_TYPES_H_

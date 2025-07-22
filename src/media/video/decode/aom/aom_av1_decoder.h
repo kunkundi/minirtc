@@ -14,6 +14,8 @@
 #include "aom/aomdx.h"
 #include "media_codec.h"
 
+namespace minirtc {
+
 class AomAv1Decoder : public MediaCodec {
  public:
   AomAv1Decoder(std::shared_ptr<SystemClock> clock);
@@ -50,5 +52,6 @@ class AomAv1Decoder : public MediaCodec {
   aom_codec_dec_cfg_t aom_av1_decoder_config_;
   aom_image_t *img_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

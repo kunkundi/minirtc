@@ -13,6 +13,7 @@
 #include "log.h"
 #include "module_common_types_public.h"
 
+namespace minirtc {
 namespace webrtc {
 
 static const int kBurstDeltaThresholdMs = 5;
@@ -148,3 +149,4 @@ void InterArrival::Reset() {
   prev_timestamp_group_ = TimestampGroup();
 }
 }  // namespace webrtc
+}  // namespace minirtc

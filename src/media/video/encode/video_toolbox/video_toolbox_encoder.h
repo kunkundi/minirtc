@@ -17,6 +17,8 @@
 
 #include "media_codec.h"
 
+namespace minirtc {
+
 class VideoToolboxEncoder : public MediaCodec {
  public:
   explicit VideoToolboxEncoder(std::shared_ptr<SystemClock> clock);
@@ -60,5 +62,6 @@ class VideoToolboxEncoder : public MediaCodec {
   class Impl;
   std::shared_ptr<Impl> impl_;
 };
+}  // namespace minirtc
 
 #endif

@@ -14,6 +14,7 @@
 #include <limits>
 #include <optional>
 
+namespace minirtc {
 namespace webrtc {
 
 template <typename U>
@@ -58,4 +59,6 @@ inline uint32_t LatestTimestamp(uint32_t timestamp1, uint32_t timestamp2) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_INCLUDE_MODULE_COMMON_TYPES_PUBLIC_H_

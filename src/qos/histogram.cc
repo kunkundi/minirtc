@@ -12,6 +12,7 @@
 
 #include <algorithm>
 
+namespace minirtc {
 namespace webrtc {
 Histogram::Histogram(size_t num_buckets, size_t max_num_values) {
   buckets_.resize(num_buckets);
@@ -46,3 +47,4 @@ size_t Histogram::InverseCdf(float probability) const {
 size_t Histogram::NumValues() const { return values_.size(); }
 
 }  // namespace webrtc
+}  // namespace minirtc

@@ -19,6 +19,7 @@
 #include "api/units/time_delta.h"
 #include "unit_base.h"  // IWYU pragma: export
 
+namespace minirtc {
 namespace webrtc {
 
 class Frequency final : public rtc_units_impl::RelativeUnit<Frequency> {
@@ -86,4 +87,6 @@ void AbslStringify(Sink& sink, Frequency value) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // API_UNITS_FREQUENCY_H_

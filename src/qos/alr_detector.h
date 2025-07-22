@@ -19,6 +19,7 @@
 
 #include "interval_budget.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class RtcEventLog;
@@ -65,5 +66,6 @@ class AlrDetector {
   std::optional<int64_t> alr_started_time_ms_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_ALR_DETECTOR_H_

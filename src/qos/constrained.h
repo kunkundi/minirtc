@@ -10,6 +10,7 @@
 #include <optional>
 #include <string>
 
+namespace minirtc {
 template <typename T>
 class Constrained {
  public:
@@ -27,5 +28,6 @@ class Constrained {
   std::optional<T> lower_limit_;
   std::optional<T> upper_limit_;
 };
+}  // namespace minirtc
 
 #endif

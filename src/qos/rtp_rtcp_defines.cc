@@ -18,6 +18,7 @@
 #include "rtp_packet.h"
 #include "rtp_packet_to_send.h"
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -36,19 +37,19 @@ bool IsTokenChar(char ch) {
 
 StreamDataCounters::StreamDataCounters() = default;
 
-RtpPacketCounter::RtpPacketCounter(const ::RtpPacket& packet)
+RtpPacketCounter::RtpPacketCounter(const RtpPacket& packet)
     : header_bytes(packet.headers_size()),
       payload_bytes(packet.payload_size()),
       padding_bytes(packet.padding_size()),
       packets(1) {}
 
 RtpPacketCounter::RtpPacketCounter(const RtpPacketToSend& packet_to_send)
-    : RtpPacketCounter(static_cast<const ::RtpPacket&>(packet_to_send)) {
+    : RtpPacketCounter(static_cast<const RtpPacket&>(packet_to_send)) {
   total_packet_delay =
       packet_to_send.time_in_send_queue().value_or(TimeDelta::Zero());
 }
 
-void RtpPacketCounter::AddPacket(const ::RtpPacket& packet) {
+void RtpPacketCounter::AddPacket(const RtpPacket& packet) {
   ++packets;
   header_bytes += packet.headers_size();
   padding_bytes += packet.padding_size();
@@ -56,9 +57,10 @@ void RtpPacketCounter::AddPacket(const ::RtpPacket& packet) {
 }
 
 void RtpPacketCounter::AddPacket(const RtpPacketToSend& packet_to_send) {
-  AddPacket(static_cast<const ::RtpPacket&>(packet_to_send));
+  AddPacket(static_cast<const RtpPacket&>(packet_to_send));
   total_packet_delay +=
       packet_to_send.time_in_send_queue().value_or(TimeDelta::Zero());
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

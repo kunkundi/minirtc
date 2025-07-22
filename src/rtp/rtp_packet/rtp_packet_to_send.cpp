@@ -12,6 +12,7 @@
 
 #include <cstdint>
 
+namespace minirtc {
 namespace webrtc {
 
 RtpPacketToSend::RtpPacketToSend() {}
@@ -124,3 +125,4 @@ bool RtpPacketToSend::BuildRtxPacket() {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

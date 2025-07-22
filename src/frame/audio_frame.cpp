@@ -3,6 +3,8 @@
 #include <cstring>
 #include <utility>
 
+namespace minirtc {
+
 AudioFrame::AudioFrame() {}
 
 AudioFrame::AudioFrame(size_t size) {
@@ -89,3 +91,4 @@ AudioFrame::~AudioFrame() {
   width_ = 0;
   height_ = 0;
 }
+}  // namespace minirtc

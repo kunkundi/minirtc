@@ -23,6 +23,8 @@
 // 20 |                   delay since last SR (DLSR)                  |
 // 24 +=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+=+
 
+namespace minirtc {
+
 RtcpReportBlock::RtcpReportBlock()
     : sender_ssrc_(0),
       source_ssrc_(0),
@@ -111,3 +113,4 @@ void RtcpReportBlock::AddRoundTripTimeSample(int64_t rtt) {
   sum_rtt_ += rtt;
   ++num_rtts_;
 }
+}  // namespace minirtc

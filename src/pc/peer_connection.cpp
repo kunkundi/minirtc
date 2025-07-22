@@ -7,6 +7,8 @@
 #include "log.h"
 #include "nlohmann/json.hpp"
 
+namespace minirtc {
+
 using nlohmann::json;
 
 PeerConnection::PeerConnection() {}
@@ -321,7 +323,7 @@ int PeerConnection::ReleaseAllIceTransmission() {
 int PeerConnection::Destroy() {
   StopIceWorker();
   if (ws_transport_) {
-    LOG_INFO("Close websocket")
+    LOG_INFO("Close websocket");
     ws_transport_->Close();
   }
 
@@ -771,3 +773,4 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
     }
   }
 }
+}  // namespace minirtc

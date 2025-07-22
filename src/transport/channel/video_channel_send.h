@@ -22,6 +22,8 @@
 #include "task_queue.h"
 #include "transport_feedback_adapter.h"
 
+namespace minirtc {
+
 class VideoChannelSend : public MediaChannel {
  public:
   VideoChannelSend(const std::string& channel_name,
@@ -80,5 +82,6 @@ class VideoChannelSend : public MediaChannel {
  private:
   FILE* file_rtp_sent_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

@@ -2,6 +2,8 @@
 
 #define RTCP_RR_INTERVAL 1000
 
+namespace minirtc {
+
 RtpAudioReceiver::RtpAudioReceiver() {}
 
 RtpAudioReceiver::RtpAudioReceiver(std::shared_ptr<IOStatistics> io_statistics)
@@ -90,3 +92,4 @@ bool RtpAudioReceiver::CheckIsTimeSendRR() {
     return false;
   }
 }
+}  // namespace minirtc

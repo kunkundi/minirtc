@@ -14,6 +14,8 @@
 #include <mutex>
 #include <thread>
 
+namespace minirtc {
+
 class IOStatistics {
  public:
   typedef struct {
@@ -124,5 +126,6 @@ class IOStatistics {
   float audio_rtp_pkt_loss_rate_ = 0;
   float data_rtp_pkt_loss_rate_ = 0;
 };
+}  // namespace minirtc
 
 #endif

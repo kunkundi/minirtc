@@ -27,6 +27,7 @@
 #include "rtp_packet_to_send.h"
 #include "rtp_rtcp_defines.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Describes how long time a packet may stay in the queue before being dropped.
@@ -193,5 +194,6 @@ class PrioritizedPacketQueue {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_PACING_PRIORITIZED_PACKET_QUEUE_H_

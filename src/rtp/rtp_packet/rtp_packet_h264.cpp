@@ -1,5 +1,6 @@
 #include "rtp_packet_h264.h"
 
+namespace minirtc {
 RtpPacketH264::RtpPacketH264() {}
 
 RtpPacketH264::~RtpPacketH264() {}
@@ -35,3 +36,4 @@ bool RtpPacketH264::GetFrameHeaderInfo() {
 
   return true;
 }
+}  // namespace minirtc

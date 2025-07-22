@@ -4,6 +4,8 @@
 #include "rtp_packetizer_generic.h"
 #include "rtp_packetizer_h264.h"
 
+namespace minirtc {
+
 std::unique_ptr<RtpPacketizer> RtpPacketizer::Create(uint32_t payload_type,
                                                      uint32_t ssrc) {
   switch (payload_type) {
@@ -15,3 +17,4 @@ std::unique_ptr<RtpPacketizer> RtpPacketizer::Create(uint32_t payload_type,
       return std::make_unique<RtpPacketizerGeneric>(ssrc, payload_type);
   }
 }
+}  // namespace minirtc

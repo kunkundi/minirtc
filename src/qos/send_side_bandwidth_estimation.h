@@ -27,6 +27,7 @@
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 enum class LossBasedState {
@@ -199,4 +200,6 @@ class SendSideBandwidthEstimation {
   LossBasedState loss_based_state_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_SEND_SIDE_BANDWIDTH_ESTIMATION_H_

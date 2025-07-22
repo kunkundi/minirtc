@@ -5,6 +5,8 @@
 #define STATISTICAL_PERIOD 1000
 #define RTP_SEQ_NUM_MAX 65535
 
+namespace minirtc {
+
 IOStatistics::IOStatistics(
     std::function<void(const NetTrafficStats&)> io_report_callback)
     : io_report_callback_(io_report_callback) {
@@ -251,3 +253,4 @@ void IOStatistics::IncrementDataInboundRtpPacketCount() {
 void IOStatistics::IncrementDataOutboundRtpPacketCount() {
   ++data_outbound_rtp_pkt_cnt_;
 }
+}  // namespace minirtc

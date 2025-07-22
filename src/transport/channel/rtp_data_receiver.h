@@ -7,6 +7,9 @@
 #include "receiver_report.h"
 #include "rtp_packet.h"
 #include "sender_report.h"
+
+namespace minirtc {
+
 class RtpDataReceiver {
  public:
   RtpDataReceiver();
@@ -49,5 +52,6 @@ class RtpDataReceiver {
   uint32_t last_sr_ = 0;
   uint32_t last_delay_ = 0;
 };
+}  // namespace minirtc
 
 #endif

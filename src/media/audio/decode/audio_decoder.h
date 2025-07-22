@@ -19,6 +19,8 @@
 #include "media_codec.h"
 #include "opus/opus.h"
 
+namespace minirtc {
+
 class AudioDecoder : public MediaCodec {
  public:
   AudioDecoder(int sample_rate, int channel_num, int frame_size);
@@ -42,5 +44,6 @@ class AudioDecoder : public MediaCodec {
   FILE *pcm_file;
   FILE *pcm_file1;
 };
+}  // namespace minirtc
 
 #endif

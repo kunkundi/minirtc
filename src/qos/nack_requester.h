@@ -19,6 +19,8 @@
 #include "module_common_types.h"
 #include "rtc_base/numerics/sequence_number_util.h"
 
+namespace minirtc {
+
 using namespace webrtc;
 
 class NackRequester {
@@ -71,5 +73,6 @@ class NackRequester {
   uint16_t newest_seq_num_;
   const TimeDelta send_nack_delay_;
 };
+}  // namespace minirtc
 
 #endif

@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 DataChannelReceive::DataChannelReceive() {}
 
 DataChannelReceive::DataChannelReceive(
@@ -60,3 +62,4 @@ int DataChannelReceive::OnReceiveRtpPacket(const char *data, size_t size) {
 
   return -1;
 }
+}  // namespace minirtc

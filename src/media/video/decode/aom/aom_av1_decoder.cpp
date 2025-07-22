@@ -5,6 +5,8 @@
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_AV1_STREAM
 
+namespace minirtc {
+
 AomAv1Decoder::AomAv1Decoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 
@@ -168,3 +170,4 @@ int AomAv1Decoder::Decode(
 
   return -1;
 }
+}  // namespace minirtc

@@ -18,6 +18,7 @@
 
 #include "percentile_filter.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Class to efficiently get moving percentile filter from a stream of samples.
@@ -97,4 +98,6 @@ size_t MovingPercentileFilter<T>::GetNumberOfSamplesStored() const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // RTC_BASE_NUMERICS_MOVING_PERCENTILE_FILTER_H_

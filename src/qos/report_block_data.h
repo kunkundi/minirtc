@@ -15,6 +15,7 @@
 #include "api/units/timestamp.h"
 #include "report_block.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Represents fields and derived information received in RTCP report block
@@ -135,5 +136,6 @@ class ReportBlockDataObserver {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_RTP_RTCP_INCLUDE_REPORT_BLOCK_DATA_H_

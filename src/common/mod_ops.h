@@ -10,6 +10,8 @@
 #include <algorithm>
 #include <type_traits>
 
+namespace minirtc {
+
 template <unsigned long M>                                    // NOLINT
 inline unsigned long Add(unsigned long a, unsigned long b) {  // NOLINT
   // RTC_DCHECK_LT(a, M);
@@ -126,5 +128,6 @@ inline T MinDiff(T a, T b) {
                 "Type must be an unsigned integer.");
   return (std::min)(ForwardDiff<T, M>(a, b), ReverseDiff<T, M>(a, b));
 }
+}  // namespace minirtc
 
 #endif

@@ -25,6 +25,7 @@
 #include "rtc_base/thread_annotations.h"
 #include "rtp_packet_received.h"
 
+namespace minirtc {
 namespace webrtc {
 class RemoteBitrateEstimator;
 
@@ -83,5 +84,6 @@ class ReceiveSideCongestionController : public CallStatsObserver {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_INCLUDE_RECEIVE_SIDE_CONGESTION_CONTROLLER_H_

@@ -8,6 +8,8 @@
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_H264_STREAM
 
+namespace minirtc {
+
 OpenH264Decoder::OpenH264Decoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 OpenH264Decoder::~OpenH264Decoder() {
@@ -207,3 +209,4 @@ int OpenH264Decoder::Decode(
 
   return 0;
 }
+}  // namespace minirtc

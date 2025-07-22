@@ -16,6 +16,7 @@
 
 #include "rtc_base/numerics/safe_conversions.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 constexpr int64_t kWindowMs = 500;
@@ -65,3 +66,4 @@ double IntervalBudget::budget_ratio() const {
 int IntervalBudget::target_rate_kbps() const { return target_rate_kbps_; }
 
 }  // namespace webrtc
+}  // namespace minirtc

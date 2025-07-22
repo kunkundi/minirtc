@@ -25,6 +25,7 @@
 #include "api/units/timestamp.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 
 RobustThroughputEstimator::RobustThroughputEstimator(
@@ -188,3 +189,4 @@ std::optional<DataRate> RobustThroughputEstimator::bitrate() const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

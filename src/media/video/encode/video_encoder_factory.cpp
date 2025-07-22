@@ -12,6 +12,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 VideoEncoderFactory::VideoEncoderFactory() {}
 
 VideoEncoderFactory::~VideoEncoderFactory() {}
@@ -51,3 +53,4 @@ bool VideoEncoderFactory::CheckIsHardwareAccerlerationSupported() {
   return CheckIsCudaEncodeSupported();
 #endif
 }
+}  // namespace minirtc

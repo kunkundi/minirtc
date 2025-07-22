@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 VideoChannelReceive::VideoChannelReceive() {}
 
 VideoChannelReceive::VideoChannelReceive(
@@ -67,4 +69,5 @@ int VideoChannelReceive::OnReceiveRtpPacket(const char *data, size_t size) {
   }
 
   return 0;
+}
 }

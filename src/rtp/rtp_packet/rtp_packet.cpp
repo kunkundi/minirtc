@@ -2,6 +2,8 @@
 
 #include <string>
 
+namespace minirtc {
+
 RtpPacket::RtpPacket() {}
 
 RtpPacket::RtpPacket(size_t size) : buffer_(size) {}
@@ -150,3 +152,4 @@ bool RtpPacket::Parse(const uint8_t *buffer, uint32_t size) {
 
   return true;
 }
+}  // namespace minirtc

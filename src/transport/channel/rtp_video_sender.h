@@ -13,6 +13,8 @@
 #include "sender_report.h"
 #include "thread_base.h"
 
+namespace minirtc {
+
 class RtpVideoSender : public ThreadBase {
  public:
   RtpVideoSender();
@@ -73,5 +75,6 @@ class RtpVideoSender : public ThreadBase {
  private:
   FILE *file_rtp_sent_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

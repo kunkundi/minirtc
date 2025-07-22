@@ -3,6 +3,8 @@
 #include "log.h"
 #include "sequence_number_compare.h"
 
+namespace minirtc {
+
 RtpPacketHistory::StoredPacket::StoredPacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet,
     webrtc::Timestamp send_time, uint64_t insert_order)
@@ -216,3 +218,4 @@ RtpPacketHistory::StoredPacket* RtpPacketHistory::GetStoredPacket(
   }
   return &packet_history_[index];
 }
+}  // namespace minirtc

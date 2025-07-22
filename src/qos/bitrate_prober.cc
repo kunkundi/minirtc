@@ -21,6 +21,7 @@
 #include "api/units/timestamp.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -185,3 +186,4 @@ Timestamp BitrateProber::CalculateNextProbeTime(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

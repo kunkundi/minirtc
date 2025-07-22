@@ -8,6 +8,8 @@
 
 #define MAX_PACKET_SIZE 4000
 
+namespace minirtc {
+
 AudioEncoder::AudioEncoder(int sample_rate, int channel_num, int frame_size)
     : sample_rate_(sample_rate),
       channel_num_(channel_num),
@@ -71,3 +73,4 @@ int AudioEncoder::Encode(
 
   return on_encoded_audio_buffer(reinterpret_cast<char*>(out_data), ret);
 }
+}  // namespace minirtc

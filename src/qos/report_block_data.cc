@@ -10,6 +10,7 @@
 
 #include "report_block_data.h"
 
+namespace minirtc {
 namespace webrtc {
 
 TimeDelta ReportBlockData::jitter(int rtp_clock_rate_hz) const {
@@ -41,3 +42,4 @@ void ReportBlockData::AddRoundTripTimeSample(TimeDelta rtt) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

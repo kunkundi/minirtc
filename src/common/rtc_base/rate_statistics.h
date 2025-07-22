@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 
+namespace minirtc {
 namespace webrtc {
 
 // Class to estimate rates based on counts in a sequence of 1-millisecond
@@ -99,5 +100,6 @@ class RateStatistics {
   int64_t current_window_size_ms_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_RATE_STATISTICS_H_

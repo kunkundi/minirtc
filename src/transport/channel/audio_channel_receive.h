@@ -11,6 +11,8 @@
 #include "media_channel.h"
 #include "rtp_audio_receiver.h"
 
+namespace minirtc {
+
 class AudioChannelReceive : public MediaChannel {
  public:
   AudioChannelReceive();
@@ -41,5 +43,6 @@ class AudioChannelReceive : public MediaChannel {
   std::unique_ptr<RtpAudioReceiver> rtp_audio_receiver_ = nullptr;
   std::function<void(const char *, size_t)> on_receive_audio_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

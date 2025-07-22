@@ -19,6 +19,7 @@
 #include "log.h"
 #include "rtc_base/numerics/safe_conversions.h"
 
+namespace minirtc {
 namespace webrtc {
 
 uint16_t VideoSendTiming::GetDeltaCappedMs(int64_t base_ms, int64_t time_ms) {
@@ -116,3 +117,4 @@ bool VideoPlayoutDelay::Set(TimeDelta min, TimeDelta max) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

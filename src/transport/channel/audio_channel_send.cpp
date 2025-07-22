@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 AudioChannelSend::AudioChannelSend() {}
 
 AudioChannelSend::~AudioChannelSend() {}
@@ -55,4 +57,5 @@ int AudioChannelSend::SendAudio(char *data, size_t size) {
   }
 
   return 0;
+}
 }

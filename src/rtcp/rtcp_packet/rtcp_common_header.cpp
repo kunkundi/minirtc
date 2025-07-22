@@ -25,6 +25,8 @@
 //
 // Common header for all RTCP packets, 4 octets.
 
+namespace minirtc {
+
 int RtcpCommonHeader::Create(uint8_t version, uint8_t has_padding,
                              uint8_t count_or_format, uint8_t payload_type,
                              uint16_t length, uint8_t* buffer) {
@@ -98,3 +100,4 @@ bool RtcpCommonHeader::Parse(const uint8_t* buffer, size_t size_bytes) {
   }
   return true;
 }
+}  // namespace minirtc

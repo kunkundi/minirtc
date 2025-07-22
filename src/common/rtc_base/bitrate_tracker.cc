@@ -16,6 +16,7 @@
 #include "api/units/timestamp.h"
 #include "rtc_base/rate_statistics.h"
 
+namespace minirtc {
 namespace webrtc {
 
 BitrateTracker::BitrateTracker(TimeDelta max_window_size)
@@ -37,3 +38,4 @@ void BitrateTracker::Update(int64_t bytes, Timestamp now) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

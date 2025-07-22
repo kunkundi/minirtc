@@ -15,6 +15,9 @@
 #include "raw_frame.h"
 
 #define I_FRAME_INTERVAL 3000
+
+namespace minirtc {
+
 class VideoEncoder : public MediaCodec {
  public:
   virtual int Init() = 0;
@@ -34,5 +37,6 @@ class VideoEncoder : public MediaCodec {
   VideoEncoder() = default;
   virtual ~VideoEncoder() {}
 };
+}  // namespace minirtc
 
 #endif

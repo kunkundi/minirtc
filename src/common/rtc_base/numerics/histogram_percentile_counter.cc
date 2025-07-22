@@ -16,6 +16,7 @@
 #include <cstdint>
 #include <optional>
 
+namespace minirtc {
 namespace rtc {
 HistogramPercentileCounter::HistogramPercentileCounter(
     uint32_t long_tail_boundary)
@@ -70,3 +71,4 @@ std::optional<uint32_t> HistogramPercentileCounter::GetPercentile(
 }
 
 }  // namespace rtc
+}  // namespace minirtc

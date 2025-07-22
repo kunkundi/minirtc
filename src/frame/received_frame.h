@@ -9,6 +9,8 @@
 
 #include "video_frame.h"
 
+namespace minirtc {
+
 class ReceivedFrame : public VideoFrame {
  public:
   ReceivedFrame(const uint8_t *buffer, size_t size)
@@ -32,5 +34,6 @@ class ReceivedFrame : public VideoFrame {
   int64_t received_timestamp_us_ = 0;
   int64_t captured_timestamp_us_ = 0;
 };
+}  // namespace minirtc
 
 #endif

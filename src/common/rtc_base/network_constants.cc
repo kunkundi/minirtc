@@ -10,6 +10,7 @@
 
 #include "rtc_base/network_constants.h"
 
+namespace minirtc {
 namespace rtc {
 
 std::string AdapterTypeToString(AdapterType type) {
@@ -42,3 +43,4 @@ std::string AdapterTypeToString(AdapterType type) {
 }
 
 }  // namespace rtc
+}  // namespace minirtc

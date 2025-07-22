@@ -32,6 +32,8 @@ enum WsStatus {
   WsServerClosed
 };
 
+namespace minirtc {
+
 class WsClient : public std::enable_shared_from_this<WsClient> {
  public:
   WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
@@ -110,4 +112,5 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
 };
 
+}  // namespace minirtc
 #endif

@@ -8,6 +8,8 @@
 #include "media_codec.h"
 #include "nvcodec_common.h"
 
+namespace minirtc {
+
 class NvidiaVideoEncoder : public MediaCodec {
  public:
   NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock);
@@ -77,5 +79,6 @@ class NvidiaVideoEncoder : public MediaCodec {
   unsigned char* nv12_data_ = nullptr;
   unsigned int seq_ = 0;
 };
+}  // namespace minirtc
 
 #endif

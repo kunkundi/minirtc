@@ -48,6 +48,7 @@
 #include "rtcp_common_header.h"
 #include "rtcp_report_block.h"
 
+namespace minirtc {
 class SenderReport {
  public:
   typedef struct {
@@ -112,5 +113,6 @@ class SenderReport {
   uint8_t *buffer_;
   size_t size_;
 };
+}  // namespace minirtc
 
 #endif

@@ -28,6 +28,7 @@
 #include "bwe_defines.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 constexpr TimeDelta kBweIncreaseInterval = TimeDelta::Millis(1000);
@@ -523,3 +524,4 @@ bool SendSideBandwidthEstimation::PaceAtLossBasedEstimate() const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

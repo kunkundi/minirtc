@@ -6,6 +6,8 @@
 #include <cstring>
 #include <optional>
 
+namespace minirtc {
+
 int RingBufferDummy();
 
 class Data {
@@ -102,5 +104,6 @@ class RingBuffer {
   unsigned int m_rear;
   T* m_data;
 };
+}  // namespace minirtc
 
 #endif

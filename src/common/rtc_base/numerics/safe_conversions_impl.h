@@ -18,6 +18,7 @@
 #undef max
 #undef min
 
+namespace minirtc {
 namespace rtc {
 namespace internal {
 
@@ -176,5 +177,6 @@ inline constexpr RangeCheckResult RangeCheck(Src value) {
 
 }  // namespace internal
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_SAFE_CONVERSIONS_IMPL_H_

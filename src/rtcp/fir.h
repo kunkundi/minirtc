@@ -16,6 +16,7 @@
 #include "rtcp_common_header.h"
 #include "rtp_feedback.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 // Full intra request (FIR) (RFC 5104).
@@ -57,4 +58,5 @@ class Fir : public RtpFeedback {
 };
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc
 #endif  // MODULES_RTP_RTCP_SOURCE_RTCP_PACKET_FIR_H_

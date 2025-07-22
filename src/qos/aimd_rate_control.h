@@ -21,6 +21,7 @@
 #include "bwe_defines.h"
 #include "link_capacity_estimator.h"
 
+namespace minirtc {
 namespace webrtc {
 // A rate control implementation based on additive increases of
 // bitrate when no over-use is detected and multiplicative decreases when
@@ -105,5 +106,6 @@ class AimdRateControl {
   std::optional<DataRate> last_decrease_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_AIMD_RATE_CONTROL_H_

@@ -12,6 +12,8 @@
 
 #include <string>
 
+namespace minirtc {
+
 namespace webrtc {
 std::string ToString(Timestamp value) {
   if (value.IsPlusInfinity()) {
@@ -28,3 +30,4 @@ std::string ToString(Timestamp value) {
   }
 }
 }  // namespace webrtc
+}  // namespace minirtc

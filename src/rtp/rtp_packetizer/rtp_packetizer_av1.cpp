@@ -2,8 +2,12 @@
 
 #include "obu_parser.h"
 
+namespace minirtc {
+namespace {
 using namespace obu;
 constexpr int kObuTypeSequenceHeader = 1;
+}  // namespace
+
 RtpPacketizerAv1::RtpPacketizerAv1(uint32_t ssrc)
     : version_(kRtpVersion),
       has_padding_(false),
@@ -151,3 +155,4 @@ void RtpPacketizerAv1::AddAbsSendTimeExtension(
   rtp_packet_frame.push_back((abs_send_time >> 8) & 0xFF);
   rtp_packet_frame.push_back(abs_send_time & 0xFF);
 }
+}  // namespace minirtc

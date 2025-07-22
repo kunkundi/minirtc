@@ -7,6 +7,8 @@
 
 #include "libyuv.h"
 
+namespace minirtc {
+
 class ScopedDav1dPicture : public std::shared_ptr<ScopedDav1dPicture> {
  public:
   ~ScopedDav1dPicture() { dav1d_picture_unref(&picture_); }
@@ -216,3 +218,4 @@ int Dav1dAv1Decoder::Decode(
 
   return 0;
 }
+}  // namespace minirtc

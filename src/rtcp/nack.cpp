@@ -18,6 +18,7 @@
 #include "log.h"
 #include "rtcp_common_header.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 // RFC 4585: Feedback format.
@@ -154,3 +155,4 @@ void Nack::Unpack() {
 
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc

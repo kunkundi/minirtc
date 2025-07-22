@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+namespace minirtc {
+
 struct NaluUnit {
   const uint8_t* data;
   size_t size;
@@ -399,3 +401,5 @@ int VideoToolboxDecoder::Decode(std::unique_ptr<ReceivedFrame> received_frame,
 }
 
 std::string VideoToolboxDecoder::GetDecoderName() { return impl_->GetDecoderName(); }
+
+}  // namespace minirtc

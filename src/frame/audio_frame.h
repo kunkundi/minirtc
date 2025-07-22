@@ -10,6 +10,8 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace minirtc {
+
 class AudioFrame {
  public:
   AudioFrame();
@@ -35,5 +37,6 @@ class AudioFrame {
   uint8_t *buffer_ = nullptr;
   size_t size_ = 0;
 };
+}  // namespace minirtc
 
 #endif

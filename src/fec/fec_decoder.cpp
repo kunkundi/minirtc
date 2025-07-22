@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 FecDecoder::FecDecoder() {}
 
 FecDecoder::~FecDecoder() {}
@@ -124,4 +126,5 @@ int FecDecoder::ReleaseSourcePackets(uint8_t **source_packets) {
   free(source_packets);
 
   return 0;
+}
 }

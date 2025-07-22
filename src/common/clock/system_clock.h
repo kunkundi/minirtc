@@ -10,6 +10,8 @@
 #include <cstdint>
 #include <memory>
 
+namespace minirtc {
+
 static const int64_t kNtpEpochOffset = 2208988800LL;
 
 class SystemClock {
@@ -36,5 +38,6 @@ class SystemClock {
 
   int64_t CurrentNtpInMilliseconds() { return CurrentNtpTimeMs(); }
 };
+}  // namespace minirtc
 
 #endif

@@ -2,6 +2,8 @@
 
 #include <cstring>
 
+namespace minirtc {
+
 ByteBufferReader::ByteBufferReader(const char* bytes, size_t len) {
   Construct(bytes, len);
 }
@@ -83,3 +85,4 @@ bool ByteBufferReader::Consume(size_t size) {
   start_ += size;
   return true;
 }
+}  // namespace minirtc

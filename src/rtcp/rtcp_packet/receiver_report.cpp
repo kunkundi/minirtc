@@ -1,5 +1,7 @@
 #include "receiver_report.h"
 
+namespace minirtc {
+
 ReceiverReport::ReceiverReport() : buffer_(nullptr), size_(0) {}
 
 ReceiverReport::~ReceiverReport() {
@@ -65,3 +67,4 @@ size_t ReceiverReport::Parse(const RtcpCommonHeader &packet) {
 
   return pos;
 }
+}  // namespace minirtc

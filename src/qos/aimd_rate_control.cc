@@ -23,6 +23,7 @@
 #include "overuse_detector.h"
 #include "rtc_base/numerics/safe_minmax.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 
@@ -328,3 +329,4 @@ void AimdRateControl::ChangeState(const RateControlInput& input,
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

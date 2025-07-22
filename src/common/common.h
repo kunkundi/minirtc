@@ -6,6 +6,8 @@
 #include <random>
 #include <unordered_set>
 
+namespace minirtc {
+
 int CommonDummy();
 
 constexpr size_t HASH_STRING_PIECE(const char *string_piece) {
@@ -84,5 +86,6 @@ inline uint32_t GenerateUniqueSsrc() {
   SSRCManager::Instance().AddSsrc(new_ssrc);
   return new_ssrc;
 }
+}  // namespace minirtc
 
 #endif

@@ -12,6 +12,8 @@
 
 #include "rtcp_typedef.h"
 
+namespace minirtc {
+
 class RtcpCommonHeader {
  public:
   static constexpr size_t kHeaderSizeBytes = 4;
@@ -46,5 +48,6 @@ class RtcpCommonHeader {
   uint32_t payload_size_ = 0;
   const uint8_t* payload_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

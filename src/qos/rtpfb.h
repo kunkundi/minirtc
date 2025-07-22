@@ -17,6 +17,7 @@
 
 #include "rtcp_packet.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 
@@ -44,4 +45,6 @@ class Rtpfb : public RtcpPacket {
 
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_RTP_RTCP_SOURCE_RTCP_PACKET_RTPFB_H_

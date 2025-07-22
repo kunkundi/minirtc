@@ -1,6 +1,6 @@
 #include "ringbuffer.h"
 
-int RingBufferDummy()
-{
-    return 0;
-}
+namespace minirtc {
+
+int RingBufferDummy() { return 0; }
+}  // namespace minirtc

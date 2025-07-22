@@ -41,6 +41,7 @@ typedef void (*OnReceiveAudio)(const char *, size_t, const char *, const size_t,
 typedef void (*OnReceiveData)(const char *, size_t, const char *, const size_t,
                               void *);
 
+namespace minirtc {
 class IceTransportController
     : public std::enable_shared_from_this<IceTransportController>,
       public ThreadBase {
@@ -193,5 +194,6 @@ class IceTransportController
   std::map<uint32_t, LossReport> last_report_blocks_;
   webrtc::Timestamp last_report_block_time_;
 };
+}  // namespace minirtc
 
 #endif

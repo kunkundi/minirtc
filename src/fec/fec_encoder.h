@@ -18,6 +18,8 @@ extern "C" {
 };
 #endif
 
+namespace minirtc {
+
 class FecEncoder {
  public:
   FecEncoder();
@@ -44,5 +46,6 @@ class FecEncoder {
   of_rs_2_m_parameters_t *fec_rs_params_ = nullptr;
   of_ldpc_parameters_t *fec_ldpc_params_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

@@ -12,6 +12,8 @@
 #define DEFAULT_RR_BLOCK_NUM 1
 #define DEFAULT_RR_SIZE 4
 
+namespace minirtc {
+
 typedef enum {
   UNKNOWN = 0,
   SR = 200,
@@ -20,5 +22,6 @@ typedef enum {
   BYE = 203,
   APP = 204
 } RTCP_TYPE;
+}  // namespace minirtc
 
 #endif

@@ -13,6 +13,8 @@
 #include "media_codec.h"
 #include "opus/opus.h"
 
+namespace minirtc {
+
 class AudioEncoder : public MediaCodec {
  public:
   AudioEncoder(int sample_rate, int channel_num, int frame_size);
@@ -32,5 +34,6 @@ class AudioEncoder : public MediaCodec {
   int channel_num_ = 1;
   int frame_size_ = 480;
 };
+}  // namespace minirtc
 
 #endif  // _AUDIO_ENCODER_H_

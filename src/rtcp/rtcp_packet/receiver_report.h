@@ -39,6 +39,8 @@
 #include "rtcp_common_header.h"
 #include "rtcp_report_block.h"
 
+namespace minirtc {
+
 class ReceiverReport {
  public:
   ReceiverReport();
@@ -67,5 +69,6 @@ class ReceiverReport {
   uint8_t *buffer_ = nullptr;
   size_t size_ = 0;
 };
+}  // namespace minirtc
 
 #endif

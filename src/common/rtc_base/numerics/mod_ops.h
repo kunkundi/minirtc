@@ -14,6 +14,7 @@
 #include <algorithm>
 #include <type_traits>
 
+namespace minirtc {
 namespace webrtc {
 
 template <unsigned long M>                                    // NOLINT
@@ -128,5 +129,6 @@ inline T MinDiff(T a, T b) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_MOD_OPS_H_

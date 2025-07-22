@@ -23,6 +23,7 @@
 #include "rtp_packet_to_send.h"
 #include "task_queue.h"
 
+namespace minirtc {
 class PacedSender : public webrtc::RtpPacketPacer,
                     public webrtc::PacingController::PacketSender {
  public:
@@ -228,5 +229,6 @@ class PacedSender : public webrtc::RtpPacketPacer,
   webrtc::Timestamp last_send_time_;
   webrtc::Timestamp last_call_time_;
 };
+}  // namespace minirtc
 
 #endif

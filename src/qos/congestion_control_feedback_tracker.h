@@ -19,6 +19,8 @@
 #include "congestion_control_feedback.h"
 #include "rtc_base/numerics/sequence_number_unwrapper.h"
 #include "rtp_packet_received.h"
+
+namespace minirtc {
 namespace webrtc {
 
 // CongestionControlFeedbackTracker is reponsible for creating and keeping track
@@ -54,5 +56,6 @@ class CongestionControlFeedbackTracker {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_CONGESTION_CONTROL_FEEDBACK_TRACKER_H_

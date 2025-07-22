@@ -19,6 +19,8 @@
 #include "NvEncoderCuda.h"
 #include "log.h"
 
+namespace minirtc {
+
 class CudaInitializer {
  public:
   static bool Init() {
@@ -44,4 +46,5 @@ bool CheckIsCudaEncodeSupported();
 
 bool CheckIsCudaDecodeSupported();
 
+}  // namespace minirtc
 #endif

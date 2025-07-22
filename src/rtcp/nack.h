@@ -16,6 +16,7 @@
 #include "rtcp_common_header.h"
 #include "rtp_feedback.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 class Nack : public RtpFeedback {
@@ -53,4 +54,5 @@ class Nack : public RtpFeedback {
 
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc
 #endif  // MODULES_RTP_RTCP_SOURCE_RTCP_PACKET_NACK_H_

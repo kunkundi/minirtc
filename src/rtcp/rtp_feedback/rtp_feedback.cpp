@@ -18,6 +18,8 @@
 //   :            Feedback Control Information (FCI)                 :
 //   :                                                               :
 
+namespace minirtc {
+
 void RtpFeedback::ParseCommonFeedback(const uint8_t* payload) {
   SetSenderSsrc(ByteReader<uint32_t>::ReadBigEndian(&payload[0]));
   SetMediaSsrc(ByteReader<uint32_t>::ReadBigEndian(&payload[4]));
@@ -27,3 +29,4 @@ void RtpFeedback::CreateCommonFeedback(uint8_t* payload) const {
   ByteWriter<uint32_t>::WriteBigEndian(&payload[0], sender_ssrc());
   ByteWriter<uint32_t>::WriteBigEndian(&payload[4], media_ssrc());
 }
+}  // namespace minirtc

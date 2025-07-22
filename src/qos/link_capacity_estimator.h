@@ -14,6 +14,7 @@
 
 #include "api/units/data_rate.h"
 
+namespace minirtc {
 namespace webrtc {
 class LinkCapacityEstimator {
  public:
@@ -35,5 +36,6 @@ class LinkCapacityEstimator {
   double deviation_kbps_ = 0.4;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_LINK_CAPACITY_ESTIMATOR_H_

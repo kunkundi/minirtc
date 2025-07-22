@@ -18,6 +18,7 @@
 #include "api/units/data_rate.h"
 #include "api/units/time_delta.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class TargetTransferRateObserver {
@@ -120,5 +121,6 @@ class NetworkStateEstimatorFactory {
   virtual ~NetworkStateEstimatorFactory() = default;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_TRANSPORT_NETWORK_CONTROL_H_

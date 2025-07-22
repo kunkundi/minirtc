@@ -20,6 +20,8 @@
 #include "concurrentqueue.h"  // MoodyCamel's lock-free queue
 #include "log.h"
 
+namespace minirtc {
+
 class TaskQueueLockFree {
  public:
   TaskQueueLockFree(std::string task_name, bool log_enabled = false,
@@ -105,5 +107,6 @@ class TaskQueueLockFree {
   std::mutex mutex_;
   std::condition_variable cond_var_;
 };
+}  // namespace minirtc
 
 #endif

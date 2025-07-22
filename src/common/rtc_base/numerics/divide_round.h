@@ -15,6 +15,7 @@
 
 #include "safe_compare.h"
 
+namespace minirtc {
 namespace webrtc {
 
 template <typename Dividend, typename Divisor>
@@ -52,5 +53,6 @@ inline auto constexpr DivideRoundToNearest(Dividend dividend, Divisor divisor) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_DIVIDE_ROUND_H_

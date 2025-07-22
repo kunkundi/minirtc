@@ -31,8 +31,8 @@
 #include "congestion_control_feedback.h"
 #include "report_block_data.h"
 
+namespace minirtc {
 class RtpPacket;
-
 namespace webrtc {
 class RtpPacketToSend;
 
@@ -166,7 +166,7 @@ struct RtpPacketCounter {
   RtpPacketCounter()
       : header_bytes(0), payload_bytes(0), padding_bytes(0), packets(0) {}
 
-  explicit RtpPacketCounter(const ::RtpPacket& packet);
+  explicit RtpPacketCounter(const minirtc::RtpPacket& packet);
   explicit RtpPacketCounter(const RtpPacketToSend& packet_to_send);
 
   void Add(const RtpPacketCounter& other) {
@@ -184,8 +184,9 @@ struct RtpPacketCounter {
            total_packet_delay == other.total_packet_delay;
   }
 
-  // Not inlined, since use of ::RtpPacket would result in circular includes.
-  void AddPacket(const ::RtpPacket& packet);
+  // Not inlined, since use of minirtc::RtpPacket would result in circular
+  // includes.
+  void AddPacket(const minirtc::RtpPacket& packet);
   void AddPacket(const RtpPacketToSend& packet_to_send);
 
   size_t TotalBytes() const {
@@ -314,4 +315,6 @@ class SendPacketObserver {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_RTP_RTCP_INCLUDE_RTP_RTCP_DEFINES_H_

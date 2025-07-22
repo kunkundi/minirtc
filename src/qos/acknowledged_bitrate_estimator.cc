@@ -21,6 +21,7 @@
 #include "api/units/data_size.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 AcknowledgedBitrateEstimator::AcknowledgedBitrateEstimator()
@@ -62,3 +63,4 @@ void AcknowledgedBitrateEstimator::SetAlrEndedTime(Timestamp alr_ended_time) {
 void AcknowledgedBitrateEstimator::SetAlr(bool in_alr) { in_alr_ = in_alr; }
 
 }  // namespace webrtc
+}  // namespace minirtc

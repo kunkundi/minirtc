@@ -31,6 +31,7 @@
 #define RTCP_CNAME_SIZE 256  // RFC 3550 page 44, including null termination
 #define IP_PACKET_SIZE 1500  // we assume ethernet
 
+namespace minirtc {
 namespace webrtc {
 
 const int kVideoPayloadTypeFrequency = 90000;
@@ -124,6 +125,7 @@ enum class RtpPacketMediaType : size_t {
   kPadding = kNumMediaTypes - 1,  // RTX or plain padding sent to maintain BWE.
   // Again, don't forget to update `kNumMediaTypes` if you add another value!
 };
-
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // _RTP_RTCP_TYPEDEF_H_

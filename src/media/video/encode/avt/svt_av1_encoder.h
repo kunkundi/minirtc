@@ -15,6 +15,8 @@
 #include "svt-av1/EbSvtAv1Metadata.h"
 #include "video_encoder.h"
 
+namespace minirtc {
+
 class SvtAv1Encoder : public VideoEncoder {
  public:
   SvtAv1Encoder(std::shared_ptr<SystemClock> clock);
@@ -56,5 +58,6 @@ class SvtAv1Encoder : public VideoEncoder {
   unsigned char* yuv420p_frame_ = nullptr;
   size_t yuv420p_frame_capacity_ = 0;
 };
+}  // namespace minirtc
 
 #endif

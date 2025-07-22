@@ -15,6 +15,7 @@
 
 #include "api/units/data_size.h"
 
+namespace minirtc {
 namespace webrtc {
 
 const int kDefaultMinPushbackTargetBitrateBps = 30000;
@@ -68,3 +69,4 @@ uint32_t CongestionWindowPushbackController::UpdateTargetBitrate(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

@@ -18,6 +18,7 @@
 #include "api/transport/bandwidth_usage.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 
@@ -134,3 +135,4 @@ void OveruseEstimator::UpdateNoiseEstimate(double residual, double ts_delta,
   }
 }
 }  // namespace webrtc
+}  // namespace minirtc

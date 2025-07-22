@@ -12,6 +12,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+namespace {
 constexpr int kMaxPacketAge = 10'000;
 constexpr int kMaxNackPackets = 1000;
 constexpr TimeDelta kDefaultRtt = TimeDelta::Millis(100);
@@ -22,6 +24,7 @@ constexpr int kMaxReorderedPackets = 128;
 constexpr int kNumReorderingBuckets = 10;
 // constexpr TimeDelta kDefaultSendNackDelay = TimeDelta::Zero();
 constexpr TimeDelta kDefaultSendNackDelay = TimeDelta::Millis(10);
+}  // namespace
 
 NackRequester::NackInfo::NackInfo()
     : seq_num(0),
@@ -188,3 +191,4 @@ int NackRequester::WaitNumberOfPackets(float probability) const {
   if (reordering_histogram_.NumValues() == 0) return 0;
   return reordering_histogram_.InverseCdf(probability);
 }
+}  // namespace minirtc

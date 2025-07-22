@@ -16,6 +16,7 @@
 
 #include "api/transport/bandwidth_usage.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class DelayIncreaseDetectorInterface {
@@ -38,5 +39,6 @@ class DelayIncreaseDetectorInterface {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_DELAY_INCREASE_DETECTOR_INTERFACE_H_

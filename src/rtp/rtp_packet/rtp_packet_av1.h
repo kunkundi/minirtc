@@ -9,6 +9,7 @@
 
 #include "rtp_packet.h"
 
+namespace minirtc {
 class RtpPacketAv1 : public RtpPacket {
  public:
   RtpPacketAv1();
@@ -46,5 +47,5 @@ class RtpPacketAv1 : public RtpPacket {
   uint8_t w_ = 0;
   uint8_t n_ = 0;
 };
-
+}  // namespace minirtc
 #endif

@@ -7,6 +7,8 @@
 #include "media_codec.h"
 #include "nvcodec_common.h"
 
+namespace minirtc {
+
 class NvidiaVideoDecoder : public MediaCodec {
  public:
   NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock);
@@ -36,5 +38,6 @@ class NvidiaVideoDecoder : public MediaCodec {
   std::string h264_file_name_;
   std::string nv12_file_name_;
 };
+}  // namespace minirtc
 
 #endif

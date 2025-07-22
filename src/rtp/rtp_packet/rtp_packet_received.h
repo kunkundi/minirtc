@@ -22,6 +22,7 @@
 #include "rtp_header.h"
 #include "rtp_packet.h"
 
+namespace minirtc {
 namespace webrtc {
 // Class to hold rtp packet with metadata for receiver side.
 // The metadata is not parsed from the rtp packet, but may be derived from the
@@ -79,4 +80,5 @@ class RtpPacketReceived : public RtpPacket {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 #endif  // MODULES_RTP_RTCP_SOURCE_RTP_PACKET_RECEIVED_H_

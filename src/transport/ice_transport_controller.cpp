@@ -8,6 +8,8 @@
 
 #include "api/transport/network_types.h"
 
+namespace minirtc {
+
 IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics)
@@ -1042,3 +1044,4 @@ bool IceTransportController::Process() {
 
   return true;
 }
+}  // namespace minirtc

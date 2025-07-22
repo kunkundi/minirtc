@@ -18,6 +18,7 @@
 
 #include "rtc_base/numerics/math_utils.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace webrtc_impl {
 
@@ -165,5 +166,6 @@ class RunningStatistics {
 
 }  // namespace webrtc_impl
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_NUMERICS_RUNNING_STATISTICS_H_

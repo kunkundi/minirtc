@@ -7,11 +7,14 @@
 #ifndef _BANDWIDTH_USAGE_H_
 #define _BANDWIDTH_USAGE_H_
 
+namespace minirtc {
+
 enum class BandwidthUsage {
   kBwNormal = 0,
   kBwUnderusing = 1,
   kBwOverusing = 2,
   kLast
 };
+}  // namespace minirtc
 
 #endif

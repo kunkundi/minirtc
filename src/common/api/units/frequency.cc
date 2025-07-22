@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <string>
 
+namespace minirtc {
 namespace webrtc {
 std::string ToString(Frequency value) {
   if (value.IsPlusInfinity()) {
@@ -25,3 +26,4 @@ std::string ToString(Frequency value) {
   }
 }
 }  // namespace webrtc
+}  // namespace minirtc

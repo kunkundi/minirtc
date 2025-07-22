@@ -18,6 +18,7 @@
 #include "rtc_base/arraysize.h"
 #include "rtc_base/byte_order.h"
 
+namespace minirtc {
 namespace rtc {
 
 // Helper function declarations for inet_ntop/inet_pton.
@@ -307,3 +308,4 @@ int inet_pton_v6(const char* src, void* dst) {
 }
 
 }  // namespace rtc
+}  // namespace minirtc

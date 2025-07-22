@@ -12,6 +12,8 @@
 #include "media_channel.h"
 #include "rtp_video_receiver.h"
 
+namespace minirtc {
+
 class VideoChannelReceive : public MediaChannel {
  public:
   VideoChannelReceive();
@@ -48,5 +50,6 @@ class VideoChannelReceive : public MediaChannel {
  private:
   std::shared_ptr<SystemClock> clock_;
 };
+}  // namespace minirtc
 
 #endif

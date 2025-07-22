@@ -18,6 +18,7 @@
 #include "log.h"
 #include "robust_throughput_estimator.h"
 
+namespace minirtc {
 namespace webrtc {
 
 constexpr char RobustThroughputEstimatorSettings::kKey[];
@@ -70,3 +71,4 @@ AcknowledgedBitrateEstimatorInterface::Create() {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

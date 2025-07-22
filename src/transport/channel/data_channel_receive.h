@@ -11,6 +11,8 @@
 #include "media_channel.h"
 #include "rtp_data_receiver.h"
 
+namespace minirtc {
+
 class DataChannelReceive : public MediaChannel {
  public:
   DataChannelReceive();
@@ -40,5 +42,6 @@ class DataChannelReceive : public MediaChannel {
   std::unique_ptr<RtpDataReceiver> rtp_data_receiver_ = nullptr;
   std::function<void(const char *, size_t)> on_receive_data_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

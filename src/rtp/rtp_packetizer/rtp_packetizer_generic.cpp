@@ -1,5 +1,7 @@
 #include "rtp_packetizer_generic.h"
 
+namespace minirtc {
+
 RtpPacketizerGeneric::RtpPacketizerGeneric(uint32_t ssrc, uint32_t payload_type)
     : version_(kRtpVersion),
       has_padding_(false),
@@ -121,4 +123,5 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerGeneric::Build(
   }
 
   return rtp_packets;
+}
 }

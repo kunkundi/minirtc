@@ -7,6 +7,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 TcuInit cuInit_ld = NULL;
 TcuDeviceGet cuDeviceGet_ld = NULL;
 TcuDeviceGetCount cuDeviceGetCount_ld = NULL;
@@ -205,3 +207,4 @@ int ReleaseNvCodecDll() {
 
   return 0;
 }
+}  // namespace minirtc

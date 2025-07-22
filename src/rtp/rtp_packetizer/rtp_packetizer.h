@@ -14,6 +14,8 @@
 #include "rtp_packet.h"
 #include "rtp_packet_to_send.h"
 
+namespace minirtc {
+
 class RtpPacketizer {
  public:
   static std::unique_ptr<RtpPacketizer> Create(uint32_t payload_type,
@@ -29,5 +31,6 @@ class RtpPacketizer {
       uint32_t payload_size, uint32_t rtp_timestamp,
       bool use_rtp_packet_to_send) = 0;
 };
+}  // namespace minirtc
 
 #endif

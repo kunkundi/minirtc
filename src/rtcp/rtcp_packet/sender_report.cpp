@@ -1,5 +1,7 @@
 #include "sender_report.h"
 
+namespace minirtc {
+
 SenderReport::SenderReport() : buffer_(nullptr), size_(0) {}
 
 SenderReport::~SenderReport() {
@@ -125,4 +127,5 @@ bool SenderReport::Parse(const RtcpCommonHeader &packet) {
   }
 
   return pos == packet.payload_size_bytes();
+}
 }

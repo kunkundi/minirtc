@@ -15,6 +15,8 @@
 #include "aom/aomcx.h"
 #include "media_codec.h"
 
+namespace minirtc {
+
 typedef struct {
   uint64_t obu_header_size;
   unsigned obu_type;
@@ -100,5 +102,6 @@ class AomAv1Encoder : public MediaCodec {
   size_t encoded_frame_size_ = 0;
   bool force_i_frame_ = false;
 };
+}  // namespace minirtc
 
 #endif

@@ -9,6 +9,8 @@
 
 #include "rtp_packetizer.h"
 
+namespace minirtc {
+
 class RtpPacketizerGeneric : public RtpPacketizer {
  public:
   RtpPacketizerGeneric(uint32_t ssrc, uint32_t payload_type);
@@ -48,5 +50,6 @@ class RtpPacketizerGeneric : public RtpPacketizer {
  private:
   std::vector<uint8_t> rtp_packet_frame_;
 };
+}  // namespace minirtc
 
 #endif

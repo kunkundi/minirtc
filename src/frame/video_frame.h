@@ -12,6 +12,8 @@
 
 #include "copy_on_write_buffer.h"
 
+namespace minirtc {
+
 enum VideoFrameType {
   kEmptyFrame = 0,
   kVideoFrameKey = 3,
@@ -51,5 +53,6 @@ class VideoFrame {
   uint32_t width_ = 0;
   uint32_t height_ = 0;
 };
+}  // namespace minirtc
 
 #endif

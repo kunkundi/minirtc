@@ -14,6 +14,7 @@
 
 #include "api/ref_count.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace webrtc_impl {
 
@@ -71,5 +72,6 @@ class RefCounter {
 
 }  // namespace webrtc_impl
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_REF_COUNTER_H_

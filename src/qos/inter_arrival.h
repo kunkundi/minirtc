@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+namespace minirtc {
 namespace webrtc {
 
 // Helper class to compute the inter-arrival time delta and the size delta
@@ -44,12 +45,9 @@ class InterArrival {
   // `timestamp_delta` (output) is the computed timestamp delta.
   // `arrival_time_delta_ms` (output) is the computed arrival-time delta.
   // `packet_size_delta` (output) is the computed size delta.
-  bool ComputeDeltas(uint32_t timestamp,
-                     int64_t arrival_time_ms,
-                     int64_t system_time_ms,
-                     size_t packet_size,
-                     uint32_t* timestamp_delta,
-                     int64_t* arrival_time_delta_ms,
+  bool ComputeDeltas(uint32_t timestamp, int64_t arrival_time_ms,
+                     int64_t system_time_ms, size_t packet_size,
+                     uint32_t* timestamp_delta, int64_t* arrival_time_delta_ms,
                      int* packet_size_delta);
 
  private:
@@ -89,5 +87,6 @@ class InterArrival {
   int num_consecutive_reordered_packets_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_INTER_ARRIVAL_H_

@@ -9,6 +9,8 @@
 // #define SAVE_RECEIVED_NV12_STREAM
 // #define SAVE_ENCODED_H264_STREAM
 
+namespace minirtc {
+
 using namespace std;
 
 class VideoToolboxEncoder::Impl {
@@ -404,3 +406,4 @@ int VideoToolboxEncoder::GetResolution(int* width, int* height) {
 }
 
 std::string VideoToolboxEncoder::GetEncoderName() { return impl_->GetEncoderName(); }
+}  // namespace minirtc

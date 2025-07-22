@@ -25,6 +25,8 @@
 #include "NvCodecUtils.h"
 #include "nvcuvid.h"
 
+namespace minirtc {
+
 /**
  * @brief Exception class for error reporting from the decode API.
  */
@@ -419,3 +421,4 @@ class NvDecoder {
   // the display callback immediately after the decode callback.
   bool m_bForce_zero_latency = false;
 };
+}  // namespace minirtc

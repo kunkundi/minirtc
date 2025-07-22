@@ -16,7 +16,7 @@
 #include <vector>
 
 #include "rtc_base/numerics/safe_conversions.h"
-
+namespace minirtc {
 namespace webrtc {
 
 RtpPacketReceived::RtpPacketReceived() = default;
@@ -51,3 +51,4 @@ void RtpPacketReceived::GetHeader(RTPHeader* header) const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

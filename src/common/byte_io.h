@@ -52,6 +52,8 @@ static_assert(
 // Plain const char* won't work for static_assert, use #define instead.
 #define kSizeErrorMsg "Byte size must be less than or equal to data type size."
 
+namespace minirtc {
+
 // Utility class for getting the unsigned equivalent of a signed type.
 template <typename T>
 struct UnsignedOf;
@@ -386,5 +388,6 @@ class ByteWriter<T, 8, false> {
     data[7] = val >> 56;
   }
 };
+}  // namespace minirtc
 
 #endif

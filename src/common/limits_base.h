@@ -9,6 +9,8 @@
 
 #include <limits>
 
+namespace minirtc {
+
 template <typename T>
 bool IsInfinite(const T& value) {
   return value == std::numeric_limits<T>::min() ||
@@ -29,6 +31,7 @@ template <typename T>
 bool IsMinusFinite(const T& value) {
   return value == std::numeric_limits<T>::min();
 }
+}  // namespace minirtc
 
 #define INT64_T_MAX std::numeric_limits<int64_t>::max()
 #define INT64_T_MIN std::numeric_limits<int64_t>::min()

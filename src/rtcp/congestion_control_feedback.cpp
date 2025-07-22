@@ -24,6 +24,7 @@
 #include "log.h"
 #include "rtcp_common_header.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 
@@ -311,3 +312,4 @@ bool CongestionControlFeedback::Parse(const RtcpCommonHeader& packet) {
 }
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc

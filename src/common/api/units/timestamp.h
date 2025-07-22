@@ -18,6 +18,7 @@
 #include "time_delta.h"
 #include "unit_base.h"  // IWYU pragma: export
 
+namespace minirtc {
 namespace webrtc {
 // Timestamp represents the time that has passed since some unspecified epoch.
 // The epoch is assumed to be before any represented timestamps, this means that
@@ -116,5 +117,6 @@ void AbslStringify(Sink& sink, Timestamp value) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_UNITS_TIMESTAMP_H_

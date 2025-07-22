@@ -5,6 +5,7 @@
 #include "rtc_base/network/sent_packet.h"
 
 // #define SAVE_RTP_SENT_STREAM
+namespace minirtc {
 
 VideoChannelSend::VideoChannelSend(
     const std::string& channel_name, std::shared_ptr<SystemClock> clock,
@@ -161,3 +162,4 @@ int32_t VideoChannelSend::ReSendPacket(uint16_t packet_id) {
 
   return 0;
 }
+}  // namespace minirtc

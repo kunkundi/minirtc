@@ -1,5 +1,7 @@
 #include "nvcodec_common.h"
 
+namespace minirtc {
+
 void ShowHelpAndExit(const char *szBadOption) {
   std::ostringstream oss;
   bool bThrowError = false;
@@ -182,3 +184,4 @@ bool CheckIsCudaDecodeSupported() {
 
   return true;
 }
+}  // namespace minirtc

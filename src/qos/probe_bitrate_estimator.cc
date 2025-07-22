@@ -21,6 +21,7 @@
 #include "api/units/timestamp.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 // The minumum number of probes we need to receive feedback about in percent
@@ -167,3 +168,4 @@ void ProbeBitrateEstimator::EraseOldClusters(Timestamp timestamp) {
   }
 }
 }  // namespace webrtc
+}  // namespace minirtc

@@ -13,6 +13,8 @@
 
 #include "Logger.h"
 
+namespace minirtc {
+
 #ifndef _WIN32
 #include <cstring>
 
@@ -925,3 +927,4 @@ NVENCSTATUS NvEncoder::DoMotionEstimation(
 
   return nvStatus;
 }
+}  // namespace minirtc

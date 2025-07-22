@@ -17,6 +17,7 @@
 
 #include "rtc_base/time_utils.h"
 
+namespace minirtc {
 namespace webrtc {
 
 AlrDetector::AlrDetector(AlrDetectorConfig config)
@@ -61,3 +62,4 @@ std::optional<int64_t> AlrDetector::GetApplicationLimitedRegionStartTime()
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

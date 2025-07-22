@@ -14,6 +14,7 @@
 #include <limits>
 #include <type_traits>
 
+namespace minirtc {
 namespace webrtc {
 namespace webrtc_impl {
 // Given two numbers `x` and `y` such that x >= y, computes the difference
@@ -66,5 +67,6 @@ constexpr T minus_infinity_or_min() {
 
 }  // namespace webrtc_impl
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_NUMERICS_MATH_UTILS_H_

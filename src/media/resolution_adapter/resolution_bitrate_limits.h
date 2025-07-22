@@ -7,6 +7,8 @@
 #ifndef _RESOLUTION_BITRATE_LIMITS_H_
 #define _RESOLUTION_BITRATE_LIMITS_H_
 
+namespace minirtc {
+
 struct ResolutionBitrateLimits {
   ResolutionBitrateLimits(int width, int height, int min_start_bitrate_bps,
                           int min_bitrate_bps, int max_bitrate_bps)
@@ -25,5 +27,6 @@ struct ResolutionBitrateLimits {
     return !(*this == rhs);
   }
 };
+}  // namespace minirtc
 
 #endif

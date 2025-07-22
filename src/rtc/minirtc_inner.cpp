@@ -11,6 +11,17 @@
 using nlohmann::json;
 
 PeerPtr *CreatePeer(const Params *params) {
+  if (!params) {
+    std::cerr << "Params is null" << std::endl;
+    return nullptr;
+  }
+
+  if (params->log_path) {
+    InitLogger(params->log_path);
+  } else {
+    InitLogger("logs");
+  }
+
   PeerPtr *peer_ptr = new PeerPtr;
   peer_ptr->peer_connection = new PeerConnection();
   peer_ptr->pc_params.use_cfg_file = params->use_cfg_file;

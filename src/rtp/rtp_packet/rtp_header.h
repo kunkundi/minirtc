@@ -13,6 +13,7 @@
 #include <optional>
 #include <string>
 
+namespace minirtc {
 static constexpr int kMaxRtpCsrcSize = 15;
 static constexpr uint8_t kRtpVersion = 2;
 
@@ -40,7 +41,7 @@ struct RTPHeader {
         ssrc_(0),
         csrcs_(),
         padding_len(0),
-        header_len(0){};
+        header_len(0) {};
 
   RTPHeader(const RTPHeader& other) = default;
   RTPHeader& operator=(const RTPHeader& other) = default;
@@ -60,5 +61,5 @@ struct RTPHeader {
 
   RTPHeaderExtension extension;
 };
-
+}  // namespace minirtc
 #endif

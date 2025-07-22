@@ -171,6 +171,8 @@
 #define DEFAULT_MTU 1500
 #define MAX_NALU_LEN 1400
 
+namespace minirtc {
+
 constexpr uint16_t kOneByteExtensionProfileId = 0xBEDE;
 constexpr uint16_t kTwoByteExtensionProfileId = 0x1000;
 constexpr size_t kFixedHeaderSize = 12;
@@ -326,5 +328,6 @@ class RtpPacket {
   CopyOnWriteBuffer buffer_;
   size_t size_ = 0;
 };
+}  // namespace minirtc
 
 #endif

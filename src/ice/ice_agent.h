@@ -9,6 +9,8 @@
 #include "glib.h"
 #include "nice/agent.h"
 
+namespace minirtc {
+
 typedef enum {
   ICE_STATE_DISCONNECTED,
   ICE_STATE_GATHERING,
@@ -128,5 +130,6 @@ class IceAgent {
   FILE* file_in_ = nullptr;
   FILE* file_out_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

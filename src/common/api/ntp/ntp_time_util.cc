@@ -17,6 +17,7 @@
 #include "rtc_base/numerics/divide_round.h"
 #include "rtc_base/time_utils.h"
 
+namespace minirtc {
 namespace webrtc {
 
 uint32_t SaturatedToCompactNtp(TimeDelta delta) {
@@ -57,3 +58,4 @@ TimeDelta CompactNtpRttToTimeDelta(uint32_t compact_ntp_interval) {
   return std::max(CompactNtpIntervalToTimeDelta(compact_ntp_interval), kMinRtt);
 }
 }  // namespace webrtc
+}  // namespace minirtc

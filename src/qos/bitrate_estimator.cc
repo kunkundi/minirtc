@@ -20,6 +20,7 @@
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -144,3 +145,4 @@ void BitrateEstimator::ExpectFastRateChange() {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

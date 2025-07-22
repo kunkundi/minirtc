@@ -16,6 +16,7 @@
 
 #include "rtc_base/numerics/safe_conversions.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class NtpTime {
@@ -131,6 +132,7 @@ inline int64_t Q32x32ToInt64Us(int64_t q32x32) {
   return rtc::dchecked_cast<int64_t>(
       std::round(q32x32 * (1'000'000.0 / NtpTime::kFractionsPerSecond)));
 }
-
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // SYSTEM_WRAPPERS_INCLUDE_NTP_TIME_H_

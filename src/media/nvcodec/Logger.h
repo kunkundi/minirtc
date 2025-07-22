@@ -34,6 +34,8 @@
 #define INVALID_SOCKET -1
 #endif
 
+namespace minirtc {
+
 enum LogLevel { TRACE, INFO, WARNING, ERROR, FATAL };
 
 namespace simplelogger {
@@ -236,3 +238,4 @@ extern simplelogger::Logger *logger;
   simplelogger::LogTransaction(logger, level, __FILE__, __LINE__, \
                                __FUNCTION__)                      \
       .GetStream()
+}  // namespace minirtc

@@ -20,6 +20,7 @@
 #include "rtc_base/numerics/divide_round.h"
 #include "rtc_base/numerics/safe_conversions.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtc_units_impl {
 
@@ -271,5 +272,6 @@ inline constexpr Unit_T operator-(RelativeUnit<Unit_T> other) {
 }  // namespace rtc_units_impl
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_UNITS_UNIT_BASE_H_

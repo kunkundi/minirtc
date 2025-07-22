@@ -14,6 +14,7 @@
 #include "obu.h"
 #include "rtp_packet.h"
 
+namespace minirtc {
 namespace obu {
 
 typedef enum {
@@ -42,5 +43,6 @@ bool ObuHasSize(uint8_t obu_header);
 
 int ObuType(uint8_t obu_header);
 }  // namespace obu
+}  // namespace minirtc
 
 #endif

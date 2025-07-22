@@ -15,6 +15,7 @@
 
 #include <string>
 
+namespace minirtc {
 namespace rtc {
 
 constexpr uint16_t kNetworkCostMax = 999;
@@ -68,5 +69,6 @@ constexpr AdapterType kAllAdapterTypes[] = {
 };
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NETWORK_CONSTANTS_H_

@@ -32,6 +32,8 @@
 
 #define I_FRAME_INTERVAL 3000
 
+namespace minirtc {
+
 class MediaCodec {
  public:
   MediaCodec() {}
@@ -78,5 +80,6 @@ class MediaCodec {
 
   virtual std::string GetDecoderName() { return ""; }
 };
+}  // namespace minirtc
 
 #endif

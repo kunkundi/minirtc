@@ -16,6 +16,7 @@
 
 #include <optional>
 
+namespace minirtc {
 namespace rtc {
 
 enum class PacketType {
@@ -66,5 +67,6 @@ struct SentPacket {
 };
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NETWORK_SENT_PACKET_H_

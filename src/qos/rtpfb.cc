@@ -12,6 +12,7 @@
 
 #include "byte_io.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 // RFC 4585, Section 6.1: Feedback format.
@@ -42,3 +43,4 @@ void Rtpfb::CreateCommonFeedback(uint8_t* payload) const {
 
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc

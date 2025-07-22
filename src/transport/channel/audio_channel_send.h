@@ -13,6 +13,8 @@
 #include "rtp_audio_sender.h"
 #include "rtp_packetizer.h"
 
+namespace minirtc {
+
 class AudioChannelSend : public MediaChannel {
  public:
   AudioChannelSend();
@@ -45,5 +47,6 @@ class AudioChannelSend : public MediaChannel {
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpAudioSender> rtp_audio_sender_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

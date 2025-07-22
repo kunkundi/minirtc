@@ -27,6 +27,7 @@
 #include "log.h"
 #include "trendline_estimator.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 constexpr TimeDelta kStreamTimeOut = TimeDelta::Seconds(2);
@@ -251,3 +252,4 @@ TimeDelta DelayBasedBwe::GetExpectedBwePeriod() const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

@@ -13,6 +13,8 @@
 
 #include "rtp_packet.h"
 
+namespace minirtc {
+
 class RtpDepacketizerH264 {
  public:
   RtpDepacketizerH264();
@@ -21,5 +23,6 @@ class RtpDepacketizerH264 {
 
   bool Parse(uint8_t* payload, uint32_t payload_size);
 };
+}  // namespace minirtc
 
 #endif

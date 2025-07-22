@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <vector>
 
+namespace minirtc {
 namespace webrtc {
 StreamsConfig::StreamsConfig() = default;
 StreamsConfig::StreamsConfig(const StreamsConfig&) = default;
@@ -105,3 +106,4 @@ bool PacedPacketInfo::operator==(const PacedPacketInfo& rhs) const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

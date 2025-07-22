@@ -15,6 +15,7 @@
 #include <string>
 #include <type_traits>
 
+namespace minirtc {
 namespace rtc {
 
 // Determines if the given class has zero-argument .data() and .size() methods
@@ -135,7 +136,7 @@ static_assert(!IsIntlike<float>::value, "");
 static_assert(!IsIntlike<S>::value, "");
 
 }  // namespace test_enum_intlike
-
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_TYPE_TRAITS_H_

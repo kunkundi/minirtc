@@ -31,6 +31,7 @@
 #include "rtp_packet_to_send.h"
 #include "rtp_rtcp_defines.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // This class implements a leaky-bucket packet pacing algorithm. It handles the
@@ -280,5 +281,6 @@ class PacingController {
   int circuit_breaker_threshold_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_PACING_PACING_CONTROLLER_H_

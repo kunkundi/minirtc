@@ -25,6 +25,7 @@
 #include "remote_bitrate_estimator.h"
 #include "rtp_packet_received.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 
@@ -352,3 +353,4 @@ DataRate RemoteBitrateEstimatorAbsSendTime::LatestEstimate() const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

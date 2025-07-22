@@ -20,6 +20,7 @@
 #include "api/units/data_rate.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class RobustThroughputEstimator : public AcknowledgedBitrateEstimatorInterface {
@@ -46,5 +47,6 @@ class RobustThroughputEstimator : public AcknowledgedBitrateEstimatorInterface {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_ROBUST_THROUGHPUT_ESTIMATOR_H_

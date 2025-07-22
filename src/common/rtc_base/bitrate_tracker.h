@@ -22,6 +22,7 @@
 #include "api/units/timestamp.h"
 #include "rtc_base/rate_statistics.h"
 
+namespace minirtc {
 namespace webrtc {
 // Class to estimate bitrates over running window.
 // Timestamps used in Update(), Rate() and SetWindowSize() must never
@@ -60,5 +61,6 @@ class BitrateTracker {
   RateStatistics impl_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_BITRATE_TRACKER_H_

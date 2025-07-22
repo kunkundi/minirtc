@@ -17,6 +17,7 @@
 
 #include "rtc_base/numerics/safe_conversions_impl.h"
 
+namespace minirtc {
 namespace rtc {
 
 // Convenience function that returns true if the supplied value is in range
@@ -66,5 +67,6 @@ inline constexpr Dst saturated_cast(Src value) {
 }
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_SAFE_CONVERSIONS_H_

@@ -18,6 +18,7 @@
 #include "rtp_packet.h"
 #include "ws_client.h"
 
+namespace minirtc {
 class IceTransport {
  public:
   typedef enum { VIDEO = 96, AUDIO = 97, DATA = 120 } DATA_TYPE;
@@ -235,5 +236,6 @@ class IceTransport {
   rtp::PAYLOAD_TYPE negotiated_audio_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE negotiated_data_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
 };
+}  // namespace minirtc
 
 #endif

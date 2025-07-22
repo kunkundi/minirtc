@@ -18,6 +18,7 @@
 #include <optional>
 #include <utility>
 
+namespace minirtc {
 namespace rtc {
 
 // Implements moving max: can add samples to it and calculate maximum over some
@@ -111,5 +112,6 @@ void MovingMaxCounter<T>::RollWindow(int64_t new_time_ms) {
 }
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_MOVING_MAX_COUNTER_H_

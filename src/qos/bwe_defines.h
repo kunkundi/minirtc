@@ -19,6 +19,7 @@
 #include "api/units/data_rate.h"
 #include "api/units/time_delta.h"
 
+namespace minirtc {
 namespace webrtc {
 
 inline constexpr DataRate kCongestionControllerMinBitrate =
@@ -44,5 +45,6 @@ struct RateControlInput {
   std::optional<DataRate> estimated_throughput;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_INCLUDE_BWE_DEFINES_H_

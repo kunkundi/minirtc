@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 ThreadBase::ThreadBase()
     : running_(false),
       pause_(false),
@@ -66,3 +68,4 @@ void ThreadBase::Run() {
     }
   }
 }
+}  // namespace minirtc

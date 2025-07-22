@@ -18,6 +18,7 @@
 #include "rtc_base/numerics/safe_compare.h"
 #include "rtc_base/numerics/safe_conversions.h"
 
+namespace minirtc {
 namespace webrtc {
 
 RateStatistics::Bucket::Bucket(int64_t timestamp)
@@ -159,3 +160,4 @@ bool RateStatistics::SetWindowSize(int64_t window_size_ms, int64_t now_ms) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

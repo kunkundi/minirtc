@@ -13,6 +13,8 @@
 #include "rtcp_common_header.h"
 #include "rtcp_packet.h"
 
+namespace minirtc {
+
 // RTPFB: Transport layer feedback message.
 // RFC4585, Section 6.2
 class RtpFeedback : public RtcpPacket {
@@ -34,5 +36,6 @@ class RtpFeedback : public RtcpPacket {
  private:
   uint32_t media_ssrc_ = 0;
 };
+}  // namespace minirtc
 
 #endif

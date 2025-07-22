@@ -83,6 +83,7 @@
 #include "rtc_base/type_traits.h"
 #include "safe_compare.h"
 
+namespace minirtc {
 namespace rtc {
 
 namespace safe_minmax_impl {
@@ -314,5 +315,6 @@ R2 SafeClamp(T x, L min, H max) {
 }
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_SAFE_MINMAX_H_

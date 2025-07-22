@@ -3,6 +3,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 const int PacedSender::kNoPacketHoldback = -1;
 
 PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
@@ -313,3 +315,4 @@ int PacedSender::EnqueueRtpPacket(
   EnqueuePacket(std::move(rtp_packet));
   return 0;
 }
+}  // namespace minirtc

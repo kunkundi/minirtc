@@ -24,6 +24,7 @@
 #include "rtp_packet_received.h"
 #include "rtp_transport_feedback_generator.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // The class is responsible for generating RTCP feedback packets based on
@@ -84,5 +85,6 @@ class CongestionControlFeedbackGenerator
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_CONGESTION_CONTROL_FEEDBACK_GENERATOR_H_

@@ -31,6 +31,7 @@
 #include "remote_bitrate_estimator.h"
 #include "rtc_base/bitrate_tracker.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class RemoteBitrateEstimatorAbsSendTime : public RemoteBitrateEstimator {
@@ -114,5 +115,6 @@ class RemoteBitrateEstimatorAbsSendTime : public RemoteBitrateEstimator {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_REMOTE_BITRATE_ESTIMATOR_ABS_SEND_TIME_H_

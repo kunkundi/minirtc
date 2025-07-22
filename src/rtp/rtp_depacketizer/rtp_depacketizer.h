@@ -13,6 +13,7 @@
 
 #include "rtp_packet.h"
 
+namespace minirtc {
 class RtpDepacketizer {
  public:
   static std::shared_ptr<RtpDepacketizer> Create(uint32_t payload_type);
@@ -21,5 +22,6 @@ class RtpDepacketizer {
 
   bool Build(uint8_t* payload, uint32_t payload_size) = 0;
 };
+}  // namespace minirtc
 
 #endif

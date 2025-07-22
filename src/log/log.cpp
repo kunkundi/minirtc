@@ -1,37 +1,43 @@
 #include "log.h"
 
+namespace minirtc {
+namespace {
+std::string g_log_dir = "logs";
+std::once_flag g_logger_once_flag;
+std::shared_ptr<spdlog::logger> g_logger;
+}  // namespace
+
+void InitLogger(const std::string& log_dir) { g_log_dir = log_dir; }
+
 std::shared_ptr<spdlog::logger> get_logger() {
-  if (auto logger = spdlog::get(LOGGER_NAME)) {
-    return logger;
-  }
+  std::call_once(g_logger_once_flag, []() {
+    auto now = std::chrono::system_clock::now() + std::chrono::hours(8);
+    auto now_time = std::chrono::system_clock::to_time_t(now);
 
-  auto now = std::chrono::system_clock::now() + std::chrono::hours(8);
-  auto now_time = std::chrono::system_clock::to_time_t(now);
-
-  std::tm tm_info;
-
+    std::tm tm_info;
 #ifdef _WIN32
-  gmtime_s(&tm_info, &now_time);
+    gmtime_s(&tm_info, &now_time);
 #else
-  gmtime_r(&now_time, &tm_info);
+    gmtime_r(&now_time, &tm_info);
 #endif
 
-  std::stringstream ss;
-  std::string filename;
-  ss << LOGGER_NAME;
-  ss << std::put_time(&tm_info, "-%Y%m%d-%H%M%S.log");
-  ss >> filename;
+    std::stringstream ss;
+    ss << LOGGER_NAME;
+    ss << std::put_time(&tm_info, "-%Y%m%d-%H%M%S.log");
 
-  std::string path = "logs/" + filename;
-  std::vector<spdlog::sink_ptr> sinks;
-  sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
-  sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
-      path, 1048576 * 5, 3));
+    std::string filename = g_log_dir + "/" + ss.str();
 
-  auto combined_logger =
-      std::make_shared<spdlog::logger>(LOGGER_NAME, begin(sinks), end(sinks));
-  combined_logger->flush_on(spdlog::level::info);
-  spdlog::register_logger(combined_logger);
+    std::vector<spdlog::sink_ptr> sinks;
+    sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
+    sinks.push_back(std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
+        filename, 1048576 * 5, 3));
 
-  return combined_logger;
+    g_logger = std::make_shared<spdlog::logger>(LOGGER_NAME, sinks.begin(),
+                                                sinks.end());
+    g_logger->flush_on(spdlog::level::info);
+    spdlog::register_logger(g_logger);
+  });
+
+  return g_logger;
 }
+}  // namespace minirtc

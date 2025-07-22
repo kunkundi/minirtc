@@ -4,8 +4,12 @@
 
 #define MAX_FRAME_SIZE 6 * 960
 #define CHANNELS 1
+
+namespace minirtc {
+namespace {
 unsigned char pcm_bytes[MAX_FRAME_SIZE * CHANNELS * 2];
 opus_int16 out_data[MAX_FRAME_SIZE * CHANNELS];
+}  // namespace
 
 AudioDecoder::AudioDecoder(int sample_rate, int channel_num, int frame_size)
     : sample_rate_(sample_rate),
@@ -64,3 +68,4 @@ int AudioDecoder::Decode(
 
   return 0;
 }
+}  // namespace minirtc

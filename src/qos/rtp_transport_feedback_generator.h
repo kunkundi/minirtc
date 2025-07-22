@@ -20,6 +20,7 @@
 #include "api/units/timestamp.h"
 #include "rtp_packet_received.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class RtpTransportFeedbackGenerator {
@@ -43,5 +44,6 @@ class RtpTransportFeedbackGenerator {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_RTP_TRANSPORT_FEEDBACK_GENERATOR_H_

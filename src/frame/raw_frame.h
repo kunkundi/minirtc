@@ -9,6 +9,8 @@
 
 #include "video_frame.h"
 
+namespace minirtc {
+
 class RawFrame : public VideoFrame {
  public:
   RawFrame(const uint8_t *buffer, size_t size, uint32_t width, uint32_t height)
@@ -29,5 +31,6 @@ class RawFrame : public VideoFrame {
  private:
   int64_t captured_timestamp_us_ = 0;
 };
+}  // namespace minirtc
 
 #endif

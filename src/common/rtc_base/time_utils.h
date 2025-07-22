@@ -16,6 +16,7 @@
 
 #include "rtc_base/system_time.h"
 
+namespace minirtc {
 namespace rtc {
 
 static const int64_t kNumMillisecsPerSec = INT64_C(1000);
@@ -128,5 +129,6 @@ int64_t TimeUTCMicros();
 int64_t TimeUTCMillis();
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_TIME_UTILS_H_

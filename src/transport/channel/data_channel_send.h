@@ -13,6 +13,8 @@
 #include "rtp_data_sender.h"
 #include "rtp_packetizer.h"
 
+namespace minirtc {
+
 class DataChannelSend : public MediaChannel {
  public:
   DataChannelSend();
@@ -45,5 +47,6 @@ class DataChannelSend : public MediaChannel {
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpDataSender> rtp_data_sender_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

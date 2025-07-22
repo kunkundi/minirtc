@@ -1,5 +1,7 @@
 #include "rtp_depacketizer.h"
 
+namespace minirtc {
+
 std::shared_ptr<RtpDepacketizer> Create(uint32_t payload_type, uint8_t* payload,
                                         size_t payload_size) {
   switch (payload_type) {
@@ -9,3 +11,4 @@ std::shared_ptr<RtpDepacketizer> Create(uint32_t payload_type, uint8_t* payload,
       return std::make_shared<RtpDepacketizerAv1>(payload, payload_size);
   }
 }
+}  // namespace minirtc

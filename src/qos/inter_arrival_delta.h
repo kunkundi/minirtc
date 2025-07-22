@@ -16,6 +16,7 @@
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Helper class to compute the inter-arrival time delta and the size delta
@@ -85,5 +86,6 @@ class InterArrivalDelta {
   int num_consecutive_reordered_packets_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_INTER_ARRIVAL_DELTA_H_

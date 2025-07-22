@@ -37,6 +37,7 @@
 #include "rtc_base/time_utils.h"
 #include "system_time.h"
 
+namespace minirtc {
 namespace rtc {
 
 int64_t SystemTimeNanos() {
@@ -100,4 +101,6 @@ int64_t SystemTimeNanos() {
 }
 
 }  // namespace rtc
+}  // namespace minirtc
+
 #endif  // WEBRTC_EXCLUDE_SYSTEM_TIME

@@ -19,6 +19,7 @@
 #include "api/units/data_size.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 class RtcEventLog;
 
@@ -54,5 +55,6 @@ class ProbeBitrateEstimator {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_PROBE_BITRATE_ESTIMATOR_H_

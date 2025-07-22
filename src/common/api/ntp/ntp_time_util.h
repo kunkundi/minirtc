@@ -17,6 +17,7 @@
 #include "api/units/time_delta.h"
 #include "rtc_base/numerics/safe_conversions.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Helper function for compact ntp representation:
@@ -58,4 +59,6 @@ TimeDelta CompactNtpIntervalToTimeDelta(uint32_t compact_ntp_interval);
 TimeDelta CompactNtpRttToTimeDelta(uint32_t compact_ntp_interval);
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_RTP_RTCP_SOURCE_NTP_TIME_UTIL_H_

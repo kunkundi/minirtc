@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 
+namespace minirtc {
 class ByteBufferReader {
  public:
   ByteBufferReader(const char* bytes, size_t len);
@@ -37,5 +38,6 @@ class ByteBufferReader {
   size_t start_;
   size_t end_;
 };
+}  // namespace minirtc
 
 #endif

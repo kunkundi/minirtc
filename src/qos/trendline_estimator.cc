@@ -25,6 +25,7 @@
 #include "log.h"
 #include "rtc_base/numerics/safe_minmax.h"
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -258,3 +259,4 @@ void TrendlineEstimator::UpdateThreshold(double modified_trend,
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

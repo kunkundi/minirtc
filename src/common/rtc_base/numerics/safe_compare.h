@@ -38,6 +38,7 @@
 
 #include "rtc_base/type_traits.h"
 
+namespace minirtc {
 namespace rtc {
 
 namespace safe_cmp_impl {
@@ -141,15 +142,16 @@ RTC_SAFECMP_MAKE_OP(GeOp, >=)
   template <typename T1, typename T2>                                         \
   constexpr                                                                   \
       typename std::enable_if<IsIntlike<T1>::value && IsIntlike<T2>::value,   \
-                              bool>::type Safe##name(T1 a, T2 b) {            \
+                              bool>::type                                     \
+      Safe##name(T1 a, T2 b) {                                                \
     /* Unary plus here turns enums into real integral types. */               \
     return safe_cmp_impl::Cmp<safe_cmp_impl::name##Op>(+a, +b);               \
   }                                                                           \
   template <typename T1, typename T2>                                         \
   constexpr                                                                   \
       typename std::enable_if<!IsIntlike<T1>::value || !IsIntlike<T2>::value, \
-                              bool>::type Safe##name(const T1& a,             \
-                                                     const T2& b) {           \
+                              bool>::type                                     \
+      Safe##name(const T1& a, const T2& b) {                                  \
     return safe_cmp_impl::name##Op::Op(a, b);                                 \
   }
 RTC_SAFECMP_MAKE_FUN(Eq)
@@ -161,5 +163,6 @@ RTC_SAFECMP_MAKE_FUN(Ge)
 #undef RTC_SAFECMP_MAKE_FUN
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_SAFE_COMPARE_H_

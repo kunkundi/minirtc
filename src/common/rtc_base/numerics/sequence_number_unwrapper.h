@@ -19,6 +19,7 @@
 
 #include "sequence_number_util.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // A sequence number unwrapper where the first unwrapped value equals the
@@ -77,5 +78,6 @@ using RtpTimestampUnwrapper = SeqNumUnwrapper<uint32_t>;
 using RtpSequenceNumberUnwrapper = SeqNumUnwrapper<uint16_t>;
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_SEQUENCE_NUMBER_UNWRAPPER_H_

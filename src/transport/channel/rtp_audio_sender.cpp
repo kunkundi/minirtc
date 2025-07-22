@@ -7,6 +7,8 @@
 
 #define RTCP_SR_INTERVAL 1000
 
+namespace minirtc {
+
 RtpAudioSender::RtpAudioSender() { SetPeriod(std::chrono::milliseconds(5)); }
 
 RtpAudioSender::RtpAudioSender(std::shared_ptr<IOStatistics> io_statistics)
@@ -140,3 +142,4 @@ bool RtpAudioSender::Process() {
 
   return true;
 }
+}  // namespace minirtc

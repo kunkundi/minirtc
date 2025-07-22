@@ -2,6 +2,8 @@
 
 #include "byte_buffer.h"
 #include "log.h"
+
+namespace minirtc {
 namespace obu {
 
 constexpr int kAggregationHeaderSize = 1;
@@ -124,3 +126,4 @@ std::vector<Obu> ParseObus(uint8_t* payload, int payload_size) {
 }
 
 }  // namespace obu
+}  // namespace minirtc

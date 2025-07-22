@@ -25,6 +25,7 @@
 #include "log.h"
 #include "rtp_packet_to_send.h"
 
+namespace minirtc {
 namespace webrtc {
 
 constexpr TimeDelta kSendTimeHistoryWindow = TimeDelta::Seconds(60);
@@ -309,3 +310,4 @@ std::optional<PacketFeedback> TransportFeedbackAdapter::RetrievePacketFeedback(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

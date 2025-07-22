@@ -9,6 +9,8 @@
 
 #include "rtp_packetizer.h"
 
+namespace minirtc {
+
 class RtpPacketizerH264 : public RtpPacketizer {
  public:
   RtpPacketizerH264(uint32_t ssrc);
@@ -64,5 +66,6 @@ class RtpPacketizerH264 : public RtpPacketizer {
  private:
   std::vector<uint8_t> rtp_packet_frame_;
 };
+}  // namespace minirtc
 
 #endif

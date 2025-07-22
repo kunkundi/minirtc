@@ -14,6 +14,7 @@
 
 #include "api/transport/bandwidth_usage.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class OveruseDetector {
@@ -48,5 +49,6 @@ class OveruseDetector {
   BandwidthUsage hypothesis_ = BandwidthUsage::kBwNormal;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_OVERUSE_DETECTOR_H_

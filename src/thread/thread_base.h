@@ -8,6 +8,8 @@
 #include <string>
 #include <thread>
 
+namespace minirtc {
+
 class ThreadBase {
  public:
   ThreadBase();
@@ -40,5 +42,6 @@ class ThreadBase {
   std::atomic<bool> running_;
   std::atomic<bool> pause_;
 };
+}  // namespace minirtc
 
 #endif

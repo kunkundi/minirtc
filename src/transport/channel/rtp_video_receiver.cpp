@@ -14,6 +14,8 @@
 #define MAX_WAIT_TIME_MS 100     // 100ms
 #define NACK_UPDATE_INTERVAL 20  // 20ms
 
+namespace minirtc {
+
 RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock)
     : ssrc_(GenerateUniqueSsrc()),
       active_remb_module_(nullptr),
@@ -894,3 +896,4 @@ void RtpVideoReceiver::OnSenderReport(const SenderReport& sender_report) {
   bytes_sent = sender_report.SenderOctetCount();
   reports_count++;
 }
+}  // namespace minirtc

@@ -39,6 +39,8 @@
     }                                                               \
   } while (0)
 
+namespace minirtc {
+
 simplelogger::Logger *logger =
     simplelogger::LoggerFactory::CreateConsoleLogger();
 
@@ -793,3 +795,4 @@ void NvDecoder::UnlockFrame(uint8_t **pFrame) {
   uint64_t timestamp[2] = {0};
   m_vTimestamp.insert(m_vTimestamp.end(), &timestamp[0], &timestamp[1]);
 }
+}  // namespace minirtc

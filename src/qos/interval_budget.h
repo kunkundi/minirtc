@@ -14,6 +14,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+namespace minirtc {
 namespace webrtc {
 
 // TODO(tschumim): Reflector IntervalBudget so that we can set a under- and
@@ -40,5 +41,6 @@ class IntervalBudget {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_PACING_INTERVAL_BUDGET_H_

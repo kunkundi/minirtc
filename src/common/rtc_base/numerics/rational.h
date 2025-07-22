@@ -11,6 +11,7 @@
 #ifndef RTC_BASE_NUMERICS_RATIONAL_H_
 #define RTC_BASE_NUMERICS_RATIONAL_H_
 
+namespace minirtc {
 namespace webrtc {
 
 // This is the worst implementation of a rational...
@@ -24,5 +25,6 @@ struct Rational {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_RATIONAL_H_

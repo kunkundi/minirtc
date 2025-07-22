@@ -14,6 +14,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 class RtcpSender {
  public:
   RtcpSender(std::function<int(const uint8_t*, size_t)> callback,
@@ -49,5 +51,6 @@ class RtcpSender {
   size_t index_ = 0;
   uint8_t buffer_[IP_PACKET_SIZE];
 };
+}  // namespace minirtc
 
 #endif

@@ -29,6 +29,7 @@
 #include "link_capacity_estimator.h"
 #include "probe_bitrate_estimator.h"
 
+namespace minirtc {
 namespace webrtc {
 class RtcEventLog;
 
@@ -110,5 +111,6 @@ class DelayBasedBwe {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_DELAY_BASED_BWE_H_

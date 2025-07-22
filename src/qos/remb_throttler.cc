@@ -14,6 +14,7 @@
 #include <mutex>  // Include the mutex header
 #include <utility>
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -62,3 +63,4 @@ void RembThrottler::SetMaxDesiredReceiveBitrate(DataRate bitrate) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

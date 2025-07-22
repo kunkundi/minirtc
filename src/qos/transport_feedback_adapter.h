@@ -27,6 +27,7 @@
 #include "rtc_base/numerics/sequence_number_unwrapper.h"
 #include "rtp_packet_to_send.h"
 
+namespace minirtc {
 namespace webrtc {
 
 struct PacketFeedback {
@@ -131,5 +132,6 @@ class TransportFeedbackAdapter {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_RTP_TRANSPORT_FEEDBACK_ADAPTER_H_

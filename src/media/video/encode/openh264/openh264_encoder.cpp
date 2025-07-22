@@ -8,6 +8,8 @@
 // #define SAVE_RECEIVED_NV12_STREAM
 // #define SAVE_ENCODED_H264_STREAM
 
+namespace minirtc {
+
 static void Nv12ToI420(unsigned char *Src_data, int src_width, int src_height,
                        unsigned char *Dst_data) {
   // NV12
@@ -321,3 +323,4 @@ int OpenH264Encoder::Release() {
 
   return 0;
 }
+}  // namespace minirtc

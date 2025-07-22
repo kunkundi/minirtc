@@ -7,6 +7,8 @@
 
 #include "bitstream_parser.h"
 
+namespace minirtc {
+
 NvidiaVideoDecoder::NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 NvidiaVideoDecoder::~NvidiaVideoDecoder() {
@@ -146,3 +148,4 @@ int NvidiaVideoDecoder::Decode(
 
   return 0;
 }
+}  // namespace minirtc

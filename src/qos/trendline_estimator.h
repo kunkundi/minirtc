@@ -19,6 +19,7 @@
 #include "api/transport/bandwidth_usage.h"
 #include "delay_increase_detector_interface.h"
 
+namespace minirtc {
 namespace webrtc {
 
 struct TrendlineEstimatorSettings {
@@ -106,5 +107,6 @@ class TrendlineEstimator : public DelayIncreaseDetectorInterface {
   BandwidthUsage hypothesis_predicted_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_TRENDLINE_ESTIMATOR_H_

@@ -15,6 +15,8 @@
 #define MAX_PACKET_BUFFER_SIZE 2048
 #define MAX_TRACKED_SEQUENCE_SIZE 5
 
+namespace minirtc {
+
 class H264FrameAssembler {
  public:
   H264FrameAssembler();
@@ -41,5 +43,6 @@ class H264FrameAssembler {
 
   webrtc::SeqNumUnwrapper<uint16_t> rtp_seq_num_unwrapper_;
 };
+}  // namespace minirtc
 
 #endif

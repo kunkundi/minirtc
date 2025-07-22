@@ -27,6 +27,7 @@
 #include "rtcp_packet.h"
 #include "rtp_packet_received.h"
 
+namespace minirtc {
 namespace webrtc {
 
 CongestionControlFeedbackGenerator::CongestionControlFeedbackGenerator(
@@ -115,3 +116,4 @@ void CongestionControlFeedbackGenerator::CalculateNextPossibleSendTime(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

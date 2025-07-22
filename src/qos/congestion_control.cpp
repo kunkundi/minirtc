@@ -6,6 +6,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+namespace {
 constexpr int64_t kLossUpdateInterval = 1000;
 
 // Pacing-rate relative to our target send rate.
@@ -20,6 +22,7 @@ constexpr float kDefaultPaceMultiplier = 2.5f;
 // However, if we actually are overusing, we want to drop to something slightly
 // below the current throughput estimate to drain the network queues.
 constexpr double kProbeDropThroughputFraction = 0.85;
+}  // namespace
 
 BandwidthLimitedCause GetBandwidthLimitedCause(LossBasedState loss_based_state,
                                                bool is_rtt_above_limit,
@@ -465,3 +468,4 @@ PacerConfig CongestionControl::GetPacingRates(Timestamp at_time) const {
   msg.pad_window = padding_rate * msg.time_window;
   return msg;
 }
+}  // namespace minirtc

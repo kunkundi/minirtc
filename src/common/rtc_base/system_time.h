@@ -13,6 +13,7 @@
 
 #include <cstdint>
 
+namespace minirtc {
 namespace rtc {
 
 // Returns the actual system time, even if a clock is set for testing.
@@ -20,5 +21,6 @@ namespace rtc {
 int64_t SystemTimeNanos();
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_SYSTEM_TIME_H_

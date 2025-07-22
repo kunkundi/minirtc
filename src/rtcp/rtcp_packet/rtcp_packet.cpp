@@ -4,6 +4,8 @@
 
 #define IP_PACKET_SIZE 1500  // we assume ethernet
 
+namespace minirtc {
+
 bool RtcpPacket::OnBufferFull(uint8_t* packet, size_t* index,
                               PacketReadyCallback callback) const {
   if (*index == 0) {
@@ -63,4 +65,5 @@ void RtcpPacket::CreateHeader(
   buffer[*pos + 2] = (length >> 8) & 0xff;
   buffer[*pos + 3] = length & 0xff;
   *pos += kHeaderLength;
+}
 }

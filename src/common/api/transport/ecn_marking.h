@@ -11,6 +11,7 @@
 #ifndef API_TRANSPORT_ECN_MARKING_H_
 #define API_TRANSPORT_ECN_MARKING_H_
 
+namespace minirtc {
 namespace webrtc {
 
 // TODO: bugs.webrtc.org/42225697 - L4S support is slowly being developed.
@@ -38,5 +39,6 @@ enum class EcnMarking {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_TRANSPORT_ECN_MARKING_H_

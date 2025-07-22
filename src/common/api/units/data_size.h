@@ -17,6 +17,7 @@
 
 #include "unit_base.h"  // IWYU pragma: export
 
+namespace minirtc {
 namespace webrtc {
 // DataSize is a class represeting a count of bytes.
 class DataSize final : public rtc_units_impl::RelativeUnit<DataSize> {
@@ -56,5 +57,6 @@ void AbslStringify(Sink& sink, DataSize value) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_UNITS_DATA_SIZE_H_

@@ -9,6 +9,8 @@
 
 #include <cstdint>
 
+namespace minirtc {
+
 class BitstreamReader {
  public:
   BitstreamReader(const uint8_t* data, size_t size)
@@ -114,5 +116,6 @@ bool ParseSPSResolution(const uint8_t* sps, size_t sps_size, int& width,
 
   return true;
 }
+}  // namespace minirtc
 
 #endif

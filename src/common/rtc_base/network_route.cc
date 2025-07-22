@@ -10,6 +10,7 @@
 
 #include "rtc_base/network_route.h"
 
+namespace minirtc {
 namespace rtc {
 
 bool RouteEndpoint::operator==(const RouteEndpoint& other) const {
@@ -25,3 +26,4 @@ bool NetworkRoute::operator==(const NetworkRoute& other) const {
 }
 
 }  // namespace rtc
+}  // namespace minirtc

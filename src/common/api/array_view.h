@@ -19,6 +19,7 @@
 
 #include "rtc_base/type_traits.h"
 
+namespace minirtc {
 namespace rtc {
 
 // tl;dr: rtc::ArrayView is the same thing as gsl::span from the Guideline
@@ -315,5 +316,6 @@ inline ArrayView<U, Size> reinterpret_array_view(ArrayView<T, Size> view) {
 }
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // API_ARRAY_VIEW_H_

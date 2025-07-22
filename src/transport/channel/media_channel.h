@@ -16,6 +16,8 @@
 #include "receiver_report.h"
 #include "sender_report.h"
 
+namespace minirtc {
+
 class MediaChannel {
  public:
   MediaChannel() {}
@@ -28,7 +30,7 @@ class MediaChannel {
   }
 
   virtual void Initialize(rtp::PAYLOAD_TYPE payload_type) {
-    LOG_INFO("Initialize() default implementation")
+    LOG_INFO("Initialize() default implementation");
   }
 
   virtual void Destroy() { LOG_INFO("Destroy() default implementation"); }
@@ -87,5 +89,6 @@ class MediaChannel {
     return {};
   }
 };
+}  // namespace minirtc
 
 #endif

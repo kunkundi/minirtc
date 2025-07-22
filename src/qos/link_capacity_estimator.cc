@@ -15,6 +15,7 @@
 #include "api/units/data_rate.h"
 #include "rtc_base/numerics/safe_minmax.h"
 
+namespace minirtc {
 namespace webrtc {
 LinkCapacityEstimator::LinkCapacityEstimator() {}
 
@@ -75,3 +76,4 @@ double LinkCapacityEstimator::deviation_estimate_kbps() const {
   return sqrt(deviation_kbps_ * estimate_kbps_.value());
 }
 }  // namespace webrtc
+}  // namespace minirtc

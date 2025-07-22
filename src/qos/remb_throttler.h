@@ -19,6 +19,7 @@
 #include "api/units/timestamp.h"
 #include "remote_bitrate_estimator.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // RembThrottler is a helper class used for throttling RTCP REMB messages.
@@ -51,4 +52,6 @@ class RembThrottler : public RemoteBitrateObserver {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_CONGESTION_CONTROLLER_REMB_THROTTLER_H_

@@ -10,6 +10,7 @@
 #ifndef API_REF_COUNT_H_
 #define API_REF_COUNT_H_
 
+namespace minirtc {
 namespace webrtc {
 
 // Refcounted objects should implement the following informal interface:
@@ -41,9 +42,9 @@ namespace webrtc {
 // result of another thread calling Release().
 //
 // Calling AddRef() and Release() manually is discouraged. It's recommended to
-// use rtc::scoped_refptr to manage all pointers to reference counted objects.
-// Note that rtc::scoped_refptr depends on compile-time duck-typing; formally
-// implementing the below RefCountInterface is not required.
+// use rtc::scoped_refptr to manage all pointers to reference counted
+// objects. Note that rtc::scoped_refptr depends on compile-time duck-typing;
+// formally implementing the below RefCountInterface is not required.
 
 enum class RefCountReleaseStatus { kDroppedLastRef, kOtherRefsRemained };
 
@@ -63,5 +64,6 @@ class RefCountInterface {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_REF_COUNT_H_

@@ -2,6 +2,8 @@
 #include <cstdint>
 #include <limits>
 
+namespace minirtc {
+
 template <typename U>
 inline bool IsNewer(U value, U prev_value) {
   static_assert(!std::numeric_limits<U>::is_signed, "U must be unsigned");
@@ -42,3 +44,4 @@ inline uint16_t LatestSequenceNumber(uint16_t sequence_number1,
 inline uint32_t LatestTimestamp(uint32_t timestamp1, uint32_t timestamp2) {
   return IsNewerTimestamp(timestamp1, timestamp2) ? timestamp1 : timestamp2;
 }
+}  // namespace minirtc

@@ -16,6 +16,7 @@
 
 #include "api/transport/bandwidth_usage.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class OveruseEstimator {
@@ -31,11 +32,8 @@ class OveruseEstimator {
   // between timestamp groups as defined by the InterArrival class.
   // `current_hypothesis` should be the hypothesis of the over-use detector at
   // this time.
-  void Update(int64_t t_delta,
-              double ts_delta,
-              int size_delta,
-              BandwidthUsage current_hypothesis,
-              int64_t now_ms);
+  void Update(int64_t t_delta, double ts_delta, int size_delta,
+              BandwidthUsage current_hypothesis, int64_t now_ms);
 
   // Returns the estimated noise/jitter variance in ms^2.
   double var_noise() const { return var_noise_; }
@@ -62,5 +60,6 @@ class OveruseEstimator {
   std::deque<double> ts_delta_hist_;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_REMOTE_BITRATE_ESTIMATOR_OVERUSE_ESTIMATOR_H_

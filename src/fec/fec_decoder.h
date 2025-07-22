@@ -18,6 +18,7 @@ extern "C" {
 };
 #endif
 
+namespace minirtc {
 class FecDecoder {
  public:
   FecDecoder();
@@ -46,5 +47,6 @@ class FecDecoder {
   unsigned int num_of_source_packets_ = 0;
   unsigned int num_of_total_packets_ = 0;
 };
+}  // namespace minirtc
 
 #endif

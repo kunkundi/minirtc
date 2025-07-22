@@ -25,6 +25,8 @@
 #include "api/video/video_timing.h"
 #include "rtp_packet.h"
 
+namespace minirtc {
+
 // Forward declare the RtpPacket class since it is not in the webrtc namespace.
 class RtpPacket;
 
@@ -32,7 +34,7 @@ namespace webrtc {
 // Class to hold rtp packet with metadata for sender side.
 // The metadata is not send over the wire, but packet sender may use it to
 // create rtp header extensions or other data that is sent over the wire.
-class RtpPacketToSend : public ::RtpPacket {
+class RtpPacketToSend : public minirtc::RtpPacket {
  public:
   explicit RtpPacketToSend();
   RtpPacketToSend(size_t capacity);
@@ -183,4 +185,6 @@ class RtpPacketToSend : public ::RtpPacket {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_RTP_RTCP_SOURCE_RTP_PACKET_TO_SEND_H_

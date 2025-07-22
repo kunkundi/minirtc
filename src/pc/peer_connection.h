@@ -21,6 +21,8 @@
 #include "video_encoder_factory.h"
 #include "ws_client.h"
 
+namespace minirtc {
+
 typedef void (*OnReceiveBuffer)(const char *, size_t, const char *,
                                 const size_t, void *);
 
@@ -216,5 +218,6 @@ class PeerConnection {
   std::mutex ice_work_mutex_;
   std::mutex empty_notify_mutex_;
 };
+}  // namespace minirtc
 
 #endif

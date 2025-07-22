@@ -12,6 +12,8 @@
 #include "dav1d/dav1d.h"
 #include "media_codec.h"
 
+namespace minirtc {
+
 class Dav1dAv1Decoder : public MediaCodec {
  public:
   Dav1dAv1Decoder(std::shared_ptr<SystemClock> clock);
@@ -46,5 +48,6 @@ class Dav1dAv1Decoder : public MediaCodec {
   // dav1d
   Dav1dContext *context_ = nullptr;
 };
+}  // namespace minirtc
 
 #endif

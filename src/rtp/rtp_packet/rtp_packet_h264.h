@@ -9,6 +9,7 @@
 
 #include "rtp_packet.h"
 
+namespace minirtc {
 class RtpPacketH264 : public RtpPacket {
  public:
   RtpPacketH264();
@@ -31,5 +32,6 @@ class RtpPacketH264 : public RtpPacket {
   rtp::FU_HEADER fu_header_;
   bool fu_info_got_ = false;
 };
+}  // namespace minirtc
 
 #endif

@@ -15,6 +15,8 @@
     }                                                            \
   } while (0)
 
+namespace minirtc {
+namespace {
 constexpr int kQpMin = 10;
 constexpr int kQpMax = 30;
 constexpr int kUsageProfile = AOM_USAGE_REALTIME;
@@ -24,6 +26,7 @@ constexpr int kBitDepth = 8;
 constexpr int kLagInFrames = 0;  // No look ahead.
 constexpr int kRtpTicksPerSecond = 90000;
 constexpr double kMinimumFrameRate = 1.0;
+}  // namespace
 
 static aom_superblock_size_t GetSuperblockSize(int width, int height,
                                                int threads) {
@@ -401,3 +404,4 @@ int AomAv1Encoder::Release() {
 
   return 0;
 }
+}  // namespace minirtc

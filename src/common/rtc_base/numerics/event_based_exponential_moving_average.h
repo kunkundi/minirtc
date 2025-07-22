@@ -16,6 +16,7 @@
 #include <limits>
 #include <optional>
 
+namespace minirtc {
 namespace rtc {
 
 /**
@@ -66,5 +67,6 @@ class EventBasedExponentialMovingAverage {
 };
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_EVENT_BASED_EXPONENTIAL_MOVING_AVERAGE_H_

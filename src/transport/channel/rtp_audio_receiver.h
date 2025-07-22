@@ -14,6 +14,8 @@
 #include "rtp_packet.h"
 #include "sender_report.h"
 
+namespace minirtc {
+
 class RtpAudioReceiver {
  public:
   RtpAudioReceiver();
@@ -56,5 +58,6 @@ class RtpAudioReceiver {
   uint32_t last_sr_ = 0;
   uint32_t last_delay_ = 0;
 };
+}  // namespace minirtc
 
 #endif

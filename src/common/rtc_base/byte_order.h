@@ -95,6 +95,7 @@
 #error "Missing byte order functions for this arch."
 #endif  // defined(__APPLE__)
 
+namespace minirtc {
 namespace rtc {
 
 // Reading and writing of little and big-endian numbers from memory
@@ -195,5 +196,6 @@ inline uint32_t NetworkToHost32(uint32_t n) { return be32toh(n); }
 inline uint64_t NetworkToHost64(uint64_t n) { return be64toh(n); }
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_BYTE_ORDER_H_

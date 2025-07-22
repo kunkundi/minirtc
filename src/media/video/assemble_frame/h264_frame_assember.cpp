@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 H264FrameAssembler::H264FrameAssembler() {}
 
 H264FrameAssembler::~H264FrameAssembler() {}
@@ -125,4 +127,5 @@ std::vector<std::unique_ptr<RtpPacketH264>> H264FrameAssembler::FindFrames(
   }
 
   return result;
+}
 }

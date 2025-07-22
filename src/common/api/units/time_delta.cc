@@ -12,6 +12,7 @@
 
 #include <string>
 
+namespace minirtc {
 namespace webrtc {
 
 std::string ToString(TimeDelta value) {
@@ -30,3 +31,4 @@ std::string ToString(TimeDelta value) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

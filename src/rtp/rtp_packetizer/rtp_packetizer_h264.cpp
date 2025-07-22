@@ -1,5 +1,7 @@
 #include "rtp_packetizer_h264.h"
 
+namespace minirtc {
+
 RtpPacketizerH264::RtpPacketizerH264(uint32_t ssrc)
     : version_(kRtpVersion),
       has_padding_(false),
@@ -312,6 +314,7 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerH264::BuildPadding(
 
   return rtp_packets;
 }
+}  // namespace minirtc
 
 // bool BuildFec(uint8_t* payload, uint32_t payload_size) {
 //   uint8_t** fec_packets =

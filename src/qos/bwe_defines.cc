@@ -10,6 +10,7 @@
 
 #include "bwe_defines.h"
 
+namespace minirtc {
 namespace webrtc {
 
 const char kBweTypeHistogram[] = "WebRTC.BWE.Types";
@@ -22,3 +23,4 @@ RateControlInput::RateControlInput(
 RateControlInput::~RateControlInput() = default;
 
 }  // namespace webrtc
+}  // namespace minirtc

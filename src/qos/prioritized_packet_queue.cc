@@ -27,6 +27,7 @@
 #include "rtp_packet_to_send.h"
 #include "rtp_rtcp_defines.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 
@@ -452,3 +453,4 @@ void PrioritizedPacketQueue::PurgeOldPacketsAtPriorityLevel(int prio_level,
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

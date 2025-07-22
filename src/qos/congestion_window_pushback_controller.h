@@ -17,6 +17,7 @@
 
 #include "api/units/data_size.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // This class enables pushback from congestion window directly to video encoder.
@@ -42,5 +43,6 @@ class CongestionWindowPushbackController {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_CONGESTION_WINDOW_PUSHBACK_CONTROLLER_H_

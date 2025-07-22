@@ -9,6 +9,8 @@
 
 #include "rtp_packetizer.h"
 
+namespace minirtc {
+
 class RtpPacketizerAv1 : public RtpPacketizer {
  public:
   RtpPacketizerAv1(uint32_t ssrc);
@@ -56,5 +58,6 @@ class RtpPacketizerAv1 : public RtpPacketizer {
  private:
   std::vector<uint8_t> rtp_packet_frame_;
 };
+}  // namespace minirtc
 
 #endif

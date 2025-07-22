@@ -11,6 +11,8 @@
 
 #include "video_decoder.h"
 
+namespace minirtc {
+
 class VideoToolboxDecoder : public VideoDecoder {
  public:
   VideoToolboxDecoder(std::shared_ptr<SystemClock> clock);
@@ -26,5 +28,6 @@ class VideoToolboxDecoder : public VideoDecoder {
   class Impl;
   std::shared_ptr<Impl> impl_;
 };
+}  // namespace minirtc
 
 #endif

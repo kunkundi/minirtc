@@ -20,6 +20,7 @@
 #include "api/units/timestamp.h"
 #include "constrained.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Computes a bayesian estimate of the throughput given acks containing
@@ -57,5 +58,6 @@ class BitrateEstimator {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_BITRATE_ESTIMATOR_H_

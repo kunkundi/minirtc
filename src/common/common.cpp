@@ -1,6 +1,6 @@
 #include "common.h"
 
-int CommonDummy()
-{
-    return 0;
-}
+namespace minirtc {
+
+int CommonDummy() { return 0; }
+}  // namespace minirtc

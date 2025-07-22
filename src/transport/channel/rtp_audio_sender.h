@@ -16,6 +16,8 @@
 #include "sender_report.h"
 #include "thread_base.h"
 
+namespace minirtc {
+
 class RtpAudioSender : public ThreadBase {
  public:
   RtpAudioSender();
@@ -49,5 +51,6 @@ class RtpAudioSender : public ThreadBase {
   uint32_t total_rtp_packets_sent_ = 0;
   uint32_t last_send_rtcp_sr_packet_ts_ = 0;
 };
+}  // namespace minirtc
 
 #endif

@@ -17,6 +17,7 @@
 #include "api/units/timestamp.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 
 static constexpr TimeDelta kBurstDeltaThreshold = TimeDelta::Millis(5);
@@ -136,3 +137,4 @@ void InterArrivalDelta::Reset() {
   prev_timestamp_group_ = SendTimeGroup();
 }
 }  // namespace webrtc
+}  // namespace minirtc

@@ -10,7 +10,7 @@ linux
 sudo apt-get install nvidia-cuda-toolkit
 solve <cuda.h>
 
-sudo apt-get install libxcb-randr0-dev libxcb-xtest0-dev libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xkb-dev libxcb-xfixes0-dev libxv-dev
+sudo apt-get install libxcb-randr0-dev libxcb-xtest0-dev libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xkb-dev libxcb-xfixes0-dev libxv-dev libxtst-dev
 solve x11
 
 sudo apt-get -y install libasound2-dev libsndio-dev libxcb-shm0-dev

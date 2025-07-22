@@ -14,6 +14,7 @@
 #include "clock/system_clock.h"
 #include "rtp_packet_to_send.h"
 
+namespace minirtc {
 class RtpPacketHistory {
  public:
   static constexpr size_t kMaxCapacity = 600;
@@ -95,5 +96,5 @@ class RtpPacketHistory {
   webrtc::TimeDelta rtt_;
   size_t number_to_store_;
 };
-
+}  // namespace minirtc
 #endif

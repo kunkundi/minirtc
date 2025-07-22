@@ -14,6 +14,8 @@
 #include <memory>
 #include <vector>
 
+namespace minirtc {
+
 class RtcpPacket {
  public:
   typedef enum { SR = 200, RR = 201, TCC = 11, NACK = 1 } RtcpPayloadType;
@@ -60,5 +62,6 @@ class RtcpPacket {
  private:
   uint32_t sender_ssrc_ = 0;
 };
+}  // namespace minirtc
 
 #endif

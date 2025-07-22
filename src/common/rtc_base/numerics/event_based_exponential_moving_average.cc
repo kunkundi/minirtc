@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <limits>
 
+namespace minirtc {
 namespace {
 
 // For a normal distributed value, the 95% double sided confidence interval is
@@ -79,3 +80,4 @@ double EventBasedExponentialMovingAverage::GetConfidenceInterval() const {
 }
 
 }  // namespace rtc
+}  // namespace minirtc

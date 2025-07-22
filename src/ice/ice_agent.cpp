@@ -9,6 +9,8 @@
 
 // #define SAVE_IO_STREAM
 
+namespace minirtc {
+
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
                    bool enable_turn, bool force_turn, std::string &stun_ip,
                    uint16_t stun_port, std::string &turn_ip, uint16_t turn_port,
@@ -392,3 +394,4 @@ int IceAgent::Send(const char *data, size_t size) {
 
   return ret ? 0 : -1;
 }
+}  // namespace minirtc

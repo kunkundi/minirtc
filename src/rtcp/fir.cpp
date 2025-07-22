@@ -13,6 +13,7 @@
 #include "byte_io.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 // RFC 4585: Feedback format.
@@ -101,3 +102,4 @@ bool Fir::Create(uint8_t* packet, size_t* index, size_t max_length,
 }
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc

@@ -18,6 +18,7 @@
 #include "media_codec.h"
 #include "received_frame.h"
 
+namespace minirtc {
 class VideoDecoder : public MediaCodec {
  public:
   virtual int Init() = 0;
@@ -31,5 +32,6 @@ class VideoDecoder : public MediaCodec {
   VideoDecoder() = default;
   virtual ~VideoDecoder() {}
 };
+}  // namespace minirtc
 
 #endif

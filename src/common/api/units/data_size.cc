@@ -12,6 +12,7 @@
 
 #include <string>
 
+namespace minirtc {
 namespace webrtc {
 
 std::string ToString(DataSize value) {
@@ -24,3 +25,4 @@ std::string ToString(DataSize value) {
   }
 }
 }  // namespace webrtc
+}  // namespace minirtc

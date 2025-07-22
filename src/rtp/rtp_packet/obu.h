@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <vector>
 
+namespace minirtc {
 namespace obu {
 struct PayloadSizeLimits {
   int max_payload_len = 1200;
@@ -45,5 +46,5 @@ struct Packet {
   int packet_size = 0;
 };
 }  // namespace obu
-
+}  // namespace minirtc
 #endif

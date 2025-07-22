@@ -11,6 +11,7 @@
 #ifndef RTC_BASE_NUMERICS_EXP_FILTER_H_
 #define RTC_BASE_NUMERICS_EXP_FILTER_H_
 
+namespace minirtc {
 namespace rtc {
 
 // This class can be used, for example, for smoothing the result of bandwidth
@@ -44,5 +45,6 @@ class ExpFilter {
   const float max_;
 };
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_EXP_FILTER_H_

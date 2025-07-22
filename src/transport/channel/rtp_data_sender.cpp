@@ -7,6 +7,8 @@
 
 #define RTCP_SR_INTERVAL 1000
 
+namespace minirtc {
+
 RtpDataSender::RtpDataSender() {}
 
 RtpDataSender::RtpDataSender(std::shared_ptr<IOStatistics> io_statistics)
@@ -140,3 +142,4 @@ bool RtpDataSender::Process() {
 
   return true;
 }
+}  // namespace minirtc

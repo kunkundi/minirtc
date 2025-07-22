@@ -16,6 +16,8 @@
 
 #include "media_codec.h"
 
+namespace minirtc {
+
 class OpenH264Decoder : public MediaCodec {
  public:
   OpenH264Decoder(std::shared_ptr<SystemClock> clock);
@@ -51,5 +53,6 @@ class OpenH264Decoder : public MediaCodec {
   int nv12_frame_capacity_ = 0;
   int nv12_frame_size_ = 0;
 };
+}  // namespace minirtc
 
 #endif

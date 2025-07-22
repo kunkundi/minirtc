@@ -67,6 +67,7 @@
 #include <memory>
 #include <utility>
 
+namespace minirtc {
 namespace webrtc {
 
 template <class T>
@@ -197,7 +198,8 @@ bool operator<(const scoped_refptr<T>& a, const scoped_refptr<U>& b) {
 namespace rtc {
 // Backwards compatible alias.
 // TODO: bugs.webrtc.org/42225969 - Deprecate and remove.
-using ::webrtc::scoped_refptr;
+using webrtc::scoped_refptr;
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // API_SCOPED_REFPTR_H_

@@ -12,6 +12,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 class RtcpReportBlock {
  public:
   static constexpr size_t kLength = 24;
@@ -76,5 +78,6 @@ class RtcpReportBlock {
   int64_t sum_rtt_;
   size_t num_rtts_;
 };
+}  // namespace minirtc
 
 #endif

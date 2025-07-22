@@ -16,6 +16,7 @@
 
 #include "mod_ops.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Test if the sequence number `a` is ahead or at sequence number `b`.
@@ -77,5 +78,6 @@ struct DescendingSeqNumComp {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_SEQUENCE_NUMBER_UTIL_H_

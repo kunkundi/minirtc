@@ -21,6 +21,7 @@
 #include "api/units/timestamp.h"
 #include "bitrate_estimator.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class AcknowledgedBitrateEstimator
@@ -46,5 +47,6 @@ class AcknowledgedBitrateEstimator
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // MODULES_CONGESTION_CONTROLLER_GOOG_CC_ACKNOWLEDGED_BITRATE_ESTIMATOR_H_

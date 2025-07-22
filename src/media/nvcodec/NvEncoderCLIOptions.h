@@ -22,6 +22,8 @@
 #include "Logger.h"
 #include "nvEncodeAPI.h"
 
+namespace minirtc {
+
 extern simplelogger::Logger *logger;
 
 #ifndef _WIN32
@@ -927,3 +929,4 @@ class NvEncoderInitParam {
     return os.str();
   }
 };
+}  // namespace minirtc

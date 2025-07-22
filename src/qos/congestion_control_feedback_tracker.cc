@@ -20,6 +20,7 @@
 #include "congestion_control_feedback.h"
 #include "rtp_packet_received.h"
 
+namespace minirtc {
 namespace webrtc {
 
 void CongestionControlFeedbackTracker::ReceivedPacket(
@@ -97,3 +98,4 @@ void CongestionControlFeedbackTracker::AddPacketsToFeedback(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

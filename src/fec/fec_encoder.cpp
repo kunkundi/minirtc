@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 FecEncoder::FecEncoder() {}
 
 FecEncoder::~FecEncoder() {}
@@ -150,4 +152,5 @@ void FecEncoder::GetFecPacketsParams(unsigned int source_length,
                           (last_packet_size ? 1 : 0);
   num_of_total_packets =
       (uint8_t)floor((double)num_of_source_packets / code_rate_);
+}
 }

@@ -24,6 +24,7 @@
 #include "api/units/timestamp.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -538,3 +539,4 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

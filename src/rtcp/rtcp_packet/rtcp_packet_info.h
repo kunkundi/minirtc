@@ -19,6 +19,8 @@
 #include "nack.h"
 #include "report_block_data.h"
 
+namespace minirtc {
+
 struct RtcpPacketInfo {
   uint32_t packet_type_flags = 0;  // RTCPPacketTypeFlags bit field.
 
@@ -33,5 +35,6 @@ struct RtcpPacketInfo {
   // std::optional<NetworkStateEstimate> network_state_estimate;
   // std::unique_ptr<rtcp::LossNotification> loss_notification;
 };
+}  // namespace minirtc
 
 #endif

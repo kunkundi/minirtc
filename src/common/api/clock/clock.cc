@@ -12,6 +12,7 @@
 
 #include "rtc_base/time_utils.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 
@@ -91,3 +92,4 @@ std::shared_ptr<Clock> Clock::GetWebrtcClockShared(
   return std::make_shared<WebrtcClock>(system_clock);
 }
 }  // namespace webrtc
+}  // namespace minirtc

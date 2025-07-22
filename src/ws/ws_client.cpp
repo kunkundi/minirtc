@@ -6,6 +6,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 WsClient::WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
     : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
@@ -309,4 +311,5 @@ void WsClient::OnMessage(websocketpp::connection_hdl, client::message_ptr msg) {
   if (on_receive_msg_) {
     on_receive_msg_(msg->get_payload());
   }
+}
 }

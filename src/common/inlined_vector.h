@@ -12,6 +12,8 @@
 #include <iostream>
 #include <vector>
 
+namespace minirtc {
+
 template <typename T, size_t N>
 class InlinedVector {
  public:
@@ -61,5 +63,6 @@ class InlinedVector {
   std::array<T, N> stack_data_;
   std::vector<T> heap_data_;
 };
+}  // namespace minirtc
 
 #endif  // _INLINED_VECTOR_H_

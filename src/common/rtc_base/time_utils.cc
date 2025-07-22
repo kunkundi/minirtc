@@ -21,6 +21,7 @@
 #include "rtc_base/win32.h"
 #endif
 
+namespace minirtc {
 namespace rtc {
 
 #if defined(_WIN32) || defined(WINUWP)
@@ -231,3 +232,4 @@ int64_t TimeUTCMicros() {
 int64_t TimeUTCMillis() { return TimeUTCMicros() / kNumMicrosecsPerMillisec; }
 
 }  // namespace rtc
+}  // namespace minirtc

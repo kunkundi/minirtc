@@ -7,6 +7,8 @@
 // #define SAVE_RECEIVED_NV12_STREAM
 // #define SAVE_ENCODED_H264_STREAM
 
+namespace minirtc {
+
 NvidiaVideoEncoder::NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 NvidiaVideoEncoder::~NvidiaVideoEncoder() {
@@ -300,3 +302,4 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
 
   return 0;
 }
+}  // namespace minirtc

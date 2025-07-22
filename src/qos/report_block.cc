@@ -13,6 +13,7 @@
 #include "byte_io.h"
 #include "log.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace rtcp {
 
@@ -85,3 +86,4 @@ bool ReportBlock::SetCumulativeLost(int32_t cumulative_lost) {
 
 }  // namespace rtcp
 }  // namespace webrtc
+}  // namespace minirtc

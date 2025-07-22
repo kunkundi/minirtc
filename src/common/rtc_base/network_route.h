@@ -22,6 +22,8 @@
 // the media code can rely on and the network code can implement, and both can
 // depend on that, but not depend on each other. Then, move this file to that
 // directory.
+
+namespace minirtc {
 namespace rtc {
 
 class RouteEndpoint {
@@ -89,5 +91,6 @@ struct NetworkRoute {
 };
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NETWORK_ROUTE_H_

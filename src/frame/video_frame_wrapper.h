@@ -9,6 +9,8 @@
 
 #include "video_frame.h"
 
+namespace minirtc {
+
 class VideoFrameWrapper : public VideoFrame {
  public:
   VideoFrameWrapper(const uint8_t *buffer, size_t size, uint32_t width,
@@ -63,5 +65,6 @@ class VideoFrameWrapper : public VideoFrame {
   uint32_t encoded_width_ = 0;
   uint32_t encoded_height_ = 0;
 };
+}  // namespace minirtc
 
 #endif

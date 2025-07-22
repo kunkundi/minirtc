@@ -18,6 +18,7 @@
 
 #include "api/units/time_delta.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Video timing timestamps in ms counted from capture_time_ms of a frame.
@@ -145,5 +146,6 @@ class VideoPlayoutDelay {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_VIDEO_VIDEO_TIMING_H_

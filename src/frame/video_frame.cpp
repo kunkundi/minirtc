@@ -3,6 +3,8 @@
 #include <cstring>
 #include <utility>
 
+namespace minirtc {
+
 VideoFrame::VideoFrame() {}
 
 VideoFrame::VideoFrame(size_t size) : buffer_(size) {
@@ -52,3 +54,4 @@ void VideoFrame::UpdateBuffer(const uint8_t *new_buffer, size_t new_size) {
     size_ = new_size;
   }
 }
+}  // namespace minirtc

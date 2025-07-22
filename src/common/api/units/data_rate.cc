@@ -12,6 +12,7 @@
 
 #include <string>
 
+namespace minirtc {
 namespace webrtc {
 
 std::string ToString(DataRate value) {
@@ -28,3 +29,4 @@ std::string ToString(DataRate value) {
   }
 }
 }  // namespace webrtc
+}  // namespace minirtc

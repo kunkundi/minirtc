@@ -15,6 +15,7 @@
 #include "api/ref_count.h"
 #include "rtc_base/ref_counter.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class RefCountedBase {
@@ -103,5 +104,6 @@ using RefCountedBase = webrtc::RefCountedBase;
 template <typename T>
 using RefCountedNonVirtual = webrtc::RefCountedNonVirtual<T>;
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // API_REF_COUNTED_BASE_H_

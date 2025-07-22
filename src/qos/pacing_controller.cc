@@ -31,6 +31,7 @@
 #include "rtc_base/numerics/safe_conversions.h"
 #include "rtp_rtcp_defines.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 constexpr TimeDelta kCongestedPacketInterval = TimeDelta::Millis(500);
@@ -683,3 +684,4 @@ Timestamp PacingController::NextUnpacedSendTime() const {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

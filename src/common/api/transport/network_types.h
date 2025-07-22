@@ -22,6 +22,7 @@
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // Configuration
@@ -288,5 +289,6 @@ struct NetworkStateEstimate {
   double cross_traffic_ratio = NAN;
 };
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_TRANSPORT_NETWORK_TYPES_H_

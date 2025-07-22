@@ -4,6 +4,9 @@
 #include <memory>
 
 #include "media_codec.h"
+
+namespace minirtc {
+
 class VideoEncoderFactory {
  public:
   VideoEncoderFactory();
@@ -15,5 +18,6 @@ class VideoEncoderFactory {
 
   static bool CheckIsHardwareAccerlerationSupported();
 };
+}  // namespace minirtc
 
 #endif

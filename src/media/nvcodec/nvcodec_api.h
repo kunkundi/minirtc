@@ -18,6 +18,8 @@
 #include "nvEncodeAPI.h"
 #include "nvcuvid.h"
 
+namespace minirtc {
+
 // nvcuda.dll
 typedef CUresult (*TcuInit)(unsigned int Flags);
 
@@ -117,4 +119,5 @@ int LoadNvCodecDll();
 
 int ReleaseNvCodecDll();
 
+}  // namespace minirtc
 #endif

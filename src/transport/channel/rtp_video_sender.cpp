@@ -10,6 +10,8 @@
 
 #define RTCP_SR_INTERVAL 1000
 
+namespace minirtc {
+
 RtpVideoSender::RtpVideoSender() {}
 
 RtpVideoSender::RtpVideoSender(std::shared_ptr<SystemClock> clock,
@@ -183,4 +185,5 @@ void RtpVideoSender::OnReceiverReport(const ReceiverReport& receiver_report) {
         r.SourceSsrc(), r.FractionLost() / 255.0, r.CumulativeLost(),
         r.ExtendedHighSeqNum(), r.Jitter(), r.LastSr(), r.DelaySinceLastSr());
   }
+}
 }

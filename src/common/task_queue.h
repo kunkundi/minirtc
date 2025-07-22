@@ -16,6 +16,8 @@
 #include "any_invocable.h"
 #include "log.h"
 
+namespace minirtc {
+
 class TaskQueue {
  public:
   TaskQueue(std::string task_name, bool log_enabled = false,
@@ -161,5 +163,6 @@ class TaskQueue {
   std::condition_variable cond_var_;
   bool stop_;
 };
+}  // namespace minirtc
 
 #endif  // _TASK_QUEUE_H_

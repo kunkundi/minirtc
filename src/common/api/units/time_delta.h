@@ -18,6 +18,7 @@
 
 #include "unit_base.h"  // IWYU pragma: export
 
+namespace minirtc {
 namespace webrtc {
 
 // TimeDelta represents the difference between two timestamps. Commonly this can
@@ -100,5 +101,6 @@ void AbslStringify(Sink& sink, TimeDelta value) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_UNITS_TIME_DELTA_H_

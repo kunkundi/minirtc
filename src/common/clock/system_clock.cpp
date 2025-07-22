@@ -15,6 +15,8 @@
 #include <windows.h>
 #endif
 
+namespace minirtc {
+
 int64_t SystemClock::ConvertToNtpTime(int64_t time_us) {
   constexpr int64_t kMicrosecondsPerSecond = 1000000;
   constexpr uint64_t kNtpFractionalUnit = 0x100000000;  // 2^32
@@ -145,3 +147,4 @@ int64_t SystemClock::NtpToUtc(int64_t ntp_time) {
 
   return unix_seconds * kMicrosecondsPerSecond + microseconds;
 }
+}  // namespace minirtc

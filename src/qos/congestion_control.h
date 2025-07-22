@@ -15,6 +15,8 @@
 #include "probe_controller.h"
 #include "send_side_bandwidth_estimation.h"
 
+namespace minirtc {
+
 using namespace webrtc;
 
 class CongestionControl {
@@ -93,5 +95,6 @@ class CongestionControl {
 
   std::optional<DataSize> current_data_window_;
 };
+}  // namespace minirtc
 
 #endif

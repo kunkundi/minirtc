@@ -16,6 +16,7 @@
 // The cricket and webrtc have separate definitions for what a media type is.
 // They're not compatible. Watch out for this.
 
+namespace minirtc {
 namespace cricket {
 
 enum MediaType {
@@ -38,5 +39,5 @@ namespace webrtc {
 enum class MediaType { ANY, AUDIO, VIDEO, DATA };
 
 }  // namespace webrtc
-
+}  // namespace minirtc
 #endif  // API_MEDIA_TYPES_H_

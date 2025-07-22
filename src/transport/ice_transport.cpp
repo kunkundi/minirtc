@@ -10,6 +10,8 @@
 
 using nlohmann::json;
 
+namespace minirtc {
+
 IceTransport::IceTransport(
     std::shared_ptr<SystemClock> clock, bool offer_peer,
     std::string &transmission_id, std::string &user_id,
@@ -1183,4 +1185,5 @@ uint8_t IceTransport::CheckIsDataPacket(const char *buffer, size_t size) {
   } else {
     return 0;
   }
+}
 }

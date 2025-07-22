@@ -20,6 +20,7 @@
 #include "api/units/timestamp.h"
 #include "clock/system_clock.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // January 1970, in NTP seconds.
@@ -72,5 +73,6 @@ class Clock {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // SYSTEM_WRAPPERS_INCLUDE_CLOCK_H_

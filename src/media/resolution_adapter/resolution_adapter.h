@@ -13,6 +13,8 @@
 #include "raw_frame.h"
 #include "resolution_bitrate_limits.h"
 
+namespace minirtc {
+
 class ResolutionAdapter {
  public:
   ResolutionAdapter();
@@ -44,5 +46,6 @@ class ResolutionAdapter {
  private:
   std::vector<uint8_t> tmp_buffer_;
 };
+}  // namespace minirtc
 
 #endif

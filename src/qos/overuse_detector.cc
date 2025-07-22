@@ -18,6 +18,7 @@
 
 #include "rtc_base/numerics/safe_minmax.h"
 
+namespace minirtc {
 namespace webrtc {
 namespace {
 
@@ -92,3 +93,4 @@ void OveruseDetector::UpdateThreshold(double modified_offset, int64_t now_ms) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

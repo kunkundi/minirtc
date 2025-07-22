@@ -20,6 +20,7 @@
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
 
+namespace minirtc {
 namespace webrtc {
 
 class RtpPacketPacer {
@@ -69,4 +70,6 @@ class RtpPacketPacer {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
+
 #endif  // MODULES_PACING_RTP_PACKET_PACER_H_

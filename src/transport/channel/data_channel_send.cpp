@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 DataChannelSend::DataChannelSend() {}
 
 DataChannelSend::~DataChannelSend() {}
@@ -55,4 +57,5 @@ int DataChannelSend::SendData(const char *data, size_t size) {
   }
 
   return 0;
+}
 }

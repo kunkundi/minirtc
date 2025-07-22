@@ -16,6 +16,7 @@
 #include <iterator>
 #include <set>
 
+namespace minirtc {
 namespace webrtc {
 
 // Class to efficiently get the percentile value from a group of observations.
@@ -112,5 +113,6 @@ void PercentileFilter<T>::Reset() {
   percentile_index_ = 0;
 }
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // RTC_BASE_NUMERICS_PERCENTILE_FILTER_H_

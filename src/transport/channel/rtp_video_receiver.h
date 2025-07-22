@@ -27,8 +27,8 @@
 #include "sender_report.h"
 #include "thread_base.h"
 
+namespace minirtc {
 using namespace webrtc;
-
 class RtpVideoReceiver : public ThreadBase,
                          public LossNotificationSender,
                          public KeyFrameRequestSender,
@@ -193,5 +193,6 @@ class RtpVideoReceiver : public ThreadBase,
   FILE* file_rtp_recv_ = nullptr;
   int64_t delta_ntp_internal_ms_;
 };
+}  // namespace minirtc
 
 #endif

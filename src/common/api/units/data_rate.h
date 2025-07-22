@@ -21,6 +21,7 @@
 #include "api/units/time_delta.h"
 #include "unit_base.h"
 
+namespace minirtc {
 namespace webrtc {
 // DataRate is a class that represents a given data rate. This can be used to
 // represent bandwidth, encoding bitrate, etc. The internal storage is bits per
@@ -137,5 +138,6 @@ void AbslStringify(Sink& sink, DataRate value) {
 }
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_UNITS_DATA_RATE_H_

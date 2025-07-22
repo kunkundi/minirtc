@@ -35,6 +35,7 @@
 // copyable, so it's probably cheaper to pass it by value than by const
 // reference.
 
+namespace minirtc {
 namespace rtc {
 
 template <typename T>
@@ -123,5 +124,6 @@ class FunctionView<RetT(ArgT...)> final {
 };
 
 }  // namespace rtc
+}  // namespace minirtc
 
 #endif  // API_FUNCTION_VIEW_H_

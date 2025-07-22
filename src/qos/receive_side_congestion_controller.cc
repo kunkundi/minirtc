@@ -25,6 +25,7 @@
 #include "remote_bitrate_estimator_abs_send_time.h"
 #include "rtp_packet_received.h"
 
+namespace minirtc {
 namespace webrtc {
 
 namespace {
@@ -108,3 +109,4 @@ void ReceiveSideCongestionController::SetTransportOverhead(
 }
 
 }  // namespace webrtc
+}  // namespace minirtc

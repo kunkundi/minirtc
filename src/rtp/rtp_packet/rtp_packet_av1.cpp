@@ -1,5 +1,6 @@
 #include "rtp_packet_av1.h"
 
+namespace minirtc {
 RtpPacketAv1::RtpPacketAv1() {}
 
 RtpPacketAv1::~RtpPacketAv1() {}
@@ -16,3 +17,4 @@ bool RtpPacketAv1::GetFrameHeaderInfo() {
 
   return true;
 }
+}  // namespace minirtc

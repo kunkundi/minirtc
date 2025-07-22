@@ -16,6 +16,7 @@
 
 #include "api/transport/bandwidth_usage.h"
 
+namespace minirtc {
 namespace webrtc {
 
 // TODO(yinwa): work in progress. API in class NetworkStatePredictor should not
@@ -34,8 +35,7 @@ class NetworkStatePredictor {
   // Inputs:  send_time_ms - packet send time.
   //          arrival_time_ms - packet arrival time.
   //          network_state - computed network state.
-  virtual BandwidthUsage Update(int64_t send_time_ms,
-                                int64_t arrival_time_ms,
+  virtual BandwidthUsage Update(int64_t send_time_ms, int64_t arrival_time_ms,
                                 BandwidthUsage network_state) = 0;
 };
 
@@ -47,5 +47,6 @@ class NetworkStatePredictorFactoryInterface {
 };
 
 }  // namespace webrtc
+}  // namespace minirtc
 
 #endif  // API_NETWORK_STATE_PREDICTOR_H_

@@ -2,6 +2,8 @@
 
 #include "log.h"
 
+namespace minirtc {
+
 AudioChannelReceive::AudioChannelReceive() {}
 
 AudioChannelReceive::AudioChannelReceive(
@@ -60,3 +62,4 @@ int AudioChannelReceive::OnReceiveRtpPacket(const char *data, size_t size) {
 
   return 0;
 }
+}  // namespace minirtc

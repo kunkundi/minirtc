@@ -3,7 +3,10 @@
 #include "libyuv.h"
 #include "log.h"
 
+namespace minirtc {
+namespace {
 constexpr size_t MAX_RESOLUTION_WIDTH = 3840 * 2160;
+}
 
 ResolutionAdapter::ResolutionAdapter() {}
 
@@ -105,3 +108,4 @@ int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
 
   return 0;
 }
+}  // namespace minirtc
