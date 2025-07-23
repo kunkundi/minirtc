@@ -13,8 +13,6 @@
 
 #include "Logger.h"
 
-namespace minirtc {
-
 #ifndef _WIN32
 #include <cstring>
 
@@ -26,6 +24,8 @@ static inline bool operator!=(const GUID &guid1, const GUID &guid2) {
   return !(guid1 == guid2);
 }
 #endif
+
+namespace minirtc {
 
 NvEncoder::NvEncoder(NV_ENC_DEVICE_TYPE eDeviceType, void *pDevice,
                      uint32_t nWidth, uint32_t nHeight,

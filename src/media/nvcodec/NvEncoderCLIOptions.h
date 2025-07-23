@@ -22,10 +22,6 @@
 #include "Logger.h"
 #include "nvEncodeAPI.h"
 
-namespace minirtc {
-
-extern simplelogger::Logger *logger;
-
 #ifndef _WIN32
 inline bool operator==(const GUID &guid1, const GUID &guid2) {
   return !memcmp(&guid1, &guid2, sizeof(GUID));
@@ -35,6 +31,10 @@ inline bool operator!=(const GUID &guid1, const GUID &guid2) {
   return !(guid1 == guid2);
 }
 #endif
+
+namespace minirtc {
+
+extern simplelogger::Logger *logger;
 
 /*
  * Helper class for parsing generic encoder options and preparing encoder

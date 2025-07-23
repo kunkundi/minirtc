@@ -67,7 +67,7 @@ inline NVENCException NVENCException::makeNVENCException(
   do {                                                                  \
     NVENCSTATUS errorCode = nvencAPI;                                   \
     if (errorCode != NV_ENC_SUCCESS) {                                  \
-      std::ostringstream errorLog;                                      \
+      ::std::ostringstream errorLog; /* ✅ 注意这里的 ::std */          \
       errorLog << #nvencAPI << " returned error " << errorCode;         \
       throw NVENCException::makeNVENCException(                         \
           errorLog.str(), errorCode, __FUNCTION__, __FILE__, __LINE__); \
