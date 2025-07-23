@@ -47,7 +47,6 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 
 bool VideoEncoderFactory::CheckIsHardwareAccerlerationSupported() {
 #if __APPLE__
-  is_hardware_acceleration_supported = false;
   return false;
 #else
   return CheckIsCudaEncodeSupported();
