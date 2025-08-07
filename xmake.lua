@@ -92,14 +92,6 @@ target("ice")
     add_deps("log", "common", "ws")
     add_files("src/ice/*.cpp")
     add_includedirs("src/ws", "src/ice", {public = true})
-    if is_os("windows") then
-        add_includedirs(path.join(os.getenv("VCPKG_ROOT"), 
-            "installed/x64-windows-static/include/glib-2.0"), {public = true})
-        add_includedirs(path.join(os.getenv("VCPKG_ROOT"), 
-            "installed/x64-windows-static/lib/glib-2.0/include"), {public = true})
-    elseif is_os("macosx") then
-
-    end
     
 target("ws")
     set_kind("object")
@@ -249,6 +241,7 @@ target("minirtc")
         add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
         add_linkdirs("thirdparty/nvcodec/lib/x64")
+        add_linkdirs("thirdparty/nvcodec/lib/linux/stubs/x86_64")
         add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib64"))
         add_links("cuda", "nvidia-encode", "nvcuvid")
     elseif is_os("macosx") then
