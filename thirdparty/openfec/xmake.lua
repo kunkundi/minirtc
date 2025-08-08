@@ -7,6 +7,8 @@ package("openfec")
 
     set_sourcedir(os.scriptdir())
 
+    add_deps("cmake")
+
     on_install(function (package)
         local configs = {}
         table.insert(configs, "-DDEBUG=" .. (package:debug() and "ON" or "OFF"))
