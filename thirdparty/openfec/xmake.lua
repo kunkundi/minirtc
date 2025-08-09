@@ -3,9 +3,11 @@ package("openfec")
     set_homepage("http://openfec.inrialpes.fr/")
     set_description("Application-Level Forward Erasure Correction codes.")
     set_license("CeCCIL-C")
-    add_versions("1.4.2", "bd1cf0fe466fb7a2ed5c3bcd8840c23dc491dbccfc8e1332989f228f8fb4ec04")
 
-    set_sourcedir(os.scriptdir())
+    add_urls("https://github.com/kunkundi/openfec/archive/refs/tags/$(version).tar.gz",
+             "https://github.com/kunkundi/openfec.git")
+
+    add_versions("1.4.2", "5aa19dc56038f4b19927efb53ca28e896fb05f068a4715de512f0709420f03be")
 
     add_deps("cmake")
 
