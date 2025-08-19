@@ -18,37 +18,42 @@ WsClient::~WsClient() {
 }
 
 void WsClient::Shutdown() {
-  Close();
-
-  if (is_reconnecting_ && reconnect_thread_.joinable()) {
-    reconnect_thread_.join();
-  }
-
-  StopThreads();
-}
-
-void WsClient::StopThreads() {
-  if (!running_.exchange(false)) {
-    return;
-  }
-
+  running_ = false;
   cond_var_.notify_all();
 
   if (ping_thread_.joinable()) {
     ping_thread_.join();
   }
+  if (reconnect_thread_.joinable()) {
+    reconnect_thread_.join();
+  }
 
   if (m_endpoint_) {
     m_endpoint_->stop_perpetual();
   }
-
   if (m_thread_.joinable()) {
     m_thread_.join();
   }
 
-  delete m_endpoint_;
-  m_endpoint_ = nullptr;
+  m_endpoint_.reset();
+  heartbeat_started_ = false;
+}
 
+void WsClient::StopThreads() {
+  running_ = false;
+  cond_var_.notify_all();
+
+  if (ping_thread_.joinable()) {
+    ping_thread_.join();
+  }
+  if (m_endpoint_) {
+    m_endpoint_->stop_perpetual();
+  }
+  if (m_thread_.joinable()) {
+    m_thread_.join();
+  }
+
+  m_endpoint_.reset();
   heartbeat_started_ = false;
 }
 
@@ -67,24 +72,24 @@ void WsClient::RegisterHandlers() {
         }
         return ssl_context_ptr();
       });
-  m_endpoint_->set_open_handler(
-      [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
-        if (auto self = weak_self.lock()) {
-          self->OnOpen(endpoint, hdl);
-        }
-      });
-  m_endpoint_->set_fail_handler(
-      [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
-        if (auto self = weak_self.lock()) {
-          self->OnFail(endpoint, hdl);
-        }
-      });
-  m_endpoint_->set_close_handler(
-      [weak_self, endpoint = m_endpoint_](websocketpp::connection_hdl hdl) {
-        if (auto self = weak_self.lock()) {
-          self->OnClose(endpoint, hdl);
-        }
-      });
+  m_endpoint_->set_open_handler([weak_self, endpoint = m_endpoint_.get()](
+                                    websocketpp::connection_hdl hdl) {
+    if (auto self = weak_self.lock()) {
+      self->OnOpen(endpoint, hdl);
+    }
+  });
+  m_endpoint_->set_fail_handler([weak_self, endpoint = m_endpoint_.get()](
+                                    websocketpp::connection_hdl hdl) {
+    if (auto self = weak_self.lock()) {
+      self->OnFail(endpoint, hdl);
+    }
+  });
+  m_endpoint_->set_close_handler([weak_self, endpoint = m_endpoint_.get()](
+                                     websocketpp::connection_hdl hdl) {
+    if (auto self = weak_self.lock()) {
+      self->OnClose(endpoint, hdl);
+    }
+  });
   m_endpoint_->set_ping_handler(
       [weak_self](websocketpp::connection_hdl hdl, std::string msg) {
         if (auto self = weak_self.lock()) {
@@ -119,13 +124,14 @@ int WsClient::Connect(const std::string &uri, const std::string &cert_path) {
 
   StopThreads();
 
-  m_endpoint_ = new client();
+  m_endpoint_ = std::make_unique<client>();
   SetStatus(WsOpening);
   m_endpoint_->init_asio();
   m_endpoint_->start_perpetual();
 
   RegisterHandlers();
-  m_thread_ = std::thread([endpoint = m_endpoint_]() { endpoint->run(); });
+  m_thread_ =
+      std::thread([endpoint = m_endpoint_.get()]() { endpoint->run(); });
 
   websocketpp::lib::error_code ec;
   auto con = m_endpoint_->get_connection(uri, ec);
@@ -165,16 +171,20 @@ int WsClient::ReConnect() {
 }
 
 void WsClient::AsyncReConnect() {
-  if (destructed_ || is_reconnecting_.exchange(true)) {
+  if (destructed_) {
     return;
   }
 
-  std::shared_ptr<WsClient> self = shared_from_this();
-  reconnect_thread_ = std::thread([self]() {
-    if (self->destructed_) {
-      return;
+  if (reconnect_thread_.joinable()) {
+    reconnect_thread_.join();
+  }
+
+  std::weak_ptr<WsClient> weak_self = shared_from_this();
+  reconnect_thread_ = std::thread([weak_self]() {
+    if (auto self = weak_self.lock()) {
+      if (self->destructed_) return;
+      self->ReConnect();
     }
-    self->ReConnect();
   });
 }
 
@@ -312,4 +322,4 @@ void WsClient::OnMessage(websocketpp::connection_hdl, client::message_ptr msg) {
     on_receive_msg_(msg->get_payload());
   }
 }
-}
+}  // namespace minirtc

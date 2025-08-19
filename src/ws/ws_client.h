@@ -10,6 +10,7 @@
 #include <atomic>
 #include <condition_variable>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -86,7 +87,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void SetStatus(WsStatus status);
 
  private:
-  client *m_endpoint_;
+  std::unique_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
 
   std::thread m_thread_;
@@ -97,16 +98,15 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::string cert_path_;
 
   std::atomic<bool> running_{false};
-  std::atomic<bool> is_reconnecting_{false};
   std::mutex ping_mtx_;
   std::condition_variable cond_var_;
 
-  bool heartbeat_started_ = false;
+  std::atomic<bool> heartbeat_started_{false};
   unsigned int ping_interval_seconds_ = 3;
 
-  WsStatus ws_status_ = WsStatus::WsClosed;
-  int timeout_count_ = 0;
-  bool destructed_ = false;
+  std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
+  std::atomic<int> timeout_count_{0};
+  std::atomic<bool> destructed_{false};
 
   std::function<void(const std::string &)> on_receive_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
