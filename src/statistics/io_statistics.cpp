@@ -13,7 +13,7 @@ IOStatistics::IOStatistics(
   interval_ = STATISTICAL_PERIOD;
 }
 
-IOStatistics::~IOStatistics() {}
+IOStatistics::~IOStatistics() { Stop(); }
 
 void IOStatistics::Process() {
   while (running_) {
