@@ -459,16 +459,18 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
   size_t complete_frame_size = 0;
   int frame_fragment_count = 0;
 
-  for (uint16_t seq = start_seq; seq <= end_seq; ++seq) {
+  for (uint16_t seq = start_seq;; seq++) {
     if (padding_sequence_numbers_.find(seq) !=
         padding_sequence_numbers_.end()) {
       padding_sequence_numbers_.erase(seq);
+      if (seq == end_seq) break;
       continue;
     }
     if (incomplete_h264_frame_list_.find(seq) !=
         incomplete_h264_frame_list_.end()) {
       complete_frame_size += incomplete_h264_frame_list_[seq].PayloadSize();
     }
+    if (seq == end_seq) break;
   }
 
   if (!nv12_data_) {
@@ -479,7 +481,7 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
   }
 
   uint8_t* dest = nv12_data_;
-  for (uint16_t seq = start_seq; seq <= end_seq; ++seq) {
+  for (uint16_t seq = start_seq;; seq++) {
     if (incomplete_h264_frame_list_.find(seq) !=
         incomplete_h264_frame_list_.end()) {
       size_t payload_size = incomplete_h264_frame_list_[seq].PayloadSize();
@@ -488,6 +490,7 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
       incomplete_h264_frame_list_.erase(seq);
       frame_fragment_count++;
     }
+    if (seq == end_seq) break;
   }
 
   std::unique_ptr<ReceivedFrame> received_frame =
