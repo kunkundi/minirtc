@@ -4,10 +4,20 @@
 #include "avt/svt_av1_encoder.h"
 #include "openh264/openh264_encoder.h"
 
-#if __APPLE__
-#include "video_toolbox/video_toolbox_encoder.h"
-#else
+#if defined(_WIN32) || defined(_WIN64)
 #include "nvcodec/nvidia_video_encoder.h"
+#elif defined(__APPLE__)
+#include "video_toolbox/video_toolbox_encoder.h"
+#elif defined(__linux__)
+#if defined(__x86_64__) || defined(__amd64__)
+#include "nvcodec/nvidia_video_encoder.h"
+#elif defined(__aarch64__) || defined(__arm64__)
+// use software encoder
+#else
+// use software encoder
+#endif
+#else
+// use software encoder
 #endif
 
 #include "log.h"
@@ -25,12 +35,14 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     // return std::make_unique<AomAv1Encoder>(AomAv1Encoder(clock));
     return std::make_unique<SvtAv1Encoder>(SvtAv1Encoder(clock));
   } else {
-#if __APPLE__
+#if defined(__APPLE__)
     if (hardware_acceleration) {
       return std::make_unique<VideoToolboxEncoder>(VideoToolboxEncoder(clock));
     } else {
       return std::make_unique<OpenH264Encoder>(OpenH264Encoder(clock));
     }
+#elif defined(__linux__) && defined(__aarch64__)
+    return std::make_unique<OpenH264Encoder>(OpenH264Encoder(clock));
 #else
     if (hardware_acceleration) {
       if (CheckIsHardwareAccerlerationSupported()) {
@@ -46,10 +58,13 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 }
 
 bool VideoEncoderFactory::CheckIsHardwareAccerlerationSupported() {
-#if __APPLE__
+#if defined(__APPLE__)
   return false;
-#else
+#elif (defined(_WIN32) || defined(_WIN64)) || \
+    (defined(__linux__) && (defined(__x86_64__) || defined(__amd64__)))
   return CheckIsCudaEncodeSupported();
+#else
+  return false;
 #endif
 }
 }  // namespace minirtc

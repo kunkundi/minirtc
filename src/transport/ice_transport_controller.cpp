@@ -1,7 +1,8 @@
 #include "ice_transport_controller.h"
 
 #include "video_frame_wrapper.h"
-#if __APPLE__
+#if defined(__APPLE__)
+#elif defined(__linux__) && defined(__aarch64__)
 #else
 #include "nvcodec_api.h"
 #endif
@@ -49,7 +50,8 @@ IceTransportController::~IceTransportController() {
   audio_codec_inited_ = false;
   load_nvcodec_dll_success_ = false;
 
-#ifdef __APPLE__
+#if defined(__APPLE__)
+#elif defined(__linux__) && defined(__aarch64__)
 #else
   if (hardware_acceleration_ && load_nvcodec_dll_success_) {
     ReleaseNvCodecDll();
@@ -801,13 +803,15 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
     }
     ret = CreateStreamCodecs(clock, false, true);
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
-#ifdef __APPLE__
+#if defined(__APPLE__)
     if (hardware_acceleration_) {
       hardware_acceleration_ = false;
       ret = CreateStreamCodecs(clock, true, false);
     } else {
       ret = CreateStreamCodecs(clock, false, false);
     }
+#elif defined(__linux__) && defined(__aarch64__)
+    ret = CreateStreamCodecs(clock, false, false);
 #else
     bool use_hardware = false;
     if (hardware_acceleration_ && LoadNvCodecDll() == 0) {

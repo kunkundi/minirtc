@@ -4,10 +4,19 @@
 #include "dav1d/dav1d_av1_decoder.h"
 #include "openh264/openh264_decoder.h"
 
-#if __APPLE__
-#include "video_toolbox/video_toolbox_decoder.h"
-#else
+#if defined(_WIN32) || defined(_WIN64)
 #include "nvcodec/nvidia_video_decoder.h"
+#elif defined(__APPLE__)
+#include "video_toolbox/video_toolbox_decoder.h"
+#elif defined(__linux__)
+#if defined(__x86_64__) || defined(__amd64__)
+#include "nvcodec/nvidia_video_decoder.h"
+#elif defined(__aarch64__) || defined(__arm64__)
+#else
+// use software encoder
+#endif
+#else
+// use software encoder
 #endif
 
 #include "log.h"
@@ -25,12 +34,14 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
     return std::make_unique<Dav1dAv1Decoder>(Dav1dAv1Decoder(clock));
     // return std::make_unique<AomAv1Decoder>(AomAv1Decoder(clock));
   } else {
-#if __APPLE__
+#if defined(__APPLE__)
     if (hardware_acceleration) {
       return std::make_unique<VideoToolboxDecoder>(VideoToolboxDecoder(clock));
     } else {
       return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
     }
+#elif defined(__linux__) && defined(__aarch64__)
+    return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
 #else
     if (hardware_acceleration) {
       if (CheckIsHardwareAccerlerationSupported()) {
@@ -46,10 +57,13 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
 }
 
 bool VideoDecoderFactory::CheckIsHardwareAccerlerationSupported() {
-#if __APPLE__
+#if defined(__APPLE__)
   return false;
-#else
+#elif (defined(_WIN32) || defined(_WIN64)) || \
+    (defined(__linux__) && (defined(__x86_64__) || defined(__amd64__)))
   return CheckIsCudaDecodeSupported();
+#else
+  return false;
 #endif
 }
 }  // namespace minirtc
