@@ -3,7 +3,7 @@ package("aom")
     set_homepage("https://aomedia.googlesource.com/aom/")
     set_description("AV1 Codec Library")
     set_license("BSD-3-Clause")
-    set_urls("https://aomedia.googlesource.com/aom.git")
+    set_urls("https://github.com/kunkundi/aom.git")
     add_versions("v3.9.0", "6cab58c3925e0f4138e15a4ed510161ea83b6db1")
 
     add_deps("cmake", "nasm")

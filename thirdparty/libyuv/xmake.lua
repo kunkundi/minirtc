@@ -3,8 +3,8 @@ package("libyuv")
     set_homepage("https://chromium.googlesource.com/libyuv/libyuv/")
     set_description("libyuv is an open source project that includes YUV scaling and conversion functionality.")
     set_license("BSD-3-Clause")
-    set_urls("https://chromium.googlesource.com/libyuv/libyuv.git")
-    add_versions("2024.5.21", "8e18fc93c8c07d2ba6f9671281d6f35c8c47b2f4")
+    set_urls("https://github.com/kunkundi/libyuv.git")
+    add_versions("2025.8.14", "ec10b61c58ee4b8fbe648d2744d9dad9ccba6430")
 
     add_deps("cmake")
 
