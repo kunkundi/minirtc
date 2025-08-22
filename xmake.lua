@@ -244,7 +244,7 @@ target("minirtc")
         add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
         if is_arch("x86_64") then
-            add_cfuncs()dd_linkdirs("thirdparty/nvcodec/lib/x64")
+            add_linkdirs("thirdparty/nvcodec/lib/x64")
             add_linkdirs("thirdparty/nvcodec/lib/linux/stubs/x86_64")
             add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib64"))
             add_links("cuda", "nvidia-encode", "nvcuvid")
