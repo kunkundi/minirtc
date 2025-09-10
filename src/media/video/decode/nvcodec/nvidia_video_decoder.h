@@ -5,6 +5,7 @@
 
 #include "NvDecoder.h"
 #include "media_codec.h"
+#include "nvcodec_api.h"
 #include "nvcodec_common.h"
 
 namespace minirtc {

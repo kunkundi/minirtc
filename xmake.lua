@@ -241,7 +241,7 @@ target("minirtc")
         add_links("Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
         "ws2_32", "windowsapp", "User32", "Strmiids", "Mfuuid",
         "Secur32", "Bcrypt")
-        add_links("cuda", "nvencodeapi", "nvcuvid")
+        -- add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
         if is_arch("x86_64") then
             add_linkdirs("thirdparty/nvcodec/lib/x64")

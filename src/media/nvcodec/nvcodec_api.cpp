@@ -13,6 +13,8 @@ TcuInit cuInit_ld = NULL;
 TcuDeviceGet cuDeviceGet_ld = NULL;
 TcuDeviceGetCount cuDeviceGetCount_ld = NULL;
 TcuCtxCreate cuCtxCreate_ld = NULL;
+TcuCtxDestroy cuCtxDestroy_ld = NULL;
+TcuDeviceGetName cuDeviceGetName_ld = NULL;
 TcuGetErrorName cuGetErrorName_ld = NULL;
 TcuCtxPushCurrent cuCtxPushCurrent_ld = NULL;
 TcuCtxPopCurrent cuCtxPopCurrent_ld = NULL;
@@ -31,8 +33,8 @@ TcuvidDestroyDecoder cuvidDestroyDecoder_ld = NULL;
 TcuvidDecodePicture cuvidDecodePicture_ld = NULL;
 TcuvidGetDecodeStatus cuvidGetDecodeStatus_ld = NULL;
 TcuvidReconfigureDecoder cuvidReconfigureDecoder_ld = NULL;
-TcuvidMapVideoFrame64 cuvidMapVideoFrame64_ld = NULL;
-TcuvidUnmapVideoFrame64 cuvidUnmapVideoFrame64_ld = NULL;
+TcuvidMapVideoFrame cuvidMapVideoFrame_ld = NULL;
+TcuvidUnmapVideoFrame cuvidUnmapVideoFrame_ld = NULL;
 TcuvidCtxLockDestroy cuvidCtxLockDestroy_ld = NULL;
 TcuvidCreateVideoParser cuvidCreateVideoParser_ld = NULL;
 TcuvidParseVideoData cuvidParseVideoData_ld = NULL;
@@ -108,6 +110,10 @@ int LoadNvCodecDll() {
                          "cuDeviceGetCount") != 0 ||
       LoadFunctionHelper(nvcuda_dll, (void**)&cuCtxCreate_ld,
                          "cuCtxCreate_v2") != 0 ||
+      LoadFunctionHelper(nvcuda_dll, (void**)&cuCtxDestroy_ld,
+                         "cuCtxDestroy_v2") != 0 ||
+      LoadFunctionHelper(nvcuda_dll, (void**)&cuDeviceGetName_ld,
+                         "cuDeviceGetName") != 0 ||
       LoadFunctionHelper(nvcuda_dll, (void**)&cuGetErrorName_ld,
                          "cuGetErrorName") != 0 ||
       LoadFunctionHelper(nvcuda_dll, (void**)&cuCtxPushCurrent_ld,
@@ -151,10 +157,10 @@ int LoadNvCodecDll() {
                          "cuvidGetDecodeStatus") != 0 ||
       LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidReconfigureDecoder_ld,
                          "cuvidReconfigureDecoder") != 0 ||
-      LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidMapVideoFrame64_ld,
-                         "cuvidMapVideoFrame64") != 0 ||
-      LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidUnmapVideoFrame64_ld,
-                         "cuvidUnmapVideoFrame64") != 0 ||
+      LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidMapVideoFrame_ld,
+                         "cuvidMapVideoFrame") != 0 ||
+      LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidUnmapVideoFrame_ld,
+                         "cuvidUnmapVideoFrame") != 0 ||
       LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidCtxLockDestroy_ld,
                          "cuvidCtxLockDestroy") != 0 ||
       LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidCreateVideoParser_ld,

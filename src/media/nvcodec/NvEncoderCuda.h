@@ -18,13 +18,14 @@
 #include <vector>
 
 #include "NvEncoder.h"
+#include "nvcodec_api.h"
 
 #define CUDA_DRVAPI_CALL(call)                                        \
   do {                                                                \
     CUresult err__ = call;                                            \
     if (err__ != CUDA_SUCCESS) {                                      \
       const char* szErrName = NULL;                                   \
-      cuGetErrorName(err__, &szErrName);                              \
+      cuGetErrorName_ld(err__, &szErrName);                           \
       std::ostringstream errorLog;                                    \
       errorLog << "CUDA driver API error " << szErrName;              \
       throw NVENCException::makeNVENCException(                       \

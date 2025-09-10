@@ -21,6 +21,7 @@
 #include <vector>
 
 #include "nvEncodeAPI.h"
+#include "nvcodec_api.h"
 
 namespace minirtc {
 
