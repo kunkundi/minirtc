@@ -173,19 +173,25 @@ int PeerConnection::Init(PeerConnectionParams params) {
     } else if ("failed" == ice_status) {
       is_ice_transport_ready_[user_id] = false;
       if (offer_peer_ && try_rejoin_with_turn_) {
-        enable_turn_ = true;
-        reliable_ice_ = false;
-        LOG_INFO(
-            "Ice failed, destroy ice agent and rereate it with TURN enabled");
+        if (reconnect_count_ > 3) {
+          LOG_INFO("Recreate with turn exceed max count, give up");
+          on_connection_status_(ConnectionStatus::Failed, user_id.data(),
+                                user_id.size(), user_data_);
+        } else {
+          LOG_INFO(
+              "Ice failed, destroy ice agent and rereate it with TURN enabled");
 
-        ReleaseAllIceTransmission();
+          enable_turn_ = true;
+          reliable_ice_ = false;
 
-        if (offer_peer_) {
-          IceWorkMsg msg;
-          msg.type = IceWorkMsg::Type::UserIdList;
-          msg.transmission_id = remote_transmission_id_;
-          msg.user_id_list = user_id_list_;
-          PushIceWorkMsg(msg);
+          if (offer_peer_) {
+            reconnect_count_++;
+            IceWorkMsg msg;
+            msg.type = IceWorkMsg::Type::RetryWithTurn;
+            msg.transmission_id = remote_transmission_id_;
+            msg.user_id_list = user_id_list_;
+            PushIceWorkMsg(msg);
+          }
         }
       } else {
         LOG_INFO("Ice failed");
@@ -607,7 +613,8 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
     case IceWorkMsg::Type::Login: {
       break;
     }
-    case IceWorkMsg::Type::UserIdList: {
+    case IceWorkMsg::Type::UserIdList:
+    case IceWorkMsg::Type::RetryWithTurn: {
       std::vector<std::string> user_id_list = msg.user_id_list;
       std::string transmission_id = msg.transmission_id;
 
@@ -619,46 +626,65 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
       }
 
       LOG_INFO("Transmission [{}] members: [", transmission_id);
-      for (auto user_id : user_id_list) {
+      for (const auto &user_id : user_id_list) {
         LOG_INFO("{}", user_id);
       }
       LOG_INFO("]");
 
       for (auto &remote_user_id : user_id_list) {
-        std::unique_lock lock(ice_transport_list_mutex_);
-        ice_transport_list_[remote_user_id] = std::make_shared<IceTransport>(
+        if (remote_user_id == user_id_) {
+          continue;
+        }
+
+        {
+          std::unique_lock lock(ice_transport_list_mutex_);
+          auto it = ice_transport_list_.find(remote_user_id);
+          if (it != ice_transport_list_.end()) {
+            auto old = it->second;
+            ice_transport_list_.erase(it);
+            lock.unlock();
+            if (old) {
+              old->DestroyIceTransmission();
+            }
+          }
+        }
+
+        auto ice = std::make_shared<IceTransport>(
             clock_, true, transmission_id, user_id_, remote_user_id,
             ws_transport_, on_ice_status_change_, user_data_);
 
-        ice_transport_list_[remote_user_id]->SetLocalCapabilities(
+        ice->SetLocalCapabilities(
             hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
             false,
             av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
             video_payload_types_, audio_payload_types_);
 
-        ice_transport_list_[remote_user_id]->SetOnReceiveFunc(
-            on_receive_video_frame_, on_receive_audio_buffer_,
-            on_receive_data_buffer_);
+        ice->SetOnReceiveFunc(on_receive_video_frame_, on_receive_audio_buffer_,
+                              on_receive_data_buffer_);
 
-        ice_transport_list_[remote_user_id]->SetOnReceiveNetStatusReportFunc(
-            net_status_report_);
+        ice->SetOnReceiveNetStatusReportFunc(net_status_report_);
 
-        ice_transport_list_[remote_user_id]->InitIceTransmission(
-            cfg_stun_server_ip_, stun_server_port_, cfg_turn_server_ip_,
-            turn_server_port_, cfg_turn_server_username_,
-            cfg_turn_server_password_);
+        ice->InitIceTransmission(cfg_stun_server_ip_, stun_server_port_,
+                                 cfg_turn_server_ip_, turn_server_port_,
+                                 cfg_turn_server_username_,
+                                 cfg_turn_server_password_);
 
         for (auto &stream_id : video_stream_ids_) {
-          ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
+          ice->AddVideoStream(stream_id);
         }
         for (auto &stream_id : audio_stream_ids_) {
-          ice_transport_list_[remote_user_id]->AddAudioStream(stream_id);
+          ice->AddAudioStream(stream_id);
         }
         for (auto &stream_id : data_stream_ids_) {
-          ice_transport_list_[remote_user_id]->AddDataStream(stream_id);
+          ice->AddDataStream(stream_id);
         }
 
-        ice_transport_list_[remote_user_id]->JoinTransmission();
+        ice->JoinTransmission();
+
+        {
+          std::unique_lock lock(ice_transport_list_mutex_);
+          ice_transport_list_[remote_user_id] = ice;
+        }
       }
 
       break;
@@ -681,45 +707,49 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
       std::unique_lock lock(ice_transport_list_mutex_);
-      if (ice_transport_list_.end() ==
+      if (ice_transport_list_.end() !=
           ice_transport_list_.find(remote_user_id)) {
-        // Enable TURN for answer peer by default
-        ice_transport_list_[remote_user_id] = std::make_shared<IceTransport>(
-            clock_, false, transmission_id, user_id_, remote_user_id,
-            ws_transport_, on_ice_status_change_, user_data_);
-
-        ice_transport_list_[remote_user_id]->SetLocalCapabilities(
-            hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
-            false,
-            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-            video_payload_types_, audio_payload_types_);
-
-        ice_transport_list_[remote_user_id]->SetOnReceiveFunc(
-            on_receive_video_frame_, on_receive_audio_buffer_,
-            on_receive_data_buffer_);
-
-        ice_transport_list_[remote_user_id]->SetOnReceiveNetStatusReportFunc(
-            net_status_report_);
-
-        ice_transport_list_[remote_user_id]->InitIceTransmission(
-            cfg_stun_server_ip_, stun_server_port_, cfg_turn_server_ip_,
-            turn_server_port_, cfg_turn_server_username_,
-            cfg_turn_server_password_);
-        ice_transport_list_[remote_user_id]->SetTransmissionId(transmission_id);
+        ice_transport_list_[remote_user_id]->DestroyIceTransmission();
+        ice_transport_list_.erase(remote_user_id);
+        is_ice_transport_ready_[remote_user_id] = false;
       }
+
+      // Enable TURN for answer peer by default
+      auto ice = std::make_shared<IceTransport>(
+          clock_, false, transmission_id, user_id_, remote_user_id,
+          ws_transport_, on_ice_status_change_, user_data_);
+
+      ice_transport_list_[remote_user_id] = ice;
+
+      ice->SetLocalCapabilities(
+          hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
+          false,
+          av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+          video_payload_types_, audio_payload_types_);
+
+      ice->SetOnReceiveFunc(on_receive_video_frame_, on_receive_audio_buffer_,
+                            on_receive_data_buffer_);
+
+      ice->SetOnReceiveNetStatusReportFunc(net_status_report_);
+
+      ice->InitIceTransmission(cfg_stun_server_ip_, stun_server_port_,
+                               cfg_turn_server_ip_, turn_server_port_,
+                               cfg_turn_server_username_,
+                               cfg_turn_server_password_);
+      ice->SetTransmissionId(transmission_id);
 
       for (auto &stream_id : video_stream_ids_) {
-        ice_transport_list_[remote_user_id]->AddVideoStream(stream_id);
+        ice->AddVideoStream(stream_id);
       }
       for (auto &stream_id : audio_stream_ids_) {
-        ice_transport_list_[remote_user_id]->AddAudioStream(stream_id);
+        ice->AddAudioStream(stream_id);
       }
       for (auto &stream_id : data_stream_ids_) {
-        ice_transport_list_[remote_user_id]->AddDataStream(stream_id);
+        ice->AddDataStream(stream_id);
       }
 
       std::string remote_sdp = msg.remote_sdp;
-      int ret = ice_transport_list_[remote_user_id]->SetRemoteSdp(remote_sdp);
+      int ret = ice->SetRemoteSdp(remote_sdp);
       if (0 != ret) {
         NegotiationFailed();
         break;
@@ -727,9 +757,9 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
       if (trickle_ice_) {
         sdp_without_cands_ = remote_sdp;
-        ice_transport_list_[remote_user_id]->SendAnswer();
+        ice->SendAnswer();
       }
-      ice_transport_list_[remote_user_id]->GatherCandidates();
+      ice->GatherCandidates();
 
       break;
     }

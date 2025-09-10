@@ -77,7 +77,8 @@ struct IceWorkMsg {
     UserLeaveTransmission,
     Offer,
     Answer,
-    NewCandidate
+    NewCandidate,
+    RetryWithTurn
   };
 
   Type type;
@@ -155,6 +156,7 @@ class PeerConnection {
   bool trickle_ice_ = true;
   bool reliable_ice_ = false;
   bool try_rejoin_with_turn_ = false;
+  int reconnect_count_ = 0;
   TraversalMode mode_ = TraversalMode::P2P;
 
   std::vector<int> video_payload_types_ = {rtp::PAYLOAD_TYPE::H264,
