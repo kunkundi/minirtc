@@ -129,7 +129,7 @@ bool CheckIsCudaEncodeSupported() {
   }
 
   NV_ENCODE_API_FUNCTION_LIST functionList = {NV_ENCODE_API_FUNCTION_LIST_VER};
-  NVENCSTATUS nvEncStatus = NvEncodeAPICreateInstance(&functionList);
+  NVENCSTATUS nvEncStatus = NvEncodeAPICreateInstance_ld(&functionList);
   if (nvEncStatus != NV_ENC_SUCCESS) {
     is_hardware_acceleration_supported = false;
     return false;
@@ -159,7 +159,7 @@ bool CheckIsCudaDecodeSupported() {
   }
 
   int deviceCount = 0;
-  cuResult = cuDeviceGetCount(&deviceCount);
+  cuResult = cuDeviceGetCount_ld(&deviceCount);
   if (cuResult != CUDA_SUCCESS || deviceCount == 0) {
     LOG_ERROR("No CUDA devices found");
     cached_result = false;
@@ -167,17 +167,17 @@ bool CheckIsCudaDecodeSupported() {
   }
 
   CUdevice cuDevice;
-  cuResult = cuDeviceGet(&cuDevice, 0);
+  cuResult = cuDeviceGet_ld(&cuDevice, 0);
   if (cuResult != CUDA_SUCCESS) {
-    LOG_ERROR("cuDeviceGet failed");
+    LOG_ERROR("cuDeviceGet_ld failed");
     cached_result = false;
     return false;
   }
 
   CUcontext context;
-  cuResult = cuCtxCreate(&context, 0, cuDevice);
+  cuResult = cuCtxCreate_ld(&context, 0, cuDevice);
   if (cuResult != CUDA_SUCCESS) {
-    LOG_ERROR("cuCtxCreate failed");
+    LOG_ERROR("cuCtxCreate_ld failed");
     cached_result = false;
     return false;
   }

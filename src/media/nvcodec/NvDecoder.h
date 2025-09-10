@@ -23,6 +23,7 @@
 #include <vector>
 
 #include "NvCodecUtils.h"
+#include "nvcodec_api.h"
 #include "nvcuvid.h"
 
 namespace minirtc {

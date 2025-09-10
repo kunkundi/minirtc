@@ -18,6 +18,7 @@
 #include "NvEncoderCLIOptions.h"
 #include "NvEncoderCuda.h"
 #include "log.h"
+#include "nvcodec_api.h"
 
 namespace minirtc {
 
@@ -25,7 +26,7 @@ class CudaInitializer {
  public:
   static bool Init() {
     static bool initialized = []() {
-      CUresult res = cuInit(0);
+      CUresult res = cuInit_ld(0);
       if (res != CUDA_SUCCESS) {
         return false;
       }

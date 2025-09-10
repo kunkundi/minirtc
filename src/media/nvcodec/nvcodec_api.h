@@ -30,6 +30,10 @@ typedef CUresult (*TcuDeviceGetCount)(int *count);
 typedef CUresult (*TcuCtxCreate)(CUcontext *pctx, unsigned int flags,
                                  CUdevice dev);
 
+typedef CUresult (*TcuCtxDestroy)(CUcontext ctx);
+
+typedef CUresult (*TcuDeviceGetName)(char *name, int len, CUdevice dev);
+
 typedef CUresult (*TcuGetErrorName)(CUresult error, const char **pStr);
 
 typedef CUresult (*TcuCtxPushCurrent)(CUcontext ctx);
@@ -57,6 +61,8 @@ extern TcuInit cuInit_ld;
 extern TcuDeviceGet cuDeviceGet_ld;
 extern TcuDeviceGetCount cuDeviceGetCount_ld;
 extern TcuCtxCreate cuCtxCreate_ld;
+extern TcuCtxDestroy cuCtxDestroy_ld;
+extern TcuDeviceGetName cuDeviceGetName_ld;
 extern TcuGetErrorName cuGetErrorName_ld;
 extern TcuCtxPushCurrent cuCtxPushCurrent_ld;
 extern TcuCtxPopCurrent cuCtxPopCurrent_ld;
@@ -80,12 +86,12 @@ typedef CUresult (*TcuvidGetDecodeStatus)(CUvideodecoder hDecoder, int nPicIdx,
                                           CUVIDGETDECODESTATUS *pDecodeStatus);
 typedef CUresult (*TcuvidReconfigureDecoder)(
     CUvideodecoder hDecoder, CUVIDRECONFIGUREDECODERINFO *pDecReconfigParams);
-typedef CUresult (*TcuvidMapVideoFrame64)(CUvideodecoder hDecoder, int nPicIdx,
-                                          unsigned long long *pDevPtr,
-                                          unsigned int *pPitch,
-                                          CUVIDPROCPARAMS *pVPP);
-typedef CUresult (*TcuvidUnmapVideoFrame64)(CUvideodecoder hDecoder,
-                                            unsigned long long DevPtr);
+typedef CUresult (*TcuvidMapVideoFrame)(CUvideodecoder hDecoder, int nPicIdx,
+                                        unsigned long long *pDevPtr,
+                                        unsigned int *pPitch,
+                                        CUVIDPROCPARAMS *pVPP);
+typedef CUresult (*TcuvidUnmapVideoFrame)(CUvideodecoder hDecoder,
+                                          unsigned long long DevPtr);
 typedef CUresult (*TcuvidCtxLockDestroy)(CUvideoctxlock lck);
 typedef CUresult (*TcuvidCreateVideoParser)(CUvideoparser *pObj,
                                             CUVIDPARSERPARAMS *pParams);
@@ -100,8 +106,8 @@ extern TcuvidDestroyDecoder cuvidDestroyDecoder_ld;
 extern TcuvidDecodePicture cuvidDecodePicture_ld;
 extern TcuvidGetDecodeStatus cuvidGetDecodeStatus_ld;
 extern TcuvidReconfigureDecoder cuvidReconfigureDecoder_ld;
-extern TcuvidMapVideoFrame64 cuvidMapVideoFrame64_ld;
-extern TcuvidUnmapVideoFrame64 cuvidUnmapVideoFrame64_ld;
+extern TcuvidMapVideoFrame cuvidMapVideoFrame_ld;
+extern TcuvidUnmapVideoFrame cuvidUnmapVideoFrame_ld;
 extern TcuvidCtxLockDestroy cuvidCtxLockDestroy_ld;
 extern TcuvidCreateVideoParser cuvidCreateVideoParser_ld;
 extern TcuvidParseVideoData cuvidParseVideoData_ld;

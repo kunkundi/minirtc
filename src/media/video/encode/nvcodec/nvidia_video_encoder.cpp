@@ -40,7 +40,7 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
   }
 
   if (cuda_context_) {
-    cuCtxDestroy(cuda_context_);
+    cuCtxDestroy_ld(cuda_context_);
     cuda_context_ = nullptr;
   }
 }
@@ -48,17 +48,17 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
 int NvidiaVideoEncoder::Init() {
   CudaInitializer::Init();
   int num_of_gpu = 0;
-  ck(cuDeviceGetCount(&num_of_gpu));
+  ck(cuDeviceGetCount_ld(&num_of_gpu));
   if (index_of_gpu_ < 0 || index_of_gpu_ >= num_of_gpu) {
     LOG_ERROR("GPU ordinal out of range. Should be within [0-{}]");
     return -1;
   }
 
-  ck(cuDeviceGet(&cuda_device_, index_of_gpu_));
+  ck(cuDeviceGet_ld(&cuda_device_, index_of_gpu_));
   char device_name[80];
-  ck(cuDeviceGetName(device_name, sizeof(device_name), cuda_device_));
+  ck(cuDeviceGetName_ld(device_name, sizeof(device_name), cuda_device_));
   LOG_INFO("H.264 encoder using [{}]", device_name);
-  ck(cuCtxCreate(&cuda_context_, 0, cuda_device_));
+  ck(cuCtxCreate_ld(&cuda_context_, 0, cuda_device_));
 
   encoder_ = new NvEncoderCuda(cuda_context_, frame_width_, frame_height_,
                                buffer_format_, 0, false, false);

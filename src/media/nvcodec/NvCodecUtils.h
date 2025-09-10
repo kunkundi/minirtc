@@ -33,6 +33,7 @@
 #include <thread>
 
 #include "Logger.h"
+#include "nvcodec_api.h"
 
 namespace minirtc {
 
@@ -42,7 +43,7 @@ extern simplelogger::Logger *logger;
 inline bool check(CUresult e, int iLine, const char *szFile) {
   if (e != CUDA_SUCCESS) {
     const char *szErrName = NULL;
-    cuGetErrorName(e, &szErrName);
+    cuGetErrorName_ld(e, &szErrName);
     LOG(FATAL) << "CUDA driver API error " << szErrName << " at line " << iLine
                << " in file " << szFile;
     return false;

@@ -34,7 +34,7 @@ NvidiaVideoDecoder::~NvidiaVideoDecoder() {
   }
 
   if (cuda_context_) {
-    cuCtxDestroy(cuda_context_);
+    cuCtxDestroy_ld(cuda_context_);
     cuda_context_ = nullptr;
   }
 
@@ -48,14 +48,14 @@ int NvidiaVideoDecoder::Init() {
   int nGpu = 0;
   int iGpu = 0;
 
-  ck(cuDeviceGetCount(&nGpu));
+  ck(cuDeviceGetCount_ld(&nGpu));
   if (nGpu < 1) {
     return -1;
   }
 
-  cuDeviceGet(&cuda_device_, iGpu);
+  cuDeviceGet_ld(&cuda_device_, iGpu);
 
-  cuCtxCreate(&cuda_context_, 0, cuda_device_);
+  cuCtxCreate_ld(&cuda_context_, 0, cuda_device_);
   if (!cuda_context_) {
     return -1;
   }

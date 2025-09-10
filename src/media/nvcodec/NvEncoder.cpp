@@ -66,7 +66,7 @@ void NvEncoder::LoadNvEncApi() {
   uint32_t version = 0;
   uint32_t currentVersion =
       (NVENCAPI_MAJOR_VERSION << 4) | NVENCAPI_MINOR_VERSION;
-  NVENC_API_CALL(NvEncodeAPIGetMaxSupportedVersion(&version));
+  NVENC_API_CALL(NvEncodeAPIGetMaxSupportedVersion_ld(&version));
   if (currentVersion > version) {
     NVENC_THROW_ERROR(
         "Current Driver Version does not support this NvEncodeAPI version, "
@@ -75,7 +75,7 @@ void NvEncoder::LoadNvEncApi() {
   }
 
   m_nvenc = {NV_ENCODE_API_FUNCTION_LIST_VER};
-  NVENC_API_CALL(NvEncodeAPICreateInstance(&m_nvenc));
+  NVENC_API_CALL(NvEncodeAPICreateInstance_ld(&m_nvenc));
 }
 
 NvEncoder::~NvEncoder() { DestroyHWEncoder(); }
