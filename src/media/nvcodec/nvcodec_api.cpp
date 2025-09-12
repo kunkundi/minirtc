@@ -46,11 +46,11 @@ TNvEncodeAPIGetMaxSupportedVersion NvEncodeAPIGetMaxSupportedVersion_ld = NULL;
 #ifdef _WIN32
 static HMODULE nvcuda_dll = NULL;
 static HMODULE nvcuvid_dll = NULL;
-static HMODULE nvEncodeAPI64_dll = NULL;
+static HMODULE nvencodeapi_dll = NULL;
 #else
 static void* nvcuda_dll = NULL;
 static void* nvcuvid_dll = NULL;
-static void* nvEncodeAPI64_dll = NULL;
+static void* nvencodeapi_dll = NULL;
 #endif
 
 static int LoadLibraryHelper(void** library, const char* winLib,
@@ -173,23 +173,20 @@ int LoadNvCodecDll() {
     return -1;
   }
 
-#ifdef _WIN32
-  nvEncodeAPI64_dll = LoadLibrary(TEXT("nvEncodeAPI64.dll"));
-  if (nvEncodeAPI64_dll == NULL) {
-    LOG_ERROR("Unable to load library nvEncodeAPI64.dll");
+  if (LoadLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll),
+                        "nvEncodeAPI64.dll", "libnvidia-encode.so") != 0) {
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll));
     return -1;
   }
 
-  if (LoadFunctionHelper(nvEncodeAPI64_dll,
-                         (void**)&NvEncodeAPICreateInstance_ld,
+  if (LoadFunctionHelper(nvencodeapi_dll, (void**)&NvEncodeAPICreateInstance_ld,
                          "NvEncodeAPICreateInstance") != 0 ||
-      LoadFunctionHelper(nvEncodeAPI64_dll,
+      LoadFunctionHelper(nvencodeapi_dll,
                          (void**)&NvEncodeAPIGetMaxSupportedVersion_ld,
                          "NvEncodeAPIGetMaxSupportedVersion") != 0) {
-    FreeLibraryHelper(reinterpret_cast<void**>(&nvEncodeAPI64_dll));
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll));
     return -1;
   }
-#endif
 
   LOG_INFO("Load NvCodec API success");
 
@@ -205,8 +202,8 @@ int ReleaseNvCodecDll() {
     FreeLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll));
   }
 
-  if (nvEncodeAPI64_dll != NULL) {
-    FreeLibraryHelper(reinterpret_cast<void**>(&nvEncodeAPI64_dll));
+  if (nvencodeapi_dll != NULL) {
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll));
   }
 
   LOG_INFO("Release NvCodec API success");
