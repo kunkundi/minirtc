@@ -13,8 +13,8 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
     "ASIO_HAS_CSTDINT", "ASIO_HAS_STD_ARRAY",  "ASIO_HAS_STD_SYSTEM_ERROR",
     "NOMINMAX")
 
-add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "websocketpp 0.8.2", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
-add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
+add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
 
 includes("thirdparty")
 
@@ -107,6 +107,12 @@ target("rtp")
     add_includedirs("src/rtp/rtp_packet",
     "src/rtp/rtp_packetizer", {public = true})
 
+target("srtp")
+    set_kind("object")
+    add_deps("log", "common")
+    add_files("src/srtp/srtp_engine.cpp")
+    add_includedirs("src/srtp", {public = true})
+
 target("rtcp")
     set_kind("object")
     add_deps("log", "common")
@@ -137,7 +143,7 @@ target("transport")
 
 target("media")
     set_kind("object")
-    add_deps("log", "frame", "common", "rtp")
+    add_deps("log", "frame", "common", "rtp", "srtp")
     if is_os("windows") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
