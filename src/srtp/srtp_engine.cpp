@@ -108,41 +108,41 @@ srtp_t SrtpEngine::CreateSessionInternal(const Params& p) {
   }
   pol.key = mk.data();
 
-  srtp_t session = nullptr;
-  srtp_err_status_t st = srtp_create(&session, &pol);
+  srtp_t SrtpSession = nullptr;
+  srtp_err_status_t st = srtp_create(&SrtpSession, &pol);
   if (st != srtp_err_status_ok) {
     throw std::runtime_error(std::string("srtp_create failed: ") +
                              ErrToStr(st));
   }
 
   // libsrtp does not take ownership of mk memory; but it expects pol.key to
-  // live as long as the session. We therefore duplicate into SRTP internal
+  // live as long as the SrtpSession. We therefore duplicate into SRTP internal
   // key store by rekeying immediately so we can free mk. Alternatively, keep
-  // mk in a heap allocation tied to the session lifetime. Here we choose to
+  // mk in a heap allocation tied to the SrtpSession lifetime. Here we choose to
   // keep mk alive by attaching it to SRTP with srtp_update.
-  // However, srtp_create already copies the key into the session; so mk can
+  // However, srtp_create already copies the key into the SrtpSession; so mk can
   // go out of scope safely in libsrtp >= 2.x.
   // No further action needed.
 
-  return session;
+  return SrtpSession;
 }
 
-SrtpEngine::Session SrtpEngine::CreateSender(const Params& p) {
+SrtpEngine::SrtpSession SrtpEngine::CreateSender(const Params& p) {
   Params cp = p;
   cp.receiver_any_inbound = false;  // sender should be specific SSRC
   if (cp.ssrc == 0) {
     throw std::invalid_argument("sender requires a non-zero SSRC");
   }
   srtp_t s = CreateSessionInternal(cp);
-  return Session{s};
+  return SrtpSession{s};
 }
 
-SrtpEngine::Session SrtpEngine::CreateReceiver(const Params& p) {
+SrtpEngine::SrtpSession SrtpEngine::CreateReceiver(const Params& p) {
   srtp_t s = CreateSessionInternal(p);
-  return Session{s};
+  return SrtpSession{s};
 }
 
-int SrtpEngine::Session::protectRtp(uint8_t* buf, int* len) const {
+int SrtpEngine::SrtpSession::protectRtp(uint8_t* buf, int* len) const {
   if (!session_) return -1;
   if (!buf || !len || *len <= 0) return -2;
   // Caller must ensure tailroom >= 16 for GCM tag.
@@ -150,7 +150,7 @@ int SrtpEngine::Session::protectRtp(uint8_t* buf, int* len) const {
   return (st == srtp_err_status_ok) ? 0 : -3;
 }
 
-int SrtpEngine::Session::unprotectRtp(uint8_t* buf, int* len) const {
+int SrtpEngine::SrtpSession::unprotectRtp(uint8_t* buf, int* len) const {
   if (!session_) return -1;
   if (!buf || !len || *len <= 0) return -2;
   srtp_err_status_t st = srtp_unprotect(session_, buf, len);

@@ -29,20 +29,20 @@ class SrtpEngine {
     bool receiver_any_inbound = false;
   };
 
-  class Session {
+  class SrtpSession {
    public:
-    Session() = default;
-    Session(const Session&) = delete;
-    Session& operator=(const Session&) = delete;
-    Session(Session&& other) noexcept { moveFrom(std::move(other)); }
-    Session& operator=(Session&& other) noexcept {
+    SrtpSession() = default;
+    SrtpSession(const SrtpSession&) = delete;
+    SrtpSession& operator=(const SrtpSession&) = delete;
+    SrtpSession(SrtpSession&& other) noexcept { moveFrom(std::move(other)); }
+    SrtpSession& operator=(SrtpSession&& other) noexcept {
       if (this != &other) {
         cleanup();
         moveFrom(std::move(other));
       }
       return *this;
     }
-    ~Session() { cleanup(); }
+    ~SrtpSession() { cleanup(); }
 
     // buf: full RTP packet (header + plaintext payload)
     // len: in/out length. On protect, grows by 16 (GCM tag).
@@ -58,14 +58,14 @@ class SrtpEngine {
 
    private:
     friend class SrtpEngine;
-    explicit Session(srtp_t s) : session_(s) {}
+    explicit SrtpSession(srtp_t s) : session_(s) {}
     void cleanup() {
       if (session_) {
         srtp_dealloc(session_);
         session_ = nullptr;
       }
     }
-    void moveFrom(Session&& other) {
+    void moveFrom(SrtpSession&& other) {
       session_ = other.session_;
       other.session_ = nullptr;
     }
@@ -75,12 +75,12 @@ class SrtpEngine {
   // One-time global init. Safe to call multiple times.
   static void GlobalInit();
 
-  // Create a sender session bound to a specific SSRC.
-  static Session CreateSender(const Params& p);
+  // Create a sender SrtpSession bound to a specific SSRC.
+  static SrtpSession CreateSender(const Params& p);
 
-  // Create a receiver session; by default uses ssrc_any_inbound when
+  // Create a receiver SrtpSession; by default uses ssrc_any_inbound when
   // p.receiver_any_inbound == true. If false, it binds to p.ssrc.
-  static Session CreateReceiver(const Params& p);
+  static SrtpSession CreateReceiver(const Params& p);
 
   // Helper to build the 28-byte master key for AES-128-GCM.
   static std::vector<uint8_t> BuildMasterKeyGcm(const uint8_t key16[16],

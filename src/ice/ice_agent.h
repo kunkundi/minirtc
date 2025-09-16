@@ -1,9 +1,22 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2025-09-16
+ * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _ICE_AGENT_H_
 #define _ICE_AGENT_H_
 
+#include <openssl/err.h>
+#include <openssl/ssl.h>
+
 #include <atomic>
+#include <cstring>
 #include <iostream>
+#include <mutex>
+#include <queue>
 #include <thread>
+#include <vector>
 
 #include "gio/gnetworking.h"
 #include "glib.h"
@@ -64,18 +77,22 @@ class IceAgent {
   int DestroyIceAgent();
 
   const char* GenerateLocalSdp();
-
   const char* GetLocalStreamSdp(uint32_t stream_id);
-
   int SetRemoteSdp(const char* remote_sdp);
-
   int GatherCandidates();
-
   ICE_STATE GetIceState();
 
-  int SetRemoteGatheringDone();
-
   int Send(const char* data, size_t size);
+
+  int StartDtls(bool is_client);
+
+  bool IsDtlsHandshakeDone() const { return dtls_handshake_done_; }
+
+  bool ExportSrtpKeys(std::vector<uint8_t>& local_key,
+                      std::vector<uint8_t>& local_salt,
+                      std::vector<uint8_t>& remote_key,
+                      std::vector<uint8_t>& remote_salt,
+                      bool local_is_client_sender) const;
 
  public:
   bool use_trickle_ice_ = true;
@@ -112,24 +129,53 @@ class IceAgent {
   gchar* ice_password_ = nullptr;
   uint32_t stream_id_ = 0;
   uint32_t n_components_ = 1;
-  // char* local_sdp_ = nullptr;
   std::string local_sdp_ = "";
   ICE_STATE state_ = ICE_STATE_LAST;
   bool destroyed_ = false;
   gboolean agent_closed_ = false;
 
-  nice_cb_state_changed_t on_state_changed_;
-  nice_cb_new_selected_pair_t on_new_selected_pair_;
-  nice_cb_new_candidate_t on_new_candidate_;
-  nice_cb_gathering_done_t on_gathering_done_;
-  nice_cb_recv_t on_recv_;
-  void* user_ptr_;
+  nice_cb_state_changed_t on_state_changed_{};
+  nice_cb_new_selected_pair_t on_new_selected_pair_{};
+  nice_cb_new_candidate_t on_new_candidate_{};
+  nice_cb_gathering_done_t on_gathering_done_{};
+  nice_cb_recv_t on_recv_{};
+  void* user_ptr_{};
 
-  UserPtrSt user_prt_st_;
+  UserPtrSt user_prt_st_{};
 
+#ifdef SAVE_IO_STREAM
   FILE* file_in_ = nullptr;
   FILE* file_out_ = nullptr;
+#endif
+
+ private:
+  // dtls
+  SSL_CTX* ssl_ctx_ = nullptr;
+  SSL* ssl_ = nullptr;
+  BIO* bio_ = nullptr;
+  std::atomic<bool> dtls_started_{false};
+  std::atomic<bool> dtls_handshake_done_{false};
+
+  static void NiceRecvTrampoline(NiceAgent* agent, guint stream_id,
+                                 guint component_id, guint size, gchar* buffer,
+                                 gpointer data);
+  void OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
+                  guint size, gchar* buffer);
+
+  static bool IsDtlsRecord(const uint8_t* data, size_t len);
+
+  static BIO_METHOD* BIO_s_nice();
+  static int bio_nice_write(BIO* b, const char* buf, int len);
+  static int bio_nice_read(BIO* b, char* buf, int len);
+  static int bio_nice_new(BIO* b);
+  static int bio_nice_free(BIO* b);
+
+  std::mutex dtls_mutex_;
+  std::queue<std::vector<uint8_t>> dtls_incoming_;
+
+  void CleanupDtls();
 };
+
 }  // namespace minirtc
 
 #endif

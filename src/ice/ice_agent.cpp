@@ -2,8 +2,8 @@
 
 #include <glib.h>
 
-#include <cstring>
-#include <iostream>
+#include <algorithm>
+#include <cassert>
 
 #include "log.h"
 
@@ -12,9 +12,9 @@
 namespace minirtc {
 
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-                   bool enable_turn, bool force_turn, std::string &stun_ip,
-                   uint16_t stun_port, std::string &turn_ip, uint16_t turn_port,
-                   std::string &turn_username, std::string &turn_password)
+                   bool enable_turn, bool force_turn, std::string& stun_ip,
+                   uint16_t stun_port, std::string& turn_ip, uint16_t turn_port,
+                   std::string& turn_username, std::string& turn_password)
     : stun_ip_(stun_ip),
       use_trickle_ice_(use_trickle_ice),
       use_reliable_ice_(use_reliable_ice),
@@ -31,7 +31,12 @@ IceAgent::~IceAgent() {
   if (!destroyed_) {
     DestroyIceAgent();
   }
-  g_object_unref(agent_);
+
+  CleanupDtls();
+
+  if (agent_) {
+    g_object_unref(agent_);
+  }
   g_free(ice_ufrag_);
   g_free(ice_password_);
 
@@ -54,24 +59,16 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                              nice_cb_new_candidate_t on_new_candidate,
                              nice_cb_gathering_done_t on_gathering_done,
                              nice_cb_new_selected_pair_t on_new_selected_pair,
-                             nice_cb_recv_t on_recv, void *user_ptr) {
+                             nice_cb_recv_t on_recv, void* user_ptr) {
   destroyed_ = false;
   on_state_changed_ = on_state_changed;
   on_new_selected_pair_ = on_new_selected_pair;
   on_new_candidate_ = on_new_candidate;
-
   on_gathering_done_ = on_gathering_done;
   on_recv_ = on_recv;
-
-#ifdef SAVE_IO_STREAM
-  user_prt_st_.user_ptr_1_ = this;
-  user_prt_st_.user_ptr_2_ = user_ptr;
-#else
   user_ptr_ = user_ptr;
-#endif
 
   g_networking_init();
-
   exit_nice_thread_ = false;
 
   nice_thread_ = std::thread([this]() {
@@ -99,17 +96,6 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     g_object_set(agent_, "stun-server-port", stun_port_, nullptr);
     g_object_set(agent_, "controlling-mode", controlling_, nullptr);
 
-#ifdef SAVE_IO_STREAM
-    g_signal_connect(agent_, "candidate-gathering-done",
-                     G_CALLBACK(on_gathering_done_), user_prt_st_.user_ptr_2_);
-    g_signal_connect(agent_, "new-selected-pair",
-                     G_CALLBACK(on_new_selected_pair_),
-                     user_prt_st_.user_ptr_2_);
-    g_signal_connect(agent_, "new-candidate", G_CALLBACK(on_new_candidate_),
-                     user_prt_st_.user_ptr_2_);
-    g_signal_connect(agent_, "component-state-changed",
-                     G_CALLBACK(on_state_changed_), user_prt_st_.user_ptr_2_);
-#else
     g_signal_connect(agent_, "candidate-gathering-done",
                      G_CALLBACK(on_gathering_done_), user_ptr_);
     g_signal_connect(agent_, "new-selected-pair",
@@ -118,7 +104,6 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                      user_ptr_);
     g_signal_connect(agent_, "component-state-changed",
                      G_CALLBACK(on_state_changed_), user_ptr_);
-#endif
 
     stream_id_ = nice_agent_add_stream(agent_, n_components_);
     if (stream_id_ == 0) {
@@ -140,26 +125,9 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       g_object_set(agent_, "force-relay", true, NULL);
     }
 
-#ifdef SAVE_IO_STREAM
-    nice_agent_attach_recv(
-        agent_, stream_id_, NICE_COMPONENT_TYPE_RTP,
-        g_main_loop_get_context(gloop_),
-        [](NiceAgent *agent, guint stream_id, guint component_id, guint size,
-           gchar *buffer, gpointer data) -> void {
-          if (data) {
-            UserPtrSt *user_prt_st = (UserPtrSt *)data;
-            IceAgent *ice_agent = (IceAgent *)(user_prt_st->user_ptr_1_);
-            ice_agent->on_recv_(agent, stream_id, component_id, size, buffer,
-                                user_prt_st->user_ptr_2_);
-            fwrite(buffer, 1, size, ice_agent->file_in_);
-          }
-        },
-        (void *)&user_prt_st_);
-#else
     nice_agent_attach_recv(agent_, stream_id_, NICE_COMPONENT_TYPE_RTP,
-                           g_main_loop_get_context(gloop_), on_recv_,
-                           user_ptr_);
-#endif
+                           g_main_loop_get_context(gloop_),
+                           &IceAgent::NiceRecvTrampoline, this);
 
     nice_inited_ = true;
     g_main_loop_run(gloop_);
@@ -188,13 +156,12 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
 #endif
 
   LOG_INFO("Nice agent init finish");
-
   return 0;
 }
 
-void cb_closed(GObject *src, [[maybe_unused]] GAsyncResult *res,
+void cb_closed(GObject* src, [[maybe_unused]] GAsyncResult* res,
                [[maybe_unused]] gpointer data) {
-  [[maybe_unused]] NiceAgent *agent = NICE_AGENT(src);
+  [[maybe_unused]] NiceAgent* agent = NICE_AGENT(src);
   LOG_INFO("Nice agent closed");
 }
 
@@ -215,11 +182,13 @@ int IceAgent::DestroyIceAgent() {
     nice_thread_.join();
   }
 
+  CleanupDtls();
+
   LOG_INFO("Destroy nice agent success");
   return 0;
 }
 
-const char *IceAgent::GenerateLocalSdp() {
+const char* IceAgent::GenerateLocalSdp() {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return nullptr;
@@ -235,7 +204,7 @@ const char *IceAgent::GenerateLocalSdp() {
     return nullptr;
   }
 
-  gchar *video_sdp_gstr = nice_agent_generate_local_sdp(agent_);
+  gchar* video_sdp_gstr = nice_agent_generate_local_sdp(agent_);
   video_stream_sdp_ = video_sdp_gstr;
   g_free(video_sdp_gstr);
 
@@ -267,12 +236,10 @@ const char *IceAgent::GenerateLocalSdp() {
     local_sdp_ += data_stream_sdp_;
   }
 
-  // LOG_INFO("Generate local sdp:[\n{}]", local_sdp_.c_str());
-
   return local_sdp_.c_str();
 }
 
-const char *IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
+const char* IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return nullptr;
@@ -292,7 +259,7 @@ const char *IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
   return local_sdp_.c_str();
 }
 
-int IceAgent::SetRemoteSdp(const char *remote_sdp) {
+int IceAgent::SetRemoteSdp(const char* remote_sdp) {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return -1;
@@ -345,21 +312,17 @@ ICE_STATE IceAgent::GetIceState() {
   if (!nice_inited_) {
     return ICE_STATE_NOT_INITIALIZED;
   }
-
   if (nullptr == agent_) {
     return ICE_STATE_NULLPTR;
   }
-
   if (destroyed_) {
     return ICE_STATE_DESTROYED;
   }
-
   state_ = (ICE_STATE)nice_agent_get_component_state(agent_, stream_id_, 1);
-
   return state_;
 }
 
-int IceAgent::Send(const char *data, size_t size) {
+int IceAgent::Send(const char* data, size_t size) {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return -1;
@@ -371,7 +334,6 @@ int IceAgent::Send(const char *data, size_t size) {
   }
 
   if (destroyed_) {
-    // LOG_ERROR("Nice agent is destroyed");
     return -1;
   }
 
@@ -380,18 +342,227 @@ int IceAgent::Send(const char *data, size_t size) {
     return -1;
   }
 
-  // if (ICE_STATE_READY !=
-  //     nice_agent_get_component_state(agent_, stream_id_, 1)) {
-  //   LOG_ERROR("Nice agent not ready");
-  //   return -1;
-  // }
-
   bool ret = nice_agent_send(agent_, stream_id_, 1, (guint)size, data);
 
 #ifdef SAVE_IO_STREAM
-  fwrite(data, 1, size, file_out_);
+  if (file_out_) fwrite(data, 1, size, file_out_);
 #endif
 
   return ret ? 0 : -1;
 }
+
+void IceAgent::CleanupDtls() {
+  if (ssl_) {
+    SSL_free(ssl_);
+    ssl_ = nullptr;
+  }
+  if (ssl_ctx_) {
+    SSL_CTX_free(ssl_ctx_);
+    ssl_ctx_ = nullptr;
+  }
+  bio_ = nullptr;
+  dtls_started_ = false;
+  dtls_handshake_done_ = false;
+
+  {
+    std::lock_guard<std::mutex> lk(dtls_mutex_);
+    std::queue<std::vector<uint8_t>> empty;
+    std::swap(dtls_incoming_, empty);
+  }
+}
+
+bool IceAgent::IsDtlsRecord(const uint8_t* data, size_t len) {
+  if (len < 13) return false;  // DTLS Record Header = 13 bytes
+  uint8_t ct = data[0];
+  if (ct < 20 || ct > 25) return false;  // 20..25
+  // version: 0xFE FF (DTLS1.0), 0xFE FD (DTLS1.2), 0xFE FC (DTLS1.3 draft)
+  return (data[1] == 0xFE) &&
+         (data[2] == 0xFF || data[2] == 0xFD || data[2] == 0xFC);
+}
+
+BIO_METHOD* IceAgent::BIO_s_nice() {
+  static BIO_METHOD* m = nullptr;
+  if (m) return m;
+  m = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "libnice-bio");
+  BIO_meth_set_write(m, &IceAgent::bio_nice_write);
+  BIO_meth_set_read(m, &IceAgent::bio_nice_read);
+  BIO_meth_set_create(m, &IceAgent::bio_nice_new);
+  BIO_meth_set_destroy(m, &IceAgent::bio_nice_free);
+  return m;
+}
+
+int IceAgent::bio_nice_write(BIO* b, const char* buf, int len) {
+  IceAgent* self = reinterpret_cast<IceAgent*>(BIO_get_data(b));
+  if (!self || !buf || len <= 0) return -1;
+  int r = self->Send(buf, (size_t)len);
+  if (r == 0) return len;
+  return -1;
+}
+
+int IceAgent::bio_nice_read(BIO* b, char* buf, int len) {
+  IceAgent* self = reinterpret_cast<IceAgent*>(BIO_get_data(b));
+  if (!self || !buf || len <= 0) return -1;
+
+  std::lock_guard<std::mutex> lk(self->dtls_mutex_);
+  if (self->dtls_incoming_.empty()) {
+    BIO_set_retry_read(b);
+    return -1;
+  }
+  auto pkt = std::move(self->dtls_incoming_.front());
+  self->dtls_incoming_.pop();
+
+  int copy = std::min<int>(len, (int)pkt.size());
+  std::memcpy(buf, pkt.data(), copy);
+  return copy;
+}
+
+int IceAgent::bio_nice_new(BIO* b) {
+  BIO_set_init(b, 1);
+  return 1;
+}
+
+int IceAgent::bio_nice_free(BIO* b) { return 1; }
+
+int IceAgent::StartDtls(bool is_client) {
+  if (dtls_started_) return 0;
+
+  SSL_library_init();
+  SSL_load_error_strings();
+  OpenSSL_add_ssl_algorithms();
+
+  ssl_ctx_ = SSL_CTX_new(DTLS_method());
+  if (!ssl_ctx_) {
+    LOG_ERROR("SSL_CTX_new failed");
+    return -1;
+  }
+
+  // example self-signed cert
+  // SSL_CTX_use_certificate_file(ssl_ctx_, "cert.pem", SSL_FILETYPE_PEM);
+  // SSL_CTX_use_PrivateKey_file(ssl_ctx_, "key.pem", SSL_FILETYPE_PEM);
+
+  if (SSL_CTX_set_tlsext_use_srtp(
+          ssl_ctx_, "SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_80") != 0) {
+    LOG_ERROR("SSL_CTX_set_tlsext_use_srtp failed");
+    return -1;
+  }
+
+  ssl_ = SSL_new(ssl_ctx_);
+  if (!ssl_) {
+    LOG_ERROR("SSL_new failed");
+    return -1;
+  }
+
+  bio_ = BIO_new(BIO_s_nice());
+  BIO_set_data(bio_, this);
+  SSL_set_bio(ssl_, bio_, bio_);
+
+  if (is_client)
+    SSL_set_connect_state(ssl_);
+  else
+    SSL_set_accept_state(ssl_);
+
+  dtls_started_ = true;
+
+  int ret = SSL_do_handshake(ssl_);
+  if (ret == 1) {
+    dtls_handshake_done_ = true;
+    LOG_INFO("DTLS handshake completed immediately");
+    return 0;
+  }
+  int err = SSL_get_error(ssl_, ret);
+  if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+    LOG_INFO("DTLS handshake started, waiting for peer packets...");
+    return 0;
+  }
+  LOG_ERROR("DTLS handshake start failed, err={}", err);
+  return -1;
+}
+
+void IceAgent::NiceRecvTrampoline(NiceAgent* agent, guint stream_id,
+                                  guint component_id, guint size, gchar* buffer,
+                                  gpointer data) {
+  IceAgent* self = reinterpret_cast<IceAgent*>(data);
+  if (!self) return;
+  self->OnNiceRecv(agent, stream_id, component_id, size, buffer);
+}
+
+void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
+                          guint size, gchar* buffer) {
+#ifdef SAVE_IO_STREAM
+  if (file_in_) fwrite(buffer, 1, size, file_in_);
+#endif
+
+  bool looks_dtls = IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
+  if (dtls_started_ && (!dtls_handshake_done_ || looks_dtls)) {
+    {
+      std::lock_guard<std::mutex> lk(dtls_mutex_);
+      dtls_incoming_.push(
+          std::vector<uint8_t>((uint8_t*)buffer, (uint8_t*)buffer + size));
+    }
+
+    int ret = SSL_do_handshake(ssl_);
+    if (ret == 1 && !dtls_handshake_done_) {
+      dtls_handshake_done_ = true;
+      const SRTP_PROTECTION_PROFILE* prof = SSL_get_selected_srtp_profile(ssl_);
+      LOG_INFO("DTLS handshake done. SRTP profile: {}",
+               prof ? prof->name : "(none)");
+    }
+    return;
+  }
+
+  if (on_recv_) {
+    on_recv_(agent, stream_id, component_id, size, buffer, user_ptr_);
+  }
+}
+
+bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
+                              std::vector<uint8_t>& local_salt,
+                              std::vector<uint8_t>& remote_key,
+                              std::vector<uint8_t>& remote_salt,
+                              bool local_is_client_sender) const {
+  if (!dtls_handshake_done_ || !ssl_) return false;
+
+  const SRTP_PROTECTION_PROFILE* prof = SSL_get_selected_srtp_profile(ssl_);
+  if (!prof) return false;
+
+  size_t key_len = 0, salt_len = 0;
+  if (std::strcmp(prof->name, "SRTP_AEAD_AES_128_GCM") == 0) {
+    key_len = 16;
+    salt_len = 12;  // AEAD GCM
+  } else if (std::strcmp(prof->name, "SRTP_AES128_CM_SHA1_80") == 0 ||
+             std::strcmp(prof->name, "SRTP_AES128_CM_SHA1_32") == 0) {
+    key_len = 16;
+    salt_len = 14;  // CTR + HMAC
+  } else {
+    key_len = 16;
+    salt_len = 14;
+  }
+
+  const size_t block = key_len + salt_len;
+  const size_t total = 2 * block;
+
+  std::vector<uint8_t> material(total);
+  static const char kLabel[] = "EXTRACTOR-dtls_srtp";
+  if (SSL_export_keying_material(ssl_, material.data(), total, kLabel,
+                                 sizeof(kLabel) - 1, nullptr, 0, 0) != 1) {
+    return false;
+  }
+
+  const uint8_t* client_key = material.data();
+  const uint8_t* client_salt = material.data() + key_len;
+  const uint8_t* server_key = material.data() + block;
+  const uint8_t* server_salt = material.data() + block + key_len;
+
+  const uint8_t* local_k = local_is_client_sender ? client_key : server_key;
+  const uint8_t* local_s = local_is_client_sender ? client_salt : server_salt;
+  const uint8_t* remote_k = local_is_client_sender ? server_key : client_key;
+  const uint8_t* remote_s = local_is_client_sender ? server_salt : client_salt;
+
+  local_key.assign(local_k, local_k + key_len);
+  local_salt.assign(local_s, local_s + salt_len);
+  remote_key.assign(remote_k, remote_k + key_len);
+  remote_salt.assign(remote_s, remote_s + salt_len);
+  return true;
+}
+
 }  // namespace minirtc

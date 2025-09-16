@@ -114,6 +114,7 @@ void IceTransport::OnIceStateChange(NiceAgent *agent, guint stream_id,
     if (state == NICE_COMPONENT_STATE_READY ||
         state == NICE_COMPONENT_STATE_CONNECTED) {
       ice_io_statistics_->Start();
+      ice_agent_->StartDtls(offer_peer_);
       if (ice_transport_controller_) {
         ice_transport_controller_->UpdateNetworkAvaliablity(true);
       }
