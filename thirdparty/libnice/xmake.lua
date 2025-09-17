@@ -5,9 +5,16 @@ package("libnice")
 
     add_urls("https://gitlab.freedesktop.org/libnice/libnice/-/archive/$(version)/libnice-$(version).tar.gz")
 
-    add_deps("meson", "glib 2.84.1", "openssl 1.1.1-w")
+    add_deps("meson", "glib 2.84.1", "openssl3 3.3.2")
 
     on_install(function (package)
+        if package:is_plat("windows") then
+            io.replace("meson.build",
+                "syslibs += [cc.find_library('ws2_32')]",
+                "syslibs += [cc.find_library('ws2_32')]\n  syslibs += [cc.find_library('crypt32')]",
+                {plain = true})
+        end
+
         local  configs = {
             "-Ddefault_library=static",
             "-Dgstreamer=disabled",
