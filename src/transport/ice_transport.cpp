@@ -111,8 +111,7 @@ void IceTransport::OnIceStateChange(NiceAgent *agent, guint stream_id,
              nice_component_state_to_string(state));
     state_ = state;
 
-    if (state == NICE_COMPONENT_STATE_READY ||
-        state == NICE_COMPONENT_STATE_CONNECTED) {
+    if (state == NICE_COMPONENT_STATE_READY) {
       ice_io_statistics_->Start();
       ice_agent_->StartDtls(offer_peer_);
       if (ice_transport_controller_) {
@@ -501,6 +500,7 @@ int IceTransport::SetRemoteSdp(const std::string &remote_sdp) {
 int IceTransport::SendOffer() {
   local_sdp_ = ice_agent_->GenerateLocalSdp();
   AppendLocalCapabilitiesToOffer(local_sdp_);
+  local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
   json message = {{"type", "offer"},
                   {"transmission_id", transmission_id_},
                   {"user_id", user_id_},
@@ -770,7 +770,6 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
 std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
   std::string media_stream_sdp;
 
-  // 获取各个 media 的位置
   std::size_t video_start = remote_sdp.find("m=video");
   std::size_t audio_start = remote_sdp.find("m=audio");
   std::size_t data_start = remote_sdp.find("m=data");
@@ -1187,4 +1186,4 @@ uint8_t IceTransport::CheckIsDataPacket(const char *buffer, size_t size) {
     return 0;
   }
 }
-}
+}  // namespace minirtc

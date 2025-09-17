@@ -8,7 +8,9 @@
 #define _ICE_AGENT_H_
 
 #include <openssl/err.h>
+#include <openssl/pem.h>
 #include <openssl/ssl.h>
+#include <openssl/x509.h>
 
 #include <atomic>
 #include <cstring>
@@ -76,9 +78,10 @@ class IceAgent {
 
   int DestroyIceAgent();
 
-  const char* GenerateLocalSdp();
-  const char* GetLocalStreamSdp(uint32_t stream_id);
-  int SetRemoteSdp(const char* remote_sdp);
+  std::string GenerateLocalSdp();
+  std::string AppendFingerprintLine(const std::string& sdp);
+  std::string GetLocalStreamSdp(uint32_t stream_id);
+  int SetRemoteSdp(const std::string& remote_sdp);
   int GatherCandidates();
   ICE_STATE GetIceState();
 
@@ -153,12 +156,21 @@ class IceAgent {
   SSL_CTX* ssl_ctx_ = nullptr;
   SSL* ssl_ = nullptr;
   BIO* bio_ = nullptr;
+  EVP_PKEY* dtls_pkey_ = nullptr;
+  X509* dtls_cert_ = nullptr;
+  std::string dtls_fingerprint_;
   std::atomic<bool> dtls_started_{false};
   std::atomic<bool> dtls_handshake_done_{false};
+  std::string remote_fingerprint_;
 
   static void NiceRecvTrampoline(NiceAgent* agent, guint stream_id,
                                  guint component_id, guint size, gchar* buffer,
                                  gpointer data);
+  static int DtlsVerifyCallback(int preverify_ok, X509_STORE_CTX* store);
+  static void NiceStateChangedTrampoline(NiceAgent* agent, guint stream_id,
+                                         guint component_id, guint state,
+                                         gpointer data);
+  void OnNiceStateChanged(guint stream_id, guint component_id, guint state);
   void OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
                   guint size, gchar* buffer);
 
@@ -169,6 +181,10 @@ class IceAgent {
   static int bio_nice_read(BIO* b, char* buf, int len);
   static int bio_nice_new(BIO* b);
   static int bio_nice_free(BIO* b);
+
+  void GenerateDtlsCertificate(int days_valid = 365 * 30);
+  std::string ComputeFingerprint(X509* cert);
+  std::string ExtractAndStripFingerprint(const std::string& sdp);
 
   std::mutex dtls_mutex_;
   std::queue<std::vector<uint8_t>> dtls_incoming_;

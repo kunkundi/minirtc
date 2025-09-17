@@ -155,6 +155,9 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   }
 #endif
 
+  GenerateDtlsCertificate();
+  LOG_INFO("Generated DTLS fingerprint: {}", dtls_fingerprint_);
+
   LOG_INFO("Nice agent init finish");
   return 0;
 }
@@ -188,7 +191,7 @@ int IceAgent::DestroyIceAgent() {
   return 0;
 }
 
-const char* IceAgent::GenerateLocalSdp() {
+std::string IceAgent::GenerateLocalSdp() {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return nullptr;
@@ -236,10 +239,10 @@ const char* IceAgent::GenerateLocalSdp() {
     local_sdp_ += data_stream_sdp_;
   }
 
-  return local_sdp_.c_str();
+  return local_sdp_;
 }
 
-const char* IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
+std::string IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return nullptr;
@@ -256,10 +259,10 @@ const char* IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
   }
 
   local_sdp_ = nice_agent_generate_local_stream_sdp(agent_, stream_id, true);
-  return local_sdp_.c_str();
+  return local_sdp_;
 }
 
-int IceAgent::SetRemoteSdp(const char* remote_sdp) {
+int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return -1;
@@ -275,11 +278,13 @@ int IceAgent::SetRemoteSdp(const char* remote_sdp) {
     return -1;
   }
 
-  int ret = nice_agent_parse_remote_sdp(agent_, remote_sdp);
+  std::string sdp_no_fingerprint = ExtractAndStripFingerprint(remote_sdp);
+  int ret = nice_agent_parse_remote_sdp(agent_, sdp_no_fingerprint.c_str());
   if (ret >= 0) {
     return 0;
   } else {
-    LOG_ERROR("Failed to parse remote sdp: [{}]", remote_sdp);
+    LOG_ERROR("Failed to parse remote sdp: [{}]", sdp_no_fingerprint);
+    LOG_ERROR("remote sdp: [{}]", remote_sdp);
     return -1;
   }
 }
@@ -436,21 +441,41 @@ int IceAgent::StartDtls(bool is_client) {
     return -1;
   }
 
-  // example self-signed cert
-  // SSL_CTX_use_certificate_file(ssl_ctx_, "cert.pem", SSL_FILETYPE_PEM);
-  // SSL_CTX_use_PrivateKey_file(ssl_ctx_, "key.pem", SSL_FILETYPE_PEM);
-
-  if (SSL_CTX_set_tlsext_use_srtp(
-          ssl_ctx_, "SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_80") != 0) {
+  if (SSL_CTX_set_tlsext_use_srtp(ssl_ctx_,
+                                  "SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_"
+                                  "80:SRTP_AES128_CM_SHA1_32") != 0) {
     LOG_ERROR("SSL_CTX_set_tlsext_use_srtp failed");
     return -1;
   }
+
+  if (!dtls_cert_ || !dtls_pkey_) {
+    LOG_ERROR("DTLS cert/key not generated");
+    return -1;
+  }
+  if (SSL_CTX_use_certificate(ssl_ctx_, dtls_cert_) != 1) {
+    LOG_ERROR("use_certificate failed");
+    return -1;
+  }
+  if (SSL_CTX_use_PrivateKey(ssl_ctx_, dtls_pkey_) != 1) {
+    LOG_ERROR("use_private_key failed");
+    return -1;
+  }
+  if (SSL_CTX_check_private_key(ssl_ctx_) != 1) {
+    LOG_ERROR("check_private_key failed");
+    return -1;
+  }
+
+  SSL_CTX_set_verify(ssl_ctx_,
+                     SSL_VERIFY_PEER | SSL_VERIFY_FAIL_IF_NO_PEER_CERT,
+                     &IceAgent::DtlsVerifyCallback);
 
   ssl_ = SSL_new(ssl_ctx_);
   if (!ssl_) {
     LOG_ERROR("SSL_new failed");
     return -1;
   }
+
+  SSL_set_app_data(ssl_, this);
 
   bio_ = BIO_new(BIO_s_nice());
   BIO_set_data(bio_, this);
@@ -466,16 +491,94 @@ int IceAgent::StartDtls(bool is_client) {
   int ret = SSL_do_handshake(ssl_);
   if (ret == 1) {
     dtls_handshake_done_ = true;
-    LOG_INFO("DTLS handshake completed immediately");
+    const SRTP_PROTECTION_PROFILE* prof = SSL_get_selected_srtp_profile(ssl_);
+    LOG_INFO("DTLS handshake completed immediately. SRTP profile: {}",
+             prof ? prof->name : "(none)");
     return 0;
   }
   int err = SSL_get_error(ssl_, ret);
   if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
-    LOG_INFO("DTLS handshake started, waiting for peer packets...");
+    LOG_INFO("DTLS handshake started, awaiting peer packets...");
     return 0;
   }
   LOG_ERROR("DTLS handshake start failed, err={}", err);
   return -1;
+}
+
+void IceAgent::GenerateDtlsCertificate(int days_valid) {
+  EVP_PKEY* pkey = EVP_PKEY_new();
+  RSA* rsa = RSA_new();
+  BIGNUM* e = BN_new();
+  BN_set_word(e, RSA_F4);
+  RSA_generate_key_ex(rsa, 2048, e, nullptr);
+  EVP_PKEY_assign_RSA(pkey, rsa);
+  BN_free(e);
+
+  X509* x509 = X509_new();
+  ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
+  X509_gmtime_adj(X509_get_notBefore(x509), 0);
+  X509_gmtime_adj(X509_get_notAfter(x509), (long)60 * 60 * 24 * days_valid);
+  X509_set_pubkey(x509, pkey);
+
+  X509_NAME* name = X509_get_subject_name(x509);
+  X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                             (unsigned char*)"DTLS-SRTP Self-Signed", -1, -1,
+                             0);
+  X509_set_issuer_name(x509, name);
+
+  X509_sign(x509, pkey, EVP_sha256());
+
+  dtls_pkey_ = pkey;
+  dtls_cert_ = x509;
+  dtls_fingerprint_ = ComputeFingerprint(x509);
+}
+
+std::string IceAgent::AppendFingerprintLine(const std::string& sdp) {
+  return sdp + "a=fingerprint:sha-256 " + dtls_fingerprint_ + "\r\n";
+}
+
+std::string IceAgent::ComputeFingerprint(X509* cert) {
+  unsigned int n = 0;
+  unsigned char md[EVP_MAX_MD_SIZE];
+  if (X509_digest(cert, EVP_sha256(), md, &n) != 1) {
+    throw std::runtime_error("Failed to compute DTLS fingerprint");
+  }
+
+  std::ostringstream oss;
+  for (unsigned int i = 0; i < n; i++) {
+    if (i) oss << ":";
+    oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+        << (int)md[i];
+  }
+  return oss.str();
+}
+
+std::string IceAgent::ExtractAndStripFingerprint(const std::string& sdp) {
+  if (!remote_fingerprint_.empty()) {
+    return sdp;
+  }
+
+  std::size_t pos = sdp.rfind("a=fingerprint:");
+  if (pos != std::string::npos) {
+    std::size_t space_pos = sdp.find(' ', pos);
+    if (space_pos != std::string::npos) {
+      remote_fingerprint_ = sdp.substr(space_pos + 1);
+
+      while (!remote_fingerprint_.empty() &&
+             (remote_fingerprint_.back() == '\r' ||
+              remote_fingerprint_.back() == '\n')) {
+        remote_fingerprint_.pop_back();
+      }
+    }
+
+    std::size_t cut_pos =
+        (pos > 0 && (sdp[pos - 1] == '\n' || sdp[pos - 1] == '\r')) ? pos - 1
+                                                                    : pos;
+    LOG_INFO("Fingerprint: {}", remote_fingerprint_);
+    return sdp.substr(0, cut_pos);
+  }
+
+  return sdp;
 }
 
 void IceAgent::NiceRecvTrampoline(NiceAgent* agent, guint stream_id,
@@ -513,6 +616,62 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
   if (on_recv_) {
     on_recv_(agent, stream_id, component_id, size, buffer, user_ptr_);
   }
+}
+
+void IceAgent::NiceStateChangedTrampoline(NiceAgent* agent, guint stream_id,
+                                          guint component_id, guint state,
+                                          gpointer data) {
+  auto* self = reinterpret_cast<IceAgent*>(data);
+  if (!self) return;
+  self->OnNiceStateChanged(stream_id, component_id, state);
+}
+
+void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
+                                  guint state) {
+  if (stream_id != stream_id_ || component_id != NICE_COMPONENT_TYPE_RTP) {
+    return;
+  }
+  if (state == NICE_COMPONENT_STATE_READY) {
+    const bool is_client = controlling_;
+    if (!dtls_started_ && !remote_fingerprint_.empty()) {
+      if (StartDtls(is_client) != 0) {
+        LOG_ERROR("StartDtls failed");
+      }
+    }
+  }
+}
+
+int IceAgent::DtlsVerifyCallback(int /*preverify_ok*/, X509_STORE_CTX* store) {
+  SSL* ssl = reinterpret_cast<SSL*>(
+      X509_STORE_CTX_get_ex_data(store, SSL_get_ex_data_X509_STORE_CTX_idx()));
+  if (!ssl) return 0;
+
+  auto* self = reinterpret_cast<IceAgent*>(SSL_get_app_data(ssl));
+  if (!self) return 0;
+
+  X509* cert = X509_STORE_CTX_get_current_cert(store);
+  if (!cert) return 0;
+
+  unsigned char md[EVP_MAX_MD_SIZE];
+  unsigned int mdlen = 0;
+  if (X509_digest(cert, EVP_sha256(), md, &mdlen) != 1) return 0;
+
+  std::ostringstream oss;
+  for (unsigned int i = 0; i < mdlen; ++i) {
+    if (i) oss << ":";
+    oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+        << (int)md[i];
+  }
+  const std::string peer_fp = oss.str();
+
+  const bool match = (peer_fp == self->remote_fingerprint_);
+  if (!match) {
+    LOG_ERROR("DTLS fingerprint mismatch! expected {} got {}",
+              self->remote_fingerprint_, peer_fp);
+  } else {
+    LOG_INFO("DTLS peer fingerprint verified: {}", peer_fp);
+  }
+  return match ? 1 : 0;
 }
 
 bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
