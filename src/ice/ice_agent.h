@@ -163,14 +163,14 @@ class IceAgent {
   std::atomic<bool> dtls_handshake_done_{false};
   std::string remote_fingerprint_;
 
-  static void NiceRecvTrampoline(NiceAgent* agent, guint stream_id,
-                                 guint component_id, guint size, gchar* buffer,
-                                 gpointer data);
-  static int DtlsVerifyCallback(int preverify_ok, X509_STORE_CTX* store);
-  static void NiceStateChangedTrampoline(NiceAgent* agent, guint stream_id,
-                                         guint component_id, guint state,
-                                         gpointer data);
-  void OnNiceStateChanged(guint stream_id, guint component_id, guint state);
+  static void OnNiceRecvStatic(NiceAgent* agent, guint stream_id,
+                               guint component_id, guint size, gchar* buffer,
+                               gpointer data);
+  static void OnNiceStateChangedStatic(NiceAgent* agent, guint stream_id,
+                                       guint component_id,
+                                       NiceComponentState state, gpointer data);
+  void OnNiceStateChanged(guint stream_id, guint component_id,
+                          NiceComponentState state);
   void OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
                   guint size, gchar* buffer);
 
@@ -181,6 +181,7 @@ class IceAgent {
   static int bio_nice_read(BIO* b, char* buf, int len);
   static int bio_nice_new(BIO* b);
   static int bio_nice_free(BIO* b);
+  static long bio_nice_ctrl(BIO* b, int cmd, long num, void* ptr);
 
   void GenerateDtlsCertificate(int days_valid = 365 * 30);
   std::string ComputeFingerprint(X509* cert);

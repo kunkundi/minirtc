@@ -517,6 +517,7 @@ int IceTransport::SendOffer() {
 int IceTransport::SendAnswer() {
   local_sdp_ = ice_agent_->GenerateLocalSdp();
   AppendLocalCapabilitiesToAnswer(local_sdp_);
+  local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
   json message = {{"type", "answer"},
                   {"transmission_id", transmission_id_},
                   {"user_id", user_id_},
@@ -781,6 +782,8 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
   std::map<std::string, uint32_t> audio_ssrc_map;
   std::map<std::string, uint32_t> data_ssrc_map;
 
+  std::string fingerprint_line;
+
   if (video_start != std::string::npos) {
     std::size_t video_end = std::min(
         {audio_start != std::string::npos ? audio_start : end_of_sdp,
@@ -815,6 +818,21 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
 
   if (candidate_start != std::string::npos) {
     media_stream_sdp += remote_sdp.substr(candidate_start);
+  }
+
+  std::size_t fingerprint_pos = remote_sdp.rfind("a=fingerprint");
+  if (fingerprint_pos != std::string::npos) {
+    std::string fingerprint_line = remote_sdp.substr(fingerprint_pos);
+    std::size_t newline_pos = fingerprint_line.find('\n');
+    if (newline_pos != std::string::npos) {
+      fingerprint_line = fingerprint_line.substr(0, newline_pos);
+    }
+
+    if (!media_stream_sdp.empty() && media_stream_sdp.back() == '\n') {
+      media_stream_sdp += fingerprint_line;
+    } else {
+      media_stream_sdp += "\n" + fingerprint_line;
+    }
   }
 
   if (!remote_capabilities_got_) {
