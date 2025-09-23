@@ -692,10 +692,16 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
                               std::vector<uint8_t>& remote_key,
                               std::vector<uint8_t>& remote_salt,
                               bool local_is_client_sender) const {
-  if (!dtls_handshake_done_ || !ssl_) return false;
+  if (!dtls_handshake_done_ || !ssl_) {
+    LOG_ERROR("DTLS handshake not done");
+    return false;
+  }
 
   const SRTP_PROTECTION_PROFILE* prof = SSL_get_selected_srtp_profile(ssl_);
-  if (!prof) return false;
+  if (!prof) {
+    LOG_ERROR("No SRTP profile selected");
+    return false;
+  }
 
   size_t key_len = 0, salt_len = 0;
   if (std::strcmp(prof->name, "SRTP_AEAD_AES_128_GCM") == 0) {
@@ -717,6 +723,7 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
   static const char kLabel[] = "EXTRACTOR-dtls_srtp";
   if (SSL_export_keying_material(ssl_, material.data(), total, kLabel,
                                  sizeof(kLabel) - 1, nullptr, 0, 0) != 1) {
+    LOG_ERROR("SSL_export_keying_material failed");
     return false;
   }
 
@@ -734,6 +741,7 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
   local_salt.assign(local_s, local_s + salt_len);
   remote_key.assign(remote_k, remote_k + key_len);
   remote_salt.assign(remote_s, remote_s + salt_len);
+
   return true;
 }
 

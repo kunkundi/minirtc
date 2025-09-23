@@ -102,6 +102,15 @@ int IceTransport::InitIceTransmission(std::string &stun_ip, int stun_port,
   return 0;
 }
 
+std::string toHex(const std::vector<uint8_t> &vec) {
+  std::ostringstream oss;
+  for (uint8_t b : vec) {
+    oss << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
+        << static_cast<int>(b);
+  }
+  return oss.str();
+}
+
 void IceTransport::OnIceStateChange(NiceAgent *agent, guint stream_id,
                                     guint component_id,
                                     NiceComponentState state,
@@ -114,6 +123,24 @@ void IceTransport::OnIceStateChange(NiceAgent *agent, guint stream_id,
     if (state == NICE_COMPONENT_STATE_READY) {
       ice_io_statistics_->Start();
       ice_agent_->StartDtls(offer_peer_);
+
+      SrtpEngine::GlobalInit();
+
+      std::vector<uint8_t> local_key;
+      std::vector<uint8_t> local_salt;
+      std::vector<uint8_t> remote_key;
+      std::vector<uint8_t> remote_salt;
+      bool local_is_client_sender;
+
+      ice_agent_->ExportSrtpKeys(local_key, local_salt, remote_key, remote_salt,
+                                 offer_peer_);
+
+      LOG_INFO(
+          "SRTP keys exported: local key[{}], local salt[{}], remote key[{}], "
+          "remote salt[{}]",
+          toHex(local_key), toHex(local_salt), toHex(remote_key),
+          toHex(remote_salt));
+
       if (ice_transport_controller_) {
         ice_transport_controller_->UpdateNetworkAvaliablity(true);
       }

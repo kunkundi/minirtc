@@ -16,6 +16,7 @@
 #include "ringbuffer.h"
 #include "rtcp_packet_info.h"
 #include "rtp_packet.h"
+#include "srtp_engine.h"
 #include "ws_client.h"
 
 namespace minirtc {
