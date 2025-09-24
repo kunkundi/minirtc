@@ -13,9 +13,10 @@ namespace minirtc {
 
 IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
-    std::shared_ptr<IOStatistics> ice_io_statistics)
+    std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp)
     : clock_(clock),
       ice_agent_(ice_agent),
+      enable_srtp_(enable_srtp),
       ice_io_statistics_(ice_io_statistics),
       webrtc_clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
       last_report_block_time_(
@@ -59,13 +60,14 @@ IceTransportController::~IceTransportController() {
 #endif
 }
 
-void IceTransportController::Create(std::string remote_user_id,
+void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     rtp::PAYLOAD_TYPE video_codec_payload_type,
                                     bool hardware_acceleration,
                                     OnReceiveVideo on_receive_video,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
                                     void* user_data) {
+  offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
   on_receive_video_ = on_receive_video;
   on_receive_audio_ = on_receive_audio;
@@ -73,6 +75,10 @@ void IceTransportController::Create(std::string remote_user_id,
   user_data_ = user_data;
 
   CreateCodecs(clock_, video_codec_payload_type, hardware_acceleration);
+
+  if (enable_srtp_) {
+    SrtpEngine::GlobalInit();
+  }
 
   task_queue_cc_ = std::make_shared<TaskQueue>("congest control");
   task_queue_encode_ = std::make_shared<TaskQueueLockFree>("encode");
@@ -93,8 +99,30 @@ void IceTransportController::Create(std::string remote_user_id,
           if (self->ice_agent_) {
             self->last_active_stream_ = packet->get_stream_name();
             webrtc::Timestamp now = self->webrtc_clock_->CurrentTime();
-            self->ice_agent_->Send((const char*)packet->Buffer().data(),
-                                   packet->Size());
+
+            if (self->enable_srtp_) {
+              int len = packet->Size();
+
+              std::vector<uint8_t> srtp_packet_buf(len + 16);
+              memcpy(srtp_packet_buf.data(), packet->Buffer().data(), len);
+
+              auto srtp_session = self->ssrc_to_srtp_sender_[packet->Ssrc()];
+              if (srtp_session && srtp_session->valid()) {
+                if (srtp_session->protectRtp(srtp_packet_buf.data(), &len) <
+                    0) {
+                  LOG_ERROR("SRTP protect failed for stream [{}]",
+                            packet->Ssrc());
+                  return;
+                }
+              }
+
+              self->ice_agent_->Send(
+                  reinterpret_cast<const char*>(srtp_packet_buf.data()), len);
+            } else {
+              self->ice_agent_->Send((const char*)packet->Buffer().data(),
+                                     packet->Size());
+            }
+
             self->OnSentPacket(*packet);
 
             if (packet->packet_type().has_value()) {
@@ -565,6 +593,43 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
   }
 }
 
+bool IceTransportController::DecryptIncomingPacket(uint8_t* buffer, int* size,
+                                                   uint32_t* out_ssrc) {
+  if (!buffer || !size || *size < 12) {
+    return false;
+  }
+
+  uint8_t version = (buffer[0] >> 6) & 0x03;
+  if (version != 2) {
+    LOG_WARN("Invalid RTP version {}", version);
+    return false;
+  }
+
+  uint32_t ssrc = (static_cast<uint32_t>(buffer[8]) << 24) |
+                  (static_cast<uint32_t>(buffer[9]) << 16) |
+                  (static_cast<uint32_t>(buffer[10]) << 8) |
+                  (static_cast<uint32_t>(buffer[11]));
+  if (out_ssrc) {
+    *out_ssrc = ssrc;
+  }
+
+  auto it = ssrc_to_srtp_receiver_.find(ssrc);
+  if (it == ssrc_to_srtp_receiver_.end() || !it->second ||
+      !it->second->valid()) {
+    LOG_WARN("No SRTP receiver session for SSRC {}", ssrc);
+    return false;
+  }
+
+  int len = *size;
+  if (it->second->unprotectRtp(buffer, &len) < 0) {
+    LOG_ERROR("SRTP unprotect failed for SSRC {}", ssrc);
+    return false;
+  }
+
+  *size = len;
+  return true;
+}
+
 int IceTransportController::OnReceiveVideoRtpPacket(const char* data,
                                                     size_t size,
                                                     uint32_t ssrc) {
@@ -677,6 +742,54 @@ void IceTransportController::OnReceiveCompleteData(
   if (on_receive_data_) {
     on_receive_data_(data, size, remote_user_id_.data(), remote_user_id_.size(),
                      user_data_);
+  }
+}
+
+// std::string toHex(const std::vector<uint8_t>& vec) {
+//   std::ostringstream oss;
+//   for (uint8_t b : vec) {
+//     oss << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
+//         << static_cast<int>(b);
+//   }
+//   return oss.str();
+// }
+
+void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
+  bool local_is_client_sender;
+
+  ice_agent_->ExportSrtpKeys(local_key_, local_salt_, remote_key_, remote_salt_,
+                             offer_peer_);
+
+  // LOG_INFO(
+  //     "SRTP keys exported: local key[{}], local salt[{}], remote key[{}], "
+  //     "remote salt[{}]",
+  //     toHex(local_key_), toHex(local_salt_), toHex(remote_key_),
+  //     toHex(remote_salt_));
+
+  // setup SRTP senders
+  SrtpEngine::Params sender_params;
+  memcpy(sender_params.key, local_key_.data(), 16);
+  memcpy(sender_params.salt, local_salt_.data(), 12);
+  for (auto& [channel_name, context] : stream_senders_) {
+    if (context) {
+      sender_params.ssrc = context->ssrc.value_or(0);
+      sender_params.receiver_any_inbound = false;
+      ssrc_to_srtp_sender_[sender_params.ssrc] =
+          SrtpEngine::CreateSenderPtr(sender_params);
+    }
+  }
+
+  // setup SRTP receivers
+  SrtpEngine::Params receiver_params;
+  memcpy(receiver_params.key, remote_key_.data(), 16);
+  memcpy(receiver_params.salt, remote_salt_.data(), 12);
+  for (auto& [channel_name, context] : stream_receivers_) {
+    if (context) {
+      receiver_params.ssrc = context->ssrc.value_or(0);
+      receiver_params.receiver_any_inbound = false;
+      ssrc_to_srtp_receiver_[receiver_params.ssrc] =
+          SrtpEngine::CreateReceiverPtr(receiver_params);
+    }
   }
 }
 

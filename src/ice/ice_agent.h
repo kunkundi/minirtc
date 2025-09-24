@@ -39,23 +39,24 @@ typedef enum {
   ICE_STATE_LAST
 } ICE_STATE;
 
-typedef void (*nice_cb_state_changed_t)(NiceAgent* agent, guint stream_id,
-                                        guint component_id,
-                                        NiceComponentState state,
-                                        gpointer data);
-typedef void (*nice_cb_new_candidate_t)(NiceAgent* agent, guint stream_id,
-                                        guint component_id, gchar* foundation,
-                                        gpointer data);
-typedef void (*nice_cb_new_selected_pair_t)(NiceAgent* agent, guint stream_id,
-                                            guint component_id,
-                                            const char* lfoundation,
-                                            const char* rfoundation,
-                                            gpointer data);
-typedef void (*nice_cb_gathering_done_t)(NiceAgent* agent, guint stream_id,
+using nice_cb_state_changed_t = void (*)(NiceAgent* agent, guint stream_id,
+                                         guint component_id,
+                                         NiceComponentState state,
                                          gpointer data);
-typedef void (*nice_cb_recv_t)(NiceAgent* agent, guint stream_id,
-                               guint component_id, guint size, gchar* buffer,
-                               gpointer data);
+using nice_cb_new_candidate_t = void (*)(NiceAgent* agent, guint stream_id,
+                                         guint component_id, gchar* foundation,
+                                         gpointer data);
+using nice_cb_new_selected_pair_t = void (*)(NiceAgent* agent, guint stream_id,
+                                             guint component_id,
+                                             const char* lfoundation,
+                                             const char* rfoundation,
+                                             gpointer data);
+using nice_cb_gathering_done_t = void (*)(NiceAgent* agent, guint stream_id,
+                                          gpointer data);
+using nice_cb_recv_t = void (*)(NiceAgent* agent, guint stream_id,
+                                guint component_id, guint size, gchar* buffer,
+                                gpointer data);
+using nice_cb_dtls_done_t = void (*)(gpointer data);
 
 typedef struct {
   void* user_ptr_1_;
@@ -65,16 +66,18 @@ typedef struct {
 class IceAgent {
  public:
   IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-           bool enable_turn, bool force_turn, std::string& stun_ip,
-           uint16_t stun_port, std::string& turn_ip, uint16_t turn_port,
-           std::string& turn_username, std::string& turn_password);
+           bool enable_turn, bool force_turn, bool enable_srtp,
+           std::string& stun_ip, uint16_t stun_port, std::string& turn_ip,
+           uint16_t turn_port, std::string& turn_username,
+           std::string& turn_password);
   ~IceAgent();
 
   int CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                      nice_cb_new_candidate_t on_new_candidate,
                      nice_cb_gathering_done_t on_gathering_done,
                      nice_cb_new_selected_pair_t on_new_selected_pair,
-                     nice_cb_recv_t on_recv, void* user_ptr);
+                     nice_cb_recv_t on_recv,
+                     nice_cb_dtls_done_t on_cb_dtls_done, void* user_ptr);
 
   int DestroyIceAgent();
 
@@ -102,6 +105,7 @@ class IceAgent {
   bool use_reliable_ice_ = false;
   bool enable_turn_ = false;
   bool force_turn_ = false;
+  bool enable_srtp_ = true;
 
   std::string stun_ip_ = "";
   uint16_t stun_port_ = 0;
@@ -142,14 +146,13 @@ class IceAgent {
   nice_cb_new_candidate_t on_new_candidate_{};
   nice_cb_gathering_done_t on_gathering_done_{};
   nice_cb_recv_t on_recv_{};
+  nice_cb_dtls_done_t on_cb_dtls_done_{};
   void* user_ptr_{};
 
   UserPtrSt user_prt_st_{};
 
-#ifdef SAVE_IO_STREAM
   FILE* file_in_ = nullptr;
   FILE* file_out_ = nullptr;
-#endif
 
  private:
   // dtls

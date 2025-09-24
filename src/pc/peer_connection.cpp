@@ -44,6 +44,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
         reader.Get("hardware acceleration", "turn_on", "false");
     cfg_av1_encoding_ = reader.Get("av1 encoding", "turn_on", "false");
     cfg_enable_turn_ = reader.Get("enable turn", "turn_on", "false");
+    cfg_enable_srtp_ = reader.Get("enable srtp", "turn_on", "true");
 
     std::regex regex("\n");
 
@@ -55,6 +56,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
         cfg_hardware_acceleration_ == "true" ? true : false;
     av1_encoding_ = cfg_av1_encoding_ == "true" ? true : false;
     enable_turn_ = cfg_enable_turn_ == "true" ? true : false;
+    enable_srtp_ = cfg_enable_srtp_ == "true" ? true : false;
 
   } else {
     cfg_signal_server_ip_ = params.signal_server_ip;
@@ -69,6 +71,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     hardware_acceleration_ = params.hardware_acceleration;
     av1_encoding_ = params.av1_encoding;
     enable_turn_ = params.enable_turn;
+    enable_srtp_ = params.enable_srtp;
 
     cfg_signal_server_port_ = std::to_string(signal_server_port_);
     cfg_stun_server_port_ = std::to_string(stun_server_port_);
@@ -655,7 +658,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
         ice->SetLocalCapabilities(
             hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
-            false,
+            false, enable_srtp_,
             av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
             video_payload_types_, audio_payload_types_);
 
@@ -723,7 +726,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg &msg) {
 
       ice->SetLocalCapabilities(
           hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
-          false,
+          false, enable_srtp_,
           av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
           video_payload_types_, audio_payload_types_);
 

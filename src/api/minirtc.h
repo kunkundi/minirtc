@@ -106,6 +106,7 @@ typedef struct {
   bool hardware_acceleration;
   bool av1_encoding;
   bool enable_turn;
+  bool enable_srtp;
 
   OnReceiveBuffer on_receive_video_buffer;
   OnReceiveBuffer on_receive_audio_buffer;

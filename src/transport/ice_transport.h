@@ -16,7 +16,6 @@
 #include "ringbuffer.h"
 #include "rtcp_packet_info.h"
 #include "rtp_packet.h"
-#include "srtp_engine.h"
 #include "ws_client.h"
 
 namespace minirtc {
@@ -45,7 +44,7 @@ class IceTransport {
  public:
   int SetLocalCapabilities(bool hardware_acceleration, bool use_trickle_ice,
                            bool use_reliable_ice, bool enable_turn,
-                           bool force_turn,
+                           bool force_turn, bool enable_srtp,
                            rtp::PAYLOAD_TYPE prefered_video_payload_type,
                            std::vector<int> &video_payload_types,
                            std::vector<int> &audio_payload_types);
@@ -139,6 +138,8 @@ class IceTransport {
   void OnReceiveBuffer(NiceAgent *agent, guint stream_id, guint component_id,
                        guint size, gchar *buffer, gpointer user_ptr);
 
+  void OnDtlsHandshakeDone(gpointer user_ptr);
+
   bool ParseRtcpPacket(const uint8_t *buffer, size_t size,
                        RtcpPacketInfo *rtcp_packet_info);
 
@@ -167,6 +168,7 @@ class IceTransport {
   bool enable_turn_ = false;
   bool use_reliable_ice_ = false;
   bool force_turn_ = false;
+  bool enable_srtp_ = true;
 
   std::vector<std::string> video_stream_ids_;
   std::vector<std::string> audio_stream_ids_;

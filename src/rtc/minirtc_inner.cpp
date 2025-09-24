@@ -40,6 +40,7 @@ PeerPtr *CreatePeer(const Params *params) {
     peer_ptr->pc_params.hardware_acceleration = params->hardware_acceleration;
     peer_ptr->pc_params.av1_encoding = params->av1_encoding;
     peer_ptr->pc_params.enable_turn = params->enable_turn;
+    peer_ptr->pc_params.enable_srtp = params->enable_srtp;
   }
   peer_ptr->pc_params.on_receive_video_buffer = params->on_receive_video_buffer;
   peer_ptr->pc_params.on_receive_audio_buffer = params->on_receive_audio_buffer;

@@ -10,7 +10,7 @@ package("libsrtp")
     add_versions("2.6.0", "f1886f72eff1d8aa82ada40b2fc3d342a3ecaf0f8988cb63d4af234fccf2253d")
     add_versions("2.5.0", "8a43ef8e9ae2b665292591af62aa1a4ae41e468b6d98d8258f91478735da4e09")
 
-    add_configs("openssl", {description = "Enable OpenSSL crypto engine", default = false, type = "boolean"})
+    add_configs("openssl", {description = "Enable OpenSSL crypto engine", default = true, type = "boolean"})
     add_configs("mbedtls", {description = "Enable MbedTLS crypto engine", default = false, type = "boolean"})
     add_configs("nss", {description = "Enable NSS crypto engine", default = false, type = "boolean", readonly = true})
 
@@ -30,7 +30,7 @@ package("libsrtp")
 
     on_load(function (package)
         if package:config("openssl") then
-            package:add("deps", "openssl")
+            package:add("deps", "openssl3 3.3.2")
         end
         if package:config("mbedtls") then
             package:add("deps", "mbedtls")
@@ -45,6 +45,7 @@ package("libsrtp")
             "-DBUILD_WITH_WARNINGS=OFF",
             "-DENABLE_WARNINGS=OFF",
             "-DENABLE_WARNINGS_AS_ERRORS=OFF",
+            "ENABLE_OPENSSL=ON",
         }
 
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:is_debug() and "Debug" or "Release"))

@@ -12,10 +12,13 @@
 #include <atomic>
 #include <cstdint>
 #include <cstring>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
+
+namespace minirtc {
 
 class SrtpEngine {
  public:
@@ -78,9 +81,17 @@ class SrtpEngine {
   // Create a sender SrtpSession bound to a specific SSRC.
   static SrtpSession CreateSender(const Params& p);
 
+  static std::shared_ptr<SrtpSession> CreateSenderPtr(const Params& p) {
+    return std::make_shared<SrtpSession>(CreateSender(p));
+  }
+
   // Create a receiver SrtpSession; by default uses ssrc_any_inbound when
   // p.receiver_any_inbound == true. If false, it binds to p.ssrc.
   static SrtpSession CreateReceiver(const Params& p);
+
+  static std::shared_ptr<SrtpSession> CreateReceiverPtr(const Params& p) {
+    return std::make_shared<SrtpSession>(CreateReceiver(p));
+  }
 
   // Helper to build the 28-byte master key for AES-128-GCM.
   static std::vector<uint8_t> BuildMasterKeyGcm(const uint8_t key16[16],
@@ -93,5 +104,6 @@ class SrtpEngine {
   static void FillGcmPolicy(srtp_policy_t& pol);
   static srtp_t CreateSessionInternal(const Params& p);
 };
+}  // namespace minirtc
 
 #endif

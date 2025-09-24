@@ -1,5 +1,9 @@
 #include "srtp_engine.h"
 
+#include "log.h"
+
+namespace minirtc {
+
 static std::atomic<bool> g_srtp_inited{false};
 
 void SrtpEngine::GlobalInit() {
@@ -8,7 +12,7 @@ void SrtpEngine::GlobalInit() {
     srtp_err_status_t st = srtp_init();
     if (st != srtp_err_status_ok) {
       g_srtp_inited = false;
-      throw std::runtime_error("srtp_init failed");
+      LOG_ERROR("srtp_init failed");
     }
   }
 }
@@ -97,6 +101,7 @@ srtp_t SrtpEngine::CreateSessionInternal(const Params& p) {
 
   auto mk = BuildMasterKeyGcm(p.key, p.salt);  // 28 bytes
   srtp_policy_t pol;
+  memset(&pol, 0, sizeof(pol));
   FillGcmPolicy(pol);
 
   if (p.receiver_any_inbound) {
@@ -107,12 +112,16 @@ srtp_t SrtpEngine::CreateSessionInternal(const Params& p) {
     pol.ssrc.value = p.ssrc;
   }
   pol.key = mk.data();
+  pol.window_size = 128;
+  pol.allow_repeat_tx = 0;
+  pol.enc_xtn_hdr_count = 0;
+  pol.next = nullptr;
 
   srtp_t SrtpSession = nullptr;
   srtp_err_status_t st = srtp_create(&SrtpSession, &pol);
   if (st != srtp_err_status_ok) {
-    throw std::runtime_error(std::string("srtp_create failed: ") +
-                             ErrToStr(st));
+    LOG_ERROR("srtp_create failed: {}", ErrToStr(st));
+    return nullptr;
   }
 
   // libsrtp does not take ownership of mk memory; but it expects pol.key to
@@ -155,4 +164,5 @@ int SrtpEngine::SrtpSession::unprotectRtp(uint8_t* buf, int* len) const {
   if (!buf || !len || *len <= 0) return -2;
   srtp_err_status_t st = srtp_unprotect(session_, buf, len);
   return (st == srtp_err_status_ok) ? 0 : -3;
+}
 }

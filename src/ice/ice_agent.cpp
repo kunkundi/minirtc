@@ -20,15 +20,22 @@ auto log_openssl_errors = []() {
   }
 };
 
+static int DtlsVerifyCallback(X509_STORE_CTX* ctx, void* arg) {
+  // always return true for self-signed certificate
+  return 1;
+}
+
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-                   bool enable_turn, bool force_turn, std::string& stun_ip,
-                   uint16_t stun_port, std::string& turn_ip, uint16_t turn_port,
+                   bool enable_turn, bool force_turn, bool enable_srtp,
+                   std::string& stun_ip, uint16_t stun_port,
+                   std::string& turn_ip, uint16_t turn_port,
                    std::string& turn_username, std::string& turn_password)
     : stun_ip_(stun_ip),
       use_trickle_ice_(use_trickle_ice),
       use_reliable_ice_(use_reliable_ice),
       enable_turn_(enable_turn),
       force_turn_(force_turn),
+      enable_srtp_(enable_srtp),
       stun_port_(stun_port),
       turn_ip_(turn_ip),
       turn_port_(turn_port),
@@ -68,13 +75,16 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                              nice_cb_new_candidate_t on_new_candidate,
                              nice_cb_gathering_done_t on_gathering_done,
                              nice_cb_new_selected_pair_t on_new_selected_pair,
-                             nice_cb_recv_t on_recv, void* user_ptr) {
+                             nice_cb_recv_t on_recv,
+                             nice_cb_dtls_done_t on_cb_dtls_done,
+                             void* user_ptr) {
   destroyed_ = false;
   on_state_changed_ = on_state_changed;
   on_new_selected_pair_ = on_new_selected_pair;
   on_new_candidate_ = on_new_candidate;
   on_gathering_done_ = on_gathering_done;
   on_recv_ = on_recv;
+  on_cb_dtls_done_ = on_cb_dtls_done;
   user_ptr_ = user_ptr;
 
   g_networking_init();
@@ -165,7 +175,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
 #endif
 
   GenerateDtlsCertificate();
-  LOG_INFO("Generated DTLS fingerprint: {}", dtls_fingerprint_);
+  // LOG_INFO("Generated DTLS fingerprint: {}", dtls_fingerprint_);
 
   LOG_INFO("Nice agent init finish");
   return 0;
@@ -492,7 +502,8 @@ int IceAgent::StartDtls(bool is_client) {
     return -1;
   }
 
-  SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_NONE, nullptr);
+  SSL_CTX_set_verify(ssl_ctx_, SSL_VERIFY_PEER, nullptr);
+  SSL_CTX_set_cert_verify_callback(ssl_ctx_, DtlsVerifyCallback, this);
 
   ssl_ = SSL_new(ssl_ctx_);
   if (!ssl_) {
@@ -622,35 +633,58 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
   if (file_in_) fwrite(buffer, 1, size, file_in_);
 #endif
 
-  bool looks_dtls = IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
-  if (dtls_started_ && (!dtls_handshake_done_ || looks_dtls)) {
-    {
-      std::lock_guard<std::mutex> lk(dtls_mutex_);
-      dtls_incoming_.push(
-          std::vector<uint8_t>((uint8_t*)buffer, (uint8_t*)buffer + size));
-    }
+  if (enable_srtp_) {
+    bool looks_dtls = IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
+    if (dtls_started_ && (!dtls_handshake_done_ || looks_dtls)) {
+      {
+        std::lock_guard<std::mutex> lk(dtls_mutex_);
+        dtls_incoming_.push(
+            std::vector<uint8_t>((uint8_t*)buffer, (uint8_t*)buffer + size));
+      }
 
-    int ret = SSL_do_handshake(ssl_);
-    if (ret == 1 && !dtls_handshake_done_) {
-      dtls_handshake_done_ = true;
-      const SRTP_PROTECTION_PROFILE* prof = SSL_get_selected_srtp_profile(ssl_);
-      LOG_INFO("DTLS handshake done. SRTP profile: {}",
-               prof ? prof->name : "(none)");
-
-      X509* peer = SSL_get_peer_certificate(ssl_);
-      if (peer) {
-        std::string fp = ComputeFingerprint(peer);
-        X509_free(peer);
-
-        if (fp != remote_fingerprint_) {
-          LOG_ERROR("DTLS fingerprint mismatch! expected {} got {}",
-                    remote_fingerprint_, fp);
+      int ret = SSL_do_handshake(ssl_);
+      if (ret <= 0) {
+        int err = SSL_get_error(ssl_, ret);
+        if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+          return;
         } else {
-          LOG_INFO("DTLS peer fingerprint verified");
+          LOG_ERROR("SSL_do_handshake failed, err={}", err);
+          log_openssl_errors();
+          return;
         }
       }
+
+      if (SSL_is_init_finished(ssl_) && !dtls_handshake_done_) {
+        dtls_handshake_done_ = true;
+
+        const SRTP_PROTECTION_PROFILE* prof =
+            SSL_get_selected_srtp_profile(ssl_);
+        LOG_INFO("DTLS handshake done. SRTP profile: {}",
+                 prof ? prof->name : "(none)");
+
+        bool verified = false;
+        X509* peer = SSL_get_peer_certificate(ssl_);
+        if (peer) {
+          std::string fp = ComputeFingerprint(peer);
+          X509_free(peer);
+
+          if (fp != remote_fingerprint_) {
+            LOG_ERROR("DTLS fingerprint mismatch! expected {} got {}",
+                      remote_fingerprint_, fp);
+          } else {
+            LOG_INFO("DTLS peer fingerprint verified");
+            verified = true;
+          }
+        } else {
+          LOG_ERROR("Peer certificate missing");
+        }
+
+        if (verified && on_cb_dtls_done_) {
+          on_cb_dtls_done_(user_ptr_);
+        }
+      }
+      return;
     }
-    return;
   }
 
   if (on_recv_) {
@@ -674,7 +708,7 @@ void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
     return;
   }
   if (state == NICE_COMPONENT_STATE_READY) {
-    if (!dtls_started_ && !remote_fingerprint_.empty()) {
+    if (!dtls_started_ && !remote_fingerprint_.empty() && enable_srtp_) {
       if (StartDtls(controlling_) != 0) {
         LOG_ERROR("StartDtls failed");
       } else {

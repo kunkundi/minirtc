@@ -133,7 +133,7 @@ target("qos")
 
 target("transport")
     set_kind("object")
-    add_deps("log", "ws", "ice", "rtp", "rtcp", "statistics", "media", "qos")
+    add_deps("log", "ws", "ice", "rtp", "rtcp", "srtp", "statistics", "media", "qos")
     add_files("src/transport/*.cpp",
     "src/transport/channel/*.cpp",
     "src/transport/paced_sender/*.cpp")
@@ -143,7 +143,7 @@ target("transport")
 
 target("media")
     set_kind("object")
-    add_deps("log", "frame", "common", "rtp", "srtp")
+    add_deps("log", "frame", "common", "rtp")
     if is_os("windows") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",

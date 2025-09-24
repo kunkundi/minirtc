@@ -31,7 +31,7 @@ IceTransport::~IceTransport() {}
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
-    bool enable_turn, bool force_turn,
+    bool enable_turn, bool force_turn, bool enable_srtp,
     rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int> &video_payload_types,
     std::vector<int> &audio_payload_types) {
@@ -40,6 +40,7 @@ int IceTransport::SetLocalCapabilities(
   use_reliable_ice_ = use_reliable_ice;
   enable_turn_ = enable_turn;
   force_turn_ = force_turn;
+  enable_srtp_ = enable_srtp;
   prefered_video_payload_type_ = prefered_video_payload_type;
   support_video_payload_types_ = video_payload_types;
   support_audio_payload_types_ = audio_payload_types;
@@ -53,8 +54,8 @@ int IceTransport::InitIceTransmission(std::string &stun_ip, int stun_port,
                                       std::string &turn_password) {
   ice_agent_ = std::make_unique<IceAgent>(
       offer_peer_, use_trickle_ice_, use_reliable_ice_, enable_turn_,
-      force_turn_, stun_ip, stun_port, turn_ip, turn_port, turn_username,
-      turn_password);
+      force_turn_, enable_srtp_, stun_ip, stun_port, turn_ip, turn_port,
+      turn_username, turn_password);
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats &net_traffic_stats) {
@@ -94,21 +95,15 @@ int IceTransport::InitIceTransmission(std::string &stun_ip, int stun_port,
         static_cast<IceTransport *>(user_ptr)->OnReceiveBuffer(
             agent, stream_id, component_id, size, buffer, user_ptr);
       },
+      [](gpointer user_ptr) {
+        static_cast<IceTransport *>(user_ptr)->OnDtlsHandshakeDone(user_ptr);
+      },
       this);
 
   ice_transport_controller_ = std::make_shared<IceTransportController>(
-      clock_, ice_agent_, ice_io_statistics_);
+      clock_, ice_agent_, ice_io_statistics_, enable_srtp_);
 
   return 0;
-}
-
-std::string toHex(const std::vector<uint8_t> &vec) {
-  std::ostringstream oss;
-  for (uint8_t b : vec) {
-    oss << std::hex << std::uppercase << std::setw(2) << std::setfill('0')
-        << static_cast<int>(b);
-  }
-  return oss.str();
 }
 
 void IceTransport::OnIceStateChange(NiceAgent *agent, guint stream_id,
@@ -123,23 +118,6 @@ void IceTransport::OnIceStateChange(NiceAgent *agent, guint stream_id,
     if (state == NICE_COMPONENT_STATE_READY) {
       ice_io_statistics_->Start();
       ice_agent_->StartDtls(offer_peer_);
-
-      SrtpEngine::GlobalInit();
-
-      std::vector<uint8_t> local_key;
-      std::vector<uint8_t> local_salt;
-      std::vector<uint8_t> remote_key;
-      std::vector<uint8_t> remote_salt;
-      bool local_is_client_sender;
-
-      ice_agent_->ExportSrtpKeys(local_key, local_salt, remote_key, remote_salt,
-                                 offer_peer_);
-
-      LOG_INFO(
-          "SRTP keys exported: local key[{}], local salt[{}], remote key[{}], "
-          "remote salt[{}]",
-          toHex(local_key), toHex(local_salt), toHex(remote_key),
-          toHex(remote_salt));
 
       if (ice_transport_controller_) {
         ice_transport_controller_->UpdateNetworkAvaliablity(true);
@@ -221,6 +199,15 @@ void IceTransport::OnNewSelectedPair(NiceAgent *agent, guint stream_id,
                                 remote_user_id_.size(), user_data_);
 }
 
+void IceTransport::OnDtlsHandshakeDone(gpointer user_ptr) {
+  if (enable_srtp_) {
+    LOG_INFO("DTLS handshake done");
+    if (ice_transport_controller_) {
+      ice_transport_controller_->OnDtlsHandshakeDone(user_ptr);
+    }
+  }
+}
+
 uint32_t GetRtpSsrc(const char *buffer, size_t size) {
   uint32_t ssrc = 0;
   if (size >= 12) {
@@ -233,25 +220,48 @@ uint32_t GetRtpSsrc(const char *buffer, size_t size) {
 void IceTransport::OnReceiveBuffer(NiceAgent *agent, guint stream_id,
                                    guint component_id, guint size,
                                    gchar *buffer, gpointer user_ptr) {
-  if (!is_closed_) {
-    if (CheckIsRtpPacket(buffer, size)) {
-      uint32_t ssrc = GetRtpSsrc(buffer, size);
-      if (CheckIsVideoPacket(buffer, size) && ice_transport_controller_) {
-        ice_transport_controller_->OnReceiveVideoRtpPacket(buffer, size, ssrc);
-      } else if (CheckIsAudioPacket(buffer, size) &&
-                 ice_transport_controller_) {
-        ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size, ssrc);
-      } else if (CheckIsDataPacket(buffer, size) && ice_transport_controller_) {
-        ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size, ssrc);
-      }
-    } else if (CheckIsRtcpPacket(buffer, size)) {
-      // LOG_ERROR("Rtcp packet [{}]", (uint8_t)(buffer[1]));
-      RtcpPacketInfo rtcp_packet_info;
-      ParseRtcpPacket((const uint8_t *)buffer, size, &rtcp_packet_info);
-    } else {
+  if (is_closed_) {
+    return;
+  }
+
+  int len = static_cast<int>(size);
+  uint32_t ssrc = 0;
+
+  if (enable_srtp_) {
+    if (CheckIsRtcpPacket(buffer, size)) {
+      RtcpPacketInfo info;
+      ParseRtcpPacket(reinterpret_cast<const uint8_t *>(buffer), size, &info);
+      return;
+    }
+
+    if (!ice_transport_controller_->DecryptIncomingPacket(
+            reinterpret_cast<uint8_t *>(buffer), &len, &ssrc)) {
       uint8_t payload_type = buffer[1] & 0x7F;
       LOG_ERROR("Unknown packet [{} {}]", payload_type, size);
+      return;
     }
+    size = static_cast<guint>(len);
+
+  } else {
+    if (CheckIsRtcpPacket(buffer, size)) {
+      RtcpPacketInfo info;
+      ParseRtcpPacket(reinterpret_cast<const uint8_t *>(buffer), size, &info);
+      return;
+    }
+    if (!CheckIsRtpPacket(buffer, size)) {
+      uint8_t payload_type = buffer[1] & 0x7F;
+      LOG_ERROR("Unknown packet [{} {}]", payload_type, size);
+      return;
+    }
+    ssrc = GetRtpSsrc(buffer, size);
+  }
+
+  if (CheckIsVideoPacket(buffer, size)) {
+    ice_transport_controller_->OnReceiveVideoRtpPacket(buffer, size, ssrc);
+  } else if (CheckIsAudioPacket(buffer, size)) {
+    ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size, ssrc);
+  } else if (CheckIsDataPacket(buffer, size)) {
+    ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size, ssrc);
   }
 }
 
@@ -720,8 +730,9 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
 
   if (ice_transport_controller_) {
     ice_transport_controller_->Create(
-        remote_user_id_, negotiated_video_pt_, hardware_acceleration_,
-        on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
+        offer_peer_, remote_user_id_, negotiated_video_pt_,
+        hardware_acceleration_, on_receive_video_, on_receive_audio_,
+        on_receive_data_, user_data_);
     ice_transport_controller_->Start();
   }
 
@@ -882,8 +893,9 @@ std::string IceTransport::GetRemoteCapabilities(const std::string &remote_sdp) {
 
     if (ice_transport_controller_ && offer_peer_) {
       ice_transport_controller_->Create(
-          remote_user_id_, negotiated_video_pt_, hardware_acceleration_,
-          on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
+          offer_peer_, remote_user_id_, negotiated_video_pt_,
+          hardware_acceleration_, on_receive_video_, on_receive_audio_,
+          on_receive_data_, user_data_);
       ice_transport_controller_->Start();
     }
 

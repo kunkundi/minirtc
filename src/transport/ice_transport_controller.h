@@ -26,6 +26,7 @@
 #include "media_codec.h"
 #include "paced_sender.h"
 #include "resolution_adapter.h"
+#include "srtp_engine.h"
 #include "task_queue.h"
 #include "task_queue_lock_free.h"
 #include "transport_feedback_adapter.h"
@@ -48,11 +49,12 @@ class IceTransportController
  public:
   IceTransportController(std::shared_ptr<SystemClock> clock,
                          std::shared_ptr<IceAgent> ice_agent,
-                         std::shared_ptr<IOStatistics> ice_io_statistics);
+                         std::shared_ptr<IOStatistics> ice_io_statistics,
+                         bool enable_srtp);
   ~IceTransportController();
 
  public:
-  void Create(std::string remote_user_id,
+  void Create(bool offer_peer, std::string remote_user_id,
               rtp::PAYLOAD_TYPE video_codec_payload_type,
               bool hardware_acceleration, OnReceiveVideo on_receive_video,
               OnReceiveAudio on_receive_audio, OnReceiveData on_receive_data,
@@ -79,6 +81,8 @@ class IceTransportController
 
   void UpdateNetworkAvaliablity(bool network_available);
 
+  bool DecryptIncomingPacket(uint8_t *buffer, int *size, uint32_t *out_ssrc);
+
   int OnReceiveVideoRtpPacket(const char *data, size_t size, uint32_t ssrc);
   int OnReceiveAudioRtpPacket(const char *data, size_t size, uint32_t ssrc);
   int OnReceiveDataRtpPacket(const char *data, size_t size, uint32_t ssrc);
@@ -89,6 +93,8 @@ class IceTransportController
                               const std::string &channel_name);
   void OnReceiveCompleteData(const char *data, size_t size,
                              const std::string &channel_name);
+
+  void OnDtlsHandshakeDone(void *user_ptr);
 
  public:
   void OnSenderReport(const SenderReport &sender_report);
@@ -140,6 +146,11 @@ class IceTransportController
   std::shared_mutex stream_senders_mutex_;
   std::shared_mutex stream_receivers_mutex_;
 
+  std::map<uint32_t, std::shared_ptr<SrtpEngine::SrtpSession>>
+      ssrc_to_srtp_sender_;
+  std::map<uint32_t, std::shared_ptr<SrtpEngine::SrtpSession>>
+      ssrc_to_srtp_receiver_;
+
   std::map<uint32_t, std::string> ssrc_to_name_;
 
   OnReceiveVideo on_receive_video_ = nullptr;
@@ -152,8 +163,15 @@ class IceTransportController
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::shared_ptr<PacedSender> paced_sender_ = nullptr;
   std::string remote_user_id_;
+  bool offer_peer_ = false;
   void *user_data_ = nullptr;
   std::atomic<bool> is_running_;
+
+  bool enable_srtp_;
+  std::vector<uint8_t> local_key_;
+  std::vector<uint8_t> local_salt_;
+  std::vector<uint8_t> remote_key_;
+  std::vector<uint8_t> remote_salt_;
 
  private:
   std::shared_ptr<SystemClock> clock_;
