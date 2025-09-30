@@ -614,6 +614,8 @@ std::string IceAgent::ExtractAndStripFingerprint(const std::string& sdp) {
                                                                     : pos;
     LOG_INFO("Got fingerprint");
     return sdp.substr(0, cut_pos);
+  } else {
+    enable_srtp_ = false;
   }
 
   return sdp;
