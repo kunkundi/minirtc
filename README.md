@@ -1,34 +1,24 @@
-# projectx
+# MiniRTC
 
-vcpkg/buildtrees/versioning_/versions/pcre/69e232f12c4e3eab4115f0672466a6661978bea2$ vim portfile.cmake
+[中文](README_CN.md) / [English](README.md)
 
--    URLS "https://ftp.pcre.org/pub/pcre/pcre-${PCRE_VERSION}.zip"
-+    URLS "https://sourceforge.net/projects/pcre/files/pcre/${PCRE_VERSION}/pcre-${PCRE_VERSION}.zip"
+**Lightweight cross-platform real-time audio and video transmission library** designed for P2P communication. MiniRTC provides complete audio/video encoding/decoding, secure transmission, and network optimization. It is already stably used in the open-source remote desktop project [CrossDesk](https://github.com/kunkundi/crossdesk.git).  
 
-linux
+[License: MIT](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
 
-sudo apt-get install nvidia-cuda-toolkit
-solve <cuda.h>
+---
 
-sudo apt-get install libxcb-randr0-dev libxcb-xtest0-dev libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xkb-dev libxcb-xfixes0-dev libxv-dev libxtst-dev
-solve x11
+## Key Features
 
-sudo apt-get -y install libasound2-dev libsndio-dev libxcb-shm0-dev
-solve asound sndio xcb-shm
-
-sudo apt-get -y install libasound2-dev libpulse-dev && rebuild
-solve error dsp no such audio device
-
-sudo apt-get install libavcodec-dev libavformat-dev libavutil-dev libavfilter-dev libavdevice-dev
-
-sudo apt remove libssl-dev libglib2.0-dev
-
-install:
-	@echo hello world
-	install -D build/linux/x86_64/release/remote_desk -t /usr/bin
-	install -D config/config.ini -t /usr/bin
-	install -D build/linux/x86_64/release/libprojectx.so -t /usr/lib
-	install -D thirdparty/nvcodec/Lib/x64/libnvidia-encode.so.1 -t /usr/lib
-	install -D thirdparty/nvcodec/Lib/x64/libnvidia-encode.so -t /usr/lib
-	install -D thirdparty/nvcodec/Lib/x64/libnvcuvid.so.1 -t /usr/lib
-	install -D thirdparty/nvcodec/Lib/x64/libnvcuvid.so -t /usr/lib
+- **Cross-platform support**: Windows, Linux, macOS  
+- **P2P audio/video transmission**: Direct peer-to-peer connection for low latency and high real-time performance  
+- **Video codec support**:
+  - **AV1** software encoding/decoding  
+  - **H.264** hardware-accelerated encoding/decoding  
+    - Windows / Linux: **NVIDIA Video Codec SDK (NVENC/NVDEC)**  
+    - macOS: **Video Toolbox**  
+- **Audio codec support**: **Opus** encoding/decoding for high-quality, low-latency audio  
+- **Secure transmission**: Supports **SRTP (RFC 3711)** to protect audio/video streams  
+- **Network traversal**: NAT traversal based on **RFC 5245 (ICE)** for direct P2P connections in complex network environments  
+- **QoS support**: Reuses WebRTC core modules for packet loss recovery, bandwidth management, and jitter compensation  
+- **Lightweight design**: Small core library, easy to integrate into various projects
