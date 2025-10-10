@@ -1,24 +1,24 @@
 # MiniRTC
 
-[中文](README_CN.md) / [English](README.md)
+[English](README.md) / [中文](README_CN.md)
 
-**Lightweight cross-platform real-time audio and video transmission library** designed for P2P communication. MiniRTC provides complete audio/video encoding/decoding, secure transmission, and network optimization. It is already stably used in the open-source remote desktop project [CrossDesk](https://github.com/kunkundi/crossdesk.git).  
+**轻量级跨平台实时音视频传输库**，专为 P2P 通信设计，低延迟、高性能、安全可靠。MiniRTC 提供完整的音视频编解码、加密传输和网络优化方案，并已在开源远程桌面项目 [CrossDesk](https://github.com/kunkundi/crossdesk.git) 中稳定应用。  
 
 [License: MIT](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
 
 ---
 
-## Key Features
+## 核心特性
 
-- **Cross-platform support**: Windows, Linux, macOS  
-- **P2P audio/video transmission**: Direct peer-to-peer connection for low latency and high real-time performance  
-- **Video codec support**:
-  - **AV1** software encoding/decoding  
-  - **H.264** hardware-accelerated encoding/decoding  
+- **跨平台支持**：Windows、Linux、macOS 等主流平台  
+- **P2P 音视频传输**：点对点直连，降低延迟，提高实时性  
+- **多视频编码支持**：
+  - **AV1** 软件编解码  
+  - **H.264** 硬件加速编码/解码  
     - Windows / Linux: **NVIDIA Video Codec SDK (NVENC/NVDEC)**  
     - macOS: **Video Toolbox**  
-- **Audio codec support**: **Opus** encoding/decoding for high-quality, low-latency audio  
-- **Secure transmission**: Supports **SRTP (RFC 3711)** to protect audio/video streams  
-- **Network traversal**: NAT traversal based on **RFC 5245 (ICE)** for direct P2P connections in complex network environments  
-- **QoS support**: Reuses WebRTC core modules for packet loss recovery, bandwidth management, and jitter compensation  
-- **Lightweight design**: Small core library, easy to integrate into various projects
+- **音频编码支持**：**Opus** 编解码，高质量低延迟  
+- **安全加密**：支持 **SRTP 协议 (RFC 3711)**，保障音视频传输安全  
+- **网络透传**：基于 **RFC 5245 (ICE)** 的 NAT 穿透，适应复杂网络环境，实现直接连接  
+- **QoS 保证**：复用 WebRTC 核心模块，实现丢包恢复、带宽管理与网络抖动补偿  
+- **轻量化设计**：核心库体积小，易于集成到各类项目  
