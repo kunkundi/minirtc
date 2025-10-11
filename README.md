@@ -4,7 +4,7 @@
 
 **轻量级跨平台实时音视频传输库**，专为 P2P 通信设计，低延迟、高性能、安全可靠。MiniRTC 提供完整的音视频编解码、加密传输和网络优化方案，并已在开源远程桌面项目 [CrossDesk](https://github.com/kunkundi/crossdesk.git) 中稳定应用。  
 
-[License: MIT](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
+[License: LGPL-3.0](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
 
 ---
 

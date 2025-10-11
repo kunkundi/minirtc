@@ -4,7 +4,7 @@
 
 **Lightweight cross-platform real-time audio and video transmission library** designed for P2P communication. MiniRTC provides complete audio/video encoding/decoding, secure transmission, and network optimization. It is already stably used in the open-source remote desktop project [CrossDesk](https://github.com/kunkundi/crossdesk.git).  
 
-[License: MIT](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
+[License: LGPL-3.0](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
 
 ---
 
