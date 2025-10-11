@@ -54,3 +54,34 @@ export XMAKE_GLOBALDIR=/data
 
 xmake b --root minirtc
 ```
+
+## 关于 Xmake
+
+#### 安装 Xmake
+使用 curl：
+```
+curl -fsSL https://xmake.io/shget.text | bash
+```
+使用 wget：
+```
+wget https://xmake.io/shget.text -O - | bash
+```
+使用 powershell：
+```
+irm https://xmake.io/psget.text | iex
+```
+
+#### 编译选项
+```
+# 切换编译模式
+xmake f -m debug/release
+
+# 可选编译参数
+-r ：重新构建目标
+-v ：显示详细的构建日志
+-y ：自动确认提示
+
+# 示例
+xmake b -vy minirtc
+```
+更多使用方法可参考 [Xmake官方文档](https://xmake.io/guide/quick-start.html) 。

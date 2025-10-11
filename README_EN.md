@@ -60,3 +60,36 @@ export XMAKE_GLOBALDIR=/data
 
 xmake b --root crossdesk
 ```
+
+## About Xmake
+#### Installing Xmake
+
+You can install Xmake using one of the following methods:
+
+Using curl:
+```
+curl -fsSL https://xmake.io/shget.text | bash
+```
+Using wget:
+```
+wget https://xmake.io/shget.text -O - | bash
+```
+Using powershell:
+```
+irm https://xmake.io/psget.text | iex
+```
+
+#### Build Options
+```
+# Switch build mode
+xmake f -m debug/release
+
+# Optional build parameters
+-r : Rebuild the target
+-v : Show detailed build logs
+-y : Automatically confirm prompts
+
+# Example
+xmake b -vy minirtc
+```
+For more information, please refer to the [official Xmake documentation](https://xmake.io/guide/quick-start.html) .
