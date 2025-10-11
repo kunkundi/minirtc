@@ -22,3 +22,35 @@
 - **网络透传**：基于 **RFC 5245 (ICE)** 的 NAT 穿透，适应复杂网络环境，实现直接连接  
 - **QoS 保证**：复用 WebRTC 核心模块，实现丢包恢复、带宽管理与网络抖动补偿  
 - **轻量化设计**：核心库体积小，易于集成到各类项目  
+
+## 如何编译
+
+依赖：
+- [xmake](https://xmake.io/#/guide/installation)
+- [cmake](https://cmake.org/download/)
+
+Linux环境下需安装以下包：
+
+```
+sudo apt-get install -y software-properties-common git curl unzip build-essential libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxcb-randr0-dev libxcb-xtest0-dev libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xkb-dev libxcb-xfixes0-dev libxv-dev libxtst-dev libasound2-dev libsndio-dev libxcb-shm0-dev libasound2-dev libpulse-dev
+```
+编译
+```
+git clone https://github.com/kunkundi/minirtc.git
+
+cd minirtc
+
+xmake b minirtc
+```
+#### 无 CUDA 环境下的开发支持
+
+对于未安装 **CUDA 环境** 的Linux开发者，这里提供了预配置的 [Ubuntu 22.04 Docker 镜像](https://hub.docker.com/r/crossdesk/ubuntu22.04)。  
+该镜像内置必要的构建依赖，可在容器中开箱即用，无需额外配置即可直接编译项目。
+
+进入容器，下载工程后执行：
+```
+export CUDA_PATH=/usr/local/cuda
+export XMAKE_GLOBALDIR=/data
+
+xmake b --root minirtc
+```

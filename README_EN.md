@@ -22,3 +22,41 @@
 - **Network traversal**: NAT traversal based on **RFC 5245 (ICE)** for direct P2P connections in complex network environments  
 - **QoS support**: Reuses WebRTC core modules for packet loss recovery, bandwidth management, and jitter compensation  
 - **Lightweight design**: Small core library, easy to integrate into various projects
+
+## How to build
+
+Requirements:
+- [xmake](https://xmake.io/#/guide/installation)
+- [cmake](https://cmake.org/download/)
+
+Following packages need to be installed on Linux:
+
+```
+sudo apt-get install -y software-properties-common git curl unzip build-essential libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxcb-randr0-dev libxcb-xtest0-dev libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xkb-dev libxcb-xfixes0-dev libxv-dev libxtst-dev libasound2-dev libsndio-dev libxcb-shm0-dev libasound2-dev libpulse-dev
+```
+
+Build:
+```
+git clone https://github.com/kunkundi/crossdesk.git
+
+cd crossdesk
+
+git submodule init 
+
+git submodule update
+
+xmake b crossdesk
+```
+
+## Development Without CUDA Environment
+
+For developers who do not have a **CUDA environment** installed, a preconfigured [Ubuntu 22.04 Docker image](https://hub.docker.com/r/crossdesk/ubuntu22.04) is provided.  
+This image comes with all required build dependencies and allows you to build the project directly inside the container without any additional setup.
+
+After entering the container, download the project and run:
+```
+export CUDA_PATH=/usr/local/cuda
+export XMAKE_GLOBALDIR=/data
+
+xmake b --root crossdesk
+```
