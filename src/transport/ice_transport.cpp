@@ -226,28 +226,33 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
 
   int len = static_cast<int>(size);
   uint32_t ssrc = 0;
+  const uint8_t* data = reinterpret_cast<const uint8_t*>(buffer);
 
+  // check is RTCP packet or not
+  if (CheckIsRtcpPacket(buffer, size)) {
+    RtcpPacketInfo info;
+    ParseRtcpPacket(data, size, &info);
+    return;
+  }
+
+  // if SRTP enabled, try to decrypt first
   if (enable_srtp_) {
-    if (CheckIsRtcpPacket(buffer, size)) {
-      RtcpPacketInfo info;
-      ParseRtcpPacket(reinterpret_cast<const uint8_t*>(buffer), size, &info);
-      return;
-    }
+    bool is_audio = CheckIsAudioPacket(buffer, size);
+    bool is_data = CheckIsDataPacket(buffer, size);
 
-    if (!ice_transport_controller_->DecryptIncomingPacket(
-            reinterpret_cast<uint8_t*>(buffer), &len, &ssrc)) {
-      uint8_t payload_type = buffer[1] & 0x7F;
-      LOG_ERROR("Unknown packet [{} {}]", payload_type, size);
-      return;
+    // do not decrypt audio and data packet because they are not encrypted now
+    if (!is_audio && !is_data) {
+      if (!ice_transport_controller_->DecryptIncomingPacket(
+              reinterpret_cast<uint8_t*>(buffer), &len, &ssrc)) {
+        uint8_t payload_type = buffer[1] & 0x7F;
+        LOG_ERROR("Unknown packet [{} {}]", payload_type, size);
+        return;
+      }
+      size = static_cast<guint>(len);
+    } else {
+      ssrc = GetRtpSsrc(buffer, size);
     }
-    size = static_cast<guint>(len);
-
   } else {
-    if (CheckIsRtcpPacket(buffer, size)) {
-      RtcpPacketInfo info;
-      ParseRtcpPacket(reinterpret_cast<const uint8_t*>(buffer), size, &info);
-      return;
-    }
     if (!CheckIsRtpPacket(buffer, size)) {
       uint8_t payload_type = buffer[1] & 0x7F;
       LOG_ERROR("Unknown packet [{} {}]", payload_type, size);

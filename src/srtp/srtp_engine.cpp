@@ -152,17 +152,29 @@ SrtpEngine::SrtpSession SrtpEngine::CreateReceiver(const Params& p) {
 }
 
 int SrtpEngine::SrtpSession::protectRtp(uint8_t* buf, int* len) const {
-  if (!session_) return -1;
-  if (!buf || !len || *len <= 0) return -2;
+  if (!session_) {
+    return -1;
+  }
+
+  if (!buf || !len || *len <= 0) {
+    return -2;
+  }
+
   // Caller must ensure tailroom >= 16 for GCM tag.
   srtp_err_status_t st = srtp_protect(session_, buf, len);
   return (st == srtp_err_status_ok) ? 0 : -3;
 }
 
 int SrtpEngine::SrtpSession::unprotectRtp(uint8_t* buf, int* len) const {
-  if (!session_) return -1;
-  if (!buf || !len || *len <= 0) return -2;
+  if (!session_) {
+    return -1;
+  }
+
+  if (!buf || !len || *len <= 0) {
+    return -2;
+  }
+
   srtp_err_status_t st = srtp_unprotect(session_, buf, len);
   return (st == srtp_err_status_ok) ? 0 : -3;
 }
-}
+}  // namespace minirtc
