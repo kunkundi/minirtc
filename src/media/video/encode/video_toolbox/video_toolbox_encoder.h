@@ -50,7 +50,7 @@ class VideoToolboxEncoder : public MediaCodec {
 
   int frame_width_ = 2880;
   int frame_height_ = 1800;
-  int fps_ = 30;
+  int max_fps_ = 60;
   int target_bitrate_ = 10000000;
   int key_frame_interval_ = 3000;
 

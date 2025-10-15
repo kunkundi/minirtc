@@ -20,8 +20,8 @@
 
 namespace minirtc {
 
-static void Nv12ToI420(unsigned char *Src_data, int src_width, int src_height,
-                       unsigned char *Dst_data) {
+static void Nv12ToI420(unsigned char* Src_data, int src_width, int src_height,
+                       unsigned char* Dst_data) {
   // NV12
   int NV12_Y_Size = src_width * src_height;
 
@@ -31,23 +31,23 @@ static void Nv12ToI420(unsigned char *Src_data, int src_width, int src_height,
   int I420_V_Size = I420_U_Size;
 
   // src: buffer address of Y channel and UV channel
-  unsigned char *Y_data_Src = Src_data;
-  unsigned char *UV_data_Src = Src_data + NV12_Y_Size;
+  unsigned char* Y_data_Src = Src_data;
+  unsigned char* UV_data_Src = Src_data + NV12_Y_Size;
   int src_stride_y = src_width;
   int src_stride_uv = src_width;
 
   // dst: buffer address of Y channel、U channel and V channel
-  unsigned char *Y_data_Dst = Dst_data;
-  unsigned char *U_data_Dst = Dst_data + I420_Y_Size;
-  unsigned char *V_data_Dst = Dst_data + I420_Y_Size + I420_V_Size;
+  unsigned char* Y_data_Dst = Dst_data;
+  unsigned char* U_data_Dst = Dst_data + I420_Y_Size;
+  unsigned char* V_data_Dst = Dst_data + I420_Y_Size + I420_V_Size;
   int Dst_Stride_Y = src_width;
   int Dst_Stride_U = src_width >> 1;
   int Dst_Stride_V = Dst_Stride_U;
 
   libyuv::NV12ToI420(
-      (const uint8_t *)Y_data_Src, src_stride_y, (const uint8_t *)UV_data_Src,
-      src_stride_uv, (uint8_t *)Y_data_Dst, Dst_Stride_Y, (uint8_t *)U_data_Dst,
-      Dst_Stride_U, (uint8_t *)V_data_Dst, Dst_Stride_V, src_width, src_height);
+      (const uint8_t*)Y_data_Src, src_stride_y, (const uint8_t*)UV_data_Src,
+      src_stride_uv, (uint8_t*)Y_data_Dst, Dst_Stride_Y, (uint8_t*)U_data_Dst,
+      Dst_Stride_U, (uint8_t*)V_data_Dst, Dst_Stride_V, src_width, src_height);
 }
 
 SvtAv1Encoder::SvtAv1Encoder(std::shared_ptr<SystemClock> clock)
@@ -156,7 +156,7 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.source_height = frame_height_;
   enc_config_.encoder_color_format = EB_YUV420;
   enc_config_.encoder_bit_depth = 8;
-  enc_config_.frame_rate_numerator = 60;
+  enc_config_.frame_rate_numerator = max_fps_;
   enc_config_.frame_rate_denominator = 1;
   enc_config_.enc_mode = 10;
   enc_config_.rate_control_mode = SVT_AV1_RC_MODE_CBR;
@@ -205,8 +205,8 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
 }
 
 int SvtAv1Encoder::Encode(
-    const RawFrame &raw_frame,
-    std::function<int(const EncodedFrame &encoded_frame)> on_encoded_image) {
+    const RawFrame& raw_frame,
+    std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
   if (!svt_av1_encoder_) {
     LOG_ERROR("Invalid openh264 encoder");
     return -1;
@@ -232,20 +232,20 @@ int SvtAv1Encoder::Encode(
     ResetEncodeResolution(raw_frame.Width(), raw_frame.Height());
   }
 
-  Nv12ToI420((unsigned char *)raw_frame.Buffer(), raw_frame.Width(),
+  Nv12ToI420((unsigned char*)raw_frame.Buffer(), raw_frame.Width(),
              raw_frame.Height(), yuv420p_frame_);
 
-  EbSvtIOFormat *input_picture_buffer =
-      (EbSvtIOFormat *)stream_header_buffer_->p_buffer;
+  EbSvtIOFormat* input_picture_buffer =
+      (EbSvtIOFormat*)stream_header_buffer_->p_buffer;
 
   const int y_stride = frame_width_;
   const int uv_stride = frame_width_ / 2;
   const int y_plane_size = y_stride * frame_height_;
   const int uv_plane_size = uv_stride * (frame_height_ / 2);
 
-  uint8_t *y_dst = yuv420p_frame_;
-  uint8_t *u_dst = y_dst + y_plane_size;
-  uint8_t *v_dst = u_dst + uv_plane_size;
+  uint8_t* y_dst = yuv420p_frame_;
+  uint8_t* u_dst = y_dst + y_plane_size;
+  uint8_t* v_dst = u_dst + uv_plane_size;
 
   input_picture_buffer->luma = y_dst;
   input_picture_buffer->cb = u_dst;
@@ -275,7 +275,7 @@ int SvtAv1Encoder::Encode(
     return -1;
   }
 
-  EbBufferHeaderType *output_packet = NULL;
+  EbBufferHeaderType* output_packet = NULL;
 
   EbErrorType packet_ret =
       svt_av1_enc_get_packet(svt_av1_encoder_, &output_packet, 0);
@@ -326,7 +326,7 @@ int SvtAv1Encoder::SetTargetBitrate(int bitrate) {
   return 0;
 }
 
-int SvtAv1Encoder::GetResolution(int *width, int *height) {
+int SvtAv1Encoder::GetResolution(int* width, int* height) {
   if (width) *width = frame_width_;
   if (height) *height = frame_height_;
   return 0;

@@ -77,7 +77,7 @@ class AomAv1Encoder : public MediaCodec {
   int target_bitrate_ = 1000;
   int max_bitrate_ = 2500000;
   int max_payload_size_ = 1400;
-  int max_frame_rate_ = 30;
+  int max_fps_ = 30;
   int number_of_cores_ = 4;
 
   std::vector<std::vector<uint8_t>> encoded_packets_;

@@ -141,8 +141,8 @@ int NvidiaVideoEncoder::Init() {
 }
 
 int NvidiaVideoEncoder::Encode(
-    const RawFrame &raw_frame,
-    std::function<int(const EncodedFrame &encoded_frame)> on_encoded_image) {
+    const RawFrame& raw_frame,
+    std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
   if (!encoder_) {
     LOG_ERROR("Invalid encoder");
     return -1;
@@ -173,10 +173,10 @@ int NvidiaVideoEncoder::Encode(
   auto start = std::chrono::steady_clock::now();
 #endif
 
-  const NvEncInputFrame *encoder_inputframe = encoder_->GetNextInputFrame();
+  const NvEncInputFrame* encoder_inputframe = encoder_->GetNextInputFrame();
   NvEncoderCuda::CopyToDeviceFrame(
       cuda_context_,
-      (void *)raw_frame.Buffer(),  // NOLINT
+      (void*)raw_frame.Buffer(),  // NOLINT
       0, (CUdeviceptr)encoder_inputframe->inputPtr, encoder_inputframe->pitch,
       encoder_->GetEncodeWidth(), encoder_->GetEncodeHeight(),
       CU_MEMORYTYPE_HOST, encoder_inputframe->bufferFormat,
@@ -188,7 +188,7 @@ int NvidiaVideoEncoder::Encode(
     return -1;
   }
 
-  for (const auto &packet : encoded_packets_) {
+  for (const auto& packet : encoded_packets_) {
     if (on_encoded_image) {
       EncodedFrame encoded_frame(packet.data(), packet.size(),
                                  encoder_->GetEncodeWidth(),
@@ -201,7 +201,7 @@ int NvidiaVideoEncoder::Encode(
       encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
       on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_H264_STREAM
-      fwrite((unsigned char *)packet.data(), 1, packet.size(), file_h264_);
+      fwrite((unsigned char*)packet.data(), 1, packet.size(), file_h264_);
 #endif
     }
   }
@@ -253,7 +253,7 @@ int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
   init_params.encodeConfig = &encode_config;
   encoder_->GetInitializeParams(&init_params);
   init_params.frameRateDen = 1;
-  init_params.frameRateNum = init_params.frameRateDen * fps_;
+  init_params.frameRateNum = init_params.frameRateDen * max_fps_;
   init_params.encodeConfig->rcParams.averageBitRate = bitrate;
   init_params.encodeConfig->rcParams.maxBitRate = bitrate;
   reconfig_params.reInitEncodeParams = init_params;

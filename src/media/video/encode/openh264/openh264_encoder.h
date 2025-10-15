@@ -60,7 +60,7 @@ class OpenH264Encoder : public MediaCodec {
   int target_bitrate_ = 10000000;
   int max_bitrate_ = 10000000;
   int max_payload_size_ = 1400;
-  int max_frame_rate_ = 30;
+  int max_fps_ = 30;
   std::vector<std::vector<uint8_t>> encoded_packets_;
   unsigned char* encoded_image_ = nullptr;
   FILE* file_h264_ = nullptr;

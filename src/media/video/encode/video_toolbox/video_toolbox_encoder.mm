@@ -34,7 +34,7 @@ class VideoToolboxEncoder::Impl {
   std::shared_ptr<SystemClock> clock_;
   int width_ = 2880;
   int height_ = 1800;
-  int fps_ = 30;
+  int max_fps_ = 60;
   int bitrate_ = 5000000;
   int keyframe_interval_ = 30;
   int seq_ = 0;
@@ -97,7 +97,7 @@ int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
   lock_guard<mutex> guard(lock_);
   width_ = width;
   height_ = height;
-  fps_ = fps;
+  max_fps_ = fps;
   bitrate_ = bitrate;
   keyframe_interval_ = keyframe_interval;
 
@@ -135,7 +135,7 @@ int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_MaxKeyFrameInterval, frameIntervalRef);
   CFRelease(frameIntervalRef);
 
-  CFNumberRef fpsRef = CFNumberCreate(nullptr, kCFNumberIntType, &fps_);
+  CFNumberRef fpsRef = CFNumberCreate(nullptr, kCFNumberIntType, &max_fps_);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_ExpectedFrameRate, fpsRef);
   CFRelease(fpsRef);
 
@@ -389,7 +389,7 @@ VideoToolboxEncoder::VideoToolboxEncoder(std::shared_ptr<SystemClock> clock)
 VideoToolboxEncoder::~VideoToolboxEncoder() = default;
 
 int VideoToolboxEncoder::Init() {
-  return impl_->Init(frame_width_, frame_height_, fps_, target_bitrate_, key_frame_interval_);
+  return impl_->Init(frame_width_, frame_height_, max_fps_, target_bitrate_, key_frame_interval_);
 }
 
 int VideoToolboxEncoder::Encode(const RawFrame& raw_frame,

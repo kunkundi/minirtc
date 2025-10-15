@@ -279,8 +279,8 @@ int AomAv1Encoder::Init() {
 }
 
 int AomAv1Encoder::Encode(
-    const RawFrame &raw_frame,
-    std::function<int(const EncodedFrame &encoded_frame)> on_encoded_image) {
+    const RawFrame& raw_frame,
+    std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
 #ifdef SAVE_RECEIVED_NV12_STREAM
   fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
 #endif
@@ -308,14 +308,13 @@ int AomAv1Encoder::Encode(
   }
 
   const uint32_t duration =
-      (uint32_t)(kRtpTicksPerSecond / static_cast<float>(max_frame_rate_));
+      (uint32_t)(kRtpTicksPerSecond / static_cast<float>(max_fps_));
   timestamp_ += duration;
 
-  frame_for_encode_->planes[AOM_PLANE_Y] =
-      (unsigned char *)(raw_frame.Buffer());
+  frame_for_encode_->planes[AOM_PLANE_Y] = (unsigned char*)(raw_frame.Buffer());
   frame_for_encode_->planes[AOM_PLANE_U] =
-      (unsigned char *)(raw_frame.Buffer() +
-                        raw_frame.Width() * raw_frame.Height());
+      (unsigned char*)(raw_frame.Buffer() +
+                       raw_frame.Width() * raw_frame.Height());
   frame_for_encode_->planes[AOM_PLANE_V] = nullptr;
   frame_for_encode_->stride[AOM_PLANE_Y] = raw_frame.Width();
   frame_for_encode_->stride[AOM_PLANE_U] = raw_frame.Width();
@@ -343,7 +342,7 @@ int AomAv1Encoder::Encode(
   }
 
   aom_codec_iter_t iter = nullptr;
-  while (const aom_codec_cx_pkt_t *pkt =
+  while (const aom_codec_cx_pkt_t* pkt =
              aom_codec_get_cx_data(&aom_av1_encoder_ctx_, &iter)) {
     if (pkt->kind == AOM_CODEC_CX_FRAME_PKT && pkt->data.frame.sz > 0) {
       memcpy(encoded_frame_, pkt->data.frame.buf, pkt->data.frame.sz);
