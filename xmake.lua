@@ -21,6 +21,7 @@ includes("thirdparty")
 if is_os("windows") then
     add_defines("_WEBSOCKETPP_CPP11_INTERNAL_")
     add_cxflags("/WX")
+    set_runtimes("MT")
 elseif is_os("linux") then
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
