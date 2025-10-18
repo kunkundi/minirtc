@@ -83,6 +83,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
   LOG_INFO("Signal server ip [{}] port [{}]", cfg_signal_server_ip_,
            cfg_signal_server_port_);
 
+  LOG_INFO("Cert file path [{}]", cfg_tls_cert_path_);
+
   LOG_INFO("Stun server ip [{}] port [{}]", cfg_stun_server_ip_,
            cfg_stun_server_port_);
 

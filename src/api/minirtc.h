@@ -91,18 +91,18 @@ typedef void (*NetStatusReport)(const char*, const size_t, TraversalMode,
 
 typedef struct {
   bool use_cfg_file;
-  const char* cfg_path;
+  char cfg_path[256];
 
-  const char* signal_server_ip;
+  char signal_server_ip[256];
   int signal_server_port;
-  const char* stun_server_ip;
+  char stun_server_ip[256];
   int stun_server_port;
-  const char* turn_server_ip;
+  char turn_server_ip[256];
   int turn_server_port;
-  const char* turn_server_username;
-  const char* turn_server_password;
-  const char* tls_cert_path;
-  const char* log_path;
+  char turn_server_username[256];
+  char turn_server_password[256];
+  char tls_cert_path[256];
+  char log_path[256];
   bool hardware_acceleration;
   bool av1_encoding;
   bool enable_turn;
