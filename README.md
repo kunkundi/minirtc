@@ -1,10 +1,14 @@
 # MiniRTC
 
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)  
+[![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc.svg)]()
+[![GitHub stars](https://img.shields.io/github/stars/kunkundi/minirtc.svg?style=social)]()
+[![GitHub forks](https://img.shields.io/github/forks/kunkundi/minirtc.svg?style=social)]()
+
 [English](README_EN.md) / [中文](README.md)
 
 **轻量级跨平台实时音视频传输库**，专为 P2P 通信设计，低延迟、高性能、安全可靠。MiniRTC 提供完整的音视频编解码、加密传输和网络优化方案，并已在开源远程桌面项目 [CrossDesk](https://github.com/kunkundi/crossdesk.git) 中稳定应用。  
-
-[License: LGPL-3.0](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
 
 ---
 

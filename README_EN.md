@@ -1,10 +1,14 @@
 # MiniRTC
 
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)  
+[![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc.svg)]()
+[![GitHub stars](https://img.shields.io/github/stars/kunkundi/minirtc.svg?style=social)]()
+[![GitHub forks](https://img.shields.io/github/forks/kunkundi/minirtc.svg?style=social)]()
+
 [中文](README_CN.md) / [English](README.md)
 
 **Lightweight cross-platform real-time audio and video transmission library** designed for P2P communication. MiniRTC provides complete audio/video encoding/decoding, secure transmission, and network optimization. It is already stably used in the open-source remote desktop project [CrossDesk](https://github.com/kunkundi/crossdesk.git).  
-
-[License: LGPL-3.0](LICENSE) | [Platform: Windows | Linux | macOS] | [Codec: AV1 | H.264 | Opus]  
 
 ---
 
