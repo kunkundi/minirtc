@@ -6,7 +6,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/kunkundi/minirtc.svg?style=social)]()
 [![GitHub forks](https://img.shields.io/github/forks/kunkundi/minirtc.svg?style=social)]()
 
-[English](README_EN.md) / [中文](README.md)
+[ [English](README_EN.md) / 中文 ]
 
 **轻量级跨平台实时音视频传输库**，专为 P2P 通信设计，低延迟、高性能、安全可靠。MiniRTC 提供完整的音视频编解码、加密传输和网络优化方案，并已在开源远程桌面项目 [CrossDesk](https://github.com/kunkundi/crossdesk.git) 中稳定应用。  
 

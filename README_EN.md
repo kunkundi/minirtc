@@ -6,7 +6,7 @@
 [![GitHub stars](https://img.shields.io/github/stars/kunkundi/minirtc.svg?style=social)]()
 [![GitHub forks](https://img.shields.io/github/forks/kunkundi/minirtc.svg?style=social)]()
 
-[中文](README_CN.md) / [English](README.md)
+[ [中文](README_CN.md) / English ]
 
 **Lightweight cross-platform real-time audio and video transmission library** designed for P2P communication. MiniRTC provides complete audio/video encoding/decoding, secure transmission, and network optimization. It is already stably used in the open-source remote desktop project [CrossDesk](https://github.com/kunkundi/crossdesk.git).  
 
