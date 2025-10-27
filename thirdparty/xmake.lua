@@ -1,1 +1,1 @@
-includes("libsrtp", "openfec", "libyuv", "aom", "openh264", "dav1d", "glib", "libnice", "websocketpp")
+includes("libsrtp", "openfec", "libyuv", "aom", "openh264", "dav1d", "glib", "libnice", "websocketpp", "libdatachannel")
