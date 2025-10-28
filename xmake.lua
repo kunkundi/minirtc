@@ -23,7 +23,7 @@ option("use_libdatachannel")
 option_end()
 
 if has_config("use_libdatachannel") then
-    add_requires("libdatachannel 0.23.2", {configs = {nice = true, media = true}})
+    add_requires("libdatachannel 0.23.2", {configs = {nice = true, media = true, websocket = true}})
     add_packages("libdatachannel")
 else
 end
@@ -149,10 +149,12 @@ target("transport")
     add_deps("log", "ws", "ice", "rtp", "rtcp", "srtp", "statistics", "media", "qos")
     add_files("src/transport/*.cpp",
     "src/transport/channel/*.cpp",
-    "src/transport/paced_sender/*.cpp")
+    "src/transport/paced_sender/*.cpp",
+    "src/transport/datachannel_transport/*.cpp")
     add_includedirs("src/transport",
     "src/transport/channel",
-    "src/transport/paced_sender", {public = true})
+    "src/transport/paced_sender", 
+    "src/transport/datachannel_transport", {public = true})
 
 target("media")
     set_kind("object")
@@ -289,3 +291,9 @@ target("minirtc")
 --     os.rm("$(projectdir)/out/lib/*.a")
 --     os.rm("$(projectdir)/out/include/log.h")
 -- end)
+
+target("libdatachannel_test")
+    set_kind("binary")
+    add_packages("libdatachannel")
+    add_deps("log")
+    add_files("tests/libdatachannel/*.cpp")

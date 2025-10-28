@@ -26,7 +26,7 @@ package("libdatachannel")
 
     add_deps("cmake")
     add_deps("plog", "usrsctp")
-    add_deps("nlohmann_json", {configs = {cmake = true}})
+    add_deps("nlohmann_json 3.11.3")
 
     on_check("wasm", function (target)
         raise("package(libdatachannel) dep(usrsctp) unsupported wasm platform")
@@ -45,7 +45,7 @@ package("libdatachannel")
         elseif package:config("gnutls") then
             package:add("deps", "gnutls")
         else
-            package:add("deps", "openssl3")
+            package:add("deps", "openssl3 3.3.2")
         end
 
         if package:config("nice") then
@@ -55,7 +55,7 @@ package("libdatachannel")
         end
 
         if package:config("media") then
-            package:add("deps", "srtp")
+            package:add("deps", "libsrtp v2.7.0")
         else
             package:add("defines", "RTC_ENABLE_MEDIA=0")
         end
