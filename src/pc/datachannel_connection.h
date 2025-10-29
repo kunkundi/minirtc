@@ -15,8 +15,13 @@
 #include "audio_decoder.h"
 #include "audio_encoder.h"
 #include "clock/system_clock.h"
+#include "datachannel_transport.h"
+#include "helpers.h"
 #include "ice_transport.h"
 #include "minirtc.h"
+#include "rtc/rtc.hpp"
+#include "rtc/websocket.hpp"
+#include "stream.h"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 #include "ws_client.h"
@@ -90,10 +95,10 @@ struct IceWorkMsg {
   std::string remote_sdp;
 };
 
-class PeerConnection {
+class DataChannelConnection {
  public:
-  PeerConnection();
-  ~PeerConnection();
+  DataChannelConnection();
+  ~DataChannelConnection();
 
  public:
   int Init(PeerConnectionParams params);
@@ -134,6 +139,25 @@ class PeerConnection {
   void PushIceWorkMsg(const IceWorkMsg& msg);
 
  private:
+  std::shared_ptr<DataChannelTransport> CreateDataChannelConnection(
+      const ::rtc::Configuration& config, std::weak_ptr<::rtc::WebSocket> wws,
+      std::string id);
+
+  std::shared_ptr<Stream> AddVideo(
+      const std::shared_ptr<::rtc::PeerConnection> pc,
+      const uint8_t payloadType, const uint32_t ssrc, const std::string cname,
+      const std::string msid, const std::function<void(void)> onOpen);
+
+  std::shared_ptr<Stream> AddAudio(
+      const std::shared_ptr<::rtc::PeerConnection> pc,
+      const uint8_t payloadType, const uint32_t ssrc, const std::string cname,
+      const std::string msid, const std::function<void(void)> onOpen);
+
+  std::shared_ptr<Stream> CreateStream(const std::string h264Samples,
+                                       const unsigned fps,
+                                       const std::string opusSamples);
+
+ private:
   std::string uri_ = "";
   std::string cfg_signal_server_ip_;
   std::string cfg_signal_server_port_;
@@ -171,7 +195,7 @@ class PeerConnection {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  std::shared_ptr<WsClient> ws_transport_ = nullptr;
+  std::shared_ptr<::rtc::WebSocket> ws_transport_ = nullptr;
   std::function<void(const std::string&)> on_receive_ws_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
   unsigned int ws_connection_id_ = 0;
@@ -221,6 +245,11 @@ class PeerConnection {
   std::condition_variable empty_notify_cv_;
   std::mutex ice_work_mutex_;
   std::mutex empty_notify_mutex_;
+
+ private:
+  std::unordered_map<std::string, std::shared_ptr<DataChannelTransport>>
+      dc_transport_list_{};
+  std::optional<std::shared_ptr<Stream>> avStream = std::nullopt;
 };
 }  // namespace minirtc
 
