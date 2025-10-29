@@ -16,17 +16,18 @@
 
 namespace minirtc {
 
+class Stream {
+ public:
+  Stream(std::shared_ptr<::rtc::Track> track,
+         std::shared_ptr<::rtc::RtcpSrReporter> sender);
+
+  std::shared_ptr<::rtc::Track> track_;
+  std::shared_ptr<::rtc::RtcpSrReporter> sender_;
+};
+
 class DataChannelTransport {
  public:
   enum class State { Waiting, WaitingForVideo, WaitingForAudio, Ready };
-
-  struct Stream {
-    std::shared_ptr<::rtc::Track> track;
-    std::shared_ptr<::rtc::RtcpSrReporter> sender;
-
-    Stream(std::shared_ptr<::rtc::Track> track,
-           std::shared_ptr<::rtc::RtcpSrReporter> sender);
-  };
 
  public:
   DataChannelTransport(std::shared_ptr<::rtc::PeerConnection> peer_connection);
@@ -39,7 +40,7 @@ class DataChannelTransport {
   std::shared_ptr<Stream> video_stream_;
   std::shared_ptr<Stream> audio_stream_;
 
-  std::shared_ptr<::rtc::DataChannel> dataChannel_;
+  std::shared_ptr<::rtc::DataChannel> data_channel_;
 
   uint32_t rtpStartTimestamp = 0;
 

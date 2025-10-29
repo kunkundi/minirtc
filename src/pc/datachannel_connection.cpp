@@ -857,7 +857,7 @@ DataChannelConnection::CreateDataChannelConnection(
       dc->send("Ping");
     }
   });
-  dc_transport->dataChannel = dc;
+  dc_transport->data_channel_ = dc;
 
   peer_connection->setLocalDescription();
   return dc_transport;
