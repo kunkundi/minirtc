@@ -139,7 +139,7 @@ class DataChannelConnection {
  private:
   std::shared_ptr<DataChannelTransport> CreateDataChannelConnection(
       const ::rtc::Configuration& config, std::weak_ptr<::rtc::WebSocket> wws,
-      std::string id);
+      bool offer_peer, std::string transmission_id, std::string remote_user_id);
 
   std::shared_ptr<Stream> AddVideo(
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,

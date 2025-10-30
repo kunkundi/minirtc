@@ -45,7 +45,6 @@ class DataChannelTransport {
 
   uint32_t rtpStartTimestamp = 0;
 
- private:
   std::shared_mutex mutex_;
   State state_ = State::Waiting;
   std::string id_;
