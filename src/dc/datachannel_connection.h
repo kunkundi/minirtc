@@ -142,14 +142,22 @@ class DataChannelConnection {
       std::string id);
 
   std::shared_ptr<Stream> AddVideo(
-      const std::shared_ptr<::rtc::PeerConnection> pc,
-      const uint8_t payloadType, const uint32_t ssrc, const std::string cname,
-      const std::string msid, const std::function<void(void)> onOpen);
+      const std::shared_ptr<::rtc::PeerConnection> peer_connection,
+      const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
+      const std::string cname, const std::string msid,
+      const std::function<void(void)> onOpen);
 
   std::shared_ptr<Stream> AddAudio(
-      const std::shared_ptr<::rtc::PeerConnection> pc,
-      const uint8_t payloadType, const uint32_t ssrc, const std::string cname,
-      const std::string msid, const std::function<void(void)> onOpen);
+      const std::shared_ptr<::rtc::PeerConnection> peer_connection,
+      const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
+      const std::string cname, const std::string msid,
+      const std::function<void(void)> onOpen);
+
+  std::shared_ptr<::rtc::DataChannel> AddData(
+      const std::shared_ptr<::rtc::PeerConnection> peer_connection,
+      const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
+      const std::string cname, const std::string msid,
+      const std::function<void(void)> onOpen);
 
   std::shared_ptr<Stream> CreateStream(const std::string h264Samples,
                                        const unsigned fps,

@@ -184,13 +184,17 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
   ws_transport_ = std::make_shared<::rtc::WebSocket>();
 
   ws_transport_->onOpen([this]() {
-    ws_status_ = WsStatus::WsOpening;
-    signal_status_ = SignalStatus::SignalConnecting;
-    on_signal_status_(SignalStatus::SignalConnecting, user_id_.data(),
+    LOG_INFO("WebSocket opened");
+    ws_status_ = WsStatus::WsOpened;
+    signal_status_ = SignalStatus::SignalConnected;
+    on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),
                       user_id_.size(), user_data_);
+
+    Login();
   });
 
   ws_transport_->onClosed([this]() {
+    LOG_INFO("WebSocket closed");
     ws_status_ = WsStatus::WsClosed;
     signal_status_ = SignalStatus::SignalClosed;
     on_signal_status_(SignalStatus::SignalClosed, user_id_.data(),
@@ -198,6 +202,7 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
   });
 
   ws_transport_->onError([this](const std::string& error) {
+    LOG_ERROR("WebSocket error [{}]", error);
     ws_status_ = WsStatus::WsFailed;
     signal_status_ = SignalStatus::SignalFailed;
     on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
@@ -214,9 +219,14 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
         ProcessSignal(msg);
       });
 
-  uri_ = "ws://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
+  uri_ = "wss://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
   if (ws_transport_) {
+    LOG_INFO("[{}] Connecting to signal server [{}]", user_id_, uri_);
     ws_transport_->open(uri_);
+    ws_status_ = WsStatus::WsOpening;
+    signal_status_ = SignalStatus::SignalConnecting;
+    on_signal_status_(SignalStatus::SignalConnecting, user_id_.data(),
+                      user_id_.size(), user_data_);
   }
 
   StartIceWorker();
@@ -615,67 +625,19 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           continue;
         }
 
-        {
-          std::unique_lock lock(ice_transport_list_mutex_);
-          auto it = ice_transport_list_.find(remote_user_id);
-          if (it != ice_transport_list_.end()) {
-            auto old = it->second;
-            ice_transport_list_.erase(it);
-            lock.unlock();
-            if (old) {
-              old->DestroyIceTransmission();
-            }
-          }
-        }
-
         ::rtc::Configuration config;
-        std::string stunServer = "stun:stun.l.google.com:19302";
-        std::cout << "STUN server is " << stunServer << std::endl;
-        config.iceServers.emplace_back(stunServer);
+        std::string stun_server =
+            cfg_stun_server_ip_ + ":" + cfg_stun_server_port_;
+
+        std::cout << "STUN server is " << stun_server << std::endl;
+        config.iceServers.emplace_back(stun_server);
         config.disableAutoNegotiation = true;
 
-        std::string id = "test";
+        std::string id = "transmission_id";
 
         dc_transport_list_.emplace(
             id, CreateDataChannelConnection(config,
                                             make_weak_ptr(ws_transport_), id));
-        // auto ice = std::make_shared<IceTransport>(
-        //     clock_, true, transmission_id, user_id_, remote_user_id,
-        //     ws_transport_, on_ice_status_change_, user_data_);
-
-        // ice->SetLocalCapabilities(
-        //     hardware_acceleration_, trickle_ice_, reliable_ice_,
-        //     enable_turn_, false, enable_srtp_, av1_encoding_ ?
-        //     rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-        //     video_payload_types_, audio_payload_types_);
-
-        // ice->SetOnReceiveFunc(on_receive_video_frame_,
-        // on_receive_audio_buffer_,
-        //                       on_receive_data_buffer_);
-
-        // ice->SetOnReceiveNetStatusReportFunc(net_status_report_);
-
-        // ice->InitIceTransmission(cfg_stun_server_ip_, stun_server_port_,
-        //                          cfg_turn_server_ip_, turn_server_port_,
-        //                          cfg_turn_server_username_,
-        //                          cfg_turn_server_password_);
-
-        // for (auto& stream_id : video_stream_ids_) {
-        //   ice->AddVideoStream(stream_id);
-        // }
-        // for (auto& stream_id : audio_stream_ids_) {
-        //   ice->AddAudioStream(stream_id);
-        // }
-        // for (auto& stream_id : data_stream_ids_) {
-        //   ice->AddDataStream(stream_id);
-        // }
-
-        // ice->JoinTransmission();
-
-        // {
-        //   std::unique_lock lock(ice_transport_list_mutex_);
-        //   ice_transport_list_[remote_user_id] = ice;
-        // }
       }
 
       break;
@@ -705,53 +667,19 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
         is_ice_transport_ready_[remote_user_id] = false;
       }
 
-      // // Enable TURN for answer peer by default
-      // auto ice = std::make_shared<IceTransport>(
-      //     clock_, false, transmission_id, user_id_, remote_user_id,
-      //     ws_transport_, on_ice_status_change_, user_data_);
+      ::rtc::Configuration config;
+      std::string stun_server =
+          cfg_stun_server_ip_ + ":" + cfg_stun_server_port_;
 
-      // ice_transport_list_[remote_user_id] = ice;
+      std::cout << "STUN server is " << stun_server << std::endl;
+      config.iceServers.emplace_back(stun_server);
+      config.disableAutoNegotiation = true;
 
-      // ice->SetLocalCapabilities(
-      //     hardware_acceleration_, trickle_ice_, reliable_ice_, enable_turn_,
-      //     false, enable_srtp_,
-      //     av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-      //     video_payload_types_, audio_payload_types_);
+      std::string id = "transmission_id";
 
-      // ice->SetOnReceiveFunc(on_receive_video_frame_,
-      // on_receive_audio_buffer_,
-      //                       on_receive_data_buffer_);
-
-      // ice->SetOnReceiveNetStatusReportFunc(net_status_report_);
-
-      // ice->InitIceTransmission(cfg_stun_server_ip_, stun_server_port_,
-      //                          cfg_turn_server_ip_, turn_server_port_,
-      //                          cfg_turn_server_username_,
-      //                          cfg_turn_server_password_);
-      // ice->SetTransmissionId(transmission_id);
-
-      // for (auto& stream_id : video_stream_ids_) {
-      //   ice->AddVideoStream(stream_id);
-      // }
-      // for (auto& stream_id : audio_stream_ids_) {
-      //   ice->AddAudioStream(stream_id);
-      // }
-      // for (auto& stream_id : data_stream_ids_) {
-      //   ice->AddDataStream(stream_id);
-      // }
-
-      // std::string remote_sdp = msg.remote_sdp;
-      // int ret = ice->SetRemoteSdp(remote_sdp);
-      // if (0 != ret) {
-      //   NegotiationFailed();
-      //   break;
-      // }
-
-      // if (trickle_ice_) {
-      //   sdp_without_cands_ = remote_sdp;
-      //   ice->SendAnswer();
-      // }
-      // ice->GatherCandidates();
+      dc_transport_list_.emplace(
+          id, CreateDataChannelConnection(config, make_weak_ptr(ws_transport_),
+                                          id));
 
       break;
     }
@@ -832,32 +760,37 @@ DataChannelConnection::CreateDataChannelConnection(
         }
       });
 
-  dc_transport->video_stream_ =
-      AddVideo(peer_connection, 102, 1, "video-stream", "stream1",
-               [id, wc = make_weak_ptr(dc_transport)]() {
-                 std::cout << "Video from " << id << " opened" << std::endl;
-               });
+  for (auto& video_stream_id : video_stream_ids_) {
+    dc_transport->video_streams_.emplace(
+        video_stream_id,
+        AddVideo(
+            peer_connection,
+            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+            GenerateUniqueSsrc(), "video-stream", video_stream_id,
+            [id, wc = make_weak_ptr(dc_transport)]() {
+              std::cout << "Video stream " << id << " opened" << std::endl;
+            }));
+  }
 
-  dc_transport->audio_stream_ =
-      AddAudio(peer_connection, 111, 2, "audio-stream", "stream1",
-               [id, wc = make_weak_ptr(dc_transport)]() {
-                 std::cout << "Audio from " << id << " opened" << std::endl;
-               });
+  for (auto& audio_stream_id : audio_stream_ids_) {
+    dc_transport->audio_streams_.emplace(
+        audio_stream_id,
+        AddAudio(peer_connection, rtp::PAYLOAD_TYPE::OPUS, GenerateUniqueSsrc(),
+                 "audio-stream", audio_stream_id,
+                 [id, wc = make_weak_ptr(dc_transport)]() {
+                   std::cout << "Audio stream " << id << " opened" << std::endl;
+                 }));
+  }
 
-  auto dc = peer_connection->createDataChannel("ping-pong");
-  dc->onOpen([id, wdc = make_weak_ptr(dc)]() {
-    if (auto dc = wdc.lock()) {
-      dc->send("Ping");
-    }
-  });
-
-  dc->onMessage(nullptr, [id, wdc = make_weak_ptr(dc)](std::string msg) {
-    std::cout << "Message from " << id << " received: " << msg << std::endl;
-    if (auto dc = wdc.lock()) {
-      dc->send("Ping");
-    }
-  });
-  dc_transport->data_channel_ = dc;
+  for (auto& data_stream_id : data_stream_ids_) {
+    dc_transport->data_streams_.emplace(
+        data_stream_id,
+        AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA, GenerateUniqueSsrc(),
+                "data-stream", data_stream_id,
+                [id, wc = make_weak_ptr(dc_transport)]() {
+                  std::cout << "Data stream " << id << " opened" << std::endl;
+                }));
+  }
 
   peer_connection->setLocalDescription();
   return dc_transport;
@@ -865,42 +798,68 @@ DataChannelConnection::CreateDataChannelConnection(
 
 std::shared_ptr<Stream> DataChannelConnection::AddVideo(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-    const uint8_t payloadType, const uint32_t ssrc, const std::string cname,
-    const std::string msid, const std::function<void(void)> onOpen) {
+    const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
+    const std::string cname, const std::string msid,
+    const std::function<void(void)> onOpen) {
   auto video = ::rtc::Description::Video(cname);
-  video.addH264Codec(payloadType);
-  video.addSSRC(ssrc, cname, msid, cname);
-  auto track = peer_connection->addTrack(video);
-  // create RTP configuration
-  auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
-      ssrc, cname, payloadType, ::rtc::H264RtpPacketizer::ClockRate);
-  // create packetizer
-  auto packetizer = std::make_shared<::rtc::H264RtpPacketizer>(
-      ::rtc::NalUnit::Separator::Length, rtpConfig);
-  // add RTCP SR handler
-  auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
-  packetizer->addToChain(srReporter);
-  // add RTCP NACK handler
-  auto nackResponder = std::make_shared<::rtc::RtcpNackResponder>();
-  packetizer->addToChain(nackResponder);
-  // set handler
-  track->setMediaHandler(packetizer);
-  track->onOpen(onOpen);
-  auto trackData = std::make_shared<Stream>(track, srReporter);
-  return trackData;
+  if (payload_type == rtp::PAYLOAD_TYPE::AV1) {
+    video.addAV1Codec((int)payload_type);
+    video.addSSRC(ssrc, cname, msid, cname);
+    auto track = peer_connection->addTrack(video);
+    // create RTP configuration
+    auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
+        ssrc, cname, payload_type, ::rtc::AV1RtpPacketizer::ClockRate);
+    // create packetizer
+    auto packetizer = std::make_shared<::rtc::AV1RtpPacketizer>(
+        ::rtc::AV1RtpPacketizer::Packetization::Obu, rtpConfig);
+    // add RTCP SR handler
+    auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
+    packetizer->addToChain(srReporter);
+    // add RTCP NACK handler
+    auto nackResponder = std::make_shared<::rtc::RtcpNackResponder>();
+    packetizer->addToChain(nackResponder);
+    // set handler
+    track->setMediaHandler(packetizer);
+    track->onOpen(onOpen);
+    auto trackData = std::make_shared<Stream>(track, srReporter);
+    return trackData;
+  } else {
+    video.addH264Codec((int)payload_type);
+    video.addSSRC(ssrc, cname, msid, cname);
+    auto track = peer_connection->addTrack(video);
+    // create RTP configuration
+    auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
+        ssrc, cname, payload_type, ::rtc::H264RtpPacketizer::ClockRate);
+    // create packetizer
+    auto packetizer = std::make_shared<::rtc::H264RtpPacketizer>(
+        ::rtc::NalUnit::Separator::Length, rtpConfig);
+    // add RTCP SR handler
+    auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
+    packetizer->addToChain(srReporter);
+    // add RTCP NACK handler
+    auto nackResponder = std::make_shared<::rtc::RtcpNackResponder>();
+    packetizer->addToChain(nackResponder);
+    // set handler
+    track->setMediaHandler(packetizer);
+    track->onOpen(onOpen);
+    auto trackData = std::make_shared<Stream>(track, srReporter);
+    return trackData;
+  }
 }
 
 std::shared_ptr<Stream> DataChannelConnection::AddAudio(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-    const uint8_t payloadType, const uint32_t ssrc, const std::string cname,
-    const std::string msid, const std::function<void(void)> onOpen) {
+    const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
+    const std::string cname, const std::string msid,
+    const std::function<void(void)> onOpen) {
   auto audio = ::rtc::Description::Audio(cname);
-  audio.addOpusCodec(payloadType);
+  audio.addOpusCodec((int)payload_type);
   audio.addSSRC(ssrc, cname, msid, cname);
   auto track = peer_connection->addTrack(audio);
   // create RTP configuration
   auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
-      ssrc, cname, payloadType, ::rtc::OpusRtpPacketizer::DefaultClockRate);
+      ssrc, cname, (int)payload_type,
+      ::rtc::OpusRtpPacketizer::DefaultClockRate);
   // create packetizer
   auto packetizer = std::make_shared<::rtc::OpusRtpPacketizer>(rtpConfig);
   // add RTCP SR handler
@@ -914,6 +873,28 @@ std::shared_ptr<Stream> DataChannelConnection::AddAudio(
   track->onOpen(onOpen);
   auto trackData = std::make_shared<Stream>(track, srReporter);
   return trackData;
+}
+
+std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
+    const std::shared_ptr<::rtc::PeerConnection> peer_connection,
+    const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
+    const std::string cname, const std::string msid,
+    const std::function<void(void)> onOpen) {
+  auto dc = peer_connection->createDataChannel("ping-pong");
+  dc->onOpen(onOpen);
+
+  dc->onClosed([&]() {
+    std::cout << "[DataChannel closed: " << dc->label() << "]" << std::endl;
+  });
+
+  dc->onMessage(nullptr, [msid, wdc = make_weak_ptr(dc)](std::string msg) {
+    std::cout << "Message from " << msid << " received: " << msg << std::endl;
+    if (auto dc = wdc.lock()) {
+      dc->send("Ping");
+    }
+  });
+
+  return dc;
 }
 
 }  // namespace minirtc

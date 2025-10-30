@@ -23,8 +23,9 @@ option("use_libdatachannel")
 option_end()
 
 if has_config("use_libdatachannel") then
-    add_requires("libdatachannel 0.23.2", {configs = {nice = true, media = true, websocket = true}})
+    add_requires("libdatachannel 0.23.2")
     add_packages("libdatachannel")
+    add_defines("USE_LIBDATACHANNEL_CONNECTION")
 else
 end
 
@@ -248,9 +249,19 @@ target("pc")
     add_files("src/pc/*.cpp")
     add_includedirs("src/pc", "src/api", {public = true})
 
+target("dc")
+    set_kind("object")
+    add_deps("log", "ws", "ice", "transport", "inih", "common")
+    add_files("src/dc/*.cpp")
+    add_includedirs("src/dc", "src/api", {public = true})
+
 target("minirtc")
     set_kind("static")
-    add_deps("log", "pc")
+    if has_config("use_libdatachannel") then
+        add_deps("log", "dc")
+    else
+        add_deps("log", "pc")
+    end
     add_files("src/rtc/*.cpp")
     add_includedirs("src/rtc", "src/api")
 
@@ -288,10 +299,4 @@ target("minirtc")
 -- after_install(function (target)
 --     os.rm("$(projectdir)/out/lib/*.a")
 --     os.rm("$(projectdir)/out/include/log.h")
--- end)
-
-target("libdatachannel_test")
-    set_kind("binary")
-    add_packages("libdatachannel")
-    add_deps("log")
-    add_files("tests/libdatachannel/*.cpp")
+-- end)ss

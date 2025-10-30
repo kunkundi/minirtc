@@ -10,7 +10,7 @@
 
 using nlohmann::json;
 
-PeerPtr *CreatePeer(const Params *params) {
+PeerPtr* CreatePeer(const Params* params) {
   if (!params) {
     std::cerr << "Params is null" << std::endl;
     return nullptr;
@@ -22,8 +22,12 @@ PeerPtr *CreatePeer(const Params *params) {
     InitLogger("logs");
   }
 
-  PeerPtr *peer_ptr = new PeerPtr;
+  PeerPtr* peer_ptr = new PeerPtr;
+#ifdef USE_LIBDATACHANNEL_CONNECTION
+  peer_ptr->peer_connection = new DataChannelConnection();
+#else
   peer_ptr->peer_connection = new PeerConnection();
+#endif
   peer_ptr->pc_params.use_cfg_file = params->use_cfg_file;
   if (params->use_cfg_file) {
     peer_ptr->pc_params.cfg_path = params->cfg_path;
@@ -58,7 +62,7 @@ PeerPtr *CreatePeer(const Params *params) {
   return peer_ptr;
 }
 
-void DestroyPeer(PeerPtr **peer_ptr) {
+void DestroyPeer(PeerPtr** peer_ptr) {
   (*peer_ptr)->peer_connection->Destroy();
   delete (*peer_ptr)->peer_connection;
   (*peer_ptr)->peer_connection = nullptr;
@@ -66,7 +70,7 @@ void DestroyPeer(PeerPtr **peer_ptr) {
   *peer_ptr = nullptr;
 }
 
-int Init(PeerPtr *peer_ptr) {
+int Init(PeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -76,7 +80,7 @@ int Init(PeerPtr *peer_ptr) {
   return 0;
 }
 
-int JoinConnection(PeerPtr *peer_ptr, const char *transmission_id) {
+int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   int ret = -1;
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
@@ -88,7 +92,7 @@ int JoinConnection(PeerPtr *peer_ptr, const char *transmission_id) {
   return ret;
 }
 
-int LeaveConnection(PeerPtr *peer_ptr, const char *transmission_id) {
+int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -99,7 +103,7 @@ int LeaveConnection(PeerPtr *peer_ptr, const char *transmission_id) {
   return 0;
 }
 
-int AddVideoStream(PeerPtr *peer_ptr, const char *stream_id) {
+int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -107,7 +111,7 @@ int AddVideoStream(PeerPtr *peer_ptr, const char *stream_id) {
   return peer_ptr->peer_connection->AddVideoStream(stream_id);
 }
 
-int AddAudioStream(PeerPtr *peer_ptr, const char *stream_id) {
+int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -115,7 +119,7 @@ int AddAudioStream(PeerPtr *peer_ptr, const char *stream_id) {
   return peer_ptr->peer_connection->AddAudioStream(stream_id);
 }
 
-int AddDataStream(PeerPtr *peer_ptr, const char *stream_id) {
+int AddDataStream(PeerPtr* peer_ptr, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -123,8 +127,8 @@ int AddDataStream(PeerPtr *peer_ptr, const char *stream_id) {
   return peer_ptr->peer_connection->AddDataStream(stream_id);
 }
 
-int SendVideoFrame(PeerPtr *peer_ptr, const XVideoFrame *video_frame,
-                   const char *stream_id) {
+int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
+                   const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -143,8 +147,8 @@ int SendVideoFrame(PeerPtr *peer_ptr, const XVideoFrame *video_frame,
   return 0;
 }
 
-int SendAudioFrame(PeerPtr *peer_ptr, const char *data, size_t size,
-                   const char *stream_id) {
+int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                   const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -160,8 +164,8 @@ int SendAudioFrame(PeerPtr *peer_ptr, const char *data, size_t size,
   return 0;
 }
 
-int SendDataFrame(PeerPtr *peer_ptr, const char *data, size_t size,
-                  const char *stream_id) {
+int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                  const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -177,7 +181,7 @@ int SendDataFrame(PeerPtr *peer_ptr, const char *data, size_t size,
   return 0;
 }
 
-int64_t GetSystemTimeMicros(PeerPtr *peer_ptr) {
+int64_t GetSystemTimeMicros(PeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;

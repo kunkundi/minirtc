@@ -12,10 +12,11 @@ package("libdatachannel")
     add_configs("gnutls", {description = "Use GnuTLS instead of OpenSSL", default = false, type = "boolean", readonly = true})
     add_configs("mbedtls", {description = "Use Mbed TLS instead of OpenSSL", default = false, type = "boolean"})
     add_configs("nice", {description = "Use libnice instead of libjuice", default = false, type = "boolean"})
-    add_configs("websocket", {description = "Enable WebSocket support", default = false, type = "boolean"})
-    add_configs("media", {description = "Enable media transport support", default = false, type = "boolean"})
+    add_configs("websocket", {description = "Enable WebSocket support", default = true, type = "boolean"})
+    add_configs("media", {description = "Enable media transport support", default = true, type = "boolean"})
     add_configs("capi_stdcall", {description = "Set calling convention of C API callbacks stdcall", default = false, type = "boolean"})
     add_configs("sctp_debug", {description = "Enable SCTP debugging output to verbose log", default = false, type = "boolean"})
+    add_configs("disable_consent_freshness", {description = "Disable RFC 7675 Consent Freshness", default = false, type = "boolean"})
     add_configs("rtc_update_version_header", {description = "Enable updating the version header", default = false, type = "boolean"})
 
     if is_plat("windows", "mingw") then
@@ -103,6 +104,7 @@ package("libdatachannel")
         table.insert(configs, "-DNO_MEDIA=" .. (not package:config("media") and "ON" or "OFF"))
         table.insert(configs, "-DCAPI_STDCALL=" .. (package:config("capi_stdcall") and "ON" or "OFF"))
         table.insert(configs, "-DSCTP_DEBUG=" .. (package:config("sctp_debug") and "ON" or "OFF"))
+        table.insert(configs, "-DDISABLE_CONSENT_FRESHNESS=" .. (package:config("disable_consent_freshness") and "ON" or "OFF"))
         table.insert(configs, "-DRTC_UPDATE_VERSION_HEADER=" .. (package:config("rtc_update_version_header") and "ON" or "OFF"))
 
         import("package.tools.cmake").install(package, configs, {

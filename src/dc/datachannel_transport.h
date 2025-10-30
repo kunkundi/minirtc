@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <shared_mutex>
+#include <unordered_map>
 
 #include "rtc/rtc.hpp"
 #include "rtc/websocket.hpp"
@@ -37,10 +38,10 @@ class DataChannelTransport {
   void setState(State state) { state_ = state; }
   State getState() { return state_; }
 
-  std::shared_ptr<Stream> video_stream_;
-  std::shared_ptr<Stream> audio_stream_;
-
-  std::shared_ptr<::rtc::DataChannel> data_channel_;
+  std::unordered_map<std::string, std::shared_ptr<Stream>> video_streams_;
+  std::unordered_map<std::string, std::shared_ptr<Stream>> audio_streams_;
+  std::unordered_map<std::string, std::shared_ptr<::rtc::DataChannel>>
+      data_streams_;
 
   uint32_t rtpStartTimestamp = 0;
 
