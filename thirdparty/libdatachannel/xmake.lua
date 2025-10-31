@@ -8,6 +8,7 @@ package("libdatachannel")
 
     add_versions("v0.23.2", "b9606efc5b2b173f2d22d0be3f6ba4f12af78c00ca02cde5932f3ff902980eb9")
     add_versions("v0.23.1", "63e14d619ac4d9cc310a0c7620b80e6da88abf878f27ccc78cd099f95d47b121")
+    add_patches("v0.23.2", path.join(os.scriptdir(), "patches", "consent_freshness.patch"), "C62C0312E58694811336E909B8E57EC478FAFECAB97F9EED1411D87E23082638")
 
     add_configs("gnutls", {description = "Use GnuTLS instead of OpenSSL", default = false, type = "boolean", readonly = true})
     add_configs("mbedtls", {description = "Use Mbed TLS instead of OpenSSL", default = false, type = "boolean"})
