@@ -26,6 +26,8 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
     return 0;
   }
 
+  // InitLogger(::rtc::LogLevel::Debug);
+
   user_id_with_pwd_ = params.user_id ? params.user_id : "";
   auto at_pos = user_id_with_pwd_.find('@');
   if (at_pos != std::string::npos) {
@@ -376,24 +378,41 @@ SignalStatus DataChannelConnection::GetSignalStatus() {
 
 int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                           const char* stream_id) {
-  // trackData->track->sendFrame(
-  //     sample, std::chrono::duration<double, std::micro>(sampleTime));
+  for (auto& it : dc_transport_list_) {
+    auto pc = it.second;
+    for (auto& track : pc->video_streams_) {
+      if (track.first == stream_id) {
+        track.second->track_->sendFrame(
+            reinterpret_cast<const std::byte*>(video_frame->data),
+            video_frame->size,
+            std::chrono::duration<double, std::micro>(90000));
+      }
+    }
+  }
 
   return 0;
 }
 
 int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
                                           const char* stream_id) {
-  // trackData->track->sendFrame(
-  //     sample, std::chrono::duration<double, std::micro>(sampleTime));
-
+  for (auto& it : dc_transport_list_)
+    for (auto& track : it.second->audio_streams_) {
+      if (track.first == stream_id) {
+        track.second->track_->sendFrame(
+            reinterpret_cast<const std::byte*>(data), size,
+            std::chrono::duration<double, std::micro>(90000));
+      }
+    }
   return 0;
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
                                          const char* stream_id) {
-  // trackData->track->sendFrame(
-  //     sample, std::chrono::duration<double, std::micro>(sampleTime));
+  for (auto& it : dc_transport_list_) {
+    for (auto& track : it.second->data_streams_) {
+      track.second->send(reinterpret_cast<const std::byte*>(data), size);
+    }
+  }
 
   return 0;
 }
@@ -631,16 +650,14 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
         std::cout << "STUN server is " << stun_server << std::endl;
         config.iceServers.emplace_back(stun_server);
-        config.disableAutoNegotiation = true;
-        config.disableAutoGathering = true;
+        // config.disableAutoNegotiation = true;
+        // config.disableAutoGathering = true;
 
+        std::unique_lock lock(ice_transport_list_mutex_);
         dc_transport_list_.emplace(
             remote_user_id,
             CreateDataChannelConnection(config, make_weak_ptr(ws_transport_),
                                         true, remote_user_id, remote_user_id));
-
-        dc_transport_list_[remote_user_id]
-            ->peer_connection_->gatherLocalCandidates();
       }
 
       break;
@@ -676,7 +693,9 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
       std::cout << "STUN server is " << stun_server << std::endl;
       config.iceServers.emplace_back(stun_server);
-      config.disableAutoNegotiation = true;
+      // config.disableAutoNegotiation = true;
+
+      LOG_ERROR("Receive offer");
 
       dc_transport_list_.emplace(
           remote_user_id,
@@ -685,26 +704,46 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
       ::rtc::Description remote_sdp(msg.remote_sdp,
                                     ::rtc::Description::Type::Offer);
+      LOG_ERROR("Set remote description: {}", msg.remote_sdp.c_str());
       dc_transport_list_[remote_user_id]
           ->peer_connection_->setRemoteDescription(remote_sdp);
+
+      dc_transport_list_[remote_user_id]
+          ->peer_connection_->setLocalDescription();
+
+      std::shared_ptr<::rtc::DataChannel> dc;
+      dc_transport_list_[remote_user_id]->peer_connection_->onDataChannel(
+          [&](std::shared_ptr<::rtc::DataChannel> _dc) {
+            std::cout << "[Got a DataChannel with label: " << _dc->label()
+                      << "]" << std::endl;
+            dc = _dc;
+
+            dc->onClosed([&]() {
+              std::cout << "[DataChannel closed: " << dc->label() << "]"
+                        << std::endl;
+            });
+
+            dc->onMessage([](auto data) {
+              if (std::holds_alternative<std::string>(data)) {
+                std::cout << "[Received message: "
+                          << std::get<std::string>(data) << "]" << std::endl;
+              }
+            });
+          });
 
       break;
     }
     case IceWorkMsg::Type::Answer: {
       std::string remote_user_id = msg.remote_user_id;
-      std::shared_lock lock(ice_transport_list_mutex_);
+      std::unique_lock lock(ice_transport_list_mutex_);
 
-      ::rtc::Description remote_sdp(msg.remote_sdp,
-                                    ::rtc::Description::Type::Answer);
+      ::rtc::Description remote_sdp(msg.remote_sdp, "answer");
 
       if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
-        dc_transport_list_[remote_user_id]
-            ->peer_connection_->setRemoteDescription(remote_sdp);
-
-        if (trickle_ice_) {
-          sdp_without_cands_ = remote_sdp;
-          dc_transport_list_[remote_user_id]
-              ->peer_connection_->gatherLocalCandidates();
+        auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
+        if (pc) {
+          LOG_ERROR("Set remote description: {}", msg.remote_sdp.c_str());
+          pc->setRemoteDescription(remote_sdp);
         }
       }
 
@@ -715,13 +754,12 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string new_candidate = msg.new_candidate;
       std::string remote_user_id = msg.remote_user_id;
 
-      // LOG_INFO("[{}] receive new candidate from [{}]:[{}]", user_id_,
-      //          remote_user_id, new_candidate);
       std::shared_lock lock(ice_transport_list_mutex_);
-      if (ice_transport_list_.find(remote_user_id) !=
-          ice_transport_list_.end()) {
-        ice_transport_list_[remote_user_id]->SetRemoteSdp(sdp_without_cands_ +
-                                                          new_candidate);
+      if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
+        auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
+        if (pc) {
+          pc->addRemoteCandidate(new_candidate);
+        }
       }
       break;
     }
@@ -742,12 +780,8 @@ DataChannelConnection::CreateDataChannelConnection(
 
   peer_connection->onLocalDescription([this, transmission_id, remote_user_id,
                                        wws](::rtc::Description description) {
-    // std::cout << "Local Description (Paste this to the other peer):"
-    //           << std::endl;
-    // std::cout << std::string(description) << std::endl;
-
     std::string local_sdp = std::string(description);
-    if (offer_peer_) {
+    if (offer_peer_ && description.type() == ::rtc::Description::Type::Offer) {
       json message = {{"type", "offer"},
                       {"transmission_id", transmission_id},
                       {"user_id", user_id_},
@@ -757,9 +791,11 @@ DataChannelConnection::CreateDataChannelConnection(
       // Gathering complete, send offer
       if (auto ws = wws.lock()) {
         ws->send(message.dump());
-        LOG_INFO("[{}] send offer to [{}]", user_id_, remote_user_id);
+        // LOG_INFO("[{}] send offer to [{}]: {}", user_id_, remote_user_id,
+        //          message.dump());
       }
-    } else {
+    } else if (!offer_peer_ &&
+               description.type() == ::rtc::Description::Type::Answer) {
       json message = {{"type", "answer"},
                       {"transmission_id", transmission_id},
                       {"user_id", user_id_},
@@ -769,77 +805,103 @@ DataChannelConnection::CreateDataChannelConnection(
       // Gathering complete, send answer
       if (auto ws = wws.lock()) {
         ws->send(message.dump());
-        LOG_INFO("[{}] send answer to [{}]", user_id_, remote_user_id);
+        // LOG_INFO("[{}] send answer to [{}]: {}", user_id_, remote_user_id,
+        //          message.dump());
       }
     }
   });
 
-  peer_connection->onLocalCandidate([](::rtc::Candidate candidate) {
-    // std::cout << "Local Candidate (Paste this to the other peer after the "
-    //              "local description):"
-    //           << std::endl;
-    // std::cout << std::string(candidate) << std::endl << std::endl;
-  });
+  peer_connection->onLocalCandidate(
+      [this, transmission_id, remote_user_id, wws](::rtc::Candidate candidate) {
+        LOG_ERROR("[{}] send new candidate to [{}]: {}", user_id_,
+                  remote_user_id, std::string(candidate));
+        json message = {{"type", "new_candidate"},
+                        {"transmission_id", transmission_id},
+                        {"user_id", user_id_},
+                        {"remote_user_id", remote_user_id},
+                        {"sdp", std::string(candidate)}};
+
+        if (auto ws = wws.lock()) ws->send(message.dump());
+      });
 
   peer_connection->onStateChange(
-      [remote_user_id](::rtc::PeerConnection::State state) {
-        std::cout << "State: " << state << std::endl;
-        if (state == ::rtc::PeerConnection::State::Disconnected ||
-            state == ::rtc::PeerConnection::State::Failed ||
-            state == ::rtc::PeerConnection::State::Closed) {
-          // remove disconnected client
-          // MainThread.dispatch([id]() { clients.erase(id); });
+      [this, remote_user_id](::rtc::PeerConnection::State state) {
+        std::cout << "Ice state: " << state << std::endl;
+
+        ConnectionStatus ice_state;
+        switch (state) {
+          case ::rtc::PeerConnection::IceState::New:
+            ice_state = ConnectionStatus::Connecting;
+            break;
+          case ::rtc::PeerConnection::IceState::Checking:
+            ice_state = ConnectionStatus::Connecting;
+            break;
+          case ::rtc::PeerConnection::IceState::Connected:
+            ice_state = ConnectionStatus::Connected;
+            break;
+          case ::rtc::PeerConnection::IceState::Completed:
+            ice_state = ConnectionStatus::Connected;
+            break;
+          case ::rtc::PeerConnection::IceState::Failed:
+            ice_state = ConnectionStatus::Failed;
+            break;
+          case ::rtc::PeerConnection::IceState::Disconnected:
+            ice_state = ConnectionStatus::Disconnected;
+            break;
+          case ::rtc::PeerConnection::IceState::Closed:
+            ice_state = ConnectionStatus::Closed;
+            break;
+          default:
+            ice_state = ConnectionStatus::Failed;
+            break;
         }
+        on_connection_status_(ice_state, remote_user_id.data(),
+                              remote_user_id.size(), user_data_);
       });
 
   peer_connection->onGatheringStateChange(
       [this, wpc = make_weak_ptr(peer_connection), transmission_id,
        remote_user_id, wws](::rtc::PeerConnection::GatheringState state) {
         std::cout << "Gathering State: " << state << std::endl;
-        if (state == ::rtc::PeerConnection::GatheringState::Complete) {
-          if (auto peer_connection = wpc.lock()) {
-            auto description = peer_connection->localDescription();
-            LOG_ERROR("description type: {}", description->typeString());
-          }
-        }
       });
 
-  for (auto& video_stream_id : video_stream_ids_) {
-    dc_transport->video_streams_.emplace(
-        video_stream_id,
-        AddVideo(
-            peer_connection,
-            av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-            GenerateUniqueSsrc(), "video-stream", video_stream_id,
-            [video_stream_id, wc = make_weak_ptr(dc_transport)]() {
-              std::cout << "Video stream " << video_stream_id << " opened"
-                        << std::endl;
-            }));
+  if (offer_peer_) {
+    for (auto& video_stream_id : video_stream_ids_) {
+      dc_transport->video_streams_.emplace(
+          video_stream_id,
+          AddVideo(
+              peer_connection,
+              av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+              GenerateUniqueSsrc(), "video-stream", video_stream_id,
+              [video_stream_id, wc = make_weak_ptr(dc_transport)]() {
+                std::cout << "Video stream " << video_stream_id << " opened"
+                          << std::endl;
+              }));
+    }
+
+    for (auto& audio_stream_id : audio_stream_ids_) {
+      dc_transport->audio_streams_.emplace(
+          audio_stream_id,
+          AddAudio(peer_connection, rtp::PAYLOAD_TYPE::OPUS,
+                   GenerateUniqueSsrc(), "audio-stream", audio_stream_id,
+                   [audio_stream_id, wc = make_weak_ptr(dc_transport)]() {
+                     std::cout << "Audio stream " << audio_stream_id
+                               << " opened" << std::endl;
+                   }));
+    }
+
+    for (auto& data_stream_id : data_stream_ids_) {
+      dc_transport->data_streams_.emplace(
+          data_stream_id,
+          AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA,
+                  GenerateUniqueSsrc(), "data-stream", data_stream_id,
+                  [data_stream_id, wc = make_weak_ptr(dc_transport)]() {
+                    std::cout << "Data stream " << data_stream_id << " opened"
+                              << std::endl;
+                  }));
+    }
   }
 
-  for (auto& audio_stream_id : audio_stream_ids_) {
-    dc_transport->audio_streams_.emplace(
-        audio_stream_id,
-        AddAudio(peer_connection, rtp::PAYLOAD_TYPE::OPUS, GenerateUniqueSsrc(),
-                 "audio-stream", audio_stream_id,
-                 [audio_stream_id, wc = make_weak_ptr(dc_transport)]() {
-                   std::cout << "Audio stream " << audio_stream_id << " opened"
-                             << std::endl;
-                 }));
-  }
-
-  for (auto& data_stream_id : data_stream_ids_) {
-    dc_transport->data_streams_.emplace(
-        data_stream_id,
-        AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA, GenerateUniqueSsrc(),
-                "data-stream", data_stream_id,
-                [data_stream_id, wc = make_weak_ptr(dc_transport)]() {
-                  std::cout << "Data stream " << data_stream_id << " opened"
-                            << std::endl;
-                }));
-  }
-
-  peer_connection->setLocalDescription();
   return dc_transport;
 };
 
@@ -852,6 +914,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddVideo(
   if (payload_type == rtp::PAYLOAD_TYPE::AV1) {
     video.addAV1Codec((int)payload_type);
     video.addSSRC(ssrc, cname, msid, cname);
+    video.setDirection(::rtc::Description::Direction::SendRecv);
     auto track = peer_connection->addTrack(video);
     // create RTP configuration
     auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
@@ -873,6 +936,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddVideo(
   } else {
     video.addH264Codec((int)payload_type);
     video.addSSRC(ssrc, cname, msid, cname);
+    video.setDirection(::rtc::Description::Direction::SendRecv);
     auto track = peer_connection->addTrack(video);
     // create RTP configuration
     auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
@@ -902,6 +966,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddAudio(
   auto audio = ::rtc::Description::Audio(cname);
   audio.addOpusCodec((int)payload_type);
   audio.addSSRC(ssrc, cname, msid, cname);
+  audio.setDirection(::rtc::Description::Direction::SendRecv);
   auto track = peer_connection->addTrack(audio);
   // create RTP configuration
   auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
