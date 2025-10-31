@@ -191,6 +191,8 @@ class DataChannelConnection {
   int reconnect_count_ = 0;
   TraversalMode mode_ = TraversalMode::P2P;
 
+  ::rtc::Configuration peer_connection_config_;
+
   std::vector<int> video_payload_types_ = {rtp::PAYLOAD_TYPE::H264,
                                            rtp::PAYLOAD_TYPE::AV1};
   std::vector<int> audio_payload_types_ = {rtp::PAYLOAD_TYPE::OPUS};
