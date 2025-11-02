@@ -291,11 +291,22 @@ int DataChannelConnection::Join(const std::string& transmission_id) {
 
   int ret = 0;
 
-  offer_peer_ = true;
+  offer_peer_ = false;
   leave_ = false;
 
+  json message = {{"type", "join_transmission"},
+                  {"user_id", user_id_},
+                  {"transmission_id", transmission_id}};
   remote_transmission_id_ = transmission_id;
-  ret = RequestTransmissionMemberList(remote_transmission_id_);
+
+  if (ws_transport_) {
+    ws_transport_->send(message.dump());
+    LOG_INFO(
+        "[{}] sends join transmission request to transmission "
+        "id [{}]",
+        user_id_, transmission_id);
+  }
+
   return ret;
 }
 
@@ -344,7 +355,7 @@ int DataChannelConnection::Leave(const std::string& transmission_id) {
 }
 
 int DataChannelConnection::AddVideoStream(const char* stream_id) {
-  video_stream_ids_.push_back(stream_id);
+  video_stream_ids_.push_back("video-stream");
   return 0;
 }
 
@@ -406,39 +417,26 @@ SignalStatus DataChannelConnection::GetSignalStatus() {
 int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                           const char* stream_id) {
   for (auto& it : dc_transport_list_) {
-    auto pc = it.second;
-    for (auto& track : pc->video_streams_) {
-      if (track.first == stream_id) {
-        track.second->track_->sendFrame(
-            reinterpret_cast<const std::byte*>(video_frame->data),
-            video_frame->size,
-            std::chrono::duration<double, std::micro>(90000));
-      }
-    }
+    auto& pc = it.second;
+    pc->SendVideoFrame(video_frame, "video-stream");
   }
-
   return 0;
 }
 
 int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
                                           const char* stream_id) {
-  for (auto& it : dc_transport_list_)
-    for (auto& track : it.second->audio_streams_) {
-      if (track.first == stream_id) {
-        track.second->track_->sendFrame(
-            reinterpret_cast<const std::byte*>(data), size,
-            std::chrono::duration<double, std::micro>(90000));
-      }
-    }
+  for (auto& it : dc_transport_list_) {
+    auto& pc = it.second;
+    pc->SendAudioFrame(data, size, stream_id);
+  }
   return 0;
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
                                          const char* stream_id) {
   for (auto& it : dc_transport_list_) {
-    for (auto& track : it.second->data_streams_) {
-      track.second->send(reinterpret_cast<const std::byte*>(data), size);
-    }
+    auto& pc = it.second;
+    pc->SendDataFrame(data, size, stream_id);
   }
 
   return 0;
@@ -523,6 +521,42 @@ void DataChannelConnection::ProcessSignal(const std::string& signal) {
         msg.type = IceWorkMsg::Type::UserIdList;
         msg.transmission_id = transmission_id;
         msg.user_id_list = user_id_list_;
+        PushIceWorkMsg(msg);
+      }
+
+      break;
+    }
+    case "user_join_transmission"_H: {
+      std::string transmission_id = j["transmission_id"].get<std::string>();
+      std::string status = j["status"].get<std::string>();
+      if (status == "failed") {
+        std::string reason = j["reason"].get<std::string>();
+        LOG_ERROR("{}", reason);
+        if ("Incorrect password" == reason) {
+          on_connection_status_(ConnectionStatus::IncorrectPassword,
+                                transmission_id.data(), transmission_id.size(),
+                                user_data_);
+        } else if ("No such transmission id" == reason) {
+          on_connection_status_(ConnectionStatus::NoSuchTransmissionId,
+                                transmission_id.data(), transmission_id.size(),
+                                user_data_);
+        }
+      } else {
+        std::string remote_user_id = j["user_id"].get<std::string>();
+
+        if (remote_user_id.empty()) {
+          LOG_ERROR(
+              "Invalid remote user join transmission msg without user id");
+          break;
+        }
+
+        if (remote_user_id == user_id_) {
+          break;
+        }
+
+        IceWorkMsg msg;
+        msg.type = IceWorkMsg::Type::UserJoinTransmission;
+        msg.remote_user_id = remote_user_id;
         PushIceWorkMsg(msg);
       }
 
@@ -674,7 +708,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
         std::unique_lock lock(ice_transport_list_mutex_);
         dc_transport_list_.emplace(
             remote_user_id,
-            CreateDataChannelConnection(peer_connection_config_,
+            CreateDataChannelConnection(peer_connection_config_, clock_,
                                         make_weak_ptr(ws_transport_), true,
                                         remote_user_id, remote_user_id));
       }
@@ -695,6 +729,22 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       }
       break;
     }
+    case IceWorkMsg::Type::UserJoinTransmission: {
+      std::string remote_user_id = msg.remote_user_id;
+      LOG_INFO("[{}] Receive notification: user id [{}] join transmission",
+               (void*)this, remote_user_id);
+      std::unique_lock lock(ice_transport_list_mutex_);
+      if (ice_transport_list_.end() ==
+          ice_transport_list_.find(remote_user_id)) {
+        dc_transport_list_.emplace(
+            remote_user_id,
+            CreateDataChannelConnection(peer_connection_config_, clock_,
+                                        make_weak_ptr(ws_transport_), true,
+                                        remote_user_id, remote_user_id));
+        LOG_INFO("Create transmission to user [{}]", remote_user_id);
+      }
+      break;
+    }
     case IceWorkMsg::Type::Offer: {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
@@ -710,7 +760,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
       dc_transport_list_.emplace(
           remote_user_id,
-          CreateDataChannelConnection(peer_connection_config_,
+          CreateDataChannelConnection(peer_connection_config_, clock_,
                                       make_weak_ptr(ws_transport_), false,
                                       transmission_id, remote_user_id));
 
@@ -784,11 +834,13 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 //
 std::shared_ptr<DataChannelTransport>
 DataChannelConnection::CreateDataChannelConnection(
-    const ::rtc::Configuration& config, std::weak_ptr<::rtc::WebSocket> wws,
-    bool offer_peer, std::string transmission_id, std::string remote_user_id) {
+    const ::rtc::Configuration& config, std::shared_ptr<SystemClock> clock,
+    std::weak_ptr<::rtc::WebSocket> wws, bool offer_peer,
+    std::string transmission_id, std::string remote_user_id) {
   offer_peer_ = offer_peer;
   auto peer_connection = std::make_shared<::rtc::PeerConnection>(config);
-  auto dc_transport = std::make_shared<DataChannelTransport>(peer_connection);
+  auto dc_transport = std::make_shared<DataChannelTransport>(
+      clock, peer_connection, user_id_, remote_user_id, offer_peer_);
 
   peer_connection->onLocalDescription([this, transmission_id, remote_user_id,
                                        wws](::rtc::Description description) {
@@ -893,7 +945,7 @@ DataChannelConnection::CreateDataChannelConnection(
           AddVideo(
               peer_connection,
               av1_encoding_ ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-              GenerateUniqueSsrc(), "video-stream", video_stream_id,
+              GenerateUniqueSsrc(), video_stream_id, "stream1",
               [video_stream_id, wc = make_weak_ptr(dc_transport)]() {
                 LOG_INFO("Video stream {} opened", video_stream_id);
               }));
@@ -961,7 +1013,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddVideo(
         ssrc, cname, payload_type, ::rtc::H264RtpPacketizer::ClockRate);
     // create packetizer
     auto packetizer = std::make_shared<::rtc::H264RtpPacketizer>(
-        ::rtc::NalUnit::Separator::Length, rtpConfig);
+        ::rtc::NalUnit::Separator::StartSequence, rtpConfig);
     // add RTCP SR handler
     auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
     packetizer->addToChain(srReporter);
