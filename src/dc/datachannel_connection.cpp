@@ -117,8 +117,13 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
 
   LOG_INFO("Cert file path [{}]", cfg_tls_cert_path_);
 
-  std::string stun_server = cfg_stun_server_ip_ + ":" + cfg_stun_server_port_;
+  std::string stun_server =
+      "stun:" + cfg_stun_server_ip_ + ":" + cfg_stun_server_port_;
+  std::string turn_server =
+      "turn:crossdesk:crossdeskpw@api.crossdesk.cn:3478?transport=udp";
+
   peer_connection_config_.iceServers.emplace_back(stun_server);
+  peer_connection_config_.iceServers.emplace_back(turn_server);
   LOG_INFO("Stun server ip [{}] port [{}]", cfg_stun_server_ip_,
            cfg_stun_server_port_);
 
