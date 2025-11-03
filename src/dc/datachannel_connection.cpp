@@ -720,11 +720,9 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
                (void*)this, user_id);
       std::unique_lock lock(ice_transport_list_mutex_);
-      auto user_id_it = ice_transport_list_.find(user_id);
-      if (user_id_it != ice_transport_list_.end()) {
-        user_id_it->second->DestroyIceTransmission();
-        ice_transport_list_.erase(user_id_it);
-        is_ice_transport_ready_[user_id] = false;
+      auto user_id_it = dc_transport_list_.find(user_id);
+      if (user_id_it != dc_transport_list_.end()) {
+        dc_transport_list_.erase(user_id_it);
         LOG_INFO("Terminate transmission to user [{}]", user_id);
       }
       break;
@@ -988,7 +986,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddVideo(
     auto track = peer_connection->addTrack(video);
     // create RTP configuration
     auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
-        ssrc, cname, payload_type, ::rtc::AV1RtpPacketizer::ClockRate);
+        ssrc, cname, payload_type, ::rtc::AV1RtpPacketizer::VideoClockRate);
     // create packetizer
     auto packetizer = std::make_shared<::rtc::AV1RtpPacketizer>(
         ::rtc::AV1RtpPacketizer::Packetization::Obu, rtpConfig);
@@ -1010,7 +1008,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddVideo(
     auto track = peer_connection->addTrack(video);
     // create RTP configuration
     auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
-        ssrc, cname, payload_type, ::rtc::H264RtpPacketizer::ClockRate);
+        ssrc, cname, payload_type, ::rtc::H264RtpPacketizer::VideoClockRate);
     // create packetizer
     auto packetizer = std::make_shared<::rtc::H264RtpPacketizer>(
         ::rtc::NalUnit::Separator::StartSequence, rtpConfig);
@@ -1065,7 +1063,7 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
   auto dc = peer_connection->createDataChannel("ping-pong");
   dc->onOpen(onOpen);
 
-  dc->onClosed([&]() {
+  dc->onClosed([dc]() {
     std::cout << "[DataChannel closed: " << dc->label() << "]" << std::endl;
   });
 

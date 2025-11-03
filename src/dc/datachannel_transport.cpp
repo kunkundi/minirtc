@@ -31,16 +31,16 @@ DataChannelTransport::~DataChannelTransport() {
   }
 }
 
-int DataChannelTransport::SendVideoFrame(const XVideoFrame *video_frame,
-                                         const std::string &stream_id) {
-  for (auto &it : video_streams_) {
+int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
+                                         const std::string& stream_id) {
+  for (auto& it : video_streams_) {
     if (it.first == stream_id) {
-      auto &track = it.second->track_;
-      auto &codec = it.second->codec_;
+      auto& track = it.second->track_;
+      auto& codec = it.second->codec_;
 
       if (!codec) {
         LoadNvCodecDll();
-        codec = VideoEncoderFactory::CreateVideoEncoder(clock_, true, false);
+        codec = VideoEncoderFactory::CreateVideoEncoder(clock_, false, false);
         if (!codec || 0 != codec->Init()) {
           LOG_ERROR("Encoder [{}] init failed", stream_id);
           return -1;
@@ -48,9 +48,8 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame *video_frame,
       }
 
       if (task_queue_encode_) {
-        RawFrame raw_frame((const uint8_t *)video_frame->data,
-                           video_frame->size, video_frame->width,
-                           video_frame->height);
+        RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
+                           video_frame->width, video_frame->height);
         raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
 
         task_queue_encode_->PostTask([this, raw_frame = std::move(raw_frame),
@@ -58,11 +57,12 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame *video_frame,
           int ret = codec->Encode(
               std::move(raw_frame),
               [this, stream_id,
-               track](const EncodedFrame &encoded_frame) -> int {
+               track](const EncodedFrame& encoded_frame) -> int {
                 track->sendFrame(
-                    reinterpret_cast<const std::byte *>(encoded_frame.Buffer()),
+                    reinterpret_cast<const std::byte*>(encoded_frame.Buffer()),
                     encoded_frame.Size(),
-                    std::chrono::duration<double, std::micro>(90000));
+                    std::chrono::duration<double, std::micro>(
+                        encoded_frame.EncodedTimestamp()));
                 LOG_ERROR("[{}] Send video frame size {}", local_id_,
                           encoded_frame.Size());
 
@@ -76,12 +76,12 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame *video_frame,
   return -1;
 }
 
-int DataChannelTransport::SendAudioFrame(const char *data, size_t size,
-                                         const std::string &stream_id) {
-  for (auto &it : audio_streams_) {
+int DataChannelTransport::SendAudioFrame(const char* data, size_t size,
+                                         const std::string& stream_id) {
+  for (auto& it : audio_streams_) {
     if (it.first == stream_id) {
-      auto &track = it.second->track_;
-      track->sendFrame(reinterpret_cast<const std::byte *>(data), size,
+      auto& track = it.second->track_;
+      track->sendFrame(reinterpret_cast<const std::byte*>(data), size,
                        std::chrono::duration<double, std::micro>(90000));
       LOG_ERROR("[{}] Send audio frame size {}", local_id_, size);
       return 0;
@@ -90,12 +90,12 @@ int DataChannelTransport::SendAudioFrame(const char *data, size_t size,
   return -1;
 }
 
-int DataChannelTransport::SendDataFrame(const char *data, size_t size,
-                                        const std::string &stream_id) {
-  for (auto &it : data_streams_) {
+int DataChannelTransport::SendDataFrame(const char* data, size_t size,
+                                        const std::string& stream_id) {
+  for (auto& it : data_streams_) {
     if (it.first == stream_id) {
-      auto &data_channel = it.second;
-      data_channel->send(reinterpret_cast<const std::byte *>(data), size);
+      auto& data_channel = it.second;
+      data_channel->send(reinterpret_cast<const std::byte*>(data), size);
       LOG_ERROR("[{}] Send data frame size {}", local_id_, size);
       return 0;
     }

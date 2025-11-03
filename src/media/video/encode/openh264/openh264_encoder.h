@@ -80,6 +80,9 @@ class OpenH264Encoder : public MediaCodec {
   bool got_output = false;
   bool is_keyframe = false;
   int temporal_ = 1;
+  uint8_t* encoded_frame_ = nullptr;
+  size_t encoded_frame_capacity_ = 0;
+  size_t encoded_frame_size_ = 0;
 };
 }  // namespace minirtc
 

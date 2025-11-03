@@ -44,6 +44,11 @@ OpenH264Encoder::OpenH264Encoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 
 OpenH264Encoder::~OpenH264Encoder() {
+  if (encoded_frame_) {
+    delete encoded_frame_;
+    encoded_frame_ = nullptr;
+  }
+
 #ifdef SAVE_RECEIVED_NV12_STREAM
   if (file_nv12_) {
     fflush(file_nv12_);
@@ -206,23 +211,32 @@ int OpenH264Encoder::Encode(
   }
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
-  fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
+  if (file_nv12_) {
+    fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
+  }
 #endif
 
-  if (!yuv420p_frame_) {
-    yuv420p_frame_capacity_ = raw_frame.Size();
+  const size_t needed_yuv_size =
+      static_cast<size_t>(raw_frame.Width()) * raw_frame.Height() * 3 / 2;
+  if (!yuv420p_frame_ || yuv420p_frame_capacity_ < needed_yuv_size) {
+    delete[] yuv420p_frame_;
+    yuv420p_frame_capacity_ = needed_yuv_size;
     yuv420p_frame_ = new unsigned char[yuv420p_frame_capacity_];
   }
 
-  if (yuv420p_frame_capacity_ < raw_frame.Size()) {
-    yuv420p_frame_capacity_ = raw_frame.Size();
-    delete[] yuv420p_frame_;
-    yuv420p_frame_ = new unsigned char[yuv420p_frame_capacity_];
+  if (!encoded_frame_) {
+    encoded_frame_capacity_ =
+        std::max(static_cast<size_t>(raw_frame.Size()), (size_t)1024);
+    encoded_frame_ = new unsigned char[encoded_frame_capacity_];
   }
 
   if (raw_frame.Width() != frame_width_ ||
       raw_frame.Height() != frame_height_) {
-    ResetEncodeResolution(raw_frame.Width(), raw_frame.Height());
+    if (ResetEncodeResolution(raw_frame.Width(), raw_frame.Height()) != 0) {
+      LOG_ERROR("Failed to reset encoder resolution to {}x{}",
+                raw_frame.Width(), raw_frame.Height());
+      return -1;
+    }
   }
 
   Nv12ToI420((unsigned char*)raw_frame.Buffer(), raw_frame.Width(),
@@ -259,7 +273,6 @@ int OpenH264Encoder::Encode(
   if (enc_ret != 0) {
     LOG_ERROR("OpenH264 frame encoding failed, EncodeFrame returned {}",
               enc_ret);
-
     return -1;
   }
 
@@ -267,26 +280,52 @@ int OpenH264Encoder::Encode(
     return 0;
   }
 
+  size_t required_capacity = 0;
+  for (int layer = 0; layer < info.iLayerNum; ++layer) {
+    const SLayerBSInfo& layerInfo = info.sLayerInfo[layer];
+    for (int nal = 0; nal < layerInfo.iNalCount; ++nal) {
+      required_capacity += layerInfo.pNalLengthInByte[nal];
+    }
+  }
+
+  if (required_capacity == 0) {
+    return 0;
+  }
+
+  if (encoded_frame_capacity_ < required_capacity) {
+    delete[] encoded_frame_;
+    encoded_frame_capacity_ = required_capacity;
+    encoded_frame_ = new unsigned char[encoded_frame_capacity_];
+  }
+
+  size_t encoded_frame_size = 0;
   for (int layer = 0; layer < info.iLayerNum; ++layer) {
     const SLayerBSInfo& layerInfo = info.sLayerInfo[layer];
     size_t layer_len = 0;
     for (int nal = 0; nal < layerInfo.iNalCount; ++nal) {
       layer_len += layerInfo.pNalLengthInByte[nal];
     }
-
-    if (on_encoded_image) {
-      EncodedFrame encoded_frame(info.sLayerInfo[layer].pBsBuf, layer_len,
-                                 raw_frame_.iPicWidth, raw_frame_.iPicHeight);
-      encoded_frame.SetFrameType(frame_type);
-      encoded_frame.SetEncodedWidth(raw_frame_.iPicWidth);
-      encoded_frame.SetEncodedHeight(raw_frame_.iPicHeight);
-      encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
-      encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
-      on_encoded_image(encoded_frame);
-#ifdef SAVE_ENCODED_H264_STREAM
-      fwrite(encoded_frame.Buffer(), 1, encoded_frame.Size(), file_h264_);
-#endif
+    if (layer_len > 0 && layerInfo.pBsBuf) {
+      memcpy(encoded_frame_ + encoded_frame_size, layerInfo.pBsBuf, layer_len);
+      encoded_frame_size += layer_len;
     }
+  }
+  encoded_frame_size_ = encoded_frame_size;
+
+  if (on_encoded_image && encoded_frame_size_ > 0) {
+    EncodedFrame encoded_frame(encoded_frame_, encoded_frame_size_,
+                               raw_frame_.iPicWidth, raw_frame_.iPicHeight);
+    encoded_frame.SetFrameType(frame_type);
+    encoded_frame.SetEncodedWidth(raw_frame_.iPicWidth);
+    encoded_frame.SetEncodedHeight(raw_frame_.iPicHeight);
+    encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
+    encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+    on_encoded_image(encoded_frame);
+#ifdef SAVE_ENCODED_H264_STREAM
+    if (file_h264_) {
+      fwrite(encoded_frame_, 1, encoded_frame_size_, file_h264_);
+    }
+#endif
   }
 
   return 0;
