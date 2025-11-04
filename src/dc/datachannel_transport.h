@@ -35,7 +35,8 @@ class Stream {
   std::shared_ptr<MediaCodec> codec_;
 };
 
-class DataChannelTransport {
+class DataChannelTransport
+    : public std::enable_shared_from_this<DataChannelTransport> {
  public:
   enum class State { Waiting, WaitingForVideo, WaitingForAudio, Ready };
 
@@ -47,14 +48,14 @@ class DataChannelTransport {
   ~DataChannelTransport();
 
  public:
-  int SendVideoFrame(const XVideoFrame *video_frame,
-                     const std::string &stream_id);
+  int SendVideoFrame(const XVideoFrame* video_frame,
+                     const std::string& stream_id);
 
-  int SendAudioFrame(const char *data, size_t size,
-                     const std::string &stream_id);
+  int SendAudioFrame(const char* data, size_t size,
+                     const std::string& stream_id);
 
-  int SendDataFrame(const char *data, size_t size,
-                    const std::string &stream_id);
+  int SendDataFrame(const char* data, size_t size,
+                    const std::string& stream_id);
 
  public:
   void setState(State state) { state_ = state; }

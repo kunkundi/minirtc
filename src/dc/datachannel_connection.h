@@ -19,7 +19,6 @@
 #include "ice_transport.h"
 #include "minirtc.h"
 #include "rtc/rtc.hpp"
-#include "rtc/websocket.hpp"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 #include "ws_client.h"
@@ -82,6 +81,7 @@ struct IceWorkMsg {
     Offer,
     Answer,
     NewCandidate,
+    NewCandidateMid,
     RetryWithTurn
   };
 
@@ -91,6 +91,8 @@ struct IceWorkMsg {
   std::string transmission_id;
   std::string remote_user_id;
   std::string new_candidate;
+  std::string candidate;
+  std::string mid;
   std::string remote_sdp;
 };
 
@@ -140,8 +142,8 @@ class DataChannelConnection {
  private:
   std::shared_ptr<DataChannelTransport> CreateDataChannelConnection(
       const ::rtc::Configuration& config, std::shared_ptr<SystemClock> clock,
-      std::weak_ptr<::rtc::WebSocket> wws, bool offer_peer,
-      std::string transmission_id, std::string remote_user_id);
+      std::weak_ptr<WsClient> wws, bool offer_peer, std::string transmission_id,
+      std::string remote_user_id);
 
   std::shared_ptr<Stream> AddVideo(
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
@@ -205,7 +207,7 @@ class DataChannelConnection {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  std::shared_ptr<::rtc::WebSocket> ws_transport_ = nullptr;
+  std::shared_ptr<WsClient> ws_transport_ = nullptr;
   std::function<void(const std::string&)> on_receive_ws_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
   unsigned int ws_connection_id_ = 0;
@@ -258,8 +260,10 @@ class DataChannelConnection {
 
  private:
   std::unordered_map<std::string, std::shared_ptr<DataChannelTransport>>
-      dc_transport_list_{};
-  std::optional<std::shared_ptr<Stream>> avStream = std::nullopt;
+      dc_transport_list_;
+  std::map<std::string, bool> is_dc_transport_ready_;
+  std::shared_mutex dc_transport_list_mutex_;
+  bool dc_ready_ = false;
 };
 }  // namespace minirtc
 

@@ -26,7 +26,7 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
     return 0;
   }
 
-  InitLogger(::rtc::LogLevel::Debug,
+  InitLogger(::rtc::LogLevel::Verbose,
              [](::rtc::LogLevel level, std::string message) {
                switch (level) {
                  case ::rtc::LogLevel::Verbose:
@@ -119,8 +119,10 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
 
   std::string stun_server =
       "stun:" + cfg_stun_server_ip_ + ":" + cfg_stun_server_port_;
-  std::string turn_server =
-      "turn:crossdesk:crossdeskpw@api.crossdesk.cn:3478?transport=udp";
+  std::string turn_server = "turn:" + cfg_turn_server_username_ + ":" +
+                            cfg_turn_server_password_ + "@" +
+                            cfg_turn_server_ip_ + ":" + cfg_turn_server_port_ +
+                            "?transport=udp";
 
   peer_connection_config_.iceServers.emplace_back(stun_server);
   peer_connection_config_.iceServers.emplace_back(turn_server);
@@ -149,6 +151,41 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
   on_connection_status_ = params.on_connection_status;
   net_status_report_ = params.net_status_report;
   user_data_ = params.user_data;
+
+  on_receive_ws_msg_ = [this](const std::string& msg) { ProcessSignal(msg); };
+
+  on_ws_status_ = [this](WsStatus ws_status) {
+    if (WsStatus::WsOpening == ws_status) {
+      ws_status_ = WsStatus::WsOpening;
+      signal_status_ = SignalStatus::SignalConnecting;
+      on_signal_status_(SignalStatus::SignalConnecting, user_id_.data(),
+                        user_id_.size(), user_data_);
+    } else if (WsStatus::WsOpened == ws_status) {
+      ws_status_ = WsStatus::WsOpened;
+      LOG_INFO("Login to signal server");
+      Login();
+    } else if (WsStatus::WsFailed == ws_status) {
+      ws_status_ = WsStatus::WsFailed;
+      signal_status_ = SignalStatus::SignalFailed;
+      on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
+                        user_id_.size(), user_data_);
+    } else if (WsStatus::WsClosed == ws_status) {
+      ws_status_ = WsStatus::WsClosed;
+      signal_status_ = SignalStatus::SignalClosed;
+      on_signal_status_(SignalStatus::SignalClosed, user_id_.data(),
+                        user_id_.size(), user_data_);
+    } else if (WsStatus::WsReconnecting == ws_status) {
+      ws_status_ = WsStatus::WsReconnecting;
+      signal_status_ = SignalStatus::SignalReconnecting;
+      on_signal_status_(SignalStatus::SignalReconnecting, user_id_.data(),
+                        user_id_.size(), user_data_);
+    } else if (WsStatus::WsServerClosed == ws_status) {
+      ws_status_ = WsStatus::WsServerClosed;
+      signal_status_ = SignalStatus::SignalServerClosed;
+      on_signal_status_(SignalStatus::SignalServerClosed, user_id_.data(),
+                        user_id_.size(), user_data_);
+    }
+  };
 
   on_ice_status_change_ = [this](std::string ice_status,
                                  const std::string& user_id) {
@@ -215,55 +252,16 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
 
   clock_ = std::make_shared<SystemClock>();
 
-  ws_transport_ = std::make_shared<::rtc::WebSocket>();
-
-  ws_transport_->onOpen([this]() {
-    LOG_INFO("WebSocket opened");
-    ws_status_ = WsStatus::WsOpened;
-    signal_status_ = SignalStatus::SignalConnected;
-    on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),
-                      user_id_.size(), user_data_);
-
-    Login();
-  });
-
-  ws_transport_->onClosed([this]() {
-    LOG_INFO("WebSocket closed");
-    ws_status_ = WsStatus::WsClosed;
-    signal_status_ = SignalStatus::SignalClosed;
-    on_signal_status_(SignalStatus::SignalClosed, user_id_.data(),
-                      user_id_.size(), user_data_);
-  });
-
-  ws_transport_->onError([this](const std::string& error) {
-    LOG_ERROR("WebSocket error [{}]", error);
-    ws_status_ = WsStatus::WsFailed;
-    signal_status_ = SignalStatus::SignalFailed;
-    on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
-                      user_id_.size(), user_data_);
-  });
-
-  ws_transport_->onMessage(
-      [&, this](std::variant<::rtc::binary, std::string> data) {
-        if (!std::holds_alternative<std::string>(data)) {
-          return;
-        }
-
-        const std::string& msg = std::get<std::string>(data);
-        ProcessSignal(msg);
-      });
-
+  ws_transport_ = std::make_shared<WsClient>(on_receive_ws_msg_, on_ws_status_);
   uri_ = "wss://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
   if (ws_transport_) {
-    LOG_INFO("[{}] Connecting to signal server [{}]", user_id_, uri_);
-    ws_transport_->open(uri_);
-    ws_status_ = WsStatus::WsOpening;
-    signal_status_ = SignalStatus::SignalConnecting;
-    on_signal_status_(SignalStatus::SignalConnecting, user_id_.data(),
-                      user_id_.size(), user_data_);
+    ws_transport_->Connect(uri_, cfg_tls_cert_path_);
   }
 
   StartIceWorker();
+
+  // do {
+  // } while (SignalStatus::SignalConnected != GetSignalStatus());
 
   LOG_INFO("[{}] Init finish", user_id_);
 
@@ -282,7 +280,7 @@ int DataChannelConnection::Login() {
   json message = {{"type", "login"}, {"user_id", user_id_with_pwd_}};
 
   if (ws_transport_) {
-    ws_transport_->send(message.dump());
+    ws_transport_->Send(message.dump());
     LOG_INFO("[{}] send login request to signal server", user_id_);
   }
   return ret;
@@ -305,7 +303,7 @@ int DataChannelConnection::Join(const std::string& transmission_id) {
   remote_transmission_id_ = transmission_id;
 
   if (ws_transport_) {
-    ws_transport_->send(message.dump());
+    ws_transport_->Send(message.dump());
     LOG_INFO(
         "[{}] sends join transmission request to transmission "
         "id [{}]",
@@ -325,7 +323,7 @@ int DataChannelConnection::NegotiationFailed() {
                   {"user_id", user_id_},
                   {"transmission_id", local_transmission_id_}};
   if (ws_transport_) {
-    ws_transport_->send(message.dump());
+    ws_transport_->Send(message.dump());
     LOG_INFO(
         "[{}] sends negotiation failed notification to [{}] for transmission "
         "id [{}]",
@@ -347,7 +345,7 @@ int DataChannelConnection::Leave(const std::string& transmission_id) {
                   {"user_id", user_id_},
                   {"transmission_id", transmission_id}};
   if (ws_transport_) {
-    ws_transport_->send(message.dump());
+    ws_transport_->Send(message.dump());
     LOG_INFO("[{}] sends leave transmission [{}] notification ", user_id_,
              transmission_id);
   }
@@ -375,11 +373,9 @@ int DataChannelConnection::AddDataStream(const char* stream_id) {
 }
 
 int DataChannelConnection::ReleaseAllIceTransmission() {
-  for (auto& user_id_it : ice_transport_list_) {
-    user_id_it.second->DestroyIceTransmission();
-  }
-  ice_transport_list_.clear();
-  is_ice_transport_ready_.clear();
+  std::shared_lock lock(dc_transport_list_mutex_);
+  dc_transport_list_.clear();
+  is_dc_transport_ready_.clear();
   video_stream_ids_.clear();
   audio_stream_ids_.clear();
   data_stream_ids_.clear();
@@ -390,7 +386,7 @@ int DataChannelConnection::Destroy() {
   StopIceWorker();
   if (ws_transport_) {
     LOG_INFO("Close websocket");
-    ws_transport_->close();
+    ws_transport_->Close();
   }
 
   return 0;
@@ -409,7 +405,7 @@ int DataChannelConnection::RequestTransmissionMemberList(
                   {"transmission_id", transmission_id}};
 
   if (ws_transport_) {
-    ws_transport_->send(message.dump());
+    ws_transport_->Send(message.dump());
   }
   return 0;
 }
@@ -421,6 +417,12 @@ SignalStatus DataChannelConnection::GetSignalStatus() {
 
 int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                           const char* stream_id) {
+  std::shared_lock lock(dc_transport_list_mutex_);
+
+  if (dc_transport_list_.empty()) {
+    return -1;
+  }
+
   for (auto& it : dc_transport_list_) {
     auto& pc = it.second;
     pc->SendVideoFrame(video_frame, "video-stream");
@@ -430,6 +432,12 @@ int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
 
 int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
                                           const char* stream_id) {
+  std::shared_lock lock(dc_transport_list_mutex_);
+
+  if (dc_transport_list_.empty()) {
+    return -1;
+  }
+
   for (auto& it : dc_transport_list_) {
     auto& pc = it.second;
     pc->SendAudioFrame(data, size, stream_id);
@@ -439,6 +447,12 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
                                          const char* stream_id) {
+  std::shared_lock lock(dc_transport_list_mutex_);
+
+  if (dc_transport_list_.empty()) {
+    return -1;
+  }
+
   for (auto& it : dc_transport_list_) {
     auto& pc = it.second;
     pc->SendDataFrame(data, size, stream_id);
@@ -638,6 +652,22 @@ void DataChannelConnection::ProcessSignal(const std::string& signal) {
 
       break;
     }
+    case "new_candidate_mid"_H: {
+      std::string transmission_id = j["transmission_id"].get<std::string>();
+      std::string remote_user_id = j["remote_user_id"].get<std::string>();
+      std::string candidate = j["candidate"].get<std::string>();
+      std::string mid = j["mid"].get<std::string>();
+
+      IceWorkMsg msg;
+      msg.type = IceWorkMsg::Type::NewCandidateMid;
+      msg.transmission_id = transmission_id;
+      msg.remote_user_id = remote_user_id;
+      msg.candidate = candidate;
+      msg.mid = mid;
+      PushIceWorkMsg(msg);
+
+      break;
+    }
     default: {
       break;
     }
@@ -710,7 +740,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           continue;
         }
 
-        std::unique_lock lock(ice_transport_list_mutex_);
+        std::unique_lock lock(dc_transport_list_mutex_);
         dc_transport_list_.emplace(
             remote_user_id,
             CreateDataChannelConnection(peer_connection_config_, clock_,
@@ -724,7 +754,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string user_id = msg.user_id;
       LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
                (void*)this, user_id);
-      std::unique_lock lock(ice_transport_list_mutex_);
+      std::unique_lock lock(dc_transport_list_mutex_);
       auto user_id_it = dc_transport_list_.find(user_id);
       if (user_id_it != dc_transport_list_.end()) {
         dc_transport_list_.erase(user_id_it);
@@ -736,28 +766,23 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string remote_user_id = msg.remote_user_id;
       LOG_INFO("[{}] Receive notification: user id [{}] join transmission",
                (void*)this, remote_user_id);
-      std::unique_lock lock(ice_transport_list_mutex_);
-      if (ice_transport_list_.end() ==
-          ice_transport_list_.find(remote_user_id)) {
+      std::unique_lock lock(dc_transport_list_mutex_);
+      if (dc_transport_list_.end() == dc_transport_list_.find(remote_user_id)) {
+        LOG_INFO("Create transmission to user [{}]", remote_user_id);
         dc_transport_list_.emplace(
             remote_user_id,
             CreateDataChannelConnection(peer_connection_config_, clock_,
                                         make_weak_ptr(ws_transport_), true,
                                         remote_user_id, remote_user_id));
-        LOG_INFO("Create transmission to user [{}]", remote_user_id);
       }
       break;
     }
     case IceWorkMsg::Type::Offer: {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
-      std::unique_lock lock(ice_transport_list_mutex_);
-      if (ice_transport_list_.end() !=
-          ice_transport_list_.find(remote_user_id)) {
-        ice_transport_list_[remote_user_id]->DestroyIceTransmission();
-        ice_transport_list_.erase(remote_user_id);
-        is_ice_transport_ready_[remote_user_id] = false;
-      }
+      std::unique_lock lock(dc_transport_list_mutex_);
+      dc_transport_list_.clear();
+      is_ice_transport_ready_.clear();
 
       LOG_INFO("Receive offer");
 
@@ -800,7 +825,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     }
     case IceWorkMsg::Type::Answer: {
       std::string remote_user_id = msg.remote_user_id;
-      std::unique_lock lock(ice_transport_list_mutex_);
+      std::unique_lock lock(dc_transport_list_mutex_);
 
       ::rtc::Description remote_sdp(msg.remote_sdp, "answer");
 
@@ -819,13 +844,33 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string new_candidate = msg.new_candidate;
       std::string remote_user_id = msg.remote_user_id;
 
-      std::shared_lock lock(ice_transport_list_mutex_);
+      std::shared_lock lock(dc_transport_list_mutex_);
       if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
         auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
         if (pc) {
           pc->addRemoteCandidate(new_candidate);
         }
       }
+      break;
+    }
+    case IceWorkMsg::Type::NewCandidateMid: {
+      // std::string transmission_id = msg.transmission_id;
+      // std::string remote_user_id = msg.remote_user_id;
+      // std::string candidate = msg.candidate;
+      // std::string mid = msg.mid;
+      // LOG_INFO("Receive new candidate from [{}]: {}, mid: {}",
+      // remote_user_id,
+      //          candidate, mid);
+
+      // std::shared_lock lock(dc_transport_list_mutex_);
+      // if (dc_transport_list_.find(remote_user_id) !=
+      // dc_transport_list_.end()) {
+      //   auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
+      //   if (pc) {
+      //     LOG_INFO("Add remote candidate: {}, mid: {}", candidate, mid);
+      //     pc->addRemoteCandidate(::rtc::Candidate(candidate, mid));
+      //   }
+      // }
       break;
     }
     default: {
@@ -838,8 +883,8 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 std::shared_ptr<DataChannelTransport>
 DataChannelConnection::CreateDataChannelConnection(
     const ::rtc::Configuration& config, std::shared_ptr<SystemClock> clock,
-    std::weak_ptr<::rtc::WebSocket> wws, bool offer_peer,
-    std::string transmission_id, std::string remote_user_id) {
+    std::weak_ptr<WsClient> wws, bool offer_peer, std::string transmission_id,
+    std::string remote_user_id) {
   offer_peer_ = offer_peer;
   auto peer_connection = std::make_shared<::rtc::PeerConnection>(config);
   auto dc_transport = std::make_shared<DataChannelTransport>(
@@ -857,7 +902,7 @@ DataChannelConnection::CreateDataChannelConnection(
 
       // Gathering complete, send offer
       if (auto ws = wws.lock()) {
-        ws->send(message.dump());
+        ws->Send(message.dump());
         // LOG_INFO("[{}] send offer to [{}]: {}", user_id_, remote_user_id,
         //          message.dump());
       }
@@ -871,7 +916,7 @@ DataChannelConnection::CreateDataChannelConnection(
 
       // Gathering complete, send answer
       if (auto ws = wws.lock()) {
-        ws->send(message.dump());
+        ws->Send(message.dump());
         // LOG_INFO("[{}] send answer to [{}]: {}", user_id_, remote_user_id,
         //          message.dump());
       }
@@ -880,13 +925,18 @@ DataChannelConnection::CreateDataChannelConnection(
 
   peer_connection->onLocalCandidate(
       [this, transmission_id, remote_user_id, wws](::rtc::Candidate candidate) {
-        json message = {{"type", "new_candidate"},
-                        {"transmission_id", transmission_id},
-                        {"user_id", user_id_},
-                        {"remote_user_id", remote_user_id},
-                        {"sdp", std::string(candidate)}};
+        // json message = {{"type", "new_candidate_mid"},
+        //                 {"transmission_id", transmission_id},
+        //                 {"user_id", user_id_},
+        //                 {"remote_user_id", remote_user_id},
+        //                 {"candidate", candidate.candidate()},
+        //                 {"mid", candidate.mid()}};
 
-        if (auto ws = wws.lock()) ws->send(message.dump());
+        // if (auto ws = wws.lock()) {
+        //   LOG_INFO("[{}] send new candidate to [{}]: {}", user_id_,
+        //            remote_user_id, message.dump());
+        //   ws->send(message.dump());
+        // }
       });
 
   peer_connection->onStateChange(
