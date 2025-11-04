@@ -123,9 +123,14 @@ int DataChannelConnection::Init(PeerConnectionParams params) {
                             cfg_turn_server_password_ + "@" +
                             cfg_turn_server_ip_ + ":" + cfg_turn_server_port_ +
                             "?transport=udp";
+  std::string turn_server_tcp = "turn:" + cfg_turn_server_username_ + ":" +
+                                cfg_turn_server_password_ + "@" +
+                                cfg_turn_server_ip_ + ":" +
+                                cfg_turn_server_port_ + "?transport=tcp";
 
   peer_connection_config_.iceServers.emplace_back(stun_server);
   peer_connection_config_.iceServers.emplace_back(turn_server);
+  peer_connection_config_.iceServers.emplace_back(turn_server_tcp);
   LOG_INFO("Stun server ip [{}] port [{}]", cfg_stun_server_ip_,
            cfg_stun_server_port_);
 
