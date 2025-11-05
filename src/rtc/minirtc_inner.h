@@ -10,11 +10,7 @@
 using namespace minirtc;
 
 struct Peer {
-#ifdef USE_LIBDATACHANNEL_CONNECTION
-  DataChannelConnection* peer_connection;
-#else
   PeerConnection* peer_connection;
-#endif
   PeerConnectionParams pc_params;
 };
 

@@ -15,8 +15,9 @@
 #include "audio_decoder.h"
 #include "audio_encoder.h"
 #include "clock/system_clock.h"
-#include "ice_transport.h"
-#include "minirtc.h"
+#include "connection_interface.h"
+#include "datachannel_connection.h"
+#include "minirtc_connection.h"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 #include "ws_client.h"
@@ -70,29 +71,6 @@ typedef struct {
   void* user_data;
 } PeerConnectionParams;
 
-struct IceWorkMsg {
-  enum Type {
-    Login = 0,
-    UserLeaveTransmission,
-    UserJoinTransmission,
-    Offer,
-    Answer,
-    NewCandidate,
-    NewCandidateMid,
-    RetryWithTurn
-  };
-
-  Type type;
-  std::vector<std::string> user_id_list;
-  std::string user_id;
-  std::string transmission_id;
-  std::string remote_user_id;
-  std::string new_candidate;
-  std::string candidate;
-  std::string mid;
-  std::string remote_sdp;
-};
-
 class PeerConnection {
  public:
   PeerConnection();
@@ -125,8 +103,6 @@ class PeerConnection {
   int Login();
 
   void ProcessSignal(const std::string& signal);
-
-  int NegotiationFailed();
 
  private:
   void StartIceWorker();
@@ -166,10 +142,6 @@ class PeerConnection {
                                            rtp::PAYLOAD_TYPE::AV1};
   std::vector<int> audio_payload_types_ = {rtp::PAYLOAD_TYPE::OPUS};
 
-  std::vector<std::string> video_stream_ids_;
-  std::vector<std::string> audio_stream_ids_;
-  std::vector<std::string> data_stream_ids_;
-
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
   std::shared_ptr<WsClient> ws_transport_ = nullptr;
@@ -190,10 +162,7 @@ class PeerConnection {
   std::string sdp_without_cands_ = "";
 
  private:
-  std::map<std::string, std::shared_ptr<IceTransport>> ice_transport_list_;
   std::map<std::string, bool> is_ice_transport_ready_;
-  std::shared_mutex ice_transport_list_mutex_;
-
   std::function<void(std::string, const std::string&)> on_ice_status_change_ =
       nullptr;
   bool ice_ready_ = false;
@@ -222,6 +191,12 @@ class PeerConnection {
   std::condition_variable empty_notify_cv_;
   std::mutex ice_work_mutex_;
   std::mutex empty_notify_mutex_;
+
+ private:
+  MediaStreamIds media_stream_ids_;
+  ConnectionInfo connection_info_;
+  ConnectionCallbacks connection_callbacks_;
+  std::shared_ptr<ConnectionInterface> peer_connection_;
 };
 }  // namespace minirtc
 

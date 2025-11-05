@@ -101,7 +101,6 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
               encoded_frame.Size(),
               std::chrono::duration<double, std::micro>(
                   encoded_frame.EncodedTimestamp()));
-          LOG_ERROR("Send video frame size {}", encoded_frame.Size());
 
           return 0;
         });
