@@ -73,11 +73,12 @@ typedef struct {
 struct IceWorkMsg {
   enum Type {
     Login = 0,
-    UserIdList,
     UserLeaveTransmission,
+    UserJoinTransmission,
     Offer,
     Answer,
     NewCandidate,
+    NewCandidateMid,
     RetryWithTurn
   };
 
@@ -87,6 +88,8 @@ struct IceWorkMsg {
   std::string transmission_id;
   std::string remote_user_id;
   std::string new_candidate;
+  std::string candidate;
+  std::string mid;
   std::string remote_sdp;
 };
 
@@ -122,8 +125,6 @@ class PeerConnection {
   int Login();
 
   void ProcessSignal(const std::string& signal);
-
-  int RequestTransmissionMemberList(const std::string& transmission_id);
 
   int NegotiationFailed();
 
