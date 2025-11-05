@@ -940,6 +940,10 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
 #endif
   }
 
+  if (ret == 0) {
+    video_codec_inited_ = true;
+  }
+
   return ret;
 }
 

@@ -67,6 +67,9 @@ int DataChannelConnection::Init() {
   peer_connection_config_.iceServers.emplace_back(stun_server);
   peer_connection_config_.iceServers.emplace_back(turn_server);
   peer_connection_config_.iceServers.emplace_back(turn_server_tcp);
+  // use trickle ice by default
+  peer_connection_config_.disableAutoNegotiation = true;
+  peer_connection_config_.disableAutoGathering = true;
 
   return 0;
 }
@@ -176,17 +179,14 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       ::rtc::Description remote_sdp(msg.remote_sdp,
                                     ::rtc::Description::Type::Offer);
       // LOG_INFO("Set remote description: {}", msg.remote_sdp.c_str());
-      dc_transport_list_[remote_user_id]
-          ->peer_connection_->setRemoteDescription(remote_sdp);
 
-      dc_transport_list_[remote_user_id]
-          ->peer_connection_->setLocalDescription();
+      auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
+      pc->setRemoteDescription(remote_sdp);
+
+      pc->setLocalDescription();
 
       // send answer
-      std::string answer = dc_transport_list_[remote_user_id]
-                               ->peer_connection_->localDescription()
-                               .value()
-                               .generateSdp();
+      std::string answer = pc->localDescription().value().generateSdp();
 
       json message = {{"type", "answer"},
                       {"transmission_id", transmission_id},
@@ -199,28 +199,26 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       // remote_user_id,
       //          message.dump());
 
-      dc_transport_list_[remote_user_id]
-          ->peer_connection_->gatherLocalCandidates();
+      pc->gatherLocalCandidates();
 
       std::shared_ptr<::rtc::DataChannel> dc;
-      dc_transport_list_[remote_user_id]->peer_connection_->onDataChannel(
-          [&](std::shared_ptr<::rtc::DataChannel> _dc) {
-            std::cout << "[Got a DataChannel with label: " << _dc->label()
+      pc->onDataChannel([&](std::shared_ptr<::rtc::DataChannel> _dc) {
+        std::cout << "[Got a DataChannel with label: " << _dc->label() << "]"
+                  << std::endl;
+        dc = _dc;
+
+        dc->onClosed([&]() {
+          std::cout << "[DataChannel closed: " << dc->label() << "]"
+                    << std::endl;
+        });
+
+        dc->onMessage([](auto data) {
+          if (std::holds_alternative<std::string>(data)) {
+            std::cout << "[Received message: " << std::get<std::string>(data)
                       << "]" << std::endl;
-            dc = _dc;
-
-            dc->onClosed([&]() {
-              std::cout << "[DataChannel closed: " << dc->label() << "]"
-                        << std::endl;
-            });
-
-            dc->onMessage([](auto data) {
-              if (std::holds_alternative<std::string>(data)) {
-                std::cout << "[Received message: "
-                          << std::get<std::string>(data) << "]" << std::endl;
-              }
-            });
-          });
+          }
+        });
+      });
 
       break;
     }
@@ -231,7 +229,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       ::rtc::Description remote_sdp(msg.remote_sdp, "answer");
 
       if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
-        auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
+        auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
         if (pc) {
           // LOG_INFO("Set remote description: {}", msg.remote_sdp.c_str());
           pc->setRemoteDescription(remote_sdp);
@@ -249,7 +247,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
       std::shared_lock lock(dc_transport_list_mutex_);
       if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
-        auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
+        auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
         if (pc) {
           pc->addRemoteCandidate(new_candidate);
         }
@@ -268,7 +266,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       // std::shared_lock lock(dc_transport_list_mutex_);
       // if (dc_transport_list_.find(remote_user_id) !=
       // dc_transport_list_.end()) {
-      //   auto pc = dc_transport_list_[remote_user_id]->peer_connection_;
+      //   auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
       //   if (pc) {
       //     LOG_INFO("Add remote candidate: {}, mid: {}", candidate, mid);
       //     pc->addRemoteCandidate(::rtc::Candidate(candidate, mid));
@@ -341,8 +339,8 @@ DataChannelConnection::CreateDataChannelConnection(
                         {"mid", candidate.mid()}};
 
         if (auto ws = wws.lock()) {
-          LOG_INFO("[{}] send new candidate to [{}]: {}", info_.user_id,
-                   remote_user_id, message.dump());
+          // LOG_INFO("[{}] send new candidate to [{}]: {}", info_.user_id,
+          //          remote_user_id, message.dump());
           ws->Send(message.dump());
         }
       });
@@ -397,29 +395,13 @@ DataChannelConnection::CreateDataChannelConnection(
             break;
           case ::rtc::PeerConnection::GatheringState::Complete:
             LOG_INFO("Gathering state: Complete");
-
-            std::string offer = dc_transport_list_[remote_user_id]
-                                    ->peer_connection_->localDescription()
-                                    .value()
-                                    .generateSdp();
-            json message = {{"type", "offer"},
-                            {"transmission_id", transmission_id},
-                            {"user_id", info_.user_id},
-                            {"remote_user_id", remote_user_id},
-                            {"sdp", offer.c_str()}};
-
-            if (auto ws = wws.lock()) {
-              ws->Send(message.dump());
-              // LOG_INFO("[{}] send offer to [{}]: {}", info_.user_id,
-              // remote_user_id,
-              //          message.dump());
-            }
+            break;
         }
       });
 
   if (offer_peer_) {
     for (auto& video_stream_id : media_stream_ids_.video) {
-      dc_transport->video_streams_.emplace(
+      dc_transport->AddVideoStream(
           video_stream_id,
           AddVideo(peer_connection,
                    info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1
@@ -430,8 +412,13 @@ DataChannelConnection::CreateDataChannelConnection(
                    }));
     }
 
+    dc_transport->CreateCodecs(
+        clock_,
+        info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+        info_.hardware_acceleration);
+
     for (auto& audio_stream_id : media_stream_ids_.audio) {
-      dc_transport->audio_streams_.emplace(
+      dc_transport->AddAudioStream(
           audio_stream_id,
           AddAudio(peer_connection, rtp::PAYLOAD_TYPE::OPUS,
                    GenerateUniqueSsrc(), "audio-stream", audio_stream_id,
@@ -441,13 +428,30 @@ DataChannelConnection::CreateDataChannelConnection(
     }
 
     for (auto& data_stream_id : media_stream_ids_.data) {
-      dc_transport->data_streams_.emplace(
+      dc_transport->AddDataStream(
           data_stream_id,
           AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA,
                   GenerateUniqueSsrc(), "data-stream", data_stream_id,
                   [data_stream_id, wc = make_weak_ptr(dc_transport)]() {
                     LOG_INFO("Data stream {} opened", data_stream_id);
                   }));
+    }
+
+    dc_transport->GetPeerConnection()->setLocalDescription();
+    std::string offer = dc_transport->GetPeerConnection()
+                            ->localDescription()
+                            .value()
+                            .generateSdp();
+    json message = {{"type", "offer"},
+                    {"transmission_id", transmission_id},
+                    {"user_id", info_.user_id},
+                    {"remote_user_id", remote_user_id},
+                    {"sdp", offer.c_str()}};
+
+    if (auto ws = wws.lock()) {
+      ws->Send(message.dump());
+      // LOG_INFO("[{}] send offer to [{}]: {}", info_.user_id, remote_user_id,
+      //          message.dump());
     }
   }
 

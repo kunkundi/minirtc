@@ -12,10 +12,13 @@
 #include <shared_mutex>
 #include <unordered_map>
 
+#include "audio_decoder.h"
+#include "audio_encoder.h"
 #include "clock/system_clock.h"
 #include "media_channel.h"
 #include "media_codec.h"
 #include "minirtc.h"
+#include "resolution_adapter.h"
 #include "rtc/rtc.hpp"
 #include "rtc/websocket.hpp"
 #include "task_queue.h"
@@ -57,14 +60,46 @@ class DataChannelTransport
   int SendDataFrame(const char* data, size_t size,
                     const std::string& stream_id);
 
+  void AddVideoStream(std::string stream_id, std::shared_ptr<Stream> stream);
+
+  void AddAudioStream(std::string stream_id, std::shared_ptr<Stream> stream);
+
+  void AddDataStream(std::string stream_id,
+                     std::shared_ptr<::rtc::DataChannel> stream);
+
+  int CreateCodecs(std::shared_ptr<SystemClock> clock,
+                   rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
+
  public:
   void setState(State state) { state_ = state; }
+
   State getState() { return state_; }
 
+  const std::shared_ptr<::rtc::PeerConnection>& GetPeerConnection() const {
+    return peer_connection_;
+  }
+
+ private:
+  int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
+                         bool hardware_acceleration, bool av1_encoding);
+
+ private:
   std::unordered_map<std::string, std::shared_ptr<Stream>> video_streams_;
   std::unordered_map<std::string, std::shared_ptr<Stream>> audio_streams_;
   std::unordered_map<std::string, std::shared_ptr<::rtc::DataChannel>>
       data_streams_;
+
+  std::shared_mutex video_streams_mutex_;
+  std::shared_mutex audio_streams_mutex_;
+  std::shared_mutex data_streams_mutex_;
+
+ private:
+  std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
+  std::atomic<bool> b_force_i_frame_;
+  bool video_codec_inited_;
+  bool audio_codec_inited_;
+  bool load_nvcodec_dll_success_;
+  bool hardware_acceleration_;
 
   uint32_t rtpStartTimestamp = 0;
 
