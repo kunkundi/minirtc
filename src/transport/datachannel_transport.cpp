@@ -123,10 +123,8 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
                   encoded_frame.EncodedTimestamp()));
           return 0;
         });
-
     return 0;
   });
-
   return 0;
 }
 
@@ -267,7 +265,7 @@ int DataChannelTransport::CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
         }
         if (video_streams_init_first_time) {
           if (!video_streams_.empty()) {
-            LOG_INFO("Use video encoder [{}]", stream_id,
+            LOG_INFO("Use video encoder [{}]",
                      stream->codec_->GetEncoderName());
             video_streams_init_first_time = false;
           }

@@ -63,6 +63,7 @@ class DataChannelConnection : public ConnectionInterface {
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
       const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
       const std::string cname, const std::string msid,
+      const ConnectionCallbacks& callbacks,
       const std::function<void(void)> onOpen);
 
   std::shared_ptr<Stream> CreateStream(const std::string h264Samples,

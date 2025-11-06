@@ -406,7 +406,7 @@ DataChannelConnection::CreateDataChannelConnection(
           AddVideo(peer_connection,
                    info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1
                                       : rtp::PAYLOAD_TYPE::H264,
-                   GenerateUniqueSsrc(), video_stream_id, "stream1",
+                   GenerateUniqueSsrc(), video_stream_id, video_stream_id,
                    [video_stream_id, wc = make_weak_ptr(dc_transport)]() {
                      LOG_INFO("Video stream {} opened", video_stream_id);
                    }));
@@ -432,6 +432,7 @@ DataChannelConnection::CreateDataChannelConnection(
           data_stream_id,
           AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA,
                   GenerateUniqueSsrc(), "data-stream", data_stream_id,
+                  callbacks_,
                   [data_stream_id, wc = make_weak_ptr(dc_transport)]() {
                     LOG_INFO("Data stream {} opened", data_stream_id);
                   }));
@@ -544,6 +545,7 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
     const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
     const std::string cname, const std::string msid,
+    const ConnectionCallbacks& callbacks,
     const std::function<void(void)> onOpen) {
   auto dc = peer_connection->createDataChannel("ping-pong");
   dc->onOpen(onOpen);
@@ -552,10 +554,15 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     std::cout << "[DataChannel closed: " << dc->label() << "]" << std::endl;
   });
 
-  dc->onMessage(nullptr, [msid, wdc = make_weak_ptr(dc)](std::string msg) {
-    std::cout << "Message from " << msid << " received: " << msg << std::endl;
-    if (auto dc = wdc.lock()) {
-      dc->send("Ping");
+  dc->onMessage([msid, wdc = std::weak_ptr(dc),
+                 callbacks](std::variant<::rtc::binary, std::string> msg) {
+    if (callbacks.on_receive_data_buffer) {
+      if (std::holds_alternative<std::string>(msg)) {
+        const auto& str = std::get<std::string>(msg);
+        LOG_INFO("[DataChannel receive: {}]", str);
+        callbacks.on_receive_data_buffer(str.data(), str.size(), msid.data(),
+                                         msid.size(), callbacks.user_data);
+      }
     }
   });
 
