@@ -75,7 +75,7 @@ int DataChannelConnection::Init() {
 }
 
 int DataChannelConnection::ReleaseAllIceTransmission() {
-  std::shared_lock lock(dc_transport_list_mutex_);
+  std::unique_lock lock(dc_transport_list_mutex_);
 
   dc_transport_list_.clear();
   is_dc_transport_ready_.clear();
@@ -165,10 +165,16 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
       std::unique_lock lock(dc_transport_list_mutex_);
-      dc_transport_list_.clear();
-      is_dc_transport_ready_.clear();
 
-      LOG_INFO("Receive offer");
+      // if there is an existing connection to the user, replace it
+      auto existing_it = dc_transport_list_.find(remote_user_id);
+      if (existing_it != dc_transport_list_.end()) {
+        LOG_INFO("Replace existing connection to user [{}]", remote_user_id);
+        dc_transport_list_.erase(existing_it);
+        is_dc_transport_ready_.erase(remote_user_id);
+      }
+
+      LOG_INFO("Receive offer from user [{}]", remote_user_id);
 
       dc_transport_list_.emplace(
           remote_user_id,

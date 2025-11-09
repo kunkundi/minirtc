@@ -249,8 +249,8 @@ int PeerConnection::Leave(const std::string& transmission_id) {
   is_ice_transport_ready_[user_id_] = false;
   leave_ = true;
 
-  if (peer_connection_) {
-    peer_connection_->ReleaseAllIceTransmission();
+  for (auto& peer_connection : peer_connection_map_) {
+    peer_connection.second->ReleaseAllIceTransmission();
   }
 
   return 0;
@@ -288,32 +288,29 @@ SignalStatus PeerConnection::GetSignalStatus() {
 
 int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                    const char* stream_id) {
-  if (!peer_connection_) {
-    LOG_ERROR("Peer connection not created yet");
-    return -1;
+  for (auto& peer_connection : peer_connection_map_) {
+    peer_connection.second->SendVideoFrame(video_frame, stream_id);
   }
 
-  return peer_connection_->SendVideoFrame(video_frame, stream_id);
+  return 0;
 }
 
 int PeerConnection::SendAudioFrame(const char* data, size_t size,
                                    const char* stream_id) {
-  if (!peer_connection_) {
-    LOG_ERROR("Peer connection not created yet");
-    return -1;
+  for (auto& peer_connection : peer_connection_map_) {
+    peer_connection.second->SendAudioFrame(data, size, stream_id);
   }
 
-  return peer_connection_->SendAudioFrame(data, size, stream_id);
+  return 0;
 }
 
 int PeerConnection::SendDataFrame(const char* data, size_t size,
                                   const char* stream_id) {
-  if (!peer_connection_) {
-    LOG_ERROR("Peer connection not created yet");
-    return -1;
+  for (auto& peer_connection : peer_connection_map_) {
+    peer_connection.second->SendDataFrame(data, size, stream_id);
   }
 
-  return peer_connection_->SendDataFrame(data, size, stream_id);
+  return 0;
 }
 
 int64_t PeerConnection::GetSystemTimeMicros() {
@@ -324,7 +321,6 @@ int64_t PeerConnection::GetSystemTimeMicros() {
 }
 
 // Process signal message from signal server
-
 void PeerConnection::ProcessSignal(const std::string& signal) {
   auto j = json::parse(signal);
   std::string type = j["type"];
@@ -393,18 +389,26 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         connection_info_.user_id = user_id_;
         connection_info_.remote_user_id = remote_user_id;
 
-        if (remote_user_id.find("web") == std::string::npos) {
-          peer_connection_ = std::make_shared<MiniRTCConnection>(
-              clock_, ws_transport_, connection_info_, media_stream_ids_,
-              connection_callbacks_);
-        } else {
-          // web client use libdatachannel
-          peer_connection_ = std::make_shared<DataChannelConnection>(
-              clock_, ws_transport_, connection_info_, media_stream_ids_,
-              connection_callbacks_);
-        }
+        if (peer_connection_map_.find(remote_user_id) ==
+            peer_connection_map_.end()) {
+          if (remote_user_id.find("web") == std::string::npos) {
+            peer_connection_map_.emplace(
+                remote_user_id, std::make_shared<MiniRTCConnection>(
+                                    clock_, ws_transport_, connection_info_,
+                                    media_stream_ids_, connection_callbacks_));
+          } else {
+            // web client use libdatachannel
+            peer_connection_map_.emplace(
+                remote_user_id, std::make_shared<DataChannelConnection>(
+                                    clock_, ws_transport_, connection_info_,
+                                    media_stream_ids_, connection_callbacks_));
+          }
 
-        peer_connection_->Init();
+          peer_connection_map_[remote_user_id]->Init();
+        } else {
+          LOG_ERROR("Peer connection already exists");
+          break;
+        }
 
         if (remote_user_id.empty()) {
           LOG_ERROR(
@@ -447,11 +451,25 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         connection_info_.user_id = user_id_;
         connection_info_.remote_user_id = remote_user_id;
 
-        peer_connection_ = std::make_shared<MiniRTCConnection>(
-            clock_, ws_transport_, connection_info_, media_stream_ids_,
-            connection_callbacks_);
+        if (peer_connection_map_.find(remote_user_id) ==
+            peer_connection_map_.end()) {
+          if (remote_user_id.find("web") == std::string::npos) {
+            peer_connection_map_.emplace(
+                remote_user_id, std::make_shared<MiniRTCConnection>(
+                                    clock_, ws_transport_, connection_info_,
+                                    media_stream_ids_, connection_callbacks_));
+          } else {
+            peer_connection_map_.emplace(
+                remote_user_id, std::make_shared<DataChannelConnection>(
+                                    clock_, ws_transport_, connection_info_,
+                                    media_stream_ids_, connection_callbacks_));
+          }
 
-        peer_connection_->Init();
+          peer_connection_map_[remote_user_id]->Init();
+        } else {
+          LOG_ERROR("Peer connection already exists");
+          break;
+        }
 
         IceWorkMsg msg;
         msg.type = IceWorkMsg::Type::Offer;
@@ -551,11 +569,11 @@ void PeerConnection::PushIceWorkMsg(const IceWorkMsg& msg) {
 }
 
 void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
-  if (!peer_connection_) {
-    LOG_ERROR("Peer connection not created yet");
-    return;
+  if (msg.remote_user_id != "") {
+    if (peer_connection_map_.find(msg.remote_user_id) !=
+        peer_connection_map_.end()) {
+      peer_connection_map_[msg.remote_user_id]->ProcessIceWorkMsg(msg);
+    }
   }
-
-  peer_connection_->ProcessIceWorkMsg(msg);
 }
 }  // namespace minirtc

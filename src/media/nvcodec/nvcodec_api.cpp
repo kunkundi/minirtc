@@ -9,6 +9,8 @@
 
 namespace minirtc {
 
+static bool nvcodec_dll_loaded = false;
+
 TcuInit cuInit_ld = NULL;
 TcuDeviceGet cuDeviceGet_ld = NULL;
 TcuDeviceGetCount cuDeviceGetCount_ld = NULL;
@@ -97,6 +99,10 @@ static int LoadFunctionHelper(void* library, void** func,
 }
 
 int LoadNvCodecDll() {
+  if (nvcodec_dll_loaded) {
+    return 0;
+  }
+
   if (LoadLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll), "nvcuda.dll",
                         "libcuda.so") != 0) {
     FreeLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll));
@@ -189,6 +195,8 @@ int LoadNvCodecDll() {
   }
 
   LOG_INFO("Load NvCodec API success");
+
+  nvcodec_dll_loaded = true;
 
   return 0;
 }

@@ -11,6 +11,7 @@
 #include <map>
 #include <mutex>
 #include <shared_mutex>
+#include <unordered_map>
 
 #include "audio_decoder.h"
 #include "audio_encoder.h"
@@ -197,6 +198,8 @@ class PeerConnection {
   ConnectionInfo connection_info_;
   ConnectionCallbacks connection_callbacks_;
   std::shared_ptr<ConnectionInterface> peer_connection_;
+  std::unordered_map<std::string, std::shared_ptr<ConnectionInterface>>
+      peer_connection_map_;
 };
 }  // namespace minirtc
 
