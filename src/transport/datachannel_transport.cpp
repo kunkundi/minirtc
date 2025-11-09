@@ -61,15 +61,27 @@ DataChannelTransport::~DataChannelTransport() {
 
 int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
                                          const std::string& stream_id) {
-  auto it_stream = video_streams_.find(stream_id);
-  if (it_stream == video_streams_.end()) {
-    LOG_ERROR("Video stream [{}] not found", stream_id);
-    return -1;
-  }
+  std::shared_ptr<Stream> stream;
+  std::shared_ptr<MediaCodec> codec;
+  std::shared_ptr<::rtc::Track> track;
 
-  auto stream = it_stream->second;
-  auto codec = stream->codec_;
-  auto track = stream->track_;
+  {
+    std::shared_lock lock(video_streams_mutex_);
+    auto it_stream = video_streams_.find(stream_id);
+    if (it_stream == video_streams_.end()) {
+      LOG_ERROR("Video stream [{}] not found", stream_id);
+      return -1;
+    }
+
+    stream = it_stream->second;
+    if (!stream) {
+      LOG_ERROR("[{}] Stream is null", stream_id);
+      return -1;
+    }
+
+    codec = stream->codec_;
+    track = stream->track_;
+  }
 
   if (!codec) {
     LOG_ERROR("[{}] Codec not found", stream_id);
@@ -102,21 +114,27 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
       return -1;
     }
 
+    if (!codec) {
+      LOG_WARN("[{}] Codec is null, drop frame", stream_id);
+      return -1;
+    }
+
+    std::shared_ptr<::rtc::Track> track_shared = track_ptr;
+
     codec->Encode(
         std::move(raw_frame),
-        [weak_self, weak_track,
+        [weak_self, track_shared,
          stream_id](const EncodedFrame& encoded_frame) -> int {
           auto self_track = weak_self.lock();
           if (!self_track) return -1;
 
-          auto track_ptr = weak_track.lock();
-          if (!track_ptr || !track_ptr->isOpen()) {
+          if (!track_shared || !track_shared->isOpen()) {
             LOG_WARN("[{}] Track closed, drop encoded frame size {}", stream_id,
                      encoded_frame.Size());
             return -1;
           }
 
-          track_ptr->sendFrame(
+          track_shared->sendFrame(
               reinterpret_cast<const std::byte*>(encoded_frame.Buffer()),
               encoded_frame.Size(),
               std::chrono::duration<double, std::micro>(
@@ -130,41 +148,58 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
 
 int DataChannelTransport::SendAudioFrame(const char* data, size_t size,
                                          const std::string& stream_id) {
-  for (auto& it : audio_streams_) {
-    if (it.first == stream_id) {
-      auto& track = it.second->track_;
-      if (!track->isOpen()) {
-        LOG_ERROR("[{}] Track is closed, drop audio frame size {}", local_id_,
-                  size);
-        break;
-      }
-
-      track->sendFrame(reinterpret_cast<const std::byte*>(data), size,
-                       std::chrono::duration<double, std::micro>(90000));
-      LOG_ERROR("[{}] Send audio frame size {}", local_id_, size);
-      return 0;
+  std::shared_ptr<Stream> stream;
+  {
+    std::shared_lock lock(audio_streams_mutex_);
+    auto it = audio_streams_.find(stream_id);
+    if (it == audio_streams_.end()) {
+      return -1;
     }
+    stream = it->second;
   }
-  return -1;
+
+  if (!stream || !stream->track_) {
+    return -1;
+  }
+
+  auto track = stream->track_;
+  if (!track->isOpen()) {
+    LOG_ERROR("[{}] Track is closed, drop audio frame size {}", local_id_,
+              size);
+    return -1;
+  }
+
+  track->sendFrame(reinterpret_cast<const std::byte*>(data), size,
+                   std::chrono::duration<double, std::micro>(90000));
+  LOG_ERROR("[{}] Send audio frame size {}", local_id_, size);
+  return 0;
 }
 
 int DataChannelTransport::SendDataFrame(const char* data, size_t size,
                                         const std::string& stream_id) {
-  for (auto& it : data_streams_) {
-    if (it.first == stream_id) {
-      auto& data_channel = it.second;
-      if (!data_channel->isOpen()) {
-        LOG_ERROR("[{}] DataChannel is closed, drop data frame size", local_id_,
-                  size);
-        break;
-      }
-
-      data_channel->send(reinterpret_cast<const std::byte*>(data), size);
-      // LOG_ERROR("[{}] Send data frame size {}", local_id_, size);
-      return 0;
+  std::shared_ptr<::rtc::DataChannel> data_channel;
+  {
+    std::shared_lock lock(data_streams_mutex_);
+    auto it = data_streams_.find(stream_id);
+    if (it == data_streams_.end()) {
+      return -1;
     }
+    data_channel = it->second;
   }
-  return -1;
+
+  if (!data_channel) {
+    return -1;
+  }
+
+  if (!data_channel->isOpen()) {
+    LOG_ERROR("[{}] DataChannel is closed, drop data frame size", local_id_,
+              size);
+    return -1;
+  }
+
+  data_channel->send(reinterpret_cast<const std::byte*>(data), size);
+  // LOG_ERROR("[{}] Send data frame size {}", local_id_, size);
+  return 0;
 }
 
 void DataChannelTransport::AddVideoStream(std::string stream_id,
