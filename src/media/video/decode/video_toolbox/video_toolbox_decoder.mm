@@ -102,7 +102,7 @@ class VideoToolboxDecoder::Impl {
   int Init();
   int Decode(std::unique_ptr<ReceivedFrame> frame,
              std::function<void(const DecodedFrame*)> on_decoded_cb);
-  std::string GetDecoderName();
+  std::string GetDecoderName() const;
 
  private:
   bool CreateSession(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps);
@@ -400,6 +400,6 @@ int VideoToolboxDecoder::Decode(std::unique_ptr<ReceivedFrame> received_frame,
   return impl_->Decode(std::move(received_frame), std::move(on_receive_decoded_frame));
 }
 
-std::string VideoToolboxDecoder::GetDecoderName() { return impl_->GetDecoderName(); }
+std::string VideoToolboxDecoder::GetDecoderName() const { return impl_->GetDecoderName(); }
 
 }  // namespace minirtc

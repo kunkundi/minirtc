@@ -13,7 +13,7 @@
 
 namespace minirtc {
 
-class VideoToolboxDecoder : public VideoDecoder {
+class VideoToolboxDecoder : public MediaCodec {
  public:
   VideoToolboxDecoder(std::shared_ptr<SystemClock> clock);
   ~VideoToolboxDecoder();

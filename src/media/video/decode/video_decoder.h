@@ -21,7 +21,7 @@
 namespace minirtc {
 class VideoDecoder : public MediaCodec {
  public:
-  virtual int Init(const MediaCodecConfig& config) = 0;
+  virtual int Init() = 0;
 
   virtual int Decode(
       std::unique_ptr<ReceivedFrame> received_frame,
