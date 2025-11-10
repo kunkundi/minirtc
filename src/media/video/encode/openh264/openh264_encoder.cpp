@@ -151,7 +151,7 @@ int OpenH264Encoder::ResetEncodeResolution(unsigned int width,
   return 0;
 }
 
-int OpenH264Encoder::Init() {
+int OpenH264Encoder::Init(const MediaCodecConfig& config) {
   // Create encoder.
   if (WelsCreateSVCEncoder(&openh264_encoder_) != 0) {
     LOG_ERROR("Failed to create OpenH264 encoder");

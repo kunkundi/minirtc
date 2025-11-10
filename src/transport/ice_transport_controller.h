@@ -35,12 +35,12 @@
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 
-typedef void (*OnReceiveVideo)(const XVideoFrame *, const char *, const size_t,
-                               void *);
-typedef void (*OnReceiveAudio)(const char *, size_t, const char *, const size_t,
-                               void *);
-typedef void (*OnReceiveData)(const char *, size_t, const char *, const size_t,
-                              void *);
+typedef void (*OnReceiveVideo)(const XVideoFrame*, const char*, const size_t,
+                               void*);
+typedef void (*OnReceiveAudio)(const char*, size_t, const char*, const size_t,
+                               void*);
+typedef void (*OnReceiveData)(const char*, size_t, const char*, const size_t,
+                              void*);
 
 namespace minirtc {
 class IceTransportController
@@ -58,50 +58,50 @@ class IceTransportController
               rtp::PAYLOAD_TYPE video_codec_payload_type,
               bool hardware_acceleration, OnReceiveVideo on_receive_video,
               OnReceiveAudio on_receive_audio, OnReceiveData on_receive_data,
-              void *user_data);
+              void* user_data);
   void Destroy();
 
-  uint32_t AddVideoSendChannel(const std::string &channel_name);
-  uint32_t AddAudioSendChannel(const std::string &channel_name);
-  uint32_t AddDataSendChannel(const std::string &channel_name);
+  uint32_t AddVideoSendChannel(const std::string& channel_name);
+  uint32_t AddAudioSendChannel(const std::string& channel_name);
+  uint32_t AddDataSendChannel(const std::string& channel_name);
 
-  uint32_t AddVideoReceiveChannel(const std::string &channel_name,
+  uint32_t AddVideoReceiveChannel(const std::string& channel_name,
                                   uint32_t ssrc);
-  uint32_t AddAudioReceiveChannel(const std::string &channel_name,
+  uint32_t AddAudioReceiveChannel(const std::string& channel_name,
                                   uint32_t ssrc);
-  uint32_t AddDataReceiveChannel(const std::string &channel_name,
+  uint32_t AddDataReceiveChannel(const std::string& channel_name,
                                  uint32_t ssrc);
 
-  int SendVideo(const XVideoFrame *video_frame,
-                const std::string &channel_name);
-  int SendAudio(const char *data, size_t size, const std::string &channel_name);
-  int SendData(const char *data, size_t size, const std::string &channel_name);
+  int SendVideo(const XVideoFrame* video_frame,
+                const std::string& channel_name);
+  int SendAudio(const char* data, size_t size, const std::string& channel_name);
+  int SendData(const char* data, size_t size, const std::string& channel_name);
 
   void FullIntraRequest() { b_force_i_frame_ = true; }
 
   void UpdateNetworkAvaliablity(bool network_available);
 
-  bool DecryptIncomingPacket(uint8_t *buffer, int *size, uint32_t *out_ssrc);
+  bool DecryptIncomingPacket(uint8_t* buffer, int* size, uint32_t* out_ssrc);
 
-  int OnReceiveVideoRtpPacket(const char *data, size_t size, uint32_t ssrc);
-  int OnReceiveAudioRtpPacket(const char *data, size_t size, uint32_t ssrc);
-  int OnReceiveDataRtpPacket(const char *data, size_t size, uint32_t ssrc);
+  int OnReceiveVideoRtpPacket(const char* data, size_t size, uint32_t ssrc);
+  int OnReceiveAudioRtpPacket(const char* data, size_t size, uint32_t ssrc);
+  int OnReceiveDataRtpPacket(const char* data, size_t size, uint32_t ssrc);
 
   void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame,
-                              const std::string &channel_name);
-  void OnReceiveCompleteAudio(const char *data, size_t size,
-                              const std::string &channel_name);
-  void OnReceiveCompleteData(const char *data, size_t size,
-                             const std::string &channel_name);
+                              const std::string& channel_name);
+  void OnReceiveCompleteAudio(const char* data, size_t size,
+                              const std::string& channel_name);
+  void OnReceiveCompleteData(const char* data, size_t size,
+                             const std::string& channel_name);
 
-  void OnDtlsHandshakeDone(void *user_ptr);
+  void OnDtlsHandshakeDone(void* user_ptr);
 
  public:
-  void OnSenderReport(const SenderReport &sender_report);
-  void OnReceiverReport(const std::vector<RtcpReportBlock> &report_block_datas);
+  void OnSenderReport(const SenderReport& sender_report);
+  void OnReceiverReport(const std::vector<RtcpReportBlock>& report_block_datas);
   void OnCongestionControlFeedback(
-      const webrtc::rtcp::CongestionControlFeedback &feedback);
-  void OnReceiveNack(const std::vector<uint16_t> &nack_sequence_numbers);
+      const webrtc::rtcp::CongestionControlFeedback& feedback);
+  void OnReceiveNack(const std::vector<uint16_t>& nack_sequence_numbers);
 
  private:
   int CreateCodecs(std::shared_ptr<SystemClock> clock,
@@ -110,7 +110,7 @@ class IceTransportController
                          bool hardware_acceleration, bool av1_encoding);
 
  private:
-  void OnSentPacket(const webrtc::RtpPacketToSend &packet);
+  void OnSentPacket(const webrtc::RtpPacketToSend& packet);
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateControlState();
   void UpdateCongestedState();
@@ -138,8 +138,8 @@ class IceTransportController
     std::shared_ptr<MediaCodec> codec;
   };
 
-  bool CheckSteamContext(const std::string &channel_name,
-                         const std::shared_ptr<StreamContext> &context);
+  bool CheckSteamContext(const std::string& channel_name,
+                         const std::shared_ptr<StreamContext>& context);
 
   std::map<std::string, std::shared_ptr<StreamContext>> stream_senders_;
   std::map<std::string, std::shared_ptr<StreamContext>> stream_receivers_;
@@ -153,6 +153,8 @@ class IceTransportController
 
   std::map<uint32_t, std::string> ssrc_to_name_;
 
+  MediaCodecConfig media_config_;
+
   OnReceiveVideo on_receive_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;
   OnReceiveData on_receive_data_ = nullptr;
@@ -164,7 +166,7 @@ class IceTransportController
   std::shared_ptr<PacedSender> paced_sender_ = nullptr;
   std::string remote_user_id_;
   bool offer_peer_ = false;
-  void *user_data_ = nullptr;
+  void* user_data_ = nullptr;
   std::atomic<bool> is_running_;
 
   bool enable_srtp_;

@@ -130,7 +130,7 @@ AomAv1Encoder::~AomAv1Encoder() {
   Release();
 }
 
-int AomAv1Encoder::Init() {
+int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   // Initialize encoder configuration structure with default values
   aom_codec_err_t ret = aom_codec_enc_config_default(
       aom_codec_av1_cx(), &aom_av1_encoder_config_, kUsageProfile);

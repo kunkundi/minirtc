@@ -24,18 +24,18 @@ class VideoToolboxEncoder : public MediaCodec {
   explicit VideoToolboxEncoder(std::shared_ptr<SystemClock> clock);
   virtual ~VideoToolboxEncoder();
 
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
   int Encode(const RawFrame& raw_frame,
-             std::function<int(const EncodedFrame&)> on_encoded_image);
+             std::function<int(const EncodedFrame&)> on_encoded_image) override;
 
-  int ForceIdr();
+  int ForceIdr() override;
 
-  int SetTargetBitrate(int bitrate);
+  int SetTargetBitrate(int bitrate) override;
 
-  int GetResolution(int* width, int* height);
+  int GetResolution(int* width, int* height) const override;
 
-  std::string GetEncoderName();
+  std::string GetEncoderName() const override;
 
  private:
   static void OutputCallback(void* outputCallbackRefCon,

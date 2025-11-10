@@ -22,7 +22,7 @@ AudioEncoder::~AudioEncoder() {
   }
 }
 
-int AudioEncoder::Init() {
+int AudioEncoder::Init(const MediaCodecConfig& config) {
   int err;
   opus_encoder_ = opus_encoder_create(sample_rate_, channel_num_,
                                       OPUS_APPLICATION_VOIP, &err);

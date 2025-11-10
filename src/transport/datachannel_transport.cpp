@@ -293,7 +293,8 @@ int DataChannelTransport::CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
               "encoder",
               stream_id);
         }
-        if (!stream->codec_ || 0 != stream->codec_->Init()) {
+
+        if (!stream->codec_ || 0 != stream->codec_->Init(media_config_)) {
           LOG_ERROR("Encoder [{}] init failed", stream_id);
           return -1;
         }
@@ -318,7 +319,7 @@ int DataChannelTransport::CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
 
       if (!stream->codec_) {
         stream->codec_ = std::make_shared<AudioEncoder>(48000, 1, 480);
-        if (!stream->codec_ || 0 != stream->codec_->Init()) {
+        if (!stream->codec_ || 0 != stream->codec_->Init(media_config_)) {
           LOG_ERROR("Audio encoder [{}] init failed", stream_id);
           return -1;
         }

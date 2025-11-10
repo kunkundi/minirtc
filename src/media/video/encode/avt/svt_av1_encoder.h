@@ -17,19 +17,19 @@
 
 namespace minirtc {
 
-class SvtAv1Encoder : public VideoEncoder {
+class SvtAv1Encoder : public MediaCodec {
  public:
   SvtAv1Encoder(std::shared_ptr<SystemClock> clock);
   ~SvtAv1Encoder();
 
-  int Init() override;
+  int Init(const MediaCodecConfig& config) override;
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame& encoded_frame)>
                  on_encoded_image) override;
   int ForceIdr() override;
   int SetTargetBitrate(int bitrate) override;
-  int GetResolution(int* width, int* height) override;
-  std::string GetEncoderName() override;
+  int GetResolution(int* width, int* height) const override;
+  std::string GetEncoderName() const override;
 
   int ResetEncodeResolution(unsigned int width, unsigned int height);
 

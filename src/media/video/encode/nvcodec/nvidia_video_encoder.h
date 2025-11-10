@@ -15,17 +15,17 @@ class NvidiaVideoEncoder : public MediaCodec {
   NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock);
   virtual ~NvidiaVideoEncoder();
 
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
-  int Encode(
-      const RawFrame& raw_frame,
-      std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image);
+  int Encode(const RawFrame& raw_frame,
+             std::function<int(const EncodedFrame& encoded_frame)>
+                 on_encoded_image) override;
 
-  int ForceIdr();
+  int ForceIdr() override;
 
-  int SetTargetBitrate(int bitrate);
+  int SetTargetBitrate(int bitrate) override;
 
-  int GetResolution(int* width, int* height) {
+  int GetResolution(int* width, int* height) const override {
     if (seq_ == 0) {
       return -1;
     }
@@ -35,7 +35,7 @@ class NvidiaVideoEncoder : public MediaCodec {
     return 0;
   }
 
-  std::string GetEncoderName() { return "NvidiaH264"; }
+  std::string GetEncoderName() const override { return "NvidiaH264"; }
 
  private:
   int ResetEncodeResolution(unsigned int width, unsigned int height);

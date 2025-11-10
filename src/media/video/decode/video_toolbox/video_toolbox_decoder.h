@@ -18,11 +18,11 @@ class VideoToolboxDecoder : public VideoDecoder {
   VideoToolboxDecoder(std::shared_ptr<SystemClock> clock);
   ~VideoToolboxDecoder();
 
-  int Init() override;
+  int Init(const MediaCodecConfig& config) override;
   int Decode(std::unique_ptr<ReceivedFrame> received_frame,
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;
-  std::string GetDecoderName() override;
+  std::string GetDecoderName() const override;
 
  private:
   class Impl;

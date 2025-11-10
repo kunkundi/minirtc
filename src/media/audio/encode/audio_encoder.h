@@ -20,13 +20,13 @@ class AudioEncoder : public MediaCodec {
   AudioEncoder(int sample_rate, int channel_num, int frame_size);
   virtual ~AudioEncoder();
 
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
   int Encode(const uint8_t* data, size_t size,
              std::function<int(char* encoded_audio_buffer, size_t size)>
-                 on_encoded_audio_buffer);
+                 on_encoded_audio_buffer) override;
 
-  std::string GetEncoderName() { return "Opus"; }
+  std::string GetEncoderName() const override { return "Opus"; }
 
  private:
   OpusEncoder* opus_encoder_ = nullptr;

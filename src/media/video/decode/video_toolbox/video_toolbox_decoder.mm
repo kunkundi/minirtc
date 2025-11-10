@@ -258,7 +258,7 @@ int VideoToolboxDecoder::Impl::Decode(
   return (status == noErr) ? 0 : -1;
 }
 
-std::string VideoToolboxDecoder::Impl::GetDecoderName() { return "VideoToolboxH264"; }
+std::string VideoToolboxDecoder::Impl::GetDecoderName() const { return "VideoToolboxH264"; }
 
 bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
                                               const std::vector<uint8_t>& pps) {
@@ -393,7 +393,7 @@ VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock)
 
 VideoToolboxDecoder::~VideoToolboxDecoder() = default;
 
-int VideoToolboxDecoder::Init() { return impl_->Init(); }
+int VideoToolboxDecoder::Init(const MediaCodecConfig& config) { return impl_->Init(); }
 
 int VideoToolboxDecoder::Decode(std::unique_ptr<ReceivedFrame> received_frame,
                                 std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {

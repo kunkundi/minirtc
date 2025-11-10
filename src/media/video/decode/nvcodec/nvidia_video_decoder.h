@@ -16,12 +16,13 @@ class NvidiaVideoDecoder : public MediaCodec {
   virtual ~NvidiaVideoDecoder();
 
  public:
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
   int Decode(std::unique_ptr<ReceivedFrame> received_frame,
-             std::function<void(const DecodedFrame*)> on_receive_decoded_frame);
+             std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
+      override;
 
-  std::string GetDecoderName() { return "NvidiaH264"; }
+  std::string GetDecoderName() const override { return "NvidiaH264"; }
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;

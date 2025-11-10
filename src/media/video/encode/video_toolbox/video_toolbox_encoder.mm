@@ -388,7 +388,7 @@ VideoToolboxEncoder::VideoToolboxEncoder(std::shared_ptr<SystemClock> clock)
 
 VideoToolboxEncoder::~VideoToolboxEncoder() = default;
 
-int VideoToolboxEncoder::Init() {
+int VideoToolboxEncoder::Init(const MediaCodecConfig& config) {
   return impl_->Init(frame_width_, frame_height_, max_fps_, target_bitrate_, key_frame_interval_);
 }
 
@@ -401,9 +401,9 @@ int VideoToolboxEncoder::ForceIdr() { return impl_->ForceIdr(); }
 
 int VideoToolboxEncoder::SetTargetBitrate(int bitrate) { return impl_->SetTargetBitrate(bitrate); }
 
-int VideoToolboxEncoder::GetResolution(int* width, int* height) {
+int VideoToolboxEncoder::GetResolution(int* width, int* height) const {
   return impl_->GetResolution(width, height);
 }
 
-std::string VideoToolboxEncoder::GetEncoderName() { return impl_->GetEncoderName(); }
+std::string VideoToolboxEncoder::GetEncoderName() const { return impl_->GetEncoderName(); }
 }  // namespace minirtc

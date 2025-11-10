@@ -45,7 +45,7 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
   }
 }
 
-int NvidiaVideoEncoder::Init() {
+int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   CudaInitializer::Init();
   int num_of_gpu = 0;
   ck(cuDeviceGetCount_ld(&num_of_gpu));

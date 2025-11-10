@@ -93,6 +93,8 @@ class DataChannelTransport
   std::shared_mutex audio_streams_mutex_;
   std::shared_mutex data_streams_mutex_;
 
+  MediaCodecConfig media_config_;
+
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
   std::atomic<bool> b_force_i_frame_;

@@ -45,7 +45,7 @@ OpenH264Decoder::~OpenH264Decoder() {
 #endif
 }
 
-int OpenH264Decoder::Init() {
+int OpenH264Decoder::Init(const MediaCodecConfig& config) {
 #ifdef SAVE_DECODED_NV12_STREAM
   nv12_file_name_ = "decoded_nv12_stream_" +
                     std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
@@ -112,12 +112,12 @@ int OpenH264Decoder::Init() {
 
 int OpenH264Decoder::Decode(
     std::unique_ptr<ReceivedFrame> received_frame,
-    std::function<void(const DecodedFrame *)> on_receive_decoded_frame) {
+    std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {
   if (!openh264_decoder_) {
     return -1;
   }
 
-  const uint8_t *data = received_frame->Buffer();
+  const uint8_t* data = received_frame->Buffer();
   size_t size = received_frame->Size();
 
   if (data == nullptr) {
@@ -125,7 +125,7 @@ int OpenH264Decoder::Decode(
   }
 
 #ifdef SAVE_RECEIVED_H264_STREAM
-  fwrite((unsigned char *)data, 1, size, file_h264_);
+  fwrite((unsigned char*)data, 1, size, file_h264_);
 #endif
 
   if (size > 4 && (*(data + 4) & 0x1f) == 0x07) {
@@ -200,7 +200,7 @@ int OpenH264Decoder::Decode(
       decoded_frame_->SetDecodedTimestamp(clock_->CurrentTime());
 
 #ifdef SAVE_DECODED_NV12_STREAM
-      fwrite((unsigned char *)decoded_frame_->Buffer(), 1,
+      fwrite((unsigned char*)decoded_frame_->Buffer(), 1,
              decoded_frame_->Size(), file_nv12_);
 #endif
       on_receive_decoded_frame(decoded_frame_);

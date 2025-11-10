@@ -97,7 +97,7 @@ void SvtAv1Encoder::Release() {
   yuv420p_frame_ = nullptr;
 }
 
-int SvtAv1Encoder::Init() {
+int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +
                     std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
@@ -326,13 +326,13 @@ int SvtAv1Encoder::SetTargetBitrate(int bitrate) {
   return 0;
 }
 
-int SvtAv1Encoder::GetResolution(int* width, int* height) {
+int SvtAv1Encoder::GetResolution(int* width, int* height) const {
   if (width) *width = frame_width_;
   if (height) *height = frame_height_;
   return 0;
 }
 
-std::string SvtAv1Encoder::GetEncoderName() { return "SvtAv1Encoder"; }
+std::string SvtAv1Encoder::GetEncoderName() const { return "SvtAv1Encoder"; }
 
 int SvtAv1Encoder::ResetEncodeResolution(unsigned int width,
                                          unsigned int height) {

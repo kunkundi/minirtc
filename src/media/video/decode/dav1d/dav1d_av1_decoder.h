@@ -20,33 +20,33 @@ class Dav1dAv1Decoder : public MediaCodec {
   virtual ~Dav1dAv1Decoder();
 
  public:
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
-  int Decode(
-      std::unique_ptr<ReceivedFrame> received_frame,
-      std::function<void(const DecodedFrame *)> on_receive_decoded_frame);
+  int Decode(std::unique_ptr<ReceivedFrame> received_frame,
+             std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
+      override;
 
-  std::string GetDecoderName() { return "Dav1dAv1"; }
+  std::string GetDecoderName() const override { return "Dav1dAv1"; }
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  DecodedFrame *decoded_frame_ = nullptr;
-  unsigned char *nv12_frame_ = 0;
+  DecodedFrame* decoded_frame_ = nullptr;
+  unsigned char* nv12_frame_ = 0;
   size_t nv12_frame_capacity_ = 0;
   size_t nv12_frame_size_ = 0;
 
   uint32_t frame_width_ = 0;
   uint32_t frame_height_ = 0;
 
-  FILE *file_av1_ = nullptr;
-  FILE *file_nv12_ = nullptr;
+  FILE* file_av1_ = nullptr;
+  FILE* file_nv12_ = nullptr;
   std::string av1_file_name_;
   std::string nv12_file_name_;
 
   bool first_ = false;
 
   // dav1d
-  Dav1dContext *context_ = nullptr;
+  Dav1dContext* context_ = nullptr;
 };
 }  // namespace minirtc
 

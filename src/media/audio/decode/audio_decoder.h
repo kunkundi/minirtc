@@ -27,22 +27,23 @@ class AudioDecoder : public MediaCodec {
   virtual ~AudioDecoder();
 
  public:
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
-  int Decode(const uint8_t *data, size_t size,
-             std::function<void(uint8_t *, int)> on_receive_decoded_frame);
+  int Decode(
+      const uint8_t* data, size_t size,
+      std::function<void(uint8_t*, int)> on_receive_decoded_frame) override;
 
-  std::string GetDecoderName() { return "Opus"; }
+  std::string GetDecoderName() const override { return "Opus"; }
 
  private:
   /* data */
-  OpusDecoder *opus_decoder_ = nullptr;
+  OpusDecoder* opus_decoder_ = nullptr;
   int sample_rate_ = 48000;
   int channel_num_ = 1;
   int frame_size_ = 0;
 
-  FILE *pcm_file;
-  FILE *pcm_file1;
+  FILE* pcm_file;
+  FILE* pcm_file1;
 };
 }  // namespace minirtc
 

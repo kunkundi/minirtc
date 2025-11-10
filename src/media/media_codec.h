@@ -32,7 +32,39 @@
 
 #define I_FRAME_INTERVAL 3000
 
+#define MINIRTC_INIT_WIDTH 1280
+#define MINIRTC_INIT_HEIGHT 720
+#define MINIRTC_INIT_BITRATE 10000000
+#define MINIRTC_MIN_BITRATE 500000
+#define MINIRTC_MAX_BITRATE 5000000
+#define MINIRTC_MIN_FRAME_RATE 15
+#define MINIRTC_MAX_FRAME_RATE 60
+#define MINIRTC_KEY_FRAME_INTERVAL 3000
+
 namespace minirtc {
+
+class MediaCodecConfig {
+ public:
+  MediaCodecConfig()
+      : init_width(MINIRTC_INIT_WIDTH),
+        init_height(MINIRTC_INIT_HEIGHT),
+        init_bitrate(MINIRTC_INIT_BITRATE),
+        min_bitrate(MINIRTC_MIN_BITRATE),
+        max_bitrate(MINIRTC_MAX_BITRATE),
+        min_frame_rate(MINIRTC_MIN_FRAME_RATE),
+        max_frame_rate(MINIRTC_MAX_FRAME_RATE),
+        key_frame_interval(MINIRTC_KEY_FRAME_INTERVAL) {}
+  ~MediaCodecConfig() {}
+
+  int init_width;
+  int init_height;
+  int init_bitrate;
+  int min_bitrate;
+  int max_bitrate;
+  int min_frame_rate;
+  int max_frame_rate;
+  int key_frame_interval;
+};
 
 class MediaCodec {
  public:
@@ -40,7 +72,7 @@ class MediaCodec {
   virtual ~MediaCodec() {}
 
  public:
-  virtual int Init() { return 0; }
+  virtual int Init(const MediaCodecConfig& config) { return 0; }
 
   virtual int Encode(
       const RawFrame& raw_frame,
@@ -74,9 +106,9 @@ class MediaCodec {
 
   virtual int SetTargetBitrate(int bitrate) { return 0; }
 
-  virtual int GetResolution(int* width, int* height) { return 0; }
+  virtual int GetResolution(int* width, int* height) const { return 0; }
 
-  virtual std::string GetEncoderName() { return ""; }
+  virtual std::string GetEncoderName() const { return ""; }
 
   virtual std::string GetDecoderName() { return ""; }
 };

@@ -24,17 +24,17 @@ class OpenH264Encoder : public MediaCodec {
   OpenH264Encoder(std::shared_ptr<SystemClock> clock);
   virtual ~OpenH264Encoder();
 
-  int Init();
+  int Init(const MediaCodecConfig& config) override;
 
-  int Encode(
-      const RawFrame& raw_frame,
-      std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image);
+  int Encode(const RawFrame& raw_frame,
+             std::function<int(const EncodedFrame& encoded_frame)>
+                 on_encoded_image) override;
 
-  int ForceIdr();
+  int ForceIdr() override;
 
-  int SetTargetBitrate(int bitrate);
+  int SetTargetBitrate(int bitrate) override;
 
-  int GetResolution(int* width, int* height) {
+  int GetResolution(int* width, int* height) const override {
     if (seq_ == 0) {
       return -1;
     }
@@ -44,7 +44,7 @@ class OpenH264Encoder : public MediaCodec {
     return 0;
   }
 
-  std::string GetEncoderName() { return "OpenH264"; }
+  std::string GetEncoderName() const override { return "OpenH264"; }
 
  private:
   int InitEncoderParams(int width, int height);

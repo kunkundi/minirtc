@@ -20,7 +20,7 @@ namespace minirtc {
 
 class VideoEncoder : public MediaCodec {
  public:
-  virtual int Init() = 0;
+  virtual int Init(const MediaCodecConfig& config) = 0;
 
   virtual int Encode(const RawFrame& raw_frame,
                      std::function<int(const EncodedFrame& encoded_frame)>
@@ -30,9 +30,9 @@ class VideoEncoder : public MediaCodec {
 
   virtual int SetTargetBitrate(int bitrate) = 0;
 
-  virtual int GetResolution(int* width, int* height) = 0;
+  virtual int GetResolution(int* width, int* height) const = 0;
 
-  virtual std::string GetEncoderName() = 0;
+  virtual std::string GetEncoderName() const = 0;
 
   VideoEncoder() = default;
   virtual ~VideoEncoder() {}
