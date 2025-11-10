@@ -75,56 +75,37 @@ int DataChannelConnection::Init() {
 }
 
 int DataChannelConnection::ReleaseAllIceTransmission() {
-  std::unique_lock lock(dc_transport_list_mutex_);
-
-  dc_transport_list_.clear();
-  is_dc_transport_ready_.clear();
+  dc_transport_->GetPeerConnection()->close();
   return 0;
 }
 
 int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                           const char* stream_id) {
-  std::shared_lock lock(dc_transport_list_mutex_);
-
-  if (dc_transport_list_.empty()) {
+  if (!dc_ready_) {
     return -1;
   }
 
-  for (auto& it : dc_transport_list_) {
-    auto& pc = it.second;
-    pc->SendVideoFrame(video_frame, stream_id);
-  }
+  dc_transport_->SendVideoFrame(video_frame, stream_id);
   return 0;
 }
 
 int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
                                           const char* stream_id) {
-  std::shared_lock lock(dc_transport_list_mutex_);
-
-  if (dc_transport_list_.empty()) {
+  if (!dc_ready_) {
     return -1;
   }
 
-  for (auto& it : dc_transport_list_) {
-    auto& pc = it.second;
-    pc->SendAudioFrame(data, size, stream_id);
-  }
+  dc_transport_->SendAudioFrame(data, size, stream_id);
   return 0;
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
                                          const char* stream_id) {
-  std::shared_lock lock(dc_transport_list_mutex_);
-
-  if (dc_transport_list_.empty()) {
+  if (!dc_ready_) {
     return -1;
   }
 
-  for (auto& it : dc_transport_list_) {
-    auto& pc = it.second;
-    pc->SendDataFrame(data, size, stream_id);
-  }
-
+  dc_transport_->SendDataFrame(data, size, stream_id);
   return 0;
 }
 
@@ -138,55 +119,37 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string remote_user_id = msg.remote_user_id;
       LOG_INFO("[{}] Receive notification: user id [{}] join transmission",
                (void*)this, remote_user_id);
-      std::unique_lock lock(dc_transport_list_mutex_);
-      if (dc_transport_list_.end() == dc_transport_list_.find(remote_user_id)) {
-        LOG_INFO("Create transmission to user [{}]", remote_user_id);
-        dc_transport_list_.emplace(
-            remote_user_id,
-            CreateDataChannelConnection(peer_connection_config_, clock_,
-                                        make_weak_ptr(ws_), true,
-                                        remote_user_id, remote_user_id));
-      }
+      LOG_INFO("Create transmission to user [{}]", remote_user_id);
+      dc_transport_ = CreateDataChannelConnection(
+          peer_connection_config_, clock_, make_weak_ptr(ws_), true,
+          remote_user_id, remote_user_id);
+
       break;
     }
     case IceWorkMsg::Type::UserLeaveTransmission: {
       std::string user_id = msg.user_id;
       LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
                (void*)this, user_id);
-      std::unique_lock lock(dc_transport_list_mutex_);
-      auto user_id_it = dc_transport_list_.find(user_id);
-      if (user_id_it != dc_transport_list_.end()) {
-        dc_transport_list_.erase(user_id_it);
-        LOG_INFO("Terminate transmission to user [{}]", user_id);
-      }
+
+      LOG_INFO("Terminate transmission to user [{}]", user_id);
+
       break;
     }
     case IceWorkMsg::Type::Offer: {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
-      std::unique_lock lock(dc_transport_list_mutex_);
-
-      // if there is an existing connection to the user, replace it
-      auto existing_it = dc_transport_list_.find(remote_user_id);
-      if (existing_it != dc_transport_list_.end()) {
-        LOG_INFO("Replace existing connection to user [{}]", remote_user_id);
-        dc_transport_list_.erase(existing_it);
-        is_dc_transport_ready_.erase(remote_user_id);
-      }
 
       LOG_INFO("Receive offer from user [{}]", remote_user_id);
 
-      dc_transport_list_.emplace(
-          remote_user_id,
-          CreateDataChannelConnection(peer_connection_config_, clock_,
-                                      make_weak_ptr(ws_), false,
-                                      transmission_id, remote_user_id));
+      dc_transport_ = CreateDataChannelConnection(
+          peer_connection_config_, clock_, make_weak_ptr(ws_), false,
+          transmission_id, remote_user_id);
 
       ::rtc::Description remote_sdp(msg.remote_sdp,
                                     ::rtc::Description::Type::Offer);
       // LOG_INFO("Set remote description: {}", msg.remote_sdp.c_str());
 
-      auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
+      auto& pc = dc_transport_->GetPeerConnection();
       pc->setRemoteDescription(remote_sdp);
 
       pc->setLocalDescription();
@@ -230,18 +193,14 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     }
     case IceWorkMsg::Type::Answer: {
       std::string remote_user_id = msg.remote_user_id;
-      std::unique_lock lock(dc_transport_list_mutex_);
-
       ::rtc::Description remote_sdp(msg.remote_sdp, "answer");
 
-      if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
-        auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
-        if (pc) {
-          // LOG_INFO("Set remote description: {}", msg.remote_sdp.c_str());
-          pc->setRemoteDescription(remote_sdp);
+      auto& pc = dc_transport_->GetPeerConnection();
+      if (pc) {
+        // LOG_INFO("Set remote description: {}", msg.remote_sdp.c_str());
+        pc->setRemoteDescription(remote_sdp);
 
-          pc->gatherLocalCandidates();
-        }
+        pc->gatherLocalCandidates();
       }
 
       break;
@@ -251,13 +210,11 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string new_candidate = msg.new_candidate;
       std::string remote_user_id = msg.remote_user_id;
 
-      std::shared_lock lock(dc_transport_list_mutex_);
-      if (dc_transport_list_.find(remote_user_id) != dc_transport_list_.end()) {
-        auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
-        if (pc) {
-          pc->addRemoteCandidate(new_candidate);
-        }
+      auto& pc = dc_transport_->GetPeerConnection();
+      if (pc) {
+        pc->addRemoteCandidate(new_candidate);
       }
+
       break;
     }
     case IceWorkMsg::Type::NewCandidateMid: {
@@ -269,15 +226,11 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       // remote_user_id,
       //          candidate, mid);
 
-      // std::shared_lock lock(dc_transport_list_mutex_);
-      // if (dc_transport_list_.find(remote_user_id) !=
-      // dc_transport_list_.end()) {
-      //   auto& pc = dc_transport_list_[remote_user_id]->GetPeerConnection();
+      //   auto& pc = dc_transport_->GetPeerConnection();
       //   if (pc) {
       //     LOG_INFO("Add remote candidate: {}, mid: {}", candidate, mid);
       //     pc->addRemoteCandidate(::rtc::Candidate(candidate, mid));
       //   }
-      // }
       break;
     }
     default: {
@@ -365,18 +318,22 @@ DataChannelConnection::CreateDataChannelConnection(
             break;
           case ::rtc::PeerConnection::State::Connected:
             ice_state = ConnectionStatus::Connected;
+            dc_ready_ = true;
             LOG_INFO("PeerConnection state: Connected");
             break;
           case ::rtc::PeerConnection::State::Disconnected:
             ice_state = ConnectionStatus::Disconnected;
+            dc_ready_ = false;
             LOG_INFO("PeerConnection state: Disconnected");
             break;
           case ::rtc::PeerConnection::State::Failed:
             ice_state = ConnectionStatus::Failed;
+            dc_ready_ = false;
             LOG_ERROR("PeerConnection state: Failed");
             break;
           case ::rtc::PeerConnection::State::Closed:
             ice_state = ConnectionStatus::Closed;
+            dc_ready_ = false;
             LOG_INFO("PeerConnection state: Closed");
             break;
           default:
@@ -565,7 +522,7 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     if (callbacks.on_receive_data_buffer) {
       if (std::holds_alternative<std::string>(msg)) {
         const auto& str = std::get<std::string>(msg);
-        LOG_INFO("[DataChannel receive: {}]", str);
+        // LOG_INFO("[DataChannel receive: {}]", str);
         callbacks.on_receive_data_buffer(str.data(), str.size(), msid.data(),
                                          msid.size(), callbacks.user_data);
       }

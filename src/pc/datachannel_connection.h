@@ -77,11 +77,8 @@ class DataChannelConnection : public ConnectionInterface {
   MediaStreamIds media_stream_ids_;
   ConnectionCallbacks callbacks_;
 
-  std::unordered_map<std::string, std::shared_ptr<DataChannelTransport>>
-      dc_transport_list_;
-  std::map<std::string, bool> is_dc_transport_ready_;
-  std::shared_mutex dc_transport_list_mutex_;
-  bool dc_ready_ = false;
+  std::shared_ptr<DataChannelTransport> dc_transport_ = nullptr;
+  std::atomic_bool dc_ready_ = false;
 
   ::rtc::Configuration peer_connection_config_;
 

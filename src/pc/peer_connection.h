@@ -163,7 +163,6 @@ class PeerConnection {
   std::string sdp_without_cands_ = "";
 
  private:
-  std::map<std::string, bool> is_ice_transport_ready_;
   std::function<void(std::string, const std::string&)> on_ice_status_change_ =
       nullptr;
   bool ice_ready_ = false;
@@ -198,8 +197,10 @@ class PeerConnection {
   ConnectionInfo connection_info_;
   ConnectionCallbacks connection_callbacks_;
   std::shared_ptr<ConnectionInterface> peer_connection_;
+
   std::unordered_map<std::string, std::shared_ptr<ConnectionInterface>>
       peer_connection_map_;
+  std::shared_mutex peer_connection_map_mutex_;
 };
 }  // namespace minirtc
 

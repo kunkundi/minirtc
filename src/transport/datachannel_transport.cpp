@@ -171,7 +171,6 @@ int DataChannelTransport::SendAudioFrame(const char* data, size_t size,
 
   track->sendFrame(reinterpret_cast<const std::byte*>(data), size,
                    std::chrono::duration<double, std::micro>(90000));
-  LOG_ERROR("[{}] Send audio frame size {}", local_id_, size);
   return 0;
 }
 

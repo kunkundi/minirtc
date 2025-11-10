@@ -246,9 +246,9 @@ int PeerConnection::Leave(const std::string& transmission_id) {
              transmission_id);
   }
 
-  is_ice_transport_ready_[user_id_] = false;
   leave_ = true;
 
+  std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     peer_connection.second->ReleaseAllIceTransmission();
   }
@@ -288,6 +288,7 @@ SignalStatus PeerConnection::GetSignalStatus() {
 
 int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                    const char* stream_id) {
+  std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     peer_connection.second->SendVideoFrame(video_frame, stream_id);
   }
@@ -297,6 +298,7 @@ int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
 
 int PeerConnection::SendAudioFrame(const char* data, size_t size,
                                    const char* stream_id) {
+  std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     peer_connection.second->SendAudioFrame(data, size, stream_id);
   }
@@ -306,6 +308,7 @@ int PeerConnection::SendAudioFrame(const char* data, size_t size,
 
 int PeerConnection::SendDataFrame(const char* data, size_t size,
                                   const char* stream_id) {
+  std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     peer_connection.second->SendDataFrame(data, size, stream_id);
   }
@@ -389,25 +392,30 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         connection_info_.user_id = user_id_;
         connection_info_.remote_user_id = remote_user_id;
 
-        if (peer_connection_map_.find(remote_user_id) ==
-            peer_connection_map_.end()) {
-          if (remote_user_id.find("web") == std::string::npos) {
-            peer_connection_map_.emplace(
-                remote_user_id, std::make_shared<MiniRTCConnection>(
-                                    clock_, ws_transport_, connection_info_,
-                                    media_stream_ids_, connection_callbacks_));
-          } else {
-            // web client use libdatachannel
-            peer_connection_map_.emplace(
-                remote_user_id, std::make_shared<DataChannelConnection>(
-                                    clock_, ws_transport_, connection_info_,
-                                    media_stream_ids_, connection_callbacks_));
-          }
+        {
+          std::unique_lock lock(peer_connection_map_mutex_);
+          if (peer_connection_map_.find(remote_user_id) ==
+              peer_connection_map_.end()) {
+            if (remote_user_id.find("web") == std::string::npos) {
+              peer_connection_map_.emplace(
+                  remote_user_id,
+                  std::make_shared<MiniRTCConnection>(
+                      clock_, ws_transport_, connection_info_,
+                      media_stream_ids_, connection_callbacks_));
+            } else {
+              // web client use libdatachannel
+              peer_connection_map_.emplace(
+                  remote_user_id,
+                  std::make_shared<DataChannelConnection>(
+                      clock_, ws_transport_, connection_info_,
+                      media_stream_ids_, connection_callbacks_));
+            }
 
-          peer_connection_map_[remote_user_id]->Init();
-        } else {
-          LOG_ERROR("Peer connection already exists");
-          break;
+            peer_connection_map_[remote_user_id]->Init();
+          } else {
+            LOG_ERROR("Peer connection already exists");
+            break;
+          }
         }
 
         if (remote_user_id.empty()) {
@@ -451,24 +459,29 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         connection_info_.user_id = user_id_;
         connection_info_.remote_user_id = remote_user_id;
 
-        if (peer_connection_map_.find(remote_user_id) ==
-            peer_connection_map_.end()) {
-          if (remote_user_id.find("web") == std::string::npos) {
-            peer_connection_map_.emplace(
-                remote_user_id, std::make_shared<MiniRTCConnection>(
-                                    clock_, ws_transport_, connection_info_,
-                                    media_stream_ids_, connection_callbacks_));
-          } else {
-            peer_connection_map_.emplace(
-                remote_user_id, std::make_shared<DataChannelConnection>(
-                                    clock_, ws_transport_, connection_info_,
-                                    media_stream_ids_, connection_callbacks_));
-          }
+        {
+          std::unique_lock lock(peer_connection_map_mutex_);
+          if (peer_connection_map_.find(remote_user_id) ==
+              peer_connection_map_.end()) {
+            if (remote_user_id.find("web") == std::string::npos) {
+              peer_connection_map_.emplace(
+                  remote_user_id,
+                  std::make_shared<MiniRTCConnection>(
+                      clock_, ws_transport_, connection_info_,
+                      media_stream_ids_, connection_callbacks_));
+            } else {
+              peer_connection_map_.emplace(
+                  remote_user_id,
+                  std::make_shared<DataChannelConnection>(
+                      clock_, ws_transport_, connection_info_,
+                      media_stream_ids_, connection_callbacks_));
+            }
 
-          peer_connection_map_[remote_user_id]->Init();
-        } else {
-          LOG_ERROR("Peer connection already exists");
-          break;
+            peer_connection_map_[remote_user_id]->Init();
+          } else {
+            LOG_ERROR("Peer connection already exists");
+            break;
+          }
         }
 
         IceWorkMsg msg;
@@ -570,6 +583,7 @@ void PeerConnection::PushIceWorkMsg(const IceWorkMsg& msg) {
 
 void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
   if (msg.remote_user_id != "") {
+    std::shared_lock lock(peer_connection_map_mutex_);
     if (peer_connection_map_.find(msg.remote_user_id) !=
         peer_connection_map_.end()) {
       peer_connection_map_[msg.remote_user_id]->ProcessIceWorkMsg(msg);
