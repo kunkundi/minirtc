@@ -46,6 +46,14 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
 }
 
 int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
+  frame_width_ = config.init_width;
+  frame_height_ = config.init_height;
+  key_frame_interval_ = config.key_frame_interval;
+  average_bitrate_ = config.average_bitrate;
+  max_bitrate_ = config.max_bitrate;
+  max_fps_ = config.max_frame_rate;
+  max_payload_size_ = config.max_payload_size;
+
   CudaInitializer::Init();
   int num_of_gpu = 0;
   ck(cuDeviceGetCount_ld(&num_of_gpu));
@@ -98,11 +106,22 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   encodeConfig.gopLength = key_frame_interval_;
   encodeConfig.frameIntervalP = 1;
   encodeConfig.encodeCodecConfig.h264Config.idrPeriod = key_frame_interval_;
-  encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-  // encodeConfig.rcParams.enableMaxQP = 1;
-  // encodeConfig.rcParams.enableMinQP = 1;
-  // encodeConfig.rcParams.maxQP.qpIntra = 22;
-  // encodeConfig.rcParams.minQP.qpIntra = 10;
+  encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+  // encodeConfig.rcParams.constQP.qpIntra = 20;
+  // encodeConfig.rcParams.constQP.qpInterP = 23;
+  // encodeConfig.rcParams.constQP.qpInterB = 25;
+  encodeConfig.rcParams.enableAQ = 1;          // enable AQ
+  encodeConfig.rcParams.aqStrength = 8;        // 4~8
+  encodeConfig.rcParams.enableTemporalAQ = 1;  // good for static area
+  encodeConfig.rcParams.enableMinQP = 1;
+  encodeConfig.rcParams.enableMaxQP = 1;
+  encodeConfig.rcParams.minQP.qpIntra = 18;
+  encodeConfig.rcParams.minQP.qpInterP = 20;
+  encodeConfig.rcParams.minQP.qpInterB = 22;
+  encodeConfig.rcParams.maxQP.qpIntra = 35;
+  encodeConfig.rcParams.maxQP.qpInterP = 37;
+  encodeConfig.rcParams.maxQP.qpInterB = 40;
+
   encodeConfig.rcParams.averageBitRate = average_bitrate_;
   // use the default VBV buffer size
   encodeConfig.rcParams.vbvBufferSize = 0;
@@ -110,7 +129,8 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   // use the default VBV initial delay
   encodeConfig.rcParams.vbvInitialDelay = 0;
   // enable adaptive quantization (Spatial)
-  encodeConfig.rcParams.enableAQ = false;
+  // encodeConfig.rcParams.enableAQ = false;
+  encodeConfig.rcParams.enableLookahead = 0;
   encodeConfig.encodeCodecConfig.h264Config.idrPeriod = encodeConfig.gopLength;
   encodeConfig.encodeCodecConfig.h264Config.level = NV_ENC_LEVEL_H264_52;
   // encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 1;

@@ -46,7 +46,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   CUdevice cuda_device_ = 0;
 
   GUID codec_guid_ = NV_ENC_CODEC_H264_GUID;
-  GUID preset_guid_ = NV_ENC_PRESET_P3_GUID;
+  GUID preset_guid_ = NV_ENC_PRESET_P7_GUID;
   NV_ENC_TUNING_INFO tuning_info_ =
       NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
   NV_ENC_BUFFER_FORMAT buffer_format_ =

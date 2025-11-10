@@ -45,7 +45,7 @@ OpenH264Decoder::~OpenH264Decoder() {
 #endif
 }
 
-int OpenH264Decoder::Init(const MediaCodecConfig& config) {
+int OpenH264Decoder::Init() {
 #ifdef SAVE_DECODED_NV12_STREAM
   nv12_file_name_ = "decoded_nv12_stream_" +
                     std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";

@@ -75,13 +75,22 @@ int DataChannelConnection::Init() {
 }
 
 int DataChannelConnection::ReleaseAllIceTransmission() {
-  dc_transport_->GetPeerConnection()->close();
+  if (dc_transport_) {
+    auto pc = dc_transport_->GetPeerConnection();
+    if (pc) {
+      pc->close();
+    }
+  }
   return 0;
 }
 
 int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                           const char* stream_id) {
   if (!dc_ready_) {
+    return -1;
+  }
+
+  if (!dc_transport_) {
     return -1;
   }
 
@@ -95,6 +104,10 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
     return -1;
   }
 
+  if (!dc_transport_) {
+    return -1;
+  }
+
   dc_transport_->SendAudioFrame(data, size, stream_id);
   return 0;
 }
@@ -102,6 +115,10 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
                                          const char* stream_id) {
   if (!dc_ready_) {
+    return -1;
+  }
+
+  if (!dc_transport_) {
     return -1;
   }
 

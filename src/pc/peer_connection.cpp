@@ -250,7 +250,9 @@ int PeerConnection::Leave(const std::string& transmission_id) {
 
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
-    peer_connection.second->ReleaseAllIceTransmission();
+    if (peer_connection.second) {
+      peer_connection.second->ReleaseAllIceTransmission();
+    }
   }
 
   return 0;
@@ -290,7 +292,9 @@ int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
                                    const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
-    peer_connection.second->SendVideoFrame(video_frame, stream_id);
+    if (peer_connection.second) {
+      peer_connection.second->SendVideoFrame(video_frame, stream_id);
+    }
   }
 
   return 0;
@@ -300,7 +304,9 @@ int PeerConnection::SendAudioFrame(const char* data, size_t size,
                                    const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
-    peer_connection.second->SendAudioFrame(data, size, stream_id);
+    if (peer_connection.second) {
+      peer_connection.second->SendAudioFrame(data, size, stream_id);
+    }
   }
 
   return 0;
@@ -310,7 +316,9 @@ int PeerConnection::SendDataFrame(const char* data, size_t size,
                                   const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
-    peer_connection.second->SendDataFrame(data, size, stream_id);
+    if (peer_connection.second) {
+      peer_connection.second->SendDataFrame(data, size, stream_id);
+    }
   }
 
   return 0;

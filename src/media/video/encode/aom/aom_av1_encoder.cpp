@@ -131,6 +131,14 @@ AomAv1Encoder::~AomAv1Encoder() {
 }
 
 int AomAv1Encoder::Init(const MediaCodecConfig& config) {
+  frame_width_ = config.init_width;
+  frame_height_ = config.init_height;
+  key_frame_interval_ = config.key_frame_interval;
+  target_bitrate_ = config.average_bitrate;
+  max_bitrate_ = config.max_bitrate;
+  max_payload_size_ = config.max_payload_size;
+  max_fps_ = config.max_frame_rate;
+
   // Initialize encoder configuration structure with default values
   aom_codec_err_t ret = aom_codec_enc_config_default(
       aom_codec_av1_cx(), &aom_av1_encoder_config_, kUsageProfile);
@@ -161,7 +169,7 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   // aom_av1_encoder_config_.rc_buf_optimal_sz = 600;
   // aom_av1_encoder_config_.rc_buf_sz = 1000;
   // Low-latency settings.
-  aom_av1_encoder_config_.rc_end_usage = AOM_CBR;    // cbr mode
+  aom_av1_encoder_config_.rc_end_usage = AOM_VBR;    // cbr mode
   aom_av1_encoder_config_.g_pass = AOM_RC_ONE_PASS;  // One-pass rate control
   aom_av1_encoder_config_.g_lag_in_frames = kLagInFrames;  // No look ahead
 
@@ -185,8 +193,16 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
 
   // Set control parameters
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_SET_CPUUSED, 11);  // 6 - 11
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CDEF, 1);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CDEF, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_TPL_MODEL, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_OBMC, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_WARPED_MOTION, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_GLOBAL_MOTION, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_FILTER_INTRA, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_SMOOTH_INTRA, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_TX64, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PAETH_INTRA, 0);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CFL_INTRA, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_DELTAQ_MODE, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_ORDER_HINT, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_AQ_MODE, 3);

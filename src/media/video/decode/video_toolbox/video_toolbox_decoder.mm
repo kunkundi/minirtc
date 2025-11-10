@@ -393,7 +393,7 @@ VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock)
 
 VideoToolboxDecoder::~VideoToolboxDecoder() = default;
 
-int VideoToolboxDecoder::Init(const MediaCodecConfig& config) { return impl_->Init(); }
+int VideoToolboxDecoder::Init() { return impl_->Init(); }
 
 int VideoToolboxDecoder::Decode(std::unique_ptr<ReceivedFrame> received_frame,
                                 std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {

@@ -18,7 +18,7 @@ class VideoToolboxEncoder::Impl {
   Impl(std::shared_ptr<SystemClock> clock);
   ~Impl();
 
-  int Init(int width, int height, int fps, int bitrate, int keyframe_interval);
+  int Init(const MediaCodecConfig& config);
   int Encode(const RawFrame& raw_frame, function<int(const EncodedFrame&)> on_encoded_image);
   int ForceIdr();
   int SetTargetBitrate(int bitrate);
@@ -35,7 +35,7 @@ class VideoToolboxEncoder::Impl {
   int width_ = 2880;
   int height_ = 1800;
   int max_fps_ = 60;
-  int bitrate_ = 5000000;
+  int average_bitrate_ = 5000000;
   int keyframe_interval_ = 30;
   int seq_ = 0;
   int ref_buffer_count_ = 3;
@@ -59,7 +59,6 @@ class VideoToolboxEncoder::Impl {
   size_t spsSize = 0, ppsSize = 0;
   size_t spsCount, ppsCount;
 
-  // 编码回调处理
   void HandleEncodedSampleBuffer(CMSampleBufferRef sampleBuffer);
 };
 
@@ -92,14 +91,13 @@ VideoToolboxEncoder::Impl::~Impl() {
   }
 }
 
-int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
-                                    int keyframe_interval) {
+int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   lock_guard<mutex> guard(lock_);
-  width_ = width;
-  height_ = height;
-  max_fps_ = fps;
-  bitrate_ = bitrate;
-  keyframe_interval_ = keyframe_interval;
+  width_ = config.init_width;
+  height_ = config.init_height;
+  max_fps_ = config.max_frame_rate;
+  average_bitrate_ = config.average_bitrate;
+  keyframe_interval_ = config.key_frame_interval;
 
   if (session_) {
     VTCompressionSessionInvalidate(session_);
@@ -129,7 +127,7 @@ int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_MoreFramesBeforeStart, kCFBooleanFalse);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_ProfileLevel,
-                       kVTProfileLevel_H264_Baseline_5_2);
+                       kVTProfileLevel_H264_High_5_2);
 
   CFNumberRef frameIntervalRef = CFNumberCreate(nullptr, kCFNumberIntType, &keyframe_interval_);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_MaxKeyFrameInterval, frameIntervalRef);
@@ -139,7 +137,7 @@ int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_ExpectedFrameRate, fpsRef);
   CFRelease(fpsRef);
 
-  CFNumberRef bitRateRef = CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate_);
+  CFNumberRef bitRateRef = CFNumberCreate(nullptr, kCFNumberSInt32Type, &average_bitrate_);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_AverageBitRate, bitRateRef);
   CFRelease(bitRateRef);
 
@@ -155,7 +153,7 @@ int VideoToolboxEncoder::Impl::Init(int width, int height, int fps, int bitrate,
                        maxFrameDelayCountRef);
   CFRelease(maxFrameDelayCountRef);
 
-  int dataRateLimit[2] = {bitrate_ / 8, 1};
+  int dataRateLimit[2] = {average_bitrate_ / 8, 1};
   CFNumberRef dataRateLimitNum[2] = {CFNumberCreate(nullptr, kCFNumberIntType, &dataRateLimit[0]),
                                      CFNumberCreate(nullptr, kCFNumberIntType, &dataRateLimit[1])};
   CFArrayRef dataRateLimits =
@@ -291,10 +289,10 @@ int VideoToolboxEncoder::Impl::ForceIdr() {
 
 int VideoToolboxEncoder::Impl::SetTargetBitrate(int bitrate) {
   lock_guard<mutex> guard(lock_);
-  bitrate_ = bitrate;
+  average_bitrate_ = bitrate;
   if (!session_) return -1;
 
-  CFNumberRef bitRateRef = CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate_);
+  CFNumberRef bitRateRef = CFNumberCreate(nullptr, kCFNumberSInt32Type, &average_bitrate_);
   VTSessionSetProperty(session_, kVTCompressionPropertyKey_AverageBitRate, bitRateRef);
   CFRelease(bitRateRef);
   return 0;
@@ -388,9 +386,7 @@ VideoToolboxEncoder::VideoToolboxEncoder(std::shared_ptr<SystemClock> clock)
 
 VideoToolboxEncoder::~VideoToolboxEncoder() = default;
 
-int VideoToolboxEncoder::Init(const MediaCodecConfig& config) {
-  return impl_->Init(frame_width_, frame_height_, max_fps_, target_bitrate_, key_frame_interval_);
-}
+int VideoToolboxEncoder::Init(const MediaCodecConfig& config) { return impl_->Init(config); }
 
 int VideoToolboxEncoder::Encode(const RawFrame& raw_frame,
                                 function<int(const EncodedFrame&)> on_encoded_image) {

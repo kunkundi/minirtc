@@ -94,12 +94,12 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   encoder_params_.iMaxBitrate = UNSPECIFIED_BIT_RATE;
   encoder_params_.iRCMode = RC_BITRATE_MODE;
   encoder_params_.fMaxFrameRate = max_fps_;
-  encoder_params_.bEnableFrameSkip = true;
+  encoder_params_.bEnableFrameSkip = false;
   encoder_params_.uiIntraPeriod = key_frame_interval_;
   encoder_params_.eSpsPpsIdStrategy = SPS_LISTING;
-  encoder_params_.uiMaxNalSize = 0;
-  encoder_params_.iMaxQp = 37;
-  encoder_params_.iMinQp = 24;
+  encoder_params_.uiMaxNalSize = max_payload_size_;
+  encoder_params_.iMinQp = 18;
+  encoder_params_.iMaxQp = 34;
   // Threading model: use auto.
   //  0: auto (dynamic imp. internal encoder)
   //  1: single thread (default value)
@@ -152,6 +152,14 @@ int OpenH264Encoder::ResetEncodeResolution(unsigned int width,
 }
 
 int OpenH264Encoder::Init(const MediaCodecConfig& config) {
+  frame_width_ = config.init_width;
+  frame_height_ = config.init_height;
+  key_frame_interval_ = config.key_frame_interval;
+  target_bitrate_ = config.init_bitrate;
+  max_bitrate_ = config.max_bitrate;
+  max_payload_size_ = config.max_payload_size;
+  max_fps_ = config.max_frame_rate;
+
   // Create encoder.
   if (WelsCreateSVCEncoder(&openh264_encoder_) != 0) {
     LOG_ERROR("Failed to create OpenH264 encoder");

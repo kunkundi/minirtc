@@ -27,7 +27,7 @@ class AudioDecoder : public MediaCodec {
   virtual ~AudioDecoder();
 
  public:
-  int Init(const MediaCodecConfig& config) override;
+  int Init() override;
 
   int Decode(
       const uint8_t* data, size_t size,

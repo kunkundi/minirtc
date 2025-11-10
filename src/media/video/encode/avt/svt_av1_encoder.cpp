@@ -98,6 +98,14 @@ void SvtAv1Encoder::Release() {
 }
 
 int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
+  frame_width_ = config.init_width;
+  frame_height_ = config.init_height;
+  target_bitrate_ = config.average_bitrate / 1000;
+  max_bitrate_ = config.max_bitrate / 1000;
+  max_fps_ = config.max_frame_rate;
+  key_frame_interval_ = config.key_frame_interval;
+  max_payload_size_ = config.max_payload_size;
+
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +
                     std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
@@ -164,12 +172,12 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.target_bit_rate = max_bitrate_;
   enc_config_.max_qp_allowed = 60;
   enc_config_.min_qp_allowed = 10;
-  enc_config_.intra_period_length = I_FRAME_INTERVAL;
+  enc_config_.intra_period_length = key_frame_interval_;
   // enc_config_.intra_refresh_type = SVT_AV1_KF_REFRESH;
   enc_config_.level = 52;
   // enc_config_.qp = 63;
   // enc_config_.screen_content_mode = 1;
-  // enc_config_.sframe_dist = I_FRAME_INTERVAL;
+  // enc_config_.sframe_dist = key_frame_interval_;
 
   svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
   if (ret != EB_ErrorNone) {
@@ -321,7 +329,7 @@ int SvtAv1Encoder::ForceIdr() {
 }
 
 int SvtAv1Encoder::SetTargetBitrate(int bitrate) {
-  enc_config_.target_bit_rate = bitrate;
+  enc_config_.target_bit_rate = bitrate / 1000;
   svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
   return 0;
 }

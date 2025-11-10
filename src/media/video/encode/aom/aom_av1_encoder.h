@@ -73,7 +73,7 @@ class AomAv1Encoder : public MediaCodec {
   std::shared_ptr<SystemClock> clock_ = nullptr;
   uint32_t frame_width_ = 1280;
   uint32_t frame_height_ = 720;
-  int key_frame_interval_ = I_FRAME_INTERVAL;
+  int key_frame_interval_ = 3000;
   int target_bitrate_ = 1000;
   int max_bitrate_ = 2500000;
   int max_payload_size_ = 1400;

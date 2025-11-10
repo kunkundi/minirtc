@@ -869,7 +869,7 @@ int IceTransportController::CreateStreamCodecs(
                 "decoder",
                 channel_name);
           }
-          if (!context->codec || context->codec->Init(media_config_)) {
+          if (!context->codec || context->codec->Init()) {
             LOG_ERROR("Decoder [{}] init failed", channel_name);
             return -1;
           }
@@ -881,7 +881,7 @@ int IceTransportController::CreateStreamCodecs(
         } else if (context->type == StreamType::kAudio) {
           context->codec =
               std::make_shared<AudioDecoder>(AudioDecoder(48000, 1, 480));
-          if (!context->codec || 0 != context->codec->Init(media_config_)) {
+          if (!context->codec || 0 != context->codec->Init()) {
             LOG_ERROR("Audio decoder [{}] init failed", channel_name);
             return -1;
           }

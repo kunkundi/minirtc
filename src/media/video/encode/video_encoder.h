@@ -14,8 +14,6 @@
 #include "minirtc.h"
 #include "raw_frame.h"
 
-#define I_FRAME_INTERVAL 3000
-
 namespace minirtc {
 
 class VideoEncoder : public MediaCodec {
