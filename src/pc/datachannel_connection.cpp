@@ -22,6 +22,8 @@ DataChannelConnection::DataChannelConnection(
       info_(info),
       media_stream_ids_(media_stream_ids),
       callbacks_(callbacks) {
+  // disable av1 encoding
+  info_.av1_encoding = false;
   InitLogger(::rtc::LogLevel::Verbose,
              [](::rtc::LogLevel level, std::string message) {
                switch (level) {
