@@ -8,7 +8,8 @@ namespace {
 constexpr size_t MAX_RESOLUTION_WIDTH = 3840 * 2160;
 }
 
-ResolutionAdapter::ResolutionAdapter() {}
+ResolutionAdapter::ResolutionAdapter(VideoQuality video_quality)
+    : video_quality_(video_quality) {}
 
 ResolutionAdapter::~ResolutionAdapter() {}
 

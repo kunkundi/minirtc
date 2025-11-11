@@ -13,10 +13,12 @@ namespace minirtc {
 
 IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
-    std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp)
+    std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp,
+    VideoQuality video_quality)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
+      video_quality_(video_quality),
       ice_io_statistics_(ice_io_statistics),
       webrtc_clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
       last_report_block_time_(
@@ -161,7 +163,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
         }
       });
 
-  resolution_adapter_ = std::make_unique<ResolutionAdapter>();
+  resolution_adapter_ = std::make_unique<ResolutionAdapter>(video_quality_);
 
   {
     std::shared_lock lock(stream_senders_mutex_);

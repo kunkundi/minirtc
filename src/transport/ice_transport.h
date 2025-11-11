@@ -32,27 +32,28 @@ class IceTransport {
   enum TraversalType { TP2P = 0, TRelay = 1, TUnknown = 2 };
 
  public:
-  IceTransport(std::shared_ptr<SystemClock> clock, bool offer_peer,
-               std::string &transmission_id, std::string &user_id,
-               std::string &remote_user_id,
-               std::shared_ptr<WsClient> ice_ws_transmission,
-               std::function<void(std::string, const std::string &)>
-                   on_ice_status_change,
-               void *user_data);
+  IceTransport(
+      std::shared_ptr<SystemClock> clock, bool offer_peer,
+      std::string& transmission_id, std::string& user_id,
+      std::string& remote_user_id,
+      std::shared_ptr<WsClient> ice_ws_transmission,
+      std::function<void(std::string, const std::string&)> on_ice_status_change,
+      void* user_data);
   ~IceTransport();
 
  public:
   int SetLocalCapabilities(bool hardware_acceleration, bool use_trickle_ice,
                            bool use_reliable_ice, bool enable_turn,
                            bool force_turn, bool enable_srtp,
+                           VideoQuality video_quality,
                            rtp::PAYLOAD_TYPE prefered_video_payload_type,
-                           std::vector<int> &video_payload_types,
-                           std::vector<int> &audio_payload_types);
+                           std::vector<int>& video_payload_types,
+                           std::vector<int>& audio_payload_types);
 
-  int InitIceTransmission(std::string &stun_ip, int stun_port,
-                          std::string &turn_ip, int turn_port,
-                          std::string &turn_username,
-                          std::string &turn_password);
+  int InitIceTransmission(std::string& stun_ip, int stun_port,
+                          std::string& turn_ip, int turn_port,
+                          std::string& turn_username,
+                          std::string& turn_password);
 
   int DestroyIceTransmission();
 
@@ -65,102 +66,102 @@ class IceTransport {
   }
 
   void SetOnReceiveNetStatusReportFunc(
-      std::function<void(const char *, const size_t, TraversalMode,
-                         const XNetTrafficStats *, const char *, const size_t,
-                         void *)>
+      std::function<void(const char*, const size_t, TraversalMode,
+                         const XNetTrafficStats*, const char*, const size_t,
+                         void*)>
           on_receive_net_status_report) {
     on_receive_net_status_report_ = on_receive_net_status_report;
   }
 
   int JoinTransmission();
 
-  int SetTransmissionId(const std::string &transmission_id);
+  int SetTransmissionId(const std::string& transmission_id);
 
-  int SendVideoFrame(const XVideoFrame *video_frame,
-                     const std::string &stream_name);
+  int SendVideoFrame(const XVideoFrame* video_frame,
+                     const std::string& stream_name);
 
-  int SendAudioFrame(const char *data, size_t size,
-                     const std::string &stream_name);
+  int SendAudioFrame(const char* data, size_t size,
+                     const std::string& stream_name);
 
-  int SendDataFrame(const char *data, size_t size,
-                    const std::string &stream_name);
+  int SendDataFrame(const char* data, size_t size,
+                    const std::string& stream_name);
 
  public:
   int GatherCandidates();
 
   int SendLocalStreamSdp();
 
-  int SetRemoteSdp(const std::string &remote_sdp);
+  int SetRemoteSdp(const std::string& remote_sdp);
 
   int SendOffer();
 
   int SendAnswer();
 
-  int AddVideoStream(const std::string &stream_id);
-  int AddAudioStream(const std::string &stream_id);
-  int AddDataStream(const std::string &stream_id);
+  int AddVideoStream(const std::string& stream_id);
+  int AddAudioStream(const std::string& stream_id);
+  int AddDataStream(const std::string& stream_id);
 
   std::vector<rtp::PAYLOAD_TYPE> GetNegotiatedCapabilities();
 
  private:
-  int AppendLocalCapabilitiesToOffer(const std::string &local_sdp);
-  int AppendLocalCapabilitiesToAnswer(const std::string &local_sdp);
-  void ParseSsrcFromSdpAndRemove(std::string &sdp_block,
-                                 std::map<std::string, uint32_t> &ssrc_map,
-                                 const std::string &media_type);
-  std::string GetRemoteCapabilities(const std::string &remote_sdp);
+  int AppendLocalCapabilitiesToOffer(const std::string& local_sdp);
+  int AppendLocalCapabilitiesToAnswer(const std::string& local_sdp);
+  void ParseSsrcFromSdpAndRemove(std::string& sdp_block,
+                                 std::map<std::string, uint32_t>& ssrc_map,
+                                 const std::string& media_type);
+  std::string GetRemoteCapabilities(const std::string& remote_sdp);
 
-  bool NegotiateVideoPayloadType(const std::string &remote_sdp);
-  bool NegotiateAudioPayloadType(const std::string &remote_sdp);
-  bool NegotiateDataPayloadType(const std::string &remote_sdp);
-
- private:
-  uint8_t CheckIsRtpPacket(const char *buffer, size_t size);
-  uint8_t CheckIsRtcpPacket(const char *buffer, size_t size);
-  uint8_t CheckIsVideoPacket(const char *buffer, size_t size);
-  uint8_t CheckIsAudioPacket(const char *buffer, size_t size);
-  uint8_t CheckIsDataPacket(const char *buffer, size_t size);
+  bool NegotiateVideoPayloadType(const std::string& remote_sdp);
+  bool NegotiateAudioPayloadType(const std::string& remote_sdp);
+  bool NegotiateDataPayloadType(const std::string& remote_sdp);
 
  private:
-  void OnIceStateChange(NiceAgent *agent, guint stream_id, guint component_id,
+  uint8_t CheckIsRtpPacket(const char* buffer, size_t size);
+  uint8_t CheckIsRtcpPacket(const char* buffer, size_t size);
+  uint8_t CheckIsVideoPacket(const char* buffer, size_t size);
+  uint8_t CheckIsAudioPacket(const char* buffer, size_t size);
+  uint8_t CheckIsDataPacket(const char* buffer, size_t size);
+
+ private:
+  void OnIceStateChange(NiceAgent* agent, guint stream_id, guint component_id,
                         NiceComponentState state, gpointer user_ptr);
 
-  void OnNewLocalCandidate(NiceAgent *agent, guint stream_id,
-                           guint component_id, gchar *foundation,
+  void OnNewLocalCandidate(NiceAgent* agent, guint stream_id,
+                           guint component_id, gchar* foundation,
                            gpointer user_ptr);
 
-  void OnGatheringDone(NiceAgent *agent, guint stream_id, gpointer user_ptr);
+  void OnGatheringDone(NiceAgent* agent, guint stream_id, gpointer user_ptr);
 
-  void OnNewSelectedPair(NiceAgent *agent, guint stream_id, guint component_id,
-                         const char *lfoundation, const char *rfoundation,
+  void OnNewSelectedPair(NiceAgent* agent, guint stream_id, guint component_id,
+                         const char* lfoundation, const char* rfoundation,
                          gpointer user_ptr);
 
-  void OnReceiveBuffer(NiceAgent *agent, guint stream_id, guint component_id,
-                       guint size, gchar *buffer, gpointer user_ptr);
+  void OnReceiveBuffer(NiceAgent* agent, guint stream_id, guint component_id,
+                       guint size, gchar* buffer, gpointer user_ptr);
 
   void OnDtlsHandshakeDone(gpointer user_ptr);
 
-  bool ParseRtcpPacket(const uint8_t *buffer, size_t size,
-                       RtcpPacketInfo *rtcp_packet_info);
+  bool ParseRtcpPacket(const uint8_t* buffer, size_t size,
+                       RtcpPacketInfo* rtcp_packet_info);
 
-  void HandleReportBlock(const RtcpReportBlock &rtcp_report_block,
-                         RtcpPacketInfo *packet_information,
+  void HandleReportBlock(const RtcpReportBlock& rtcp_report_block,
+                         RtcpPacketInfo* packet_information,
                          uint32_t remote_ssrc);
 
-  bool HandleSenderReport(const RtcpCommonHeader &rtcp_block,
-                          RtcpPacketInfo *rtcp_packet_info);
+  bool HandleSenderReport(const RtcpCommonHeader& rtcp_block,
+                          RtcpPacketInfo* rtcp_packet_info);
 
-  bool HandleReceiverReport(const RtcpCommonHeader &rtcp_block,
-                            RtcpPacketInfo *rtcp_packet_info);
+  bool HandleReceiverReport(const RtcpCommonHeader& rtcp_block,
+                            RtcpPacketInfo* rtcp_packet_info);
 
-  bool HandleCongestionControlFeedback(const RtcpCommonHeader &rtcp_block,
-                                       RtcpPacketInfo *rtcp_packet_info);
+  bool HandleCongestionControlFeedback(const RtcpCommonHeader& rtcp_block,
+                                       RtcpPacketInfo* rtcp_packet_info);
 
-  bool HandleNack(const RtcpCommonHeader &rtcp_block,
-                  RtcpPacketInfo *rtcp_packet_info);
+  bool HandleNack(const RtcpCommonHeader& rtcp_block,
+                  RtcpPacketInfo* rtcp_packet_info);
 
-  bool HandleFir(const RtcpCommonHeader &rtcp_block,
-                 RtcpPacketInfo *rtcp_packet_info);
+  bool HandleFir(const RtcpCommonHeader& rtcp_block,
+                 RtcpPacketInfo* rtcp_packet_info);
 
  private:
   bool hardware_acceleration_ = false;
@@ -169,6 +170,7 @@ class IceTransport {
   bool use_reliable_ice_ = false;
   bool force_turn_ = false;
   bool enable_srtp_ = true;
+  VideoQuality video_quality_ = QualityHigh;
 
   std::vector<std::string> video_stream_ids_;
   std::vector<std::string> audio_stream_ids_;
@@ -203,7 +205,7 @@ class IceTransport {
   std::string remote_ice_username_ = "";
   NiceComponentState state_ = NICE_COMPONENT_STATE_DISCONNECTED;
   TraversalType traversal_type_ = TraversalType::TP2P;
-  void *user_data_ = nullptr;
+  void* user_data_ = nullptr;
 
  private:
   std::shared_ptr<SystemClock> clock_;
@@ -215,12 +217,11 @@ class IceTransport {
   OnReceiveAudio on_receive_audio_ = nullptr;
   OnReceiveData on_receive_data_ = nullptr;
 
-  std::function<void(std::string, const std::string &)> on_ice_status_change_ =
+  std::function<void(std::string, const std::string&)> on_ice_status_change_ =
       nullptr;
 
-  std::function<void(const char *, const size_t, TraversalMode,
-                     const XNetTrafficStats *, const char *, const size_t,
-                     void *)>
+  std::function<void(const char*, const size_t, TraversalMode,
+                     const XNetTrafficStats*, const char*, const size_t, void*)>
       on_receive_net_status_report_ = nullptr;
 
  private:

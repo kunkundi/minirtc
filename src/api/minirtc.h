@@ -35,6 +35,8 @@ enum SignalStatus {
 
 enum TraversalMode { P2P = 0, Relay, UnknownMode };
 
+enum VideoQuality { QualityLow = 0, QualityMedium, QualityHigh };
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -107,6 +109,8 @@ typedef struct {
   bool av1_encoding;
   bool enable_turn;
   bool enable_srtp;
+
+  VideoQuality video_quality;
 
   OnReceiveBuffer on_receive_video_buffer;
   OnReceiveBuffer on_receive_audio_buffer;

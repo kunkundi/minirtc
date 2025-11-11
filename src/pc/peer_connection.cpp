@@ -45,6 +45,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_av1_encoding_ = reader.Get("av1 encoding", "turn_on", "false");
     cfg_enable_turn_ = reader.Get("enable turn", "turn_on", "false");
     cfg_enable_srtp_ = reader.Get("enable srtp", "turn_on", "true");
+    cfg_video_quality_ = reader.Get("video quality", "quality", "high");
 
     std::regex regex("\n");
 
@@ -57,7 +58,13 @@ int PeerConnection::Init(PeerConnectionParams params) {
     av1_encoding_ = cfg_av1_encoding_ == "true" ? true : false;
     enable_turn_ = cfg_enable_turn_ == "true" ? true : false;
     enable_srtp_ = cfg_enable_srtp_ == "true" ? true : false;
-
+    if (cfg_video_quality_ == "low") {
+      video_quality_ = VideoQuality::QualityLow;
+    } else if (cfg_video_quality_ == "medium") {
+      video_quality_ = VideoQuality::QualityMedium;
+    } else {
+      video_quality_ = VideoQuality::QualityHigh;
+    }
   } else {
     cfg_signal_server_ip_ = params.signal_server_ip;
     signal_server_port_ = params.signal_server_port;
@@ -72,6 +79,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     av1_encoding_ = params.av1_encoding;
     enable_turn_ = params.enable_turn;
     enable_srtp_ = params.enable_srtp;
+    video_quality_ = params.video_quality;
 
     cfg_signal_server_port_ = std::to_string(signal_server_port_);
     cfg_stun_server_port_ = std::to_string(stun_server_port_);
@@ -90,6 +98,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_info_.enable_turn = enable_turn_;
   connection_info_.enable_srtp = enable_srtp_;
   connection_info_.av1_encoding = av1_encoding_;
+  connection_info_.video_quality = video_quality_;
 
   LOG_INFO("Read config success, use configure file [{}]", params.use_cfg_file);
 

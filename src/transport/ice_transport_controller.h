@@ -50,7 +50,7 @@ class IceTransportController
   IceTransportController(std::shared_ptr<SystemClock> clock,
                          std::shared_ptr<IceAgent> ice_agent,
                          std::shared_ptr<IOStatistics> ice_io_statistics,
-                         bool enable_srtp);
+                         bool enable_srtp, VideoQuality video_quality);
   ~IceTransportController();
 
  public:
@@ -170,6 +170,8 @@ class IceTransportController
   std::atomic<bool> is_running_;
 
   bool enable_srtp_;
+  VideoQuality video_quality_;
+
   std::vector<uint8_t> local_key_;
   std::vector<uint8_t> local_salt_;
   std::vector<uint8_t> remote_key_;

@@ -37,6 +37,7 @@ struct ConnectionInfo {
   bool enable_turn;
   bool enable_srtp;
   bool av1_encoding;
+  VideoQuality video_quality;
 };
 
 struct ConnectionCallbacks {
