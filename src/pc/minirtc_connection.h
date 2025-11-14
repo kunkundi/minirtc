@@ -47,9 +47,8 @@ class MiniRTCConnection : public ConnectionInterface {
   MediaStreamIds media_stream_ids_;
   ConnectionCallbacks callbacks_;
 
-  std::map<std::string, std::shared_ptr<IceTransport>> ice_transport_list_;
-  std::map<std::string, bool> is_ice_transport_ready_;
-  std::shared_mutex ice_transport_list_mutex_;
+  std::shared_ptr<IceTransport> ice_transport_;
+  std::atomic_bool is_ice_transport_ready_;
 
   std::function<void(std::string, const std::string&)> on_ice_status_change_;
   void* user_data_;
