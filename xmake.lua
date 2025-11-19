@@ -2,6 +2,12 @@ set_project("minirtc")
 set_version("0.0.1")
 set_license("LGPL-3.0")
 
+option("USE_CUDA")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Use CUDA for hardware codec acceleration")
+option_end()
+
 add_rules("mode.release", "mode.debug")
 set_languages("c++17")
 set_encodings("utf-8")
@@ -12,6 +18,7 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
     "ASIO_HAS_STD_ADDRESSOF", "ASIO_HAS_STD_ATOMIC", "ASIO_HAS_STD_CHRONO", 
     "ASIO_HAS_CSTDINT", "ASIO_HAS_STD_ARRAY",  "ASIO_HAS_STD_SYSTEM_ERROR",
     "NOMINMAX", "WIN32_LEAN_AND_MEAN")
+add_defines("USE_CUDA=" .. (is_config("USE_CUDA", true) and "1" or "0"))
 
 add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
 add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
@@ -151,28 +158,30 @@ target("media")
     if is_os("windows") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
-        "src/media/video/encode/nvcodec/*.cpp",
-        "src/media/video/decode/nvcodec/*.cpp",
         "src/media/video/encode/openh264/*.cpp",
         "src/media/video/decode/openh264/*.cpp",
         "src/media/video/encode/aom/*.cpp",
         "src/media/video/encode/avt/*.cpp",
         "src/media/video/decode/dav1d/*.cpp",
-        "src/media/video/decode/aom/*.cpp",
-        "src/media/nvcodec/*.cpp")
+        "src/media/video/decode/aom/*.cpp")
         add_includedirs("src/media/video/encode",
         "src/media/video/decode",
-        "src/media/video/encode/nvcodec",
-        "src/media/video/decode/nvcodec",
         "src/media/video/encode/openh264",
         "src/media/video/decode/openh264",
         "src/media/video/encode/aom",
         "src/media/video/encode/avt",
         "src/media/video/decode/dav1d",
-        "src/media/video/decode/aom",
-        "src/media/nvcodec",
-        "thirdparty/nvcodec/interface", {public = true})
-        add_includedirs(path.join(os.getenv("CUDA_PATH"), "include"), {public = true})
+        "src/media/video/decode/aom", {public = true})
+        if is_config("USE_CUDA", true) then
+            add_files("src/media/video/encode/nvcodec/*.cpp",
+            "src/media/video/decode/nvcodec/*.cpp",
+            "src/media/nvcodec/*.cpp")
+            add_includedirs("src/media/video/encode/nvcodec",
+            "src/media/video/decode/nvcodec",
+            "src/media/nvcodec",
+            "thirdparty/nvcodec/interface", {public = true})
+            add_includedirs(path.join(os.getenv("CUDA_PATH"), "include"), {public = true})
+        end
     elseif is_os("linux") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
@@ -190,7 +199,7 @@ target("media")
         "src/media/video/encode/avt",
         "src/media/video/decode/dav1d",
         "src/media/video/decode/aom", {public = true})
-        if is_arch("x86_64") then
+        if is_arch("x86_64") and is_config("USE_CUDA", true) then
             add_files("src/media/video/encode/nvcodec/*.cpp",
             "src/media/video/decode/nvcodec/*.cpp",
             "src/media/nvcodec/*.cpp")
@@ -246,14 +255,16 @@ target("minirtc")
     add_includedirs("src/rtc", "src/api")
 
     if is_os("windows") then
-        add_linkdirs("thirdparty/nvcodec/lib/x64")
-        add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
+        if is_config("USE_CUDA", true) then
+            add_linkdirs("thirdparty/nvcodec/lib/x64")
+            add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
+        end
         add_links("Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
         "ws2_32", "windowsapp", "User32", "Strmiids", "Mfuuid",
         "Secur32", "Bcrypt")
         -- add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
-        if is_arch("x86_64") then
+        if is_arch("x86_64") and is_config("USE_CUDA", true) then
             add_linkdirs("thirdparty/nvcodec/lib/x64")
             add_linkdirs("thirdparty/nvcodec/lib/linux/stubs/x86_64")
             add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib64"))

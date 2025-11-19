@@ -1,9 +1,12 @@
 #include "ice_transport_controller.h"
 
 #include "video_frame_wrapper.h"
+
 #if defined(__APPLE__)
-#elif defined(__linux__) && defined(__aarch64__)
-#else
+#if USE_CUDA
+#pragma message("Warning: CUDA is ignored on macOS.")
+#endif
+#elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
 #include "nvcodec_api.h"
 #endif
 
@@ -51,15 +54,14 @@ IceTransportController::~IceTransportController() {
   user_data_ = nullptr;
   video_codec_inited_ = false;
   audio_codec_inited_ = false;
-  load_nvcodec_dll_success_ = false;
 
-#if defined(__APPLE__)
-#elif defined(__linux__) && defined(__aarch64__)
-#else
+#if USE_CUDA && !defined(__aarch64__) && !defined(__arm__) && \
+    !defined(__APPLE__)
   if (hardware_acceleration_ && load_nvcodec_dll_success_) {
     ReleaseNvCodecDll();
   }
 #endif
+  load_nvcodec_dll_success_ = false;
 }
 
 void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
@@ -919,15 +921,8 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
     ret = CreateStreamCodecs(clock, false, true);
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
 #if defined(__APPLE__)
-    if (hardware_acceleration_) {
-      hardware_acceleration_ = false;
-      ret = CreateStreamCodecs(clock, true, false);
-    } else {
-      ret = CreateStreamCodecs(clock, false, false);
-    }
-#elif defined(__linux__) && defined(__aarch64__)
-    ret = CreateStreamCodecs(clock, false, false);
-#else
+    ret = CreateStreamCodecs(clock, hardware_acceleration_, false);
+#elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
     bool use_hardware = false;
     if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
       load_nvcodec_dll_success_ = true;
@@ -937,8 +932,9 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
           "Hardware accelerated codec not available, use default software "
           "codec");
     }
-
     ret = CreateStreamCodecs(clock, use_hardware, false);
+#else
+    ret = CreateStreamCodecs(clock, false, false);
 #endif
   }
 

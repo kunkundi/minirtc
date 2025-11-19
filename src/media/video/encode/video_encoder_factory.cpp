@@ -4,12 +4,12 @@
 #include "avt/svt_av1_encoder.h"
 #include "openh264/openh264_encoder.h"
 
-#if defined(_WIN32) || defined(_WIN64)
+#if (defined(_WIN32) || defined(_WIN64)) && USE_CUDA
 #include "nvcodec/nvidia_video_encoder.h"
 #elif defined(__APPLE__)
 #include "video_toolbox/video_toolbox_encoder.h"
 #elif defined(__linux__)
-#if defined(__x86_64__) || defined(__amd64__)
+#if (defined(__x86_64__) || defined(__amd64__)) && USE_CUDA
 #include "nvcodec/nvidia_video_encoder.h"
 #elif defined(__aarch64__) || defined(__arm64__)
 // use software encoder
@@ -44,6 +44,7 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 #elif defined(__linux__) && defined(__aarch64__)
     return std::make_unique<OpenH264Encoder>(OpenH264Encoder(clock));
 #else
+#if USE_CUDA
     if (hardware_acceleration) {
       if (CheckIsHardwareAccerlerationSupported()) {
         return std::make_unique<NvidiaVideoEncoder>(NvidiaVideoEncoder(clock));
@@ -51,8 +52,11 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
         return nullptr;
       }
     } else {
+#endif
       return std::make_unique<OpenH264Encoder>(OpenH264Encoder(clock));
+#if USE_CUDA
     }
+#endif
 #endif
   }
 }
@@ -60,8 +64,9 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 bool VideoEncoderFactory::CheckIsHardwareAccerlerationSupported() {
 #if defined(__APPLE__)
   return false;
-#elif (defined(_WIN32) || defined(_WIN64)) || \
-    (defined(__linux__) && (defined(__x86_64__) || defined(__amd64__)))
+#elif ((defined(_WIN32) || defined(_WIN64)) ||                                 \
+       (defined(__linux__) && (defined(__x86_64__) || defined(__amd64__)))) && \
+    USE_CUDA
   return CheckIsCudaEncodeSupported();
 #else
   return false;
