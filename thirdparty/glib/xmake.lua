@@ -81,6 +81,8 @@ package("glib")
         else
             package:add("deps", "pcre", {system = false, configs = {shared = false}})
         end
+        -- force static linking of libffi to avoid version conflicts
+        package:add("deps", "libffi", {system = false, configs = {shared = false}})
     end)
 
     on_install("windows", "macosx", "linux", "cross", "mingw", function (package)
