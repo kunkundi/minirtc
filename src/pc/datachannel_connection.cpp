@@ -146,11 +146,11 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       break;
     }
     case IceWorkMsg::Type::UserLeaveTransmission: {
-      std::string user_id = msg.user_id;
+      std::string remote_user_id = msg.remote_user_id;
       LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
-               (void*)this, user_id);
+               (void*)this, remote_user_id);
 
-      LOG_INFO("Terminate transmission to user [{}]", user_id);
+      LOG_INFO("Terminate transmission to user [{}]", remote_user_id);
 
       break;
     }

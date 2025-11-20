@@ -455,10 +455,10 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       break;
     }
     case "user_leave_transmission"_H: {
-      std::string user_id = j["user_id"];
+      std::string remote_user_id = j["user_id"];
       IceWorkMsg msg;
       msg.type = IceWorkMsg::Type::UserLeaveTransmission;
-      msg.user_id = user_id;
+      msg.remote_user_id = remote_user_id;
       PushIceWorkMsg(msg);
 
       break;
@@ -600,10 +600,32 @@ void PeerConnection::PushIceWorkMsg(const IceWorkMsg& msg) {
 
 void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
   if (msg.remote_user_id != "") {
-    std::shared_lock lock(peer_connection_map_mutex_);
-    if (peer_connection_map_.find(msg.remote_user_id) !=
-        peer_connection_map_.end()) {
-      peer_connection_map_[msg.remote_user_id]->ProcessIceWorkMsg(msg);
+    if (msg.type == IceWorkMsg::Type::UserLeaveTransmission) {
+      std::string remote_user_id = msg.remote_user_id;
+      {
+        std::shared_lock lock(peer_connection_map_mutex_);
+        auto it = peer_connection_map_.find(remote_user_id);
+        if (it != peer_connection_map_.end()) {
+          it->second->ProcessIceWorkMsg(msg);
+        }
+      }
+      {
+        std::unique_lock lock(peer_connection_map_mutex_);
+        auto it = peer_connection_map_.find(remote_user_id);
+        if (it != peer_connection_map_.end()) {
+          LOG_INFO(
+              "[{}] Remove peer connection for user [{}] after leave "
+              "transmission",
+              user_id_, remote_user_id);
+          peer_connection_map_.erase(it);
+        }
+      }
+    } else {
+      std::shared_lock lock(peer_connection_map_mutex_);
+      if (peer_connection_map_.find(msg.remote_user_id) !=
+          peer_connection_map_.end()) {
+        peer_connection_map_[msg.remote_user_id]->ProcessIceWorkMsg(msg);
+      }
     }
   }
 }
