@@ -1,6 +1,6 @@
 # MiniRTC
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-lightgrey.svg)]()
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg)]()
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)  
 [![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc.svg)]()
 [![GitHub stars](https://img.shields.io/github/stars/kunkundi/minirtc.svg?style=social)]()
