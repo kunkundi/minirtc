@@ -56,12 +56,17 @@ class TaskQueueLockFree {
       cond_var_.notify_all();
     }
 
-    for (std::thread& worker : workers_) {
+    std::vector<std::thread> workers_to_join;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      workers_to_join.swap(workers_);
+    }
+
+    for (std::thread& worker : workers_to_join) {
       if (worker.joinable()) {
         worker.join();
       }
     }
-    workers_.clear();
   }
 
  private:
