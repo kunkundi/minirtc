@@ -45,7 +45,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
  public:
   void Shutdown();
 
-  int Connect(const std::string &uri, const std::string &cert_path);
+  int Connect(const std::string &uri, const std::string &expected_fingerprint,
+              std::function<void(const std::string &)> on_fingerprint_cb = nullptr);
 
   int ReConnect();
 
@@ -97,7 +98,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::thread reconnect_thread_;
 
   std::string uri_;
-  std::string cert_path_;
+  std::string expected_fingerprint_;
+  std::function<void(const std::string &)> on_fingerprint_cb_;
 
   std::atomic<bool> running_{false};
   std::mutex ping_mtx_;

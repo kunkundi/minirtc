@@ -52,7 +52,9 @@ typedef struct {
   int turn_server_port;
   const char* turn_server_username;
   const char* turn_server_password;
-  const char* tls_cert_path;
+  const char* tls_cert_fingerprint;
+  void (*on_cert_fingerprint)(const char* fingerprint, void* user_data);
+  void* fingerprint_user_data;
   bool hardware_acceleration;
   bool av1_encoding;
   bool enable_turn;
@@ -123,7 +125,7 @@ class PeerConnection {
   std::string cfg_turn_server_port_;
   std::string cfg_turn_server_username_;
   std::string cfg_turn_server_password_;
-  std::string cfg_tls_cert_path_;
+  std::string cfg_tls_cert_fingerprint_;
   std::string cfg_hardware_acceleration_;
   std::string cfg_av1_encoding_;
   std::string cfg_enable_turn_;

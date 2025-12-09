@@ -1,16 +1,35 @@
 #include "ws_client.h"
 
+#include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 
 #include <algorithm>
 #include <chrono>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <thread>
 
 #include "log.h"
 
 namespace minirtc {
+
+std::string ComputeFingerprint(X509 *cert) {
+  unsigned int n = 0;
+  unsigned char md[EVP_MAX_MD_SIZE];
+  if (X509_digest(cert, EVP_sha256(), md, &n) != 1) {
+    return "";
+  }
+
+  std::ostringstream oss;
+  for (unsigned int i = 0; i < n; i++) {
+    if (i) oss << ":";
+    oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
+        << (int)md[i];
+  }
+  return oss.str();
+}
 
 WsClient::WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
@@ -122,9 +141,12 @@ void WsClient::RegisterHandlers() {
       });
 }
 
-int WsClient::Connect(const std::string &uri, const std::string &cert_path) {
+int WsClient::Connect(
+    const std::string &uri, const std::string &expected_fingerprint,
+    std::function<void(const std::string &)> on_fingerprint_cb) {
   uri_ = uri;
-  cert_path_ = cert_path;
+  expected_fingerprint_ = expected_fingerprint;
+  on_fingerprint_cb_ = on_fingerprint_cb;
 
   StopThreads();
 
@@ -171,7 +193,7 @@ int WsClient::ReConnect() {
 
   StopThreads();
 
-  return Connect(uri_, cert_path_);
+  return Connect(uri_, expected_fingerprint_, on_fingerprint_cb_);
 }
 
 void WsClient::AsyncReConnect() {
@@ -292,10 +314,6 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
           }
           return false;
         });
-
-    if (!cert_path_.empty()) {
-      ctx->load_verify_file(cert_path_);
-    }
   } catch (std::exception &e) {
     LOG_ERROR("TLS init error: {}", e.what());
   }
@@ -308,60 +326,44 @@ bool WsClient::OnTlsVerify(bool preverified,
   X509 *cert = X509_STORE_CTX_get_current_cert(cts);
   if (cert) {
     int depth = X509_STORE_CTX_get_error_depth(cts);
-    int err = X509_STORE_CTX_get_error(cts);
 
-    if (err != X509_V_OK) {
-      const char *err_str = X509_verify_cert_error_string(err);
-      LOG_WARN(
-          "TLS certificate verification failed at depth {}: {} (error code: "
-          "{})",
-          depth, err_str ? err_str : "unknown", err);
+    // only verify the first certificate
+    if (depth == 0) {
+      std::string fingerprint = ComputeFingerprint(cert);
 
-      switch (err) {
-        case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
-          LOG_WARN("Unable to get issuer certificate");
-          break;
-        case X509_V_ERR_CERT_NOT_YET_VALID:
-          LOG_WARN("Certificate not yet valid");
-          break;
-        case X509_V_ERR_CERT_HAS_EXPIRED:
-          LOG_WARN("Certificate has expired");
-          break;
-        case X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:
-          LOG_WARN("Self-signed certificate in chain");
-          break;
-        case X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE:
-          LOG_WARN("Unable to verify leaf signature");
-          break;
-        case X509_V_ERR_CERT_UNTRUSTED:
-          LOG_WARN("Certificate untrusted");
-          break;
-        case X509_V_ERR_INVALID_CA:
-          LOG_WARN("Invalid CA certificate");
-          break;
-        default:
-          LOG_WARN("Other certificate verification error: {}", err);
-          break;
+      if (fingerprint.empty()) {
+        LOG_ERROR("Failed to compute certificate fingerprint");
+        tls_failure_count_++;
+        return false;
       }
 
-      char subject[256];
-      X509_NAME_oneline(X509_get_subject_name(cert), subject, sizeof(subject));
-      LOG_WARN("Certificate subject: {}", subject);
+      if (expected_fingerprint_.empty()) {
+        LOG_INFO("First connection: saving certificate fingerprint");
+        if (on_fingerprint_cb_) {
+          on_fingerprint_cb_(fingerprint);
+        }
+        tls_failure_count_ = 0;
+        return true;
+      }
 
-      tls_failure_count_++;
-      return false;
-    } else {
-      if (depth == 0) {
+      if (fingerprint == expected_fingerprint_) {
         char subject[256];
         X509_NAME_oneline(X509_get_subject_name(cert), subject,
                           sizeof(subject));
-        LOG_INFO("TLS certificate verified successfully. Subject: {}", subject);
+        // LOG_INFO(
+        //     "TLS certificate fingerprint verified successfully. Subject: {}",
+        //     subject);
         tls_failure_count_ = 0;
+        return true;
+      } else {
+        LOG_ERROR("Certificate fingerprint mismatch");
+        tls_failure_count_++;
+        return false;
       }
     }
   }
 
-  return preverified;
+  return true;
 }
 
 void WsClient::OnOpen(client *, websocketpp::connection_hdl hdl) {
