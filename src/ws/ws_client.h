@@ -61,6 +61,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   ssl_context_ptr OnTlsInit(websocketpp::connection_hdl hdl);
 
+  bool OnTlsVerify(bool preverified, websocketpp::lib::asio::ssl::verify_context &ctx);
+
   void OnOpen(client *c, websocketpp::connection_hdl hdl);
 
   void OnFail(client *c, websocketpp::connection_hdl hdl);
@@ -107,6 +109,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
   std::atomic<int> timeout_count_{0};
   std::atomic<bool> destructed_{false};
+  std::atomic<int> reconnect_attempts_{0};
+  std::atomic<int> tls_failure_count_{0};
 
   std::function<void(const std::string &)> on_receive_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;

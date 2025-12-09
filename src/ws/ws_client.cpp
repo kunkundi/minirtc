@@ -1,5 +1,9 @@
 #include "ws_client.h"
 
+#include <openssl/ssl.h>
+#include <openssl/x509.h>
+
+#include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <thread>
@@ -183,6 +187,13 @@ void WsClient::AsyncReConnect() {
   reconnect_thread_ = std::thread([weak_self]() {
     if (auto self = weak_self.lock()) {
       if (self->destructed_) return;
+
+      int attempts = self->reconnect_attempts_.load();
+      if (attempts > 0 && attempts < 3) {
+        int delay_ms = 500 * attempts;  // 500ms, 1s, 1.5s
+        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+      }
+
       self->ReConnect();
     }
   });
@@ -270,7 +281,18 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
     ctx->set_options(
         asio::ssl::context::default_workarounds | asio::ssl::context::no_sslv2 |
         asio::ssl::context::no_sslv3 | asio::ssl::context::single_dh_use);
-    ctx->set_verify_mode(asio::ssl::verify_peer);
+    ctx->set_verify_mode(asio::ssl::verify_peer |
+                         asio::ssl::verify_fail_if_no_peer_cert);
+
+    std::weak_ptr<WsClient> weak_self = shared_from_this();
+    ctx->set_verify_callback(
+        [weak_self](bool preverified, asio::ssl::verify_context &ctx) {
+          if (auto self = weak_self.lock()) {
+            return self->OnTlsVerify(preverified, ctx);
+          }
+          return false;
+        });
+
     if (!cert_path_.empty()) {
       ctx->load_verify_file(cert_path_);
     }
@@ -280,18 +302,131 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
   return ctx;
 }
 
+bool WsClient::OnTlsVerify(bool preverified,
+                           websocketpp::lib::asio::ssl::verify_context &ctx) {
+  X509_STORE_CTX *cts = ctx.native_handle();
+  X509 *cert = X509_STORE_CTX_get_current_cert(cts);
+  if (cert) {
+    int depth = X509_STORE_CTX_get_error_depth(cts);
+    int err = X509_STORE_CTX_get_error(cts);
+
+    if (err != X509_V_OK) {
+      const char *err_str = X509_verify_cert_error_string(err);
+      LOG_WARN(
+          "TLS certificate verification failed at depth {}: {} (error code: "
+          "{})",
+          depth, err_str ? err_str : "unknown", err);
+
+      switch (err) {
+        case X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT:
+          LOG_WARN("Unable to get issuer certificate");
+          break;
+        case X509_V_ERR_CERT_NOT_YET_VALID:
+          LOG_WARN("Certificate not yet valid");
+          break;
+        case X509_V_ERR_CERT_HAS_EXPIRED:
+          LOG_WARN("Certificate has expired");
+          break;
+        case X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN:
+          LOG_WARN("Self-signed certificate in chain");
+          break;
+        case X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE:
+          LOG_WARN("Unable to verify leaf signature");
+          break;
+        case X509_V_ERR_CERT_UNTRUSTED:
+          LOG_WARN("Certificate untrusted");
+          break;
+        case X509_V_ERR_INVALID_CA:
+          LOG_WARN("Invalid CA certificate");
+          break;
+        default:
+          LOG_WARN("Other certificate verification error: {}", err);
+          break;
+      }
+
+      char subject[256];
+      X509_NAME_oneline(X509_get_subject_name(cert), subject, sizeof(subject));
+      LOG_WARN("Certificate subject: {}", subject);
+
+      tls_failure_count_++;
+      return false;
+    } else {
+      if (depth == 0) {
+        char subject[256];
+        X509_NAME_oneline(X509_get_subject_name(cert), subject,
+                          sizeof(subject));
+        LOG_INFO("TLS certificate verified successfully. Subject: {}", subject);
+        tls_failure_count_ = 0;
+      }
+    }
+  }
+
+  return preverified;
+}
+
 void WsClient::OnOpen(client *, websocketpp::connection_hdl hdl) {
   LOG_INFO("WebSocket connection opened");
   connection_handle_ = hdl;
   SetStatus(WsOpened);
+  reconnect_attempts_ = 0;
+  tls_failure_count_ = 0;
   RestartPingThread(hdl);
 }
 
 void WsClient::OnFail(client *c, websocketpp::connection_hdl hdl) {
   auto con = c->get_con_from_hdl(hdl);
-  LOG_WARN("Connection failed: {}", con ? con->get_ec().message() : "unknown");
-  if (!destructed_) {
-    AsyncReConnect();
+  std::string error_msg = con ? con->get_ec().message() : "unknown";
+  websocketpp::lib::error_code ec =
+      con ? con->get_ec() : websocketpp::lib::error_code();
+
+  bool is_tls_error = false;
+  if (con) {
+    std::string ec_msg = error_msg;
+    std::transform(ec_msg.begin(), ec_msg.end(), ec_msg.begin(), ::tolower);
+
+    if (ec_msg.find("ssl") != std::string::npos ||
+        ec_msg.find("tls") != std::string::npos ||
+        ec_msg.find("certificate") != std::string::npos ||
+        ec_msg.find("handshake") != std::string::npos ||
+        ec_msg.find("verify") != std::string::npos) {
+      is_tls_error = true;
+    }
+
+    if (ec.category() == websocketpp::lib::asio::error::get_ssl_category()) {
+      is_tls_error = true;
+    }
+  }
+
+  if (is_tls_error) {
+    LOG_ERROR("TLS connection failed: {} (TLS failure count: {})", error_msg,
+              tls_failure_count_.load());
+
+    int attempts = reconnect_attempts_.fetch_add(1);
+    int delay_seconds = std::min(1 << attempts, 60);  // 1, 2, 4, 8, 16, 32, 60
+
+    LOG_INFO("Will retry TLS connection after {} seconds (attempt {})",
+             delay_seconds, attempts + 1);
+
+    if (!destructed_) {
+      if (reconnect_thread_.joinable()) {
+        reconnect_thread_.join();
+      }
+
+      std::weak_ptr<WsClient> weak_self = shared_from_this();
+      reconnect_thread_ = std::thread([weak_self, delay_seconds]() {
+        std::this_thread::sleep_for(std::chrono::seconds(delay_seconds));
+        if (auto self = weak_self.lock()) {
+          if (!self->destructed_) {
+            self->ReConnect();
+          }
+        }
+      });
+    }
+  } else {
+    LOG_WARN("Connection failed (non-TLS error): {}", error_msg);
+    if (!destructed_) {
+      AsyncReConnect();
+    }
   }
 }
 
