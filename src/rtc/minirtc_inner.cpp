@@ -89,7 +89,7 @@ int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   }
 
   ret = peer_ptr->peer_connection->Join(transmission_id);
-  LOG_INFO("JoinConnection [{}]", transmission_id);
+  // LOG_INFO("JoinConnection [{}]", transmission_id);
   return ret;
 }
 

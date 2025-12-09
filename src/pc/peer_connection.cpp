@@ -231,10 +231,10 @@ int PeerConnection::Join(const std::string& transmission_id) {
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
-    LOG_INFO(
-        "[{}] sends join transmission request to transmission "
-        "id [{}]",
-        user_id_, transmission_id);
+    // LOG_INFO(
+    //     "[{}] sends join transmission request to transmission "
+    //     "id [{}]",
+    //     user_id_, transmission_id);
   }
 
   return ret;
