@@ -11,7 +11,7 @@ FecEncoder::~FecEncoder() {}
 int FecEncoder::Init() {
   fec_codec_id_ = OF_CODEC_REED_SOLOMON_GF_2_M_STABLE;
 
-  fec_rs_params_ = (of_rs_2_m_parameters_t *)calloc(1, sizeof(*fec_params_));
+  fec_rs_params_ = (of_rs_2_m_parameters_t *)calloc(1, sizeof(*fec_rs_params_));
   if (nullptr == fec_rs_params_) {
     LOG_ERROR("Create FEC codec params failed");
     return -1;
