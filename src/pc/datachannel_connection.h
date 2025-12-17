@@ -36,8 +36,8 @@ class DataChannelConnection : public ConnectionInterface {
                      const char* stream_id) override;
   int SendAudioFrame(const char* data, size_t size,
                      const char* stream_id) override;
-  int SendDataFrame(const char* data, size_t size,
-                    const char* stream_id) override;
+  int SendDataFrame(const char* data, size_t size, const char* stream_id,
+                    bool is_reliable) override;
 
   void ProcessIceWorkMsg(const IceWorkMsg& msg) override;
 

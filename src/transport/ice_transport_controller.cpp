@@ -565,7 +565,8 @@ int IceTransportController::SendAudio(const char* data, size_t size,
 }
 
 int IceTransportController::SendData(const char* data, size_t size,
-                                     const std::string& channel_name) {
+                                     const std::string& channel_name,
+                                     bool is_reliable) {
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
@@ -578,7 +579,7 @@ int IceTransportController::SendData(const char* data, size_t size,
   }
 
   context->last_active_time = clock_->CurrentTimeMs();
-  return context->transceiver->SendData(data, size);
+  return context->transceiver->SendData(data, size, is_reliable);
 
   return 0;
 }

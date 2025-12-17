@@ -130,7 +130,7 @@ int MiniRTCConnection::SendAudioFrame(const char* data, size_t size,
 }
 
 int MiniRTCConnection::SendDataFrame(const char* data, size_t size,
-                                     const char* stream_id) {
+                                     const char* stream_id, bool is_reliable) {
   if (!ice_transport_) {
     return -1;
   }
@@ -139,7 +139,7 @@ int MiniRTCConnection::SendDataFrame(const char* data, size_t size,
     return -1;
   }
 
-  ice_transport_->SendDataFrame(data, size, stream_id);
+  ice_transport_->SendDataFrame(data, size, stream_id, is_reliable);
 
   return 0;
 }

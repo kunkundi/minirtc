@@ -115,7 +115,8 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
-                                         const char* stream_id) {
+                                         const char* stream_id,
+                                         bool is_reliable) {
   if (!dc_ready_) {
     return -1;
   }

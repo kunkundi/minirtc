@@ -1146,7 +1146,8 @@ int IceTransport::SendAudioFrame(const char* data, size_t size,
 }
 
 int IceTransport::SendDataFrame(const char* data, size_t size,
-                                const std::string& stream_name) {
+                                const std::string& stream_name,
+                                bool is_reliable) {
   if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
       state_ != NICE_COMPONENT_STATE_READY) {
     LOG_ERROR("Ice is not connected, state = [{}]",
@@ -1155,7 +1156,8 @@ int IceTransport::SendDataFrame(const char* data, size_t size,
   }
 
   if (ice_transport_controller_) {
-    return ice_transport_controller_->SendData(data, size, stream_name);
+    return ice_transport_controller_->SendData(data, size, stream_name,
+                                               is_reliable);
   }
 
   return -1;

@@ -55,7 +55,7 @@ class MediaChannel {
     return 0;
   }
 
-  virtual int SendData(const char* data, size_t size) {
+  virtual int SendData(const char* data, size_t size, bool is_reliable) {
     LOG_INFO("SendData() default implementation");
     return 0;
   }

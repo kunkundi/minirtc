@@ -330,11 +330,11 @@ int PeerConnection::SendAudioFrame(const char* data, size_t size,
 }
 
 int PeerConnection::SendDataFrame(const char* data, size_t size,
-                                  const char* stream_id) {
+                                  const char* stream_id, bool is_reliable) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     if (peer_connection.second) {
-      peer_connection.second->SendDataFrame(data, size, stream_id);
+      peer_connection.second->SendDataFrame(data, size, stream_id, is_reliable);
     }
   }
 

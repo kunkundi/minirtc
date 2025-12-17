@@ -8,6 +8,7 @@
 #define _DATA_CHANNEL_SEND_H_
 
 #include "ice_agent.h"
+#include "ikcp.h"
 #include "media_channel.h"
 #include "paced_sender.h"
 #include "rtp_data_sender.h"
@@ -25,7 +26,7 @@ class DataChannelSend : public MediaChannel {
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
-                  std::shared_ptr<PacedSender> packet_sender);
+                  std::shared_ptr<PacedSender> packet_sender) override;
   void Destroy();
 
   uint32_t GetSsrc() {
@@ -35,17 +36,25 @@ class DataChannelSend : public MediaChannel {
     return 0;
   }
 
-  int SendData(const char* data, size_t size);
+  int SendData(const char* data, size_t size, bool is_reliable) override;
 
   void OnReceiverReport(const ReceiverReport& receiver_report) {}
 
  private:
   std::string channel_name_;
+  bool is_reliable_ = false;
   std::shared_ptr<PacedSender> paced_sender_ = nullptr;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpDataSender> rtp_data_sender_ = nullptr;
+  ikcpcb* kcp_ = nullptr;
+
+ private:
+  bool InitKcp();
+  int OnKcpOutput(const char* data, int len);
+  static int KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
+                               void* user);
 };
 }  // namespace minirtc
 

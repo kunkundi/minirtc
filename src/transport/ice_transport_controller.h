@@ -75,7 +75,8 @@ class IceTransportController
   int SendVideo(const XVideoFrame* video_frame,
                 const std::string& channel_name);
   int SendAudio(const char* data, size_t size, const std::string& channel_name);
-  int SendData(const char* data, size_t size, const std::string& channel_name);
+  int SendData(const char* data, size_t size, const std::string& channel_name,
+               bool is_reliable);
 
   void FullIntraRequest() { b_force_i_frame_ = true; }
 

@@ -100,7 +100,8 @@ class PeerConnection {
 
   int SendVideoFrame(const XVideoFrame* video_frame, const char* stream_id);
   int SendAudioFrame(const char* data, size_t size, const char* stream_id);
-  int SendDataFrame(const char* data, size_t size, const char* stream_id);
+  int SendDataFrame(const char* data, size_t size, const char* stream_id,
+                    bool is_reliable);
 
   int64_t GetSystemTimeMicros();
 

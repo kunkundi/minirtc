@@ -84,7 +84,7 @@ class IceTransport {
                      const std::string& stream_name);
 
   int SendDataFrame(const char* data, size_t size,
-                    const std::string& stream_name);
+                    const std::string& stream_name, bool is_reliable);
 
  public:
   int GatherCandidates();
