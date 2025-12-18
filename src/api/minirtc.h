@@ -151,7 +151,10 @@ DLLAPI int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
                           const char* stream_id);
 
 DLLAPI int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
-                         const char* stream_id, bool is_reliable);
+                         const char* stream_id);
+
+DLLAPI int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data,
+                                 size_t size, const char* stream_id);
 
 DLLAPI int64_t GetSystemTimeMicros(PeerPtr* peer_ptr);
 

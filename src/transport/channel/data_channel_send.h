@@ -36,7 +36,9 @@ class DataChannelSend : public MediaChannel {
     return 0;
   }
 
-  int SendData(const char* data, size_t size, bool is_reliable) override;
+  int SendData(const char* data, size_t size) override;
+
+  int SendReliableData(const char* data, size_t size) override;
 
   void OnReceiverReport(const ReceiverReport& receiver_report) {}
 

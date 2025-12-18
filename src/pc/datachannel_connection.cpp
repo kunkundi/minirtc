@@ -115,8 +115,7 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
-                                         const char* stream_id,
-                                         bool is_reliable) {
+                                         const char* stream_id) {
   if (!dc_ready_) {
     return -1;
   }
@@ -127,6 +126,11 @@ int DataChannelConnection::SendDataFrame(const char* data, size_t size,
 
   dc_transport_->SendDataFrame(data, size, stream_id);
   return 0;
+}
+
+int DataChannelConnection::SendReliableDataFrame(const char* data, size_t size,
+                                                 const char* stream_id) {
+  return SendDataFrame(data, size, stream_id);
 }
 
 void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {

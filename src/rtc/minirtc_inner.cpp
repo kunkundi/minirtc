@@ -168,7 +168,7 @@ int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
 }
 
 int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
-                  const char* stream_id, bool is_reliable) {
+                  const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -179,7 +179,24 @@ int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
     return -1;
   }
 
-  peer_ptr->peer_connection->SendDataFrame(data, size, stream_id, is_reliable);
+  peer_ptr->peer_connection->SendDataFrame(data, size, stream_id);
+
+  return 0;
+}
+
+int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                          const char* stream_id) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  if (!data || size <= 0) {
+    LOG_ERROR("Invaild data");
+    return -1;
+  }
+
+  peer_ptr->peer_connection->SendReliableDataFrame(data, size, stream_id);
 
   return 0;
 }

@@ -64,25 +64,10 @@ void DataChannelSend::Destroy() {
   }
 }
 
-int DataChannelSend::SendData(const char* data, size_t size, bool is_reliable) {
+int DataChannelSend::SendData(const char* data, size_t size) {
   if (!rtp_data_sender_ || !rtp_packetizer_) {
     LOG_ERROR("DataChannelSend not initialized");
     return -1;
-  }
-
-  if (is_reliable) {
-    if (!InitKcp()) {
-      return -1;
-    }
-
-    int ret = ikcp_send(kcp_, data, static_cast<int>(size));
-    if (ret < 0) {
-      LOG_ERROR("ikcp_send failed, ret={}", ret);
-      return ret;
-    }
-
-    ikcp_update(kcp_, GetCurrentTimeMs());
-    return 0;
   }
 
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets = rtp_packetizer_->Build(
@@ -91,6 +76,26 @@ int DataChannelSend::SendData(const char* data, size_t size, bool is_reliable) {
   // paced_sender_->EnqueueRtpPackets(rtp_packets, 0);
   rtp_data_sender_->Enqueue(rtp_packets);
 
+  return 0;
+}
+
+int DataChannelSend::SendReliableData(const char* data, size_t size) {
+  if (!rtp_data_sender_ || !rtp_packetizer_) {
+    LOG_ERROR("DataChannelSend not initialized");
+    return -1;
+  }
+
+  if (!InitKcp()) {
+    return -1;
+  }
+
+  int ret = ikcp_send(kcp_, data, static_cast<int>(size));
+  if (ret < 0) {
+    LOG_ERROR("ikcp_send failed, ret={}", ret);
+    return ret;
+  }
+
+  ikcp_update(kcp_, GetCurrentTimeMs());
   return 0;
 }
 
@@ -127,9 +132,21 @@ int DataChannelSend::OnKcpOutput(const char* data, int len) {
     return -1;
   }
 
+  // KCP frame format
+  //  0      1      2        3        4 ...
+  // +------+------+--------+--------+-------------------+
+  // | 'K'  | 'C'  | ver=1 | flags  | KCP segment bytes |
+  // +------+------+--------+--------+-------------------+
+  std::vector<uint8_t> framed;
+  framed.resize(4 + static_cast<size_t>(len));
+  framed[0] = 'K';
+  framed[1] = 'C';
+  framed[2] = 0x01;  // version
+  framed[3] = 0x00;  // flags, reserved
+  memcpy(framed.data() + 4, data, static_cast<size_t>(len));
+
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets = rtp_packetizer_->Build(
-      reinterpret_cast<uint8_t*>(const_cast<char*>(data)),
-      static_cast<uint32_t>(len), 0, true);
+      framed.data(), static_cast<uint32_t>(framed.size()), 0, true);
   rtp_data_sender_->Enqueue(rtp_packets);
 
   return len;

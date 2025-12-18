@@ -267,6 +267,7 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
   } else if (CheckIsAudioPacket(buffer, size)) {
     ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size, ssrc);
   } else if (CheckIsDataPacket(buffer, size)) {
+    LOG_ERROR("Receive data packet size: {}", size);
     ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size, ssrc);
   }
 }
@@ -1146,8 +1147,7 @@ int IceTransport::SendAudioFrame(const char* data, size_t size,
 }
 
 int IceTransport::SendDataFrame(const char* data, size_t size,
-                                const std::string& stream_name,
-                                bool is_reliable) {
+                                const std::string& stream_name) {
   if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
       state_ != NICE_COMPONENT_STATE_READY) {
     LOG_ERROR("Ice is not connected, state = [{}]",
@@ -1156,8 +1156,23 @@ int IceTransport::SendDataFrame(const char* data, size_t size,
   }
 
   if (ice_transport_controller_) {
-    return ice_transport_controller_->SendData(data, size, stream_name,
-                                               is_reliable);
+    return ice_transport_controller_->SendData(data, size, stream_name);
+  }
+
+  return -1;
+}
+
+int IceTransport::SendReliableDataFrame(const char* data, size_t size,
+                                        const std::string& stream_name) {
+  if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
+      state_ != NICE_COMPONENT_STATE_READY) {
+    LOG_ERROR("Ice is not connected, state = [{}]",
+              nice_component_state_to_string(state_));
+    return -2;
+  }
+
+  if (ice_transport_controller_) {
+    return ice_transport_controller_->SendReliableData(data, size, stream_name);
   }
 
   return -1;
@@ -1185,14 +1200,18 @@ uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
 }
 
 uint8_t IceTransport::CheckIsRtcpPacket(const char* buffer, size_t size) {
-  if (size < 2) {
+  if (size < 4) {
     return 0;
   }
 
-  uint8_t payload_type = buffer[1];
+  uint8_t v = (buffer[0] >> 6) & 0x03;
+  if (v != 2) {
+    return 0;
+  }
+
+  uint8_t payload_type = static_cast<uint8_t>(buffer[1]);
   if (payload_type >= 192 && payload_type <= 223) {
     return payload_type;
-    ;
   }
 
   return 0;

@@ -74,7 +74,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     turn_server_port_ = params.turn_server_port;
     cfg_turn_server_username_ = params.turn_server_username;
     cfg_turn_server_password_ = params.turn_server_password;
-    cfg_tls_cert_fingerprint_ = params.tls_cert_fingerprint ? params.tls_cert_fingerprint : "";
+    cfg_tls_cert_fingerprint_ =
+        params.tls_cert_fingerprint ? params.tls_cert_fingerprint : "";
     hardware_acceleration_ = params.hardware_acceleration;
     av1_encoding_ = params.av1_encoding;
     enable_turn_ = params.enable_turn;
@@ -105,7 +106,9 @@ int PeerConnection::Init(PeerConnectionParams params) {
   LOG_INFO("Signal server ip [{}] port [{}]", cfg_signal_server_ip_,
            cfg_signal_server_port_);
 
-  LOG_INFO("Cert fingerprint [{}]", cfg_tls_cert_fingerprint_.empty() ? "(none)" : cfg_tls_cert_fingerprint_);
+  LOG_INFO("Cert fingerprint [{}]", cfg_tls_cert_fingerprint_.empty()
+                                        ? "(none)"
+                                        : cfg_tls_cert_fingerprint_);
 
   LOG_INFO("Stun server ip [{}] port [{}]", cfg_stun_server_ip_,
            cfg_stun_server_port_);
@@ -186,7 +189,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     if (params.on_cert_fingerprint) {
       on_fingerprint_cb = [params](const std::string& fingerprint) {
         if (params.on_cert_fingerprint) {
-          params.on_cert_fingerprint(fingerprint.c_str(), params.fingerprint_user_data);
+          params.on_cert_fingerprint(fingerprint.c_str(),
+                                     params.fingerprint_user_data);
         }
       };
     }
@@ -330,11 +334,23 @@ int PeerConnection::SendAudioFrame(const char* data, size_t size,
 }
 
 int PeerConnection::SendDataFrame(const char* data, size_t size,
-                                  const char* stream_id, bool is_reliable) {
+                                  const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     if (peer_connection.second) {
-      peer_connection.second->SendDataFrame(data, size, stream_id, is_reliable);
+      peer_connection.second->SendDataFrame(data, size, stream_id);
+    }
+  }
+
+  return 0;
+}
+
+int PeerConnection::SendReliableDataFrame(const char* data, size_t size,
+                                          const char* stream_id) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  for (auto& peer_connection : peer_connection_map_) {
+    if (peer_connection.second) {
+      peer_connection.second->SendReliableDataFrame(data, size, stream_id);
     }
   }
 

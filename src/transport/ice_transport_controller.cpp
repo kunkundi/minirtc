@@ -565,8 +565,7 @@ int IceTransportController::SendAudio(const char* data, size_t size,
 }
 
 int IceTransportController::SendData(const char* data, size_t size,
-                                     const std::string& channel_name,
-                                     bool is_reliable) {
+                                     const std::string& channel_name) {
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
@@ -579,9 +578,26 @@ int IceTransportController::SendData(const char* data, size_t size,
   }
 
   context->last_active_time = clock_->CurrentTimeMs();
-  return context->transceiver->SendData(data, size, is_reliable);
 
-  return 0;
+  return context->transceiver->SendData(data, size);
+}
+
+int IceTransportController::SendReliableData(const char* data, size_t size,
+                                             const std::string& channel_name) {
+  std::shared_lock lock(stream_senders_mutex_);
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || !it->second) {
+    LOG_ERROR("Failed to find stream sender [{}]", channel_name);
+    return -1;
+  }
+  auto& context = it->second;
+  if (!CheckSteamContext(channel_name, context)) {
+    return -1;
+  }
+
+  context->last_active_time = clock_->CurrentTimeMs();
+
+  return context->transceiver->SendReliableData(data, size);
 }
 
 void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {

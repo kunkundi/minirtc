@@ -86,7 +86,9 @@ class ConnectionInterface {
   virtual int SendAudioFrame(const char* data, size_t size,
                              const char* stream_id) = 0;
   virtual int SendDataFrame(const char* data, size_t size,
-                            const char* stream_id, bool is_reliable) = 0;
+                            const char* stream_id) = 0;
+  virtual int SendReliableDataFrame(const char* data, size_t size,
+                                    const char* stream_id) = 0;
 
   virtual void ProcessIceWorkMsg(const IceWorkMsg& msg) = 0;
 };
