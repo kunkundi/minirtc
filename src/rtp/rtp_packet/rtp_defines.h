@@ -24,7 +24,8 @@ typedef enum {
   AV1 = 99,
   OPUS = 111,
   RTX = 127,
-  DATA = 120
+  DATA = 120,
+  KCP = 121
 } PAYLOAD_TYPE;
 
 typedef struct {

@@ -18,12 +18,13 @@ namespace minirtc {
 DataChannelReceive::DataChannelReceive() {}
 
 DataChannelReceive::DataChannelReceive(
-    const std::string &channel_name, uint32_t ssrc,
+    const std::string& channel_name, uint32_t ssrc,
     std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics,
-    std::function<void(const char *, size_t)> on_receive_data)
+    std::function<void(const char*, size_t)> on_receive_data, bool use_reliable)
     : channel_name_(channel_name),
       ssrc_(ssrc),
+      use_reliable_(use_reliable),
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
       on_receive_data_(on_receive_data) {}
@@ -35,51 +36,46 @@ void DataChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
 
   rtp_data_receiver_ = std::make_unique<RtpDataReceiver>(ice_io_statistics_);
 
-  rtp_data_receiver_->SetOnReceiveData(
-      [this](const char *data, size_t size) -> void {
-        const uint8_t *payload = reinterpret_cast<const uint8_t *>(data);
-        size_t len = size;
+  rtp_data_receiver_->SetOnReceiveData([this](const char* data,
+                                              size_t size) -> void {
+    if (!use_reliable_) {
+      if (on_receive_data_) {
+        on_receive_data_(data, size);
+      }
+      return;
+    } else {
+      LOG_DEBUG("KCP init receive");
+    }
 
-        bool is_kcp_frame = false;
-        if (len >= 4 && payload[0] == 'K' && payload[1] == 'C' &&
-            payload[2] == 0x01) {
-          is_kcp_frame = true;
-        }
+    if (!InitKcp()) {
+      LOG_ERROR("InitKcp failed in KCP frame path");
+      return;
+    }
 
-        if (!is_kcp_frame) {
-          if (on_receive_data_) {
-            on_receive_data_(data, size);
-          }
-          return;
-        }
+    RtpPacket rtp_packet;
+    rtp_packet.Build((uint8_t*)data, (uint32_t)size);
+    const char* kcp_seg = reinterpret_cast<const char*>(rtp_packet.Payload());
+    long kcp_len = static_cast<long>(rtp_packet.PayloadSize());
 
-        // KCP 帧：payload[4..] 为实际 KCP segment
-        if (!InitKcp()) {
-          LOG_ERROR("InitKcp failed in KCP frame path");
-          return;
-        }
+    LOG_ERROR("KCP received size [{}]", kcp_len);
+    int ret = ikcp_input(kcp_, kcp_seg, kcp_len);
+    if (ret < 0) {
+      LOG_ERROR("ikcp_input failed, ret={}", ret);
+      return;
+    }
 
-        const char *kcp_seg = reinterpret_cast<const char *>(payload + 4);
-        long kcp_len = static_cast<long>(len - 4);
+    ikcp_update(kcp_, GetCurrentTimeMs());
 
-        int ret = ikcp_input(kcp_, kcp_seg, kcp_len);
-        if (ret < 0) {
-          LOG_ERROR("ikcp_input failed, ret={}", ret);
-          return;
-        }
+    char buffer[1500];
+    int recv_len = 0;
+    while ((recv_len = ikcp_recv(kcp_, buffer, sizeof(buffer))) > 0) {
+      if (on_receive_data_) {
+        on_receive_data_(buffer, static_cast<size_t>(recv_len));
+      }
+    }
+  });
 
-        ikcp_update(kcp_, GetCurrentTimeMs());
-
-        char buffer[1500];
-        int recv_len = 0;
-        while ((recv_len = ikcp_recv(kcp_, buffer, sizeof(buffer))) > 0) {
-          if (on_receive_data_) {
-            on_receive_data_(buffer, static_cast<size_t>(recv_len));
-          }
-        }
-      });
-
-  rtp_data_receiver_->SetSendDataFunc([this](const char *data,
+  rtp_data_receiver_->SetSendDataFunc([this](const char* data,
                                              size_t size) -> int {
     if (!ice_agent_) {
       LOG_ERROR("ice_agent_ is nullptr");
@@ -105,14 +101,14 @@ void DataChannelReceive::Destroy() {
   }
 }
 
-int DataChannelReceive::OnReceiveRtpPacket(const char *data, size_t size) {
+int DataChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
   if (ice_io_statistics_) {
     ice_io_statistics_->UpdateDataInboundBytes((uint32_t)size);
   }
 
   if (rtp_data_receiver_) {
     RtpPacket rtp_packet;
-    rtp_packet.Build((uint8_t *)data, (uint32_t)size);
+    rtp_packet.Build((uint8_t*)data, (uint32_t)size);
     rtp_data_receiver_->InsertRtpPacket(rtp_packet);
   }
 
@@ -147,7 +143,7 @@ bool DataChannelReceive::InitKcp() {
   return true;
 }
 
-int DataChannelReceive::OnKcpOutput(const char *data, int len) {
+int DataChannelReceive::OnKcpOutput(const char* data, int len) {
   if (!ice_agent_) {
     LOG_ERROR("OnKcpOutput: ice_agent_ is nullptr");
     return -1;
@@ -167,14 +163,14 @@ int DataChannelReceive::OnKcpOutput(const char *data, int len) {
   return ice_agent_->Send(data, static_cast<size_t>(len));
 }
 
-int DataChannelReceive::KcpOutputCallback(const char *buf, int len, ikcpcb *kcp,
-                                          void *user) {
+int DataChannelReceive::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
+                                          void* user) {
   (void)kcp;
   if (!user || !buf || len <= 0) {
     return 0;
   }
 
-  auto *self = static_cast<DataChannelReceive *>(user);
+  auto* self = static_cast<DataChannelReceive*>(user);
   return self->OnKcpOutput(buf, len);
 }
 

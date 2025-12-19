@@ -21,10 +21,11 @@ DataChannelSend::~DataChannelSend() { Destroy(); }
 
 DataChannelSend::DataChannelSend(
     const std::string& channel_name, std::shared_ptr<IceAgent> ice_agent,
-    std::shared_ptr<IOStatistics> ice_io_statistics)
+    std::shared_ptr<IOStatistics> ice_io_statistics, bool use_reliable)
     : channel_name_(channel_name),
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
+      use_reliable_(use_reliable),
       rtp_data_sender_(std::make_unique<RtpDataSender>(ice_io_statistics)) {}
 
 void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
@@ -85,6 +86,12 @@ int DataChannelSend::SendReliableData(const char* data, size_t size) {
     return -1;
   }
 
+  if (!use_reliable_) {
+    LOG_ERROR(
+        "DataChannelSend::SendReliableData called but use_reliable_=false");
+    return -1;
+  }
+
   if (!InitKcp()) {
     return -1;
   }
@@ -132,22 +139,12 @@ int DataChannelSend::OnKcpOutput(const char* data, int len) {
     return -1;
   }
 
-  // KCP frame format
-  //  0      1      2        3        4 ...
-  // +------+------+--------+--------+-------------------+
-  // | 'K'  | 'C'  | ver=1 | flags  | KCP segment bytes |
-  // +------+------+--------+--------+-------------------+
-  std::vector<uint8_t> framed;
-  framed.resize(4 + static_cast<size_t>(len));
-  framed[0] = 'K';
-  framed[1] = 'C';
-  framed[2] = 0x01;  // version
-  framed[3] = 0x00;  // flags, reserved
-  memcpy(framed.data() + 4, data, static_cast<size_t>(len));
-
-  std::vector<std::unique_ptr<RtpPacket>> rtp_packets = rtp_packetizer_->Build(
-      framed.data(), static_cast<uint32_t>(framed.size()), 0, true);
+  std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
+      rtp_packetizer_->Build((uint8_t*)data, len, 0, true);
   rtp_data_sender_->Enqueue(rtp_packets);
+  LOG_ERROR(
+      "KCP output for data channel [{}], rtp packets num [{}], data size [{}]",
+      channel_name_, rtp_packets.size(), len);
 
   return len;
 }

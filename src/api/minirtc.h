@@ -142,7 +142,8 @@ DLLAPI int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id);
 
 DLLAPI int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id);
 
-DLLAPI int AddDataStream(PeerPtr* peer_ptr, const char* stream_id);
+DLLAPI int AddDataStream(PeerPtr* peer_ptr, const char* stream_id,
+                         bool reliable);
 
 DLLAPI int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
                           const char* stream_id);

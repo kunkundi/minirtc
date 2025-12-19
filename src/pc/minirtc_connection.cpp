@@ -207,8 +207,8 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       for (auto& stream_id : media_stream_ids_.audio) {
         ice_transport_->AddAudioStream(stream_id);
       }
-      for (auto& stream_id : media_stream_ids_.data) {
-        ice_transport_->AddDataStream(stream_id);
+      for (auto& stream_id_kv : media_stream_ids_.data) {
+        ice_transport_->AddDataStream(stream_id_kv.first, stream_id_kv.second);
       }
 
       if (info_.trickle_ice) {
@@ -268,8 +268,8 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       for (auto& stream_id : media_stream_ids_.audio) {
         ice_transport_->AddAudioStream(stream_id);
       }
-      for (auto& stream_id : media_stream_ids_.data) {
-        ice_transport_->AddDataStream(stream_id);
+      for (auto& stream_id_kv : media_stream_ids_.data) {
+        ice_transport_->AddDataStream(stream_id_kv.first, stream_id_kv.second);
       }
 
       std::string remote_sdp = msg.remote_sdp;

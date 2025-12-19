@@ -289,8 +289,8 @@ int PeerConnection::AddAudioStream(const char* stream_id) {
   return 0;
 }
 
-int PeerConnection::AddDataStream(const char* stream_id) {
-  media_stream_ids_.data.push_back(stream_id);
+int PeerConnection::AddDataStream(const char* stream_id, bool reliable) {
+  media_stream_ids_.data.insert(std::make_pair(stream_id, reliable));
   return 0;
 }
 

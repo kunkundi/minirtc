@@ -414,7 +414,8 @@ DataChannelConnection::CreateDataChannelConnection(
                    }));
     }
 
-    for (auto& data_stream_id : media_stream_ids_.data) {
+    for (auto& data_stream_id_kv : media_stream_ids_.data) {
+      std::string data_stream_id = data_stream_id_kv.first;
       dc_transport->AddDataStream(
           data_stream_id,
           AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA,

@@ -21,7 +21,8 @@ class DataChannelSend : public MediaChannel {
   DataChannelSend();
   DataChannelSend(const std::string& channel_name,
                   std::shared_ptr<IceAgent> ice_agent,
-                  std::shared_ptr<IOStatistics> ice_io_statistics);
+                  std::shared_ptr<IOStatistics> ice_io_statistics,
+                  bool use_reliable = false);
   virtual ~DataChannelSend();
 
  public:
@@ -44,7 +45,7 @@ class DataChannelSend : public MediaChannel {
 
  private:
   std::string channel_name_;
-  bool is_reliable_ = false;
+  bool use_reliable_ = false;
   std::shared_ptr<PacedSender> paced_sender_ = nullptr;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;

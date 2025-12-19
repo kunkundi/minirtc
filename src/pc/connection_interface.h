@@ -7,6 +7,7 @@
 #ifndef _CONNECTION_INTERFACE_H_
 #define _CONNECTION_INTERFACE_H_
 
+#include <map>
 #include <string>
 #include <vector>
 
@@ -17,7 +18,7 @@ namespace minirtc {
 struct MediaStreamIds {
   std::vector<std::string> video;
   std::vector<std::string> audio;
-  std::vector<std::string> data;
+  std::map<std::string, bool> data;
 };
 
 struct ConnectionInfo {

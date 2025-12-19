@@ -102,7 +102,7 @@ class IceTransport {
 
   int AddVideoStream(const std::string& stream_id);
   int AddAudioStream(const std::string& stream_id);
-  int AddDataStream(const std::string& stream_id);
+  int AddDataStream(const std::string& stream_id, bool reliable);
 
   std::vector<rtp::PAYLOAD_TYPE> GetNegotiatedCapabilities();
 
@@ -177,7 +177,7 @@ class IceTransport {
 
   std::vector<std::string> video_stream_ids_;
   std::vector<std::string> audio_stream_ids_;
-  std::vector<std::string> data_stream_ids_;
+  std::map<std::string, bool> data_stream_ids_;
 
   std::vector<std::string> remote_video_stream_ids_;
   std::vector<std::string> remote_audio_stream_ids_;
@@ -190,6 +190,7 @@ class IceTransport {
   std::map<std::string, uint32_t> video_receivers_ssrc_;
   std::map<std::string, uint32_t> audio_receivers_ssrc_;
   std::map<std::string, uint32_t> data_receivers_ssrc_;
+  std::map<std::string, bool> remote_data_stream_reliable_;
 
   std::vector<int> support_video_payload_types_;
   std::vector<int> support_audio_payload_types_;

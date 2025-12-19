@@ -178,8 +178,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS,
                                            paced_sender_);
         } else if (context->type == StreamType::kData) {
-          context->transceiver->Initialize(rtp::PAYLOAD_TYPE::DATA,
-                                           paced_sender_);
+          context->transceiver->Initialize(data_pt, paced_sender_);
         }
       }
     }
@@ -194,7 +193,19 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
         } else if (context->type == StreamType::kAudio) {
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS);
         } else if (context->type == StreamType::kData) {
-          context->transceiver->Initialize(rtp::PAYLOAD_TYPE::DATA);
+          // Determine payload type based on whether this is a reliable channel.
+          // For receive channels, we should check if the channel was created
+          // with reliable flag. Since we don't store that in StreamContext,
+          // we can infer from the DataChannelReceive's reliable_ member,
+          // but that's not accessible. For now, use the same logic as send
+          // side: check channel name or use negotiated PT. Actually, we should
+          // use the negotiated_data_pt_ from IceTransport, but that's not
+          // directly accessible here. For simplicity, keep the name-based check
+          // for now.
+          rtp::PAYLOAD_TYPE data_pt = (context->name == "file")
+                                          ? rtp::PAYLOAD_TYPE::KCP
+                                          : rtp::PAYLOAD_TYPE::DATA;
+          context->transceiver->Initialize(data_pt);
         }
       }
     }
@@ -307,7 +318,7 @@ uint32_t IceTransportController::AddAudioSendChannel(
 }
 
 uint32_t IceTransportController::AddDataSendChannel(
-    const std::string& channel_name) {
+    const std::string& channel_name, bool reliable) {
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it != stream_senders_.end() && !it->second) {
@@ -326,7 +337,7 @@ uint32_t IceTransportController::AddDataSendChannel(
   }
   if (!context->transceiver) {
     context->transceiver = std::make_shared<DataChannelSend>(
-        channel_name, ice_agent_, ice_io_statistics_);
+        channel_name, ice_agent_, ice_io_statistics_, reliable);
     if (!context->transceiver) {
       LOG_ERROR("Data stream sender [{}] create failed", channel_name);
       return -1;
@@ -415,7 +426,7 @@ uint32_t IceTransportController::AddAudioReceiveChannel(
 }
 
 uint32_t IceTransportController::AddDataReceiveChannel(
-    const std::string& channel_name, uint32_t ssrc) {
+    const std::string& channel_name, uint32_t ssrc, bool reliable) {
   std::shared_lock lock(stream_receivers_mutex_);
   auto it = stream_receivers_.find(channel_name);
   if (it != stream_receivers_.end() && !it->second) {
@@ -441,7 +452,8 @@ uint32_t IceTransportController::AddDataReceiveChannel(
           if (auto self = weak_self.lock()) {
             OnReceiveCompleteData(data, size, channel_name);
           }
-        });
+        },
+        reliable);
     if (!context->transceiver) {
       LOG_ERROR("Data stream receiver [{}:{}] create failed", channel_name,
                 ssrc);

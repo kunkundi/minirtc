@@ -90,7 +90,7 @@ class PeerConnection {
 
   int AddVideoStream(const char* stream_id);
   int AddAudioStream(const char* stream_id);
-  int AddDataStream(const char* stream_id);
+  int AddDataStream(const char* stream_id, bool reliable);
 
   int ReleaseAllIceTransmission();
 

@@ -122,12 +122,12 @@ int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id) {
   return peer_ptr->peer_connection->AddAudioStream(stream_id);
 }
 
-int AddDataStream(PeerPtr* peer_ptr, const char* stream_id) {
+int AddDataStream(PeerPtr* peer_ptr, const char* stream_id, bool reliable) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
   }
-  return peer_ptr->peer_connection->AddDataStream(stream_id);
+  return peer_ptr->peer_connection->AddDataStream(stream_id, reliable);
 }
 
 int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,

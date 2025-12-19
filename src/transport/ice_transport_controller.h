@@ -63,14 +63,14 @@ class IceTransportController
 
   uint32_t AddVideoSendChannel(const std::string& channel_name);
   uint32_t AddAudioSendChannel(const std::string& channel_name);
-  uint32_t AddDataSendChannel(const std::string& channel_name);
+  uint32_t AddDataSendChannel(const std::string& channel_name, bool reliable);
 
   uint32_t AddVideoReceiveChannel(const std::string& channel_name,
                                   uint32_t ssrc);
   uint32_t AddAudioReceiveChannel(const std::string& channel_name,
                                   uint32_t ssrc);
-  uint32_t AddDataReceiveChannel(const std::string& channel_name,
-                                 uint32_t ssrc);
+  uint32_t AddDataReceiveChannel(const std::string& channel_name, uint32_t ssrc,
+                                 bool reliable = false);
 
   int SendVideo(const XVideoFrame* video_frame,
                 const std::string& channel_name);
@@ -138,6 +138,8 @@ class IceTransportController
 
     std::shared_ptr<MediaChannel> transceiver;
     std::shared_ptr<MediaCodec> codec;
+
+    bool reliable;
   };
 
   bool CheckSteamContext(const std::string& channel_name,

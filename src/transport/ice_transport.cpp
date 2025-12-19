@@ -267,7 +267,6 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
   } else if (CheckIsAudioPacket(buffer, size)) {
     ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size, ssrc);
   } else if (CheckIsDataPacket(buffer, size)) {
-    LOG_ERROR("Receive data packet size: {}", size);
     ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size, ssrc);
   }
 }
@@ -554,7 +553,7 @@ int IceTransport::SendOffer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  // LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
+  LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send offer", user_id_, remote_user_id_);
@@ -571,7 +570,7 @@ int IceTransport::SendAnswer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  // LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
+  LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send answer", user_id_, remote_user_id_);
@@ -590,8 +589,8 @@ int IceTransport::AddAudioStream(const std::string& stream_id) {
   return 0;
 }
 
-int IceTransport::AddDataStream(const std::string& stream_id) {
-  data_stream_ids_.push_back(stream_id);
+int IceTransport::AddDataStream(const std::string& stream_id, bool reliable) {
+  data_stream_ids_.insert(std::make_pair(stream_id, reliable));
   return 0;
 }
 
@@ -601,7 +600,7 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
   std::string to_replace = "ICE/SDP";
   std::string video_capabilities = "UDP/TLS/RTP/SAVPF ";
   std::string audio_capabilities = "UDP/TLS/RTP/SAVPF 111";
-  std::string data_capabilities = "UDP/TLS/RTP/SAVPF 120";
+  std::string data_capabilities = "UDP/TLS/RTP/SAVPF 120 121";
 
   switch (prefered_video_payload_type_) {
     case rtp::PAYLOAD_TYPE::H264: {
@@ -668,11 +667,16 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
 
-  for (auto& stream_id : data_stream_ids_) {
-    uint32_t ssrc = ice_transport_controller_->AddDataSendChannel(stream_id);
+  for (const auto& kv : data_stream_ids_) {
+    const std::string& stream_id = kv.first;
+    bool reliable = kv.second;
+    uint32_t ssrc =
+        ice_transport_controller_->AddDataSendChannel(stream_id, reliable);
     video_senders_ssrc_[stream_id] = ssrc;
     data_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+    data_ssrc_lines += "a=x-reliable-data:" + std::to_string(ssrc) + " " +
+                       (reliable ? "1" : "0") + "\n";
   }
 
   auto insert_ssrc = [&](const std::string& media_tag,
@@ -732,11 +736,16 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
 
-  for (auto& stream_id : data_stream_ids_) {
-    uint32_t ssrc = ice_transport_controller_->AddDataSendChannel(stream_id);
+  for (const auto& kv : data_stream_ids_) {
+    const std::string& stream_id = kv.first;
+    bool reliable = kv.second;
+    uint32_t ssrc =
+        ice_transport_controller_->AddDataSendChannel(stream_id, reliable);
     data_senders_ssrc_[stream_id] = ssrc;
     data_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+    data_ssrc_lines += "a=x-reliable-data:" + std::to_string(ssrc) + " " +
+                       (reliable ? "1" : "0") + "\n";
   }
 
   if (ice_transport_controller_) {
@@ -788,6 +797,9 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
   std::string line;
   std::ostringstream new_sdp_block;
 
+  std::map<uint32_t, std::string> ssrc_to_sender_id;
+  std::map<uint32_t, bool> ssrc_to_reliable;
+
   while (std::getline(sdp_stream, line)) {
     if (line.find("a=ssrc:") == 0) {
       size_t ssrc_pos = strlen("a=ssrc:");
@@ -801,6 +813,7 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
       if (attribute.find("name:") == 0) {
         std::string sender_id = attribute.substr(strlen("name:"));
         ssrc_map[sender_id] = ssrc;
+        ssrc_to_sender_id[ssrc] = sender_id;
         if (media_type == "video") {
           remote_video_stream_ids_.push_back(sender_id);
         } else if (media_type == "audio") {
@@ -809,8 +822,29 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
           remote_data_stream_ids_.push_back(sender_id);
         }
       }
+    } else if (line.find("a=x-reliable-data:") == 0 && media_type == "data") {
+      size_t prefix_len = strlen("a=x-reliable-data:");
+      size_t space_pos = line.find(" ", prefix_len);
+      if (space_pos != std::string::npos) {
+        std::string ssrc_str = line.substr(prefix_len, space_pos - prefix_len);
+        std::string value_str = line.substr(space_pos + 1);
+        uint32_t ssrc = std::stoul(ssrc_str);
+        bool reliable = (value_str == "1");
+        ssrc_to_reliable[ssrc] = reliable;
+      }
     } else {
       new_sdp_block << line << "\n";
+    }
+  }
+
+  if (media_type == "data") {
+    for (const auto& kv : ssrc_to_reliable) {
+      uint32_t ssrc = kv.first;
+      bool reliable = kv.second;
+      auto it = ssrc_to_sender_id.find(ssrc);
+      if (it != ssrc_to_sender_id.end()) {
+        remote_data_stream_reliable_[it->second] = reliable;
+      }
     }
   }
 
@@ -896,8 +930,13 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
                                                         entry.second);
     }
     for (const auto& entry : data_receivers_ssrc_) {
-      ice_transport_controller_->AddDataReceiveChannel(entry.first,
-                                                       entry.second);
+      bool use_reliable = false;
+      auto it = remote_data_stream_reliable_.find(entry.first);
+      if (it != remote_data_stream_reliable_.end()) {
+        use_reliable = it->second;
+      }
+      ice_transport_controller_->AddDataReceiveChannel(
+          entry.first, entry.second, use_reliable);
     }
 
     if (!NegotiateVideoPayloadType(remote_sdp)) return std::string();
@@ -1188,7 +1227,8 @@ uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
       payload_type == rtp::PAYLOAD_TYPE::AV1 ||
       payload_type == rtp::PAYLOAD_TYPE::OPUS ||
       payload_type == rtp::PAYLOAD_TYPE::RTX ||
-      payload_type == rtp::PAYLOAD_TYPE::DATA) {
+      payload_type == rtp::PAYLOAD_TYPE::DATA ||
+      payload_type == rtp::PAYLOAD_TYPE::KCP) {
     return payload_type;
   } else if (payload_type == rtp::PAYLOAD_TYPE::H264 - 1 ||
              payload_type == rtp::PAYLOAD_TYPE::AV1 - 1 ||

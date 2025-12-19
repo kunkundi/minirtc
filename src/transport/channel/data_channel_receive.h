@@ -20,7 +20,8 @@ class DataChannelReceive : public MediaChannel {
   DataChannelReceive(const std::string &channel_name, uint32_t ssrc,
                      std::shared_ptr<IceAgent> ice_agent,
                      std::shared_ptr<IOStatistics> ice_io_statistics,
-                     std::function<void(const char *, size_t)> on_receive_data);
+                     std::function<void(const char *, size_t)> on_receive_data,
+                     bool use_reliable = false);
   virtual ~DataChannelReceive();
 
  public:
@@ -38,6 +39,7 @@ class DataChannelReceive : public MediaChannel {
  private:
   std::string channel_name_;
   uint32_t ssrc_ = 0;
+  bool use_reliable_ = false;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpDataReceiver> rtp_data_receiver_ = nullptr;
