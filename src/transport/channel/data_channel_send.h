@@ -13,8 +13,47 @@
 #include "paced_sender.h"
 #include "rtp_data_sender.h"
 #include "rtp_packetizer.h"
+#include "thread_base.h"
 
 namespace minirtc {
+
+// Internal timer class to periodically update KCP
+class KcpUpdateTimer : public ThreadBase {
+ public:
+  KcpUpdateTimer(ikcpcb* kcp, const std::string& channel_name)
+      : kcp_(kcp), channel_name_(channel_name) {
+    SetPeriod(std::chrono::milliseconds(10));  // 10ms update interval
+    SetThreadName("KcpUpdate-" + channel_name);
+  }
+
+  bool Process() override {
+    if (!kcp_) {
+      return false;
+    }
+
+    // Use monotonic clock for KCP
+    uint32_t now = GetCurrentTimeMs();
+
+    // Use ikcp_check to avoid unnecessary updates
+    uint32_t next_update = ikcp_check(kcp_, now);
+    if (now >= next_update) {
+      ikcp_update(kcp_, now);
+    }
+
+    return true;
+  }
+
+ private:
+  static uint32_t GetCurrentTimeMs() {
+    using namespace std::chrono;
+    return static_cast<uint32_t>(
+        duration_cast<milliseconds>(steady_clock::now().time_since_epoch())
+            .count());
+  }
+
+  ikcpcb* kcp_;
+  std::string channel_name_;
+};
 
 class DataChannelSend : public MediaChannel {
  public:
@@ -43,6 +82,8 @@ class DataChannelSend : public MediaChannel {
 
   void OnReceiverReport(const ReceiverReport& receiver_report) {}
 
+  int OnReceiveRtpPacket(const char* data, size_t size);
+
  private:
   std::string channel_name_;
   bool use_reliable_ = false;
@@ -52,6 +93,7 @@ class DataChannelSend : public MediaChannel {
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpDataSender> rtp_data_sender_ = nullptr;
   ikcpcb* kcp_ = nullptr;
+  std::unique_ptr<KcpUpdateTimer> kcp_update_timer_ = nullptr;
 
  private:
   bool InitKcp();

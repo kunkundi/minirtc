@@ -178,6 +178,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS,
                                            paced_sender_);
         } else if (context->type == StreamType::kData) {
+          rtp::PAYLOAD_TYPE data_pt = context->reliable
+                                          ? rtp::PAYLOAD_TYPE::KCP
+                                          : rtp::PAYLOAD_TYPE::DATA;
           context->transceiver->Initialize(data_pt, paced_sender_);
         }
       }
@@ -193,16 +196,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
         } else if (context->type == StreamType::kAudio) {
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS);
         } else if (context->type == StreamType::kData) {
-          // Determine payload type based on whether this is a reliable channel.
-          // For receive channels, we should check if the channel was created
-          // with reliable flag. Since we don't store that in StreamContext,
-          // we can infer from the DataChannelReceive's reliable_ member,
-          // but that's not accessible. For now, use the same logic as send
-          // side: check channel name or use negotiated PT. Actually, we should
-          // use the negotiated_data_pt_ from IceTransport, but that's not
-          // directly accessible here. For simplicity, keep the name-based check
-          // for now.
-          rtp::PAYLOAD_TYPE data_pt = (context->name == "file")
+          rtp::PAYLOAD_TYPE data_pt = context->reliable
                                           ? rtp::PAYLOAD_TYPE::KCP
                                           : rtp::PAYLOAD_TYPE::DATA;
           context->transceiver->Initialize(data_pt);
@@ -334,6 +328,7 @@ uint32_t IceTransportController::AddDataSendChannel(
     context->name = channel_name;
     context->type = StreamType::kData;
     context->direction = StreamDirection::kSend;
+    context->reliable = reliable;
   }
   if (!context->transceiver) {
     context->transceiver = std::make_shared<DataChannelSend>(
@@ -441,6 +436,7 @@ uint32_t IceTransportController::AddDataReceiveChannel(
     context->type = StreamType::kData;
     context->direction = StreamDirection::kReceive;
     context->ssrc = ssrc;
+    context->reliable = reliable;
     ssrc_to_name_[ssrc] = channel_name;
   }
 
@@ -701,6 +697,19 @@ int IceTransportController::OnReceiveDataRtpPacket(const char* data,
       return stream_receivers_[channel_name]->transceiver->OnReceiveRtpPacket(
           data, size);
     }
+  } else {
+    LOG_ERROR("Can not find ssrc {}", ssrc);
+  }
+
+  return -1;
+}
+
+int IceTransportController::OnReceiveDataAckRtpPacket(
+    const char* data, size_t size, uint32_t ssrc,
+    const std::string& channel_name) {
+  if (stream_senders_.find(channel_name) != stream_senders_.end()) {
+    auto data_sender_context = stream_senders_[channel_name];
+    data_sender_context->transceiver->OnReceiveRtpPacket(data, size);
   }
 
   return -1;

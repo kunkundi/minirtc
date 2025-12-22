@@ -267,6 +267,14 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
   } else if (CheckIsAudioPacket(buffer, size)) {
     ice_transport_controller_->OnReceiveAudioRtpPacket(buffer, size, ssrc);
   } else if (CheckIsDataPacket(buffer, size)) {
+    for (const auto& kv : data_senders_ssrc_) {
+      if (kv.second == ssrc) {
+        ice_transport_controller_->OnReceiveDataAckRtpPacket(buffer, size, ssrc,
+                                                             kv.first);
+        return;
+      }
+    }
+
     ice_transport_controller_->OnReceiveDataRtpPacket(buffer, size, ssrc);
   }
 }
@@ -662,7 +670,7 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
 
   for (auto& stream_id : audio_stream_ids_) {
     uint32_t ssrc = ice_transport_controller_->AddAudioSendChannel(stream_id);
-    video_senders_ssrc_[stream_id] = ssrc;
+    audio_senders_ssrc_[stream_id] = ssrc;
     audio_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
   }
@@ -672,7 +680,7 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
     bool reliable = kv.second;
     uint32_t ssrc =
         ice_transport_controller_->AddDataSendChannel(stream_id, reliable);
-    video_senders_ssrc_[stream_id] = ssrc;
+    data_senders_ssrc_[stream_id] = ssrc;
     data_ssrc_lines +=
         "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
     data_ssrc_lines += "a=x-reliable-data:" + std::to_string(ssrc) + " " +
@@ -1222,7 +1230,30 @@ uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
     return 0;
   }
 
+  // First check RTP version (must be 2)
+  uint8_t version = (buffer[0] >> 6) & 0x03;
+  if (version != 2) {
+    // Not an RTP packet, might be STUN/TURN or other protocol
+    return 0;
+  }
+
   uint8_t payload_type = buffer[1] & 0x7F;
+
+  // Debug: log unexpected PT values that might be KCP packets
+  if (payload_type == 69 || (payload_type >= 100 && payload_type <= 127 &&
+                             payload_type != rtp::PAYLOAD_TYPE::H264 &&
+                             payload_type != rtp::PAYLOAD_TYPE::AV1 &&
+                             payload_type != rtp::PAYLOAD_TYPE::OPUS &&
+                             payload_type != rtp::PAYLOAD_TYPE::RTX &&
+                             payload_type != rtp::PAYLOAD_TYPE::DATA &&
+                             payload_type != rtp::PAYLOAD_TYPE::KCP)) {
+    LOG_ERROR(
+        "CheckIsRtpPacket: PT={}, version={}, buffer[0]=0x{:02X}, "
+        "buffer[1]=0x{:02X}, size={}",
+        payload_type, version, static_cast<uint8_t>(buffer[0]),
+        static_cast<uint8_t>(buffer[1]), size);
+  }
+
   if (payload_type == rtp::PAYLOAD_TYPE::H264 ||
       payload_type == rtp::PAYLOAD_TYPE::AV1 ||
       payload_type == rtp::PAYLOAD_TYPE::OPUS ||
@@ -1310,7 +1341,7 @@ uint8_t IceTransport::CheckIsDataPacket(const char* buffer, size_t size) {
   }
 
   uint8_t pt = buffer[1] & 0x7F;
-  if (rtp::PAYLOAD_TYPE::DATA == pt) {
+  if (rtp::PAYLOAD_TYPE::DATA == pt || rtp::PAYLOAD_TYPE::KCP == pt) {
     return pt;
   } else {
     return 0;

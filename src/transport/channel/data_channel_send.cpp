@@ -1,6 +1,7 @@
 #include "data_channel_send.h"
 
 #include <chrono>
+#include <thread>
 
 #include "log.h"
 
@@ -55,6 +56,12 @@ void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
 }
 
 void DataChannelSend::Destroy() {
+  // Stop KCP update timer first
+  if (kcp_update_timer_) {
+    kcp_update_timer_->Stop();
+    kcp_update_timer_.reset();
+  }
+
   if (rtp_data_sender_) {
     rtp_data_sender_->Stop();
   }
@@ -102,7 +109,6 @@ int DataChannelSend::SendReliableData(const char* data, size_t size) {
     return ret;
   }
 
-  ikcp_update(kcp_, GetCurrentTimeMs());
   return 0;
 }
 
@@ -124,12 +130,17 @@ bool DataChannelSend::InitKcp() {
   }
 
   ikcp_nodelay(kcp_, 1, 10, 2, 1);
-  ikcp_wndsize(kcp_, 128, 128);
+  // Increase send/receive window to handle large fragmented messages
+  ikcp_wndsize(kcp_, 256, 256);
   ikcp_setmtu(kcp_, 1200);
   kcp_->output = &DataChannelSend::KcpOutputCallback;
 
-  LOG_INFO("KCP initialized for data channel [{}], conv={}", channel_name_,
-           conv);
+  // Create and start periodic update timer for this KCP instance
+  kcp_update_timer_ = std::make_unique<KcpUpdateTimer>(kcp_, channel_name_);
+  kcp_update_timer_->Start();
+
+  LOG_INFO("KCP initialized for data channel [{}], conv={}, ssrc={}",
+           channel_name_, conv, GetSsrc());
   return true;
 }
 
@@ -141,10 +152,8 @@ int DataChannelSend::OnKcpOutput(const char* data, int len) {
 
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
       rtp_packetizer_->Build((uint8_t*)data, len, 0, true);
+
   rtp_data_sender_->Enqueue(rtp_packets);
-  LOG_ERROR(
-      "KCP output for data channel [{}], rtp packets num [{}], data size [{}]",
-      channel_name_, rtp_packets.size(), len);
 
   return len;
 }
@@ -158,5 +167,20 @@ int DataChannelSend::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
 
   auto* self = static_cast<DataChannelSend*>(user);
   return self->OnKcpOutput(buf, len);
+}
+
+int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {
+  RtpPacket rtp_packet;
+  rtp_packet.Build((uint8_t*)data, (uint32_t)size);
+
+  int ret = ikcp_input(kcp_, (const char*)rtp_packet.Payload(),
+                       static_cast<long>(rtp_packet.PayloadSize()));
+  if (ret < 0) {
+    LOG_ERROR("ikcp_input failed, ret={}, size={}, conv={}", ret, size,
+              kcp_->conv);
+    return -1;
+  }
+
+  return 0;
 }
 }  // namespace minirtc
