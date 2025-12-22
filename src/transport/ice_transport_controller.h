@@ -36,11 +36,11 @@
 #include "video_encoder_factory.h"
 
 typedef void (*OnReceiveVideo)(const XVideoFrame*, const char*, const size_t,
-                               void*);
+                               const char*, const size_t, void*);
 typedef void (*OnReceiveAudio)(const char*, size_t, const char*, const size_t,
-                               void*);
+                               const char*, const size_t, void*);
 typedef void (*OnReceiveData)(const char*, size_t, const char*, const size_t,
-                              void*);
+                              const char*, const size_t, void*);
 
 namespace minirtc {
 class IceTransportController

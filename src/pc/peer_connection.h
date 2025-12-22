@@ -26,10 +26,11 @@
 namespace minirtc {
 
 typedef void (*OnReceiveBuffer)(const char*, size_t, const char*, const size_t,
-                                void*);
+                                const char*, const size_t, void*);
 
 typedef void (*OnReceiveVideoFrame)(const XVideoFrame* video_frame, const char*,
-                                    const size_t, void*);
+                                    const size_t, const char*, const size_t,
+                                    void*);
 
 typedef void (*OnSignalStatus)(SignalStatus, const char*, const size_t, void*);
 

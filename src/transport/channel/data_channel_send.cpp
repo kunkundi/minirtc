@@ -121,6 +121,7 @@ bool DataChannelSend::InitKcp() {
   if (conv == 0) {
     conv =
         static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this) & 0xffffffffu);
+    LOG_ERROR("KCP conv fallback to object address, channel={}", channel_name_);
   }
 
   kcp_ = ikcp_create(conv, this);
@@ -130,7 +131,6 @@ bool DataChannelSend::InitKcp() {
   }
 
   ikcp_nodelay(kcp_, 1, 10, 2, 1);
-  // Increase send/receive window to handle large fragmented messages
   ikcp_wndsize(kcp_, 256, 256);
   ikcp_setmtu(kcp_, 1200);
   kcp_->output = &DataChannelSend::KcpOutputCallback;
@@ -153,6 +153,13 @@ int DataChannelSend::OnKcpOutput(const char* data, int len) {
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
       rtp_packetizer_->Build((uint8_t*)data, len, 0, true);
 
+  if (rtp_packets.size() > 1) {
+    LOG_ERROR(
+        "KCP output segment split into {} RTP packets (violates rule 15), "
+        "len={}, conv={}",
+        rtp_packets.size(), len, kcp_->conv);
+  }
+
   rtp_data_sender_->Enqueue(rtp_packets);
 
   return len;
@@ -170,6 +177,21 @@ int DataChannelSend::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
 }
 
 int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {
+  if (!use_reliable_) {
+    LOG_ERROR("OnReceiveRtpPacket called but use_reliable_=false");
+    return -1;
+  }
+
+  if (!InitKcp()) {
+    LOG_ERROR("InitKcp failed in OnReceiveRtpPacket");
+    return -1;
+  }
+
+  if (!kcp_) {
+    LOG_ERROR("kcp_ is nullptr after InitKcp");
+    return -1;
+  }
+
   RtpPacket rtp_packet;
   rtp_packet.Build((uint8_t*)data, (uint32_t)size);
 
@@ -180,6 +202,9 @@ int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {
               kcp_->conv);
     return -1;
   }
+
+  uint32_t now = GetCurrentTimeMs();
+  ikcp_update(kcp_, now);
 
   return 0;
 }

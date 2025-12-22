@@ -542,14 +542,15 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     std::cout << "[DataChannel closed: " << dc->label() << "]" << std::endl;
   });
 
-  dc->onMessage([msid, wdc = std::weak_ptr(dc),
+  dc->onMessage([msid, cname, wdc = std::weak_ptr(dc),
                  callbacks](std::variant<::rtc::binary, std::string> msg) {
     if (callbacks.on_receive_data_buffer) {
       if (std::holds_alternative<std::string>(msg)) {
         const auto& str = std::get<std::string>(msg);
         // LOG_INFO("[DataChannel receive: {}]", str);
         callbacks.on_receive_data_buffer(str.data(), str.size(), msid.data(),
-                                         msid.size(), callbacks.user_data);
+                                         msid.size(), cname.data(),
+                                         cname.size(), callbacks.user_data);
       }
     }
   });

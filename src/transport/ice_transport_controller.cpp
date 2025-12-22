@@ -733,7 +733,8 @@ void IceTransportController::OnReceiveCompleteFrame(
       return;
     } else {
       int num_frame_returned = context->codec->Decode(
-          std::move(received_frame), [this](const DecodedFrame* decoded_frame) {
+          std::move(received_frame),
+          [this, channel_name](const DecodedFrame* decoded_frame) {
             if (on_receive_video_ && decoded_frame) {
               XVideoFrame x_video_frame;
               x_video_frame.data = (const char*)decoded_frame->Buffer();
@@ -749,7 +750,8 @@ void IceTransportController::OnReceiveCompleteFrame(
 
               if (on_receive_video_) {
                 on_receive_video_(&x_video_frame, remote_user_id_.data(),
-                                  remote_user_id_.size(), user_data_);
+                                  remote_user_id_.size(), channel_name.data(),
+                                  channel_name.size(), user_data_);
               }
             }
           });
@@ -770,10 +772,11 @@ void IceTransportController::OnReceiveCompleteAudio(
     return;
   } else {
     int num_frame_returned = context->codec->Decode(
-        (uint8_t*)data, size, [this](uint8_t* data, int size) {
+        (uint8_t*)data, size, [this, channel_name](uint8_t* data, int size) {
           if (on_receive_audio_) {
             on_receive_audio_((const char*)data, size, remote_user_id_.data(),
-                              remote_user_id_.size(), user_data_);
+                              remote_user_id_.size(), channel_name.data(),
+                              channel_name.size(), user_data_);
           }
         });
   }
@@ -783,7 +786,7 @@ void IceTransportController::OnReceiveCompleteData(
     const char* data, size_t size, const std::string& channel_name) {
   if (on_receive_data_) {
     on_receive_data_(data, size, remote_user_id_.data(), remote_user_id_.size(),
-                     user_data_);
+                     channel_name.data(), channel_name.size(), user_data_);
   }
 }
 

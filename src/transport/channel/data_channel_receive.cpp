@@ -80,9 +80,9 @@ void DataChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
           return;
         }
 
-        // Try to receive immediately in case data is ready
-        // (The periodic timer will also handle this, but this gives lower
-        // latency)
+        uint32_t now = GetCurrentTimeMs();
+        ikcp_update(kcp_, now);
+
         TryReceiveKcpData();
       });
 
@@ -146,6 +146,7 @@ bool DataChannelReceive::InitKcp() {
   if (conv == 0) {
     conv =
         static_cast<uint32_t>(reinterpret_cast<uintptr_t>(this) & 0xffffffffu);
+    LOG_ERROR("KCP conv fallback to object address, channel={}", channel_name_);
   }
 
   kcp_ = ikcp_create(conv, this);
@@ -155,10 +156,8 @@ bool DataChannelReceive::InitKcp() {
   }
 
   ikcp_nodelay(kcp_, 1, 10, 2, 1);
-  // Increase receive window to handle large fragmented messages
   ikcp_wndsize(kcp_, 256, 256);
   ikcp_setmtu(kcp_, 1200);
-
   kcp_->output = &DataChannelReceive::KcpOutputCallback;
 
   // Create and start periodic update timer for this KCP instance
@@ -178,15 +177,17 @@ int DataChannelReceive::OnKcpOutput(const char* data, int len) {
     return -1;
   }
 
-  // Pack KCP segment (ACK/control packets) into RTP packets, same as send side
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
       rtp_packetizer_->Build((uint8_t*)data, len, 0, true);
 
+  if (rtp_packets.size() > 1) {
+    LOG_ERROR(
+        "KCP output segment split into {} RTP packets (violates rule 15), "
+        "len={}, conv={}, channel={}",
+        rtp_packets.size(), len, kcp_->conv, channel_name_);
+  }
+
   rtp_data_sender_->Enqueue(rtp_packets);
-  LOG_ERROR(
-      "KCP output (receive side) for data channel [{}], rtp packets num [{}], "
-      "data size [{}], ssrc [{}]",
-      channel_name_, rtp_packets.size(), len, ssrc_);
 
   return len;
 }
@@ -384,8 +385,11 @@ void DataChannelReceive::TryReceiveKcpData() {
     size_t old_size = receive_buffer_.size();
     receive_buffer_.resize(old_size + recv_len);
     memcpy(receive_buffer_.data() + old_size, buffer.data(), recv_len);
+  }
 
-    // Update KCP after receiving to process any pending operations
+  // Update KCP once after receiving all available data
+  // This is more efficient than updating after each recv
+  if (total_received > 0) {
     ikcp_update(kcp_, GetCurrentTimeMs());
   }
 
