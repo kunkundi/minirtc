@@ -46,12 +46,11 @@ class KcpUpdateTimerReceive : public ThreadBase {
     }
 
     // Always try to receive data, even if update wasn't needed
-    // Data may be ready even if no update/ACK/retransmission is needed
     if (on_update_callback_) {
       on_update_callback_();
     }
 
-    return true;  // Continue running
+    return true;
   }
 
  private:
@@ -102,23 +101,13 @@ class DataChannelReceive : public MediaChannel {
   ikcpcb* kcp_ = nullptr;
   std::unique_ptr<KcpUpdateTimerReceive> kcp_update_timer_ = nullptr;
 
-  // Buffer to accumulate KCP byte stream for message boundary parsing
-  // KCP provides a byte stream, not message boundaries, so we need to
-  // accumulate data until we have complete messages
-  std::vector<char> receive_buffer_;
-
  private:
   bool InitKcp();
   int OnKcpOutput(const char* data, int len);
   static int KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
                                void* user);
 
-  // Called periodically by kcp_update_timer_ to receive data
   void TryReceiveKcpData();
-
-  // Process accumulated data in receive_buffer_ and extract complete messages
-  // This handles the case where KCP returns partial messages
-  void ProcessReceiveBuffer();
 };
 }  // namespace minirtc
 

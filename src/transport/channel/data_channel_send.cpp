@@ -178,12 +178,11 @@ int DataChannelSend::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
 
 int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {
   if (!use_reliable_) {
-    LOG_ERROR("OnReceiveRtpPacket called but use_reliable_=false");
     return -1;
   }
 
   if (!InitKcp()) {
-    LOG_ERROR("InitKcp failed in OnReceiveRtpPacket");
+    LOG_ERROR("InitKcp failed");
     return -1;
   }
 

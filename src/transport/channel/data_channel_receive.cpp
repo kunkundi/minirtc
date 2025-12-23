@@ -203,203 +203,35 @@ int DataChannelReceive::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
   return self->OnKcpOutput(buf, len);
 }
 
-void DataChannelReceive::ProcessReceiveBuffer() {
-  if (!on_receive_data_) {
-    return;
-  }
-
-  // Process complete messages from the accumulated buffer
-  // KCP is a byte stream, so we need to parse message boundaries
-  // For file transfer protocol, we parse FileChunkHeader to determine
-  // boundaries For other data (e.g., JSON), we deliver as-is if no file magic
-  // is found
-
-  constexpr size_t kMinHeaderSize =
-      31;  // sizeof(FileChunkHeader) = 4+4+8+8+4+2+1 = 31
-  constexpr uint32_t kFileChunkMagic = 0x4A4E544D;  // 'JNTM'
-
-  // Keep processing until no more complete messages can be extracted
-  // and no more data can be read from KCP
-  constexpr size_t kRecvBufferSize = 64 * 1024;
-  std::vector<char> temp_buffer(kRecvBufferSize);
-  bool made_progress = true;
-
-  while (made_progress) {
-    made_progress = false;
-
-    // Process all complete messages in the buffer
-    while (receive_buffer_.size() >= kMinHeaderSize) {
-      // Check magic to find message start
-      uint32_t magic = 0;
-      memcpy(&magic, receive_buffer_.data(), sizeof(uint32_t));
-
-      if (magic != kFileChunkMagic) {
-        // Not a file chunk, might be other data (e.g., JSON)
-        // Try to find the magic in the buffer (skip up to 1KB to avoid scanning
-        // too much)
-        bool found = false;
-        size_t search_limit =
-            std::min<size_t>(1024, receive_buffer_.size() - kMinHeaderSize);
-        for (size_t i = 1; i <= search_limit; ++i) {
-          memcpy(&magic, receive_buffer_.data() + i, sizeof(uint32_t));
-          if (magic == kFileChunkMagic) {
-            // Found magic, remove data before it (might be incomplete JSON or
-            // other data)
-            LOG_ERROR(
-                "ProcessReceiveBuffer: found file magic at offset {}, removing "
-                "{} "
-                "bytes of non-file data, conv={}",
-                i, i, kcp_->conv);
-            receive_buffer_.erase(receive_buffer_.begin(),
-                                  receive_buffer_.begin() + i);
-            found = true;
-            break;
-          }
-        }
-        if (!found) {
-          // No magic found in reasonable range, might be non-file data
-          // Deliver a chunk (up to 64KB) and let application layer handle it
-          size_t deliver_size =
-              std::min<size_t>(64 * 1024, receive_buffer_.size());
-          if (on_receive_data_) {
-            on_receive_data_(receive_buffer_.data(), deliver_size);
-          }
-          receive_buffer_.erase(receive_buffer_.begin(),
-                                receive_buffer_.begin() + deliver_size);
-          continue;
-        }
-        // Continue to parse the message after removing non-file data
-      }
-
-      // Parse FileChunkHeader (packed structure, 31 bytes)
-      // Use pragma pack for cross-platform compatibility (MSVC and GCC/Clang)
-#pragma pack(push, 1)
-      struct FileChunkHeader {
-        uint32_t magic;
-        uint32_t file_id;
-        uint64_t offset;
-        uint64_t total_size;
-        uint32_t chunk_size;
-        uint16_t name_len;
-        uint8_t flags;
-      } header;
-#pragma pack(pop)
-
-      if (receive_buffer_.size() < sizeof(FileChunkHeader)) {
-        break;  // Not enough data for header
-      }
-
-      memcpy(&header, receive_buffer_.data(), sizeof(FileChunkHeader));
-
-      size_t header_and_name =
-          sizeof(FileChunkHeader) + static_cast<size_t>(header.name_len);
-      size_t total_message_size =
-          header_and_name + static_cast<size_t>(header.chunk_size);
-
-      if (receive_buffer_.size() < total_message_size) {
-        // Incomplete message, wait for more data
-        LOG_ERROR(
-            "ProcessReceiveBuffer: incomplete message, need {} bytes, have {} "
-            "bytes, file_id={}, chunk_size={}, conv={}",
-            total_message_size, receive_buffer_.size(), header.file_id,
-            header.chunk_size, kcp_->conv);
-        break;
-      }
-
-      // Complete message found, deliver it
-      if (on_receive_data_) {
-        on_receive_data_(receive_buffer_.data(), total_message_size);
-      }
-
-      LOG_ERROR(
-          "ProcessReceiveBuffer: delivered complete message, size={}, "
-          "file_id={}, offset={}, remaining_buffer={}, conv={}",
-          total_message_size, header.file_id, header.offset,
-          receive_buffer_.size() - total_message_size, kcp_->conv);
-
-      // Remove processed message from buffer
-      receive_buffer_.erase(receive_buffer_.begin(),
-                            receive_buffer_.begin() + total_message_size);
-      made_progress = true;
-    }
-
-    // After processing messages, try to read more data from KCP
-    // This is important for large files where multiple chunks are sent
-    // KCP might have more data ready after we processed the current buffer
-    if (kcp_) {
-      // Try to read more data from KCP (might be ready after processing)
-      while (true) {
-        int recv_len = ikcp_recv(kcp_, temp_buffer.data(),
-                                 static_cast<int>(temp_buffer.size()));
-        if (recv_len <= 0) {
-          break;
-        }
-
-        size_t old_size = receive_buffer_.size();
-        receive_buffer_.resize(old_size + recv_len);
-        memcpy(receive_buffer_.data() + old_size, temp_buffer.data(), recv_len);
-
-        // Update KCP after receiving
-        ikcp_update(kcp_, GetCurrentTimeMs());
-        made_progress = true;
-
-        LOG_ERROR(
-            "ProcessReceiveBuffer: read additional {} bytes from KCP, "
-            "total_buffer={}, conv={}",
-            recv_len, receive_buffer_.size(), kcp_->conv);
-      }
-    }
-  }
-}
-
 void DataChannelReceive::TryReceiveKcpData() {
   if (!kcp_ || !on_receive_data_) {
     return;
   }
 
-  // 按 KCP 推荐方式：不停调用 ikcp_recv，直到返回 < 0
-  // 不再依赖 ikcp_peeksize（在 stream 模式下语义不稳定）
-  constexpr size_t kRecvBufferSize = 64 * 1024;  // 单次读取最大 64KB
-  std::vector<char> buffer(kRecvBufferSize);
   int total_received = 0;
 
   while (true) {
+    // Get next message size
+    int peek_size = ikcp_peeksize(kcp_);
+    if (peek_size < 0) {
+      break;
+    }
+
+    std::vector<char> buffer(static_cast<size_t>(peek_size));
     int recv_len =
         ikcp_recv(kcp_, buffer.data(), static_cast<int>(buffer.size()));
     if (recv_len <= 0) {
-      break;  // No more data or error
+      break;
     }
 
     total_received += recv_len;
-    LOG_ERROR(
-        "TryReceiveKcpData: recv_len={}, total_received={}, conv={}, "
-        "first_bytes=0x{:02X}{:02X}{:02X}{:02X}",
-        recv_len, total_received, kcp_->conv,
-        recv_len > 0 ? static_cast<uint8_t>(buffer[0]) : 0,
-        recv_len > 1 ? static_cast<uint8_t>(buffer[1]) : 0,
-        recv_len > 2 ? static_cast<uint8_t>(buffer[2]) : 0,
-        recv_len > 3 ? static_cast<uint8_t>(buffer[3]) : 0);
-
-    // Accumulate data in receive buffer (KCP is a byte stream, not
-    // message-based). We need to accumulate until we have complete messages.
-    size_t old_size = receive_buffer_.size();
-    receive_buffer_.resize(old_size + recv_len);
-    memcpy(receive_buffer_.data() + old_size, buffer.data(), recv_len);
+    if (on_receive_data_) {
+      on_receive_data_(buffer.data(), static_cast<size_t>(recv_len));
+    }
   }
 
-  // Update KCP once after receiving all available data
-  // This is more efficient than updating after each recv
   if (total_received > 0) {
     ikcp_update(kcp_, GetCurrentTimeMs());
-  }
-
-  // Process accumulated data to extract complete messages
-  if (total_received > 0) {
-    LOG_ERROR(
-        "KCP recv: total_received={} bytes in TryReceiveKcpData, conv={}, "
-        "buffer_size={}",
-        total_received, kcp_->conv, receive_buffer_.size());
-    ProcessReceiveBuffer();
   }
 }
 
