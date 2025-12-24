@@ -1,5 +1,8 @@
 #include "ice_transport_controller.h"
 
+#include <memory>
+
+#include "data_channel_send.h"
 #include "video_frame_wrapper.h"
 
 #if defined(__APPLE__)
@@ -169,7 +172,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 
   {
     std::shared_lock lock(stream_senders_mutex_);
-    for (auto& [_, context] : stream_senders_) {
+    for (auto& [channel_name, context] : stream_senders_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
           context->transceiver->Initialize(video_codec_payload_type,
@@ -182,6 +185,30 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                           ? rtp::PAYLOAD_TYPE::KCP
                                           : rtp::PAYLOAD_TYPE::DATA;
           context->transceiver->Initialize(data_pt, paced_sender_);
+
+          // Set callback to track actual sent data for reliable data channels
+          if (context->reliable) {
+            auto data_channel = std::dynamic_pointer_cast<DataChannelSend>(
+                context->transceiver);
+            if (data_channel) {
+              std::weak_ptr<IceTransportController> weak_this =
+                  shared_from_this();
+              std::string channel_name_copy = channel_name;
+              data_channel->SetOnSentCallback(
+                  [weak_this, channel_name_copy](uint32_t payload_bytes) {
+                    // This callback is called when data is actually sent to
+                    // network
+                    auto self = weak_this.lock();
+                    if (self) {
+                      std::shared_lock lock(self->stream_senders_mutex_);
+                      auto it = self->stream_senders_.find(channel_name_copy);
+                      if (it != self->stream_senders_.end() && it->second) {
+                        it->second->actual_sent_bytes_ += payload_bytes;
+                      }
+                    }
+                  });
+            }
+          }
         }
       }
     }
@@ -606,6 +633,17 @@ int IceTransportController::SendReliableData(const char* data, size_t size,
   context->last_active_time = clock_->CurrentTimeMs();
 
   return context->transceiver->SendReliableData(data, size);
+}
+
+uint64_t IceTransportController::GetDataChannelSentBytes(
+    const std::string& channel_name) {
+  std::shared_lock lock(stream_senders_mutex_);
+  auto it = stream_senders_.find(channel_name);
+  if (it != stream_senders_.end() && it->second &&
+      it->second->type == StreamType::kData) {
+    return it->second->actual_sent_bytes_.load();
+  }
+  return 0;
 }
 
 void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
@@ -1116,51 +1154,91 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   }
 
   if (update.target_rate) {
-    int target_bitrate = update.target_rate.has_value()
-                             ? (update.target_rate->target_rate.bps() == 0
-                                    ? target_bitrate_
-                                    : update.target_rate->target_rate.bps())
-                             : target_bitrate_;
+    available_transport_bitrate_ =
+        update.target_rate.has_value()
+            ? (update.target_rate->target_rate.bps() == 0
+                   ? target_bitrate_
+                   : update.target_rate->target_rate.bps())
+            : target_bitrate_;
     std::shared_lock lock(stream_senders_mutex_);
-    if (target_bitrate != target_bitrate_ && !stream_senders_.empty()) {
-      target_bitrate_ = target_bitrate;
+    if (available_transport_bitrate_ != target_bitrate_ &&
+        !stream_senders_.empty()) {
+      target_bitrate_ = available_transport_bitrate_;
 
-      int count = 0;
+      // Count active video and data channels separately
+      int video_count = 0;
+      int data_count = 0;
       for (auto& [_, context] : stream_senders_) {
         if (context->last_active_time.has_value()) {
           if (clock_->CurrentTimeMs() - context->last_active_time.value() <
               100) {
-            count++;
+            if (context->type == StreamType::kVideo) {
+              video_count++;
+            } else if (context->type == StreamType::kData) {
+              data_count++;
+            }
           }
         }
       }
 
-      if (count == 0) {
+      if (video_count == 0 && data_count == 0) {
         return;
       }
 
-      int sub_target_bitrate = target_bitrate / count;
-      for (auto& [channel_name, context] : stream_senders_) {
-        if (context->codec && context->type == StreamType::kVideo) {
-          int width, height, target_width, target_height;
-          if (!context->codec->GetResolution(&width, &height)) {
-            if (0 == resolution_adapter_->GetResolution(
-                         sub_target_bitrate, width, height, &target_width,
-                         &target_height)) {
-              if (target_width != context->target_width ||
-                  target_height != context->target_height) {
-                context->target_width = target_width;
-                context->target_height = target_height;
-                b_force_i_frame_ = true;
+      // Allocate bandwidth: reserve 10% for all data channels
+      // The rest goes to video channels
+      int64_t data_bitrate_total = 0;
+      int64_t video_bitrate_total = available_transport_bitrate_;
+
+      if (data_count > 0) {
+        // All data channels together use 10% of total bandwidth
+        data_bitrate_total =
+            static_cast<int64_t>(available_transport_bitrate_ * 0.1);
+        video_bitrate_total = available_transport_bitrate_ - data_bitrate_total;
+      }
+
+      // Allocate bandwidth to video channels
+      if (video_count > 0) {
+        int sub_target_bitrate = video_bitrate_total / video_count;
+        for (auto& [channel_name, context] : stream_senders_) {
+          if (context->codec && context->type == StreamType::kVideo) {
+            int width, height, target_width, target_height;
+            if (!context->codec->GetResolution(&width, &height)) {
+              if (0 == resolution_adapter_->GetResolution(
+                           sub_target_bitrate, width, height, &target_width,
+                           &target_height)) {
+                if (target_width != context->target_width ||
+                    target_height != context->target_height) {
+                  context->target_width = target_width;
+                  context->target_height = target_height;
+                  b_force_i_frame_ = true;
+                }
+              } else if (context->target_width.has_value() &&
+                         context->target_height.has_value()) {
+                context->target_width.reset();
+                context->target_height.reset();
               }
-            } else if (context->target_width.has_value() &&
-                       context->target_height.has_value()) {
-              context->target_width.reset();
-              context->target_height.reset();
+            }
+            context->codec->SetTargetBitrate(sub_target_bitrate);
+            // LOG_WARN("Set target bitrate [{}]bps", sub_target_bitrate);
+          }
+        }
+      }
+
+      // Allocate bandwidth to data channels
+      if (data_count > 0) {
+        int64_t data_bitrate_per_channel = data_bitrate_total / data_count;
+        for (auto& [channel_name, context] : stream_senders_) {
+          if (context->type == StreamType::kData && context->transceiver) {
+            // Cast to DataChannelSend to call SetTargetBitrate
+            auto data_channel = std::dynamic_pointer_cast<DataChannelSend>(
+                context->transceiver);
+            if (data_channel) {
+              data_channel->SetTargetBitrate(data_bitrate_per_channel);
+              // LOG_INFO("Set data channel [{}] target bitrate [{}]bps",
+              //          channel_name, data_bitrate_per_channel);
             }
           }
-          context->codec->SetTargetBitrate(sub_target_bitrate);
-          // LOG_WARN("Set target bitrate [{}]bps", sub_target_bitrate);
         }
       }
     }

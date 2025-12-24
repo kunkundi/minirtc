@@ -89,6 +89,8 @@ class IceTransport {
   int SendReliableDataFrame(const char* data, size_t size,
                             const std::string& stream_name);
 
+  uint64_t GetDataChannelSentBytes(const std::string& channel_name);
+
  public:
   int GatherCandidates();
 

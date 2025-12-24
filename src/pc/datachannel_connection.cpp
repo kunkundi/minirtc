@@ -133,6 +133,14 @@ int DataChannelConnection::SendReliableDataFrame(const char* data, size_t size,
   return SendDataFrame(data, size, stream_id);
 }
 
+uint64_t DataChannelConnection::GetDataChannelSentBytes(
+    const char* stream_id) {
+  // DataChannelConnection uses libdatachannel which doesn't provide
+  // sent bytes tracking. Return 0 to indicate this feature is not available.
+  (void)stream_id;
+  return 0;
+}
+
 void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
   switch (msg.type) {
     case IceWorkMsg::Type::Login: {

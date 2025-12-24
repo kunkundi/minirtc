@@ -159,6 +159,18 @@ int MiniRTCConnection::SendReliableDataFrame(const char* data, size_t size,
   return 0;
 }
 
+uint64_t MiniRTCConnection::GetDataChannelSentBytes(const char* stream_id) {
+  if (!ice_transport_) {
+    return 0;
+  }
+
+  if (!is_ice_transport_ready_) {
+    return 0;
+  }
+
+  return ice_transport_->GetDataChannelSentBytes(stream_id);
+}
+
 void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
   switch (msg.type) {
     case IceWorkMsg::Type::Login: {

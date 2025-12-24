@@ -80,6 +80,10 @@ class DataChannelSend : public MediaChannel {
 
   int SendReliableData(const char* data, size_t size) override;
 
+  void SetTargetBitrate(int64_t target_bitrate_bps);
+
+  void SetOnSentCallback(std::function<void(uint32_t payload_bytes)> on_sent_callback);
+
   void OnReceiverReport(const ReceiverReport& receiver_report) {}
 
   int OnReceiveRtpPacket(const char* data, size_t size);
@@ -94,6 +98,7 @@ class DataChannelSend : public MediaChannel {
   std::unique_ptr<RtpDataSender> rtp_data_sender_ = nullptr;
   ikcpcb* kcp_ = nullptr;
   std::unique_ptr<KcpUpdateTimer> kcp_update_timer_ = nullptr;
+  std::function<void(uint32_t payload_bytes)> on_sent_callback_ = nullptr;
 
  private:
   bool InitKcp();

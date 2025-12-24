@@ -103,7 +103,9 @@ class PeerConnection {
   int SendAudioFrame(const char* data, size_t size, const char* stream_id);
   int SendDataFrame(const char* data, size_t size, const char* stream_id);
   int SendReliableDataFrame(const char* data, size_t size,
-                            const char* stream_id);
+                           const char* stream_id);
+
+  uint64_t GetDataChannelSentBytes(const char* stream_id);
 
   int64_t GetSystemTimeMicros();
 

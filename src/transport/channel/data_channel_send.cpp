@@ -52,6 +52,13 @@ void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
         return ice_agent_->Send(data, size);
       });
 
+  // Set callback to track actual sent data
+  rtp_data_sender_->SetOnSentCallback([this](uint32_t payload_bytes) {
+    if (on_sent_callback_) {
+      on_sent_callback_(payload_bytes);
+    }
+  });
+
   rtp_data_sender_->Start();
 }
 
@@ -174,6 +181,17 @@ int DataChannelSend::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
 
   auto* self = static_cast<DataChannelSend*>(user);
   return self->OnKcpOutput(buf, len);
+}
+
+void DataChannelSend::SetTargetBitrate(int64_t target_bitrate_bps) {
+  if (rtp_data_sender_) {
+    rtp_data_sender_->SetTargetBitrate(target_bitrate_bps);
+  }
+}
+
+void DataChannelSend::SetOnSentCallback(
+    std::function<void(uint32_t payload_bytes)> on_sent_callback) {
+  on_sent_callback_ = on_sent_callback;
 }
 
 int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {

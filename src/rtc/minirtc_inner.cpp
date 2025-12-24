@@ -201,6 +201,15 @@ int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
   return 0;
 }
 
+uint64_t GetDataChannelSentBytes(PeerPtr* peer_ptr, const char* stream_id) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return 0;
+  }
+
+  return peer_ptr->peer_connection->GetDataChannelSentBytes(stream_id);
+}
+
 int64_t GetSystemTimeMicros(PeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");

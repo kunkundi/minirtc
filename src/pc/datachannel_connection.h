@@ -41,6 +41,8 @@ class DataChannelConnection : public ConnectionInterface {
   int SendReliableDataFrame(const char* data, size_t size,
                             const char* stream_id) override;
 
+  uint64_t GetDataChannelSentBytes(const char* stream_id) override;
+
   void ProcessIceWorkMsg(const IceWorkMsg& msg) override;
 
  private:
