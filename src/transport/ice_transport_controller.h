@@ -79,9 +79,6 @@ class IceTransportController
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);
 
-  // Get actual sent bytes for a data channel (bytes actually sent to network)
-  uint64_t GetDataChannelSentBytes(const std::string& channel_name);
-
   void FullIntraRequest() { b_force_i_frame_ = true; }
 
   void UpdateNetworkAvaliablity(bool network_available);
@@ -145,10 +142,6 @@ class IceTransportController
     std::shared_ptr<MediaCodec> codec;
 
     bool reliable;
-
-    // For data channels: track actual sent bytes (payload bytes actually sent
-    // to network)
-    std::atomic<uint64_t> actual_sent_bytes_{0};
   };
 
   bool CheckSteamContext(const std::string& channel_name,

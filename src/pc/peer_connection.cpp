@@ -357,17 +357,6 @@ int PeerConnection::SendReliableDataFrame(const char* data, size_t size,
   return 0;
 }
 
-uint64_t PeerConnection::GetDataChannelSentBytes(const char* stream_id) {
-  std::shared_lock lock(peer_connection_map_mutex_);
-  uint64_t total_sent = 0;
-  for (auto& peer_connection : peer_connection_map_) {
-    if (peer_connection.second) {
-      total_sent += peer_connection.second->GetDataChannelSentBytes(stream_id);
-    }
-  }
-  return total_sent;
-}
-
 int64_t PeerConnection::GetSystemTimeMicros() {
   if (clock_) {
     return clock_->CurrentTimeUs();

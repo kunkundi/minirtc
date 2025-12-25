@@ -45,11 +45,6 @@ void RtpDataSender::SetTargetBitrate(int64_t target_bitrate_bps) {
   last_update_time_ = std::chrono::steady_clock::now();
 }
 
-void RtpDataSender::SetOnSentCallback(
-    std::function<void(uint32_t payload_bytes)> on_sent_callback) {
-  on_sent_callback_ = on_sent_callback;
-}
-
 int RtpDataSender::SendRtpPacket(std::unique_ptr<RtpPacket> rtp_packet) {
   if (!data_send_func_) {
     LOG_ERROR("data_send_func_ is nullptr");
@@ -70,11 +65,6 @@ int RtpDataSender::SendRtpPacket(std::unique_ptr<RtpPacket> rtp_packet) {
   if (io_statistics_) {
     io_statistics_->UpdateDataOutboundBytes(last_send_bytes_);
     io_statistics_->IncrementDataOutboundRtpPacketCount();
-  }
-
-  // Notify callback when data is actually sent to network
-  if (on_sent_callback_ && ret == 0) {
-    on_sent_callback_(rtp_packet->PayloadSize());
   }
 
   // if (CheckIsTimeSendSR()) {

@@ -158,9 +158,6 @@ DLLAPI int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
 DLLAPI int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data,
                                  size_t size, const char* stream_id);
 
-DLLAPI uint64_t GetDataChannelSentBytes(PeerPtr* peer_ptr,
-                                         const char* stream_id);
-
 DLLAPI int64_t GetSystemTimeMicros(PeerPtr* peer_ptr);
 
 #ifdef __cplusplus

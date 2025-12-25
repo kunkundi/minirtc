@@ -91,8 +91,6 @@ class ConnectionInterface {
   virtual int SendReliableDataFrame(const char* data, size_t size,
                                     const char* stream_id) = 0;
 
-  virtual uint64_t GetDataChannelSentBytes(const char* stream_id) = 0;
-
   virtual void ProcessIceWorkMsg(const IceWorkMsg& msg) = 0;
 };
 }  // namespace minirtc

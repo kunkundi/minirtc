@@ -1225,14 +1225,6 @@ int IceTransport::SendReliableDataFrame(const char* data, size_t size,
   return -1;
 }
 
-uint64_t IceTransport::GetDataChannelSentBytes(
-    const std::string& channel_name) {
-  if (ice_transport_controller_) {
-    return ice_transport_controller_->GetDataChannelSentBytes(channel_name);
-  }
-  return 0;
-}
-
 uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
   if (size < 2) {
     return 0;

@@ -185,30 +185,6 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                           ? rtp::PAYLOAD_TYPE::KCP
                                           : rtp::PAYLOAD_TYPE::DATA;
           context->transceiver->Initialize(data_pt, paced_sender_);
-
-          // Set callback to track actual sent data for reliable data channels
-          if (context->reliable) {
-            auto data_channel = std::dynamic_pointer_cast<DataChannelSend>(
-                context->transceiver);
-            if (data_channel) {
-              std::weak_ptr<IceTransportController> weak_this =
-                  shared_from_this();
-              std::string channel_name_copy = channel_name;
-              data_channel->SetOnSentCallback(
-                  [weak_this, channel_name_copy](uint32_t payload_bytes) {
-                    // This callback is called when data is actually sent to
-                    // network
-                    auto self = weak_this.lock();
-                    if (self) {
-                      std::shared_lock lock(self->stream_senders_mutex_);
-                      auto it = self->stream_senders_.find(channel_name_copy);
-                      if (it != self->stream_senders_.end() && it->second) {
-                        it->second->actual_sent_bytes_ += payload_bytes;
-                      }
-                    }
-                  });
-            }
-          }
         }
       }
     }
@@ -633,17 +609,6 @@ int IceTransportController::SendReliableData(const char* data, size_t size,
   context->last_active_time = clock_->CurrentTimeMs();
 
   return context->transceiver->SendReliableData(data, size);
-}
-
-uint64_t IceTransportController::GetDataChannelSentBytes(
-    const std::string& channel_name) {
-  std::shared_lock lock(stream_senders_mutex_);
-  auto it = stream_senders_.find(channel_name);
-  if (it != stream_senders_.end() && it->second &&
-      it->second->type == StreamType::kData) {
-    return it->second->actual_sent_bytes_.load();
-  }
-  return 0;
 }
 
 void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
