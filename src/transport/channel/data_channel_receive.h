@@ -7,6 +7,8 @@
 #ifndef _DATA_CHANNEL_RECEIVE_H_
 #define _DATA_CHANNEL_RECEIVE_H_
 
+#include <mutex>
+
 #include "ice_agent.h"
 #include "ikcp.h"
 #include "media_channel.h"
@@ -20,9 +22,11 @@ namespace minirtc {
 // Internal timer class to periodically update KCP (receive side)
 class KcpUpdateTimerReceive : public ThreadBase {
  public:
-  KcpUpdateTimerReceive(ikcpcb* kcp, const std::string& channel_name,
+  KcpUpdateTimerReceive(ikcpcb* kcp, std::mutex& kcp_mutex,
+                        const std::string& channel_name,
                         std::function<void()> on_update_callback)
       : kcp_(kcp),
+        kcp_mutex_(kcp_mutex),
         channel_name_(channel_name),
         on_update_callback_(on_update_callback) {
     SetPeriod(std::chrono::milliseconds(10));  // 10ms update interval
@@ -37,15 +41,19 @@ class KcpUpdateTimerReceive : public ThreadBase {
     // Use monotonic clock for KCP
     uint32_t now = GetCurrentTimeMs();
 
-    // Use ikcp_check to avoid unnecessary updates
-    uint32_t next_update = ikcp_check(kcp_, now);
-    bool updated = false;
-    if (now >= next_update) {
-      ikcp_update(kcp_, now);
-      updated = true;
+    // Lock KCP operations for thread safety
+    {
+      std::lock_guard<std::mutex> lock(kcp_mutex_);
+
+      // Use ikcp_check to avoid unnecessary updates
+      uint32_t next_update = ikcp_check(kcp_, now);
+      if (now >= next_update) {
+        ikcp_update(kcp_, now);
+      }
     }
 
     // Always try to receive data, even if update wasn't needed
+    // Callback will handle its own locking
     if (on_update_callback_) {
       on_update_callback_();
     }
@@ -62,6 +70,7 @@ class KcpUpdateTimerReceive : public ThreadBase {
   }
 
   ikcpcb* kcp_;
+  std::mutex& kcp_mutex_;
   std::string channel_name_;
   std::function<void()> on_update_callback_;
 };
@@ -99,6 +108,7 @@ class DataChannelReceive : public MediaChannel {
   std::unique_ptr<RtpDataSender> rtp_data_sender_ = nullptr;
   std::function<void(const char*, size_t)> on_receive_data_ = nullptr;
   ikcpcb* kcp_ = nullptr;
+  std::mutex kcp_mutex_;  // Protects all KCP operations
   std::unique_ptr<KcpUpdateTimerReceive> kcp_update_timer_ = nullptr;
 
  private:

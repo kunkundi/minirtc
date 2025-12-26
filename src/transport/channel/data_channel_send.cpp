@@ -66,9 +66,12 @@ void DataChannelSend::Destroy() {
     rtp_data_sender_->Stop();
   }
 
-  if (kcp_) {
-    ikcp_release(kcp_);
-    kcp_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(kcp_mutex_);
+    if (kcp_) {
+      ikcp_release(kcp_);
+      kcp_ = nullptr;
+    }
   }
 }
 
@@ -103,6 +106,7 @@ int DataChannelSend::SendReliableData(const char* data, size_t size) {
     return -1;
   }
 
+  std::lock_guard<std::mutex> lock(kcp_mutex_);
   int ret = ikcp_send(kcp_, data, static_cast<int>(size));
   if (ret < 0) {
     LOG_ERROR("ikcp_send failed, ret={}", ret);
@@ -113,6 +117,13 @@ int DataChannelSend::SendReliableData(const char* data, size_t size) {
 }
 
 bool DataChannelSend::InitKcp() {
+  // Double-checked locking pattern
+  if (kcp_) {
+    return true;
+  }
+
+  std::lock_guard<std::mutex> lock(kcp_mutex_);
+  // Check again after acquiring lock
   if (kcp_) {
     return true;
   }
@@ -136,7 +147,8 @@ bool DataChannelSend::InitKcp() {
   kcp_->output = &DataChannelSend::KcpOutputCallback;
 
   // Create and start periodic update timer for this KCP instance
-  kcp_update_timer_ = std::make_unique<KcpUpdateTimer>(kcp_, channel_name_);
+  kcp_update_timer_ =
+      std::make_unique<KcpUpdateTimer>(kcp_, kcp_mutex_, channel_name_);
   kcp_update_timer_->Start();
 
   LOG_INFO("KCP initialized for data channel [{}], conv={}, ssrc={}",
@@ -200,6 +212,7 @@ int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {
   RtpPacket rtp_packet;
   rtp_packet.Build((uint8_t*)data, (uint32_t)size);
 
+  std::lock_guard<std::mutex> lock(kcp_mutex_);
   int ret = ikcp_input(kcp_, (const char*)rtp_packet.Payload(),
                        static_cast<long>(rtp_packet.PayloadSize()));
   if (ret < 0) {

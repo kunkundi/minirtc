@@ -73,15 +73,18 @@ void DataChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
           return;
         }
 
-        int ret = ikcp_input(kcp_, data, static_cast<long>(size));
-        if (ret < 0) {
-          LOG_ERROR("ikcp_input failed, ret={}, size={}, conv={}", ret, size,
-                    kcp_->conv);
-          return;
-        }
+        {
+          std::lock_guard<std::mutex> lock(kcp_mutex_);
+          int ret = ikcp_input(kcp_, data, static_cast<long>(size));
+          if (ret < 0) {
+            LOG_ERROR("ikcp_input failed, ret={}, size={}, conv={}", ret, size,
+                      kcp_->conv);
+            return;
+          }
 
-        uint32_t now = GetCurrentTimeMs();
-        ikcp_update(kcp_, now);
+          uint32_t now = GetCurrentTimeMs();
+          ikcp_update(kcp_, now);
+        }
 
         TryReceiveKcpData();
       });
@@ -117,9 +120,12 @@ void DataChannelReceive::Destroy() {
     rtp_data_sender_ = nullptr;
   }
 
-  if (kcp_) {
-    ikcp_release(kcp_);
-    kcp_ = nullptr;
+  {
+    std::lock_guard<std::mutex> lock(kcp_mutex_);
+    if (kcp_) {
+      ikcp_release(kcp_);
+      kcp_ = nullptr;
+    }
   }
 }
 
@@ -138,6 +144,13 @@ int DataChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
 }
 
 bool DataChannelReceive::InitKcp() {
+  // Double-checked locking pattern
+  if (kcp_) {
+    return true;
+  }
+
+  std::lock_guard<std::mutex> lock(kcp_mutex_);
+  // Check again after acquiring lock
   if (kcp_) {
     return true;
   }
@@ -163,7 +176,7 @@ bool DataChannelReceive::InitKcp() {
   // Create and start periodic update timer for this KCP instance
   // The timer will also trigger TryReceiveKcpData() to continuously read data
   kcp_update_timer_ = std::make_unique<KcpUpdateTimerReceive>(
-      kcp_, channel_name_, [this]() { this->TryReceiveKcpData(); });
+      kcp_, kcp_mutex_, channel_name_, [this]() { this->TryReceiveKcpData(); });
   kcp_update_timer_->Start();
 
   LOG_INFO("KCP initialized for data channel [{}], conv={}, ssrc={}",
@@ -208,30 +221,42 @@ void DataChannelReceive::TryReceiveKcpData() {
     return;
   }
 
+  // Collect all received data while holding the lock
+  std::vector<std::vector<char>> received_messages;
   int total_received = 0;
 
-  while (true) {
-    // Get next message size
-    int peek_size = ikcp_peeksize(kcp_);
-    if (peek_size < 0) {
-      break;
+  {
+    std::lock_guard<std::mutex> lock(kcp_mutex_);
+    while (true) {
+      // Get next message size
+      int peek_size = ikcp_peeksize(kcp_);
+      if (peek_size < 0) {
+        break;
+      }
+
+      std::vector<char> buffer(static_cast<size_t>(peek_size));
+      int recv_len =
+          ikcp_recv(kcp_, buffer.data(), static_cast<int>(buffer.size()));
+      if (recv_len <= 0) {
+        break;
+      }
+
+      total_received += recv_len;
+      // Resize buffer to actual received size and store for later delivery
+      buffer.resize(static_cast<size_t>(recv_len));
+      received_messages.push_back(std::move(buffer));
     }
 
-    std::vector<char> buffer(static_cast<size_t>(peek_size));
-    int recv_len =
-        ikcp_recv(kcp_, buffer.data(), static_cast<int>(buffer.size()));
-    if (recv_len <= 0) {
-      break;
-    }
-
-    total_received += recv_len;
-    if (on_receive_data_) {
-      on_receive_data_(buffer.data(), static_cast<size_t>(recv_len));
+    if (total_received > 0) {
+      ikcp_update(kcp_, GetCurrentTimeMs());
     }
   }
 
-  if (total_received > 0) {
-    ikcp_update(kcp_, GetCurrentTimeMs());
+  // Deliver all received messages outside the lock
+  for (const auto& message : received_messages) {
+    if (on_receive_data_) {
+      on_receive_data_(message.data(), message.size());
+    }
   }
 }
 

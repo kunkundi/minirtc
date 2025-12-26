@@ -7,6 +7,8 @@
 #ifndef _DATA_CHANNEL_SEND_H_
 #define _DATA_CHANNEL_SEND_H_
 
+#include <mutex>
+
 #include "ice_agent.h"
 #include "ikcp.h"
 #include "media_channel.h"
@@ -20,8 +22,9 @@ namespace minirtc {
 // Internal timer class to periodically update KCP
 class KcpUpdateTimer : public ThreadBase {
  public:
-  KcpUpdateTimer(ikcpcb* kcp, const std::string& channel_name)
-      : kcp_(kcp), channel_name_(channel_name) {
+  KcpUpdateTimer(ikcpcb* kcp, std::mutex& kcp_mutex,
+                 const std::string& channel_name)
+      : kcp_(kcp), kcp_mutex_(kcp_mutex), channel_name_(channel_name) {
     SetPeriod(std::chrono::milliseconds(10));  // 10ms update interval
     SetThreadName("KcpUpdate-" + channel_name);
   }
@@ -33,6 +36,9 @@ class KcpUpdateTimer : public ThreadBase {
 
     // Use monotonic clock for KCP
     uint32_t now = GetCurrentTimeMs();
+
+    // Lock KCP operations for thread safety
+    std::lock_guard<std::mutex> lock(kcp_mutex_);
 
     // Use ikcp_check to avoid unnecessary updates
     uint32_t next_update = ikcp_check(kcp_, now);
@@ -52,6 +58,7 @@ class KcpUpdateTimer : public ThreadBase {
   }
 
   ikcpcb* kcp_;
+  std::mutex& kcp_mutex_;
   std::string channel_name_;
 };
 
@@ -95,6 +102,7 @@ class DataChannelSend : public MediaChannel {
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpDataSender> rtp_data_sender_ = nullptr;
   ikcpcb* kcp_ = nullptr;
+  std::mutex kcp_mutex_;  // Protects all KCP operations
   std::unique_ptr<KcpUpdateTimer> kcp_update_timer_ = nullptr;
 
  private:
