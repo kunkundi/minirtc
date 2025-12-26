@@ -188,12 +188,6 @@ int DataChannelSend::KcpOutputCallback(const char* buf, int len, ikcpcb* kcp,
   return self->OnKcpOutput(buf, len);
 }
 
-void DataChannelSend::SetTargetBitrate(int64_t target_bitrate_bps) {
-  if (rtp_data_sender_) {
-    rtp_data_sender_->SetTargetBitrate(target_bitrate_bps);
-  }
-}
-
 int DataChannelSend::OnReceiveRtpPacket(const char* data, size_t size) {
   if (!use_reliable_) {
     return -1;

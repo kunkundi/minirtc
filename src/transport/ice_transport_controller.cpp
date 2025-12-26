@@ -1189,23 +1189,6 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
           }
         }
       }
-
-      // Allocate bandwidth to data channels
-      if (data_count > 0) {
-        int64_t data_bitrate_per_channel = data_bitrate_total / data_count;
-        for (auto& [channel_name, context] : stream_senders_) {
-          if (context->type == StreamType::kData && context->transceiver) {
-            // Cast to DataChannelSend to call SetTargetBitrate
-            auto data_channel = std::dynamic_pointer_cast<DataChannelSend>(
-                context->transceiver);
-            if (data_channel) {
-              data_channel->SetTargetBitrate(data_bitrate_per_channel);
-              // LOG_INFO("Set data channel [{}] target bitrate [{}]bps",
-              //          channel_name, data_bitrate_per_channel);
-            }
-          }
-        }
-      }
     }
     UpdateControlState();
   }

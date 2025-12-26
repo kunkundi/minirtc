@@ -12,8 +12,7 @@ namespace minirtc {
 RtpDataSender::RtpDataSender() {}
 
 RtpDataSender::RtpDataSender(std::shared_ptr<IOStatistics> io_statistics)
-    : ssrc_(GenerateUniqueSsrc()), io_statistics_(io_statistics),
-      last_update_time_(std::chrono::steady_clock::now()) {
+    : ssrc_(GenerateUniqueSsrc()), io_statistics_(io_statistics) {
   SetPeriod(std::chrono::milliseconds(5));
   SetThreadName("RtpDataSender");
 }
@@ -30,19 +29,6 @@ void RtpDataSender::Enqueue(
 void RtpDataSender::SetSendDataFunc(
     std::function<int(const char*, size_t)> data_send_func) {
   data_send_func_ = data_send_func;
-}
-
-void RtpDataSender::SetTargetBitrate(int64_t target_bitrate_bps) {
-  target_bitrate_bps_.store(target_bitrate_bps);
-  // Reset budget when bitrate changes
-  if (target_bitrate_bps > 0) {
-    int64_t max_bytes_in_budget = (kWindowMs * target_bitrate_bps) / 8000;
-    bytes_remaining_ = std::min(bytes_remaining_, max_bytes_in_budget);
-    bytes_remaining_ = std::max(bytes_remaining_, -max_bytes_in_budget);
-  } else {
-    bytes_remaining_ = 0;
-  }
-  last_update_time_ = std::chrono::steady_clock::now();
 }
 
 int RtpDataSender::SendRtpPacket(std::unique_ptr<RtpPacket> rtp_packet) {
@@ -145,60 +131,14 @@ bool RtpDataSender::CheckIsTimeSendSR() {
 bool RtpDataSender::Process() {
   last_send_bytes_ = 0;
 
-  // Update bandwidth budget
-  int64_t target_bitrate = target_bitrate_bps_.load();
-  if (target_bitrate > 0) {
-    auto now = std::chrono::steady_clock::now();
-    auto delta_time_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                             now - last_update_time_)
-                             .count();
-    
-    if (delta_time_ms > 0) {
-      // Increase budget based on elapsed time
-      int64_t bytes_to_add = (target_bitrate * delta_time_ms) / 8000;
-      int64_t max_bytes_in_budget = (kWindowMs * target_bitrate) / 8000;
-      
-      if (bytes_remaining_ < 0) {
-        // We overused last interval, compensate this interval
-        bytes_remaining_ = std::min(bytes_remaining_ + bytes_to_add, max_bytes_in_budget);
-      } else {
-        // If we underused last interval, we can't use it this interval
-        bytes_remaining_ = std::min(bytes_to_add, max_bytes_in_budget);
-      }
-      
-      last_update_time_ = now;
-    }
-  }
-
-  // Send packets with bandwidth limiting
-  for (size_t i = 0; i < 10; i++) {
+  for (size_t i = 0; i < 10; i++)
     if (!rtp_packet_queue_.isEmpty()) {
       std::optional<std::unique_ptr<RtpPacket>> rtp_packet =
           rtp_packet_queue_.pop();
       if (rtp_packet) {
-        // Check bandwidth budget if limiting is enabled
-        if (target_bitrate > 0) {
-          size_t packet_size = (*rtp_packet)->Size();
-          int64_t max_bytes_in_budget = (kWindowMs * target_bitrate) / 8000;
-          
-          // Check if we have enough budget
-          if (bytes_remaining_ >= static_cast<int64_t>(packet_size)) {
-            bytes_remaining_ -= static_cast<int64_t>(packet_size);
-            SendRtpPacket(std::move(*rtp_packet));
-          } else {
-            // Not enough budget, allow sending but track overuse
-            // This allows some burst but limits average rate
-            bytes_remaining_ = std::max(bytes_remaining_ - static_cast<int64_t>(packet_size),
-                                        -max_bytes_in_budget);
-            SendRtpPacket(std::move(*rtp_packet));
-          }
-        } else {
-          // No bandwidth limit, send as before
-          SendRtpPacket(std::move(*rtp_packet));
-        }
+        SendRtpPacket(std::move(*rtp_packet));
       }
     }
-  }
 
   return true;
 }

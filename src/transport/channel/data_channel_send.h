@@ -87,8 +87,6 @@ class DataChannelSend : public MediaChannel {
 
   int SendReliableData(const char* data, size_t size) override;
 
-  void SetTargetBitrate(int64_t target_bitrate_bps);
-
   void OnReceiverReport(const ReceiverReport& receiver_report) {}
 
   int OnReceiveRtpPacket(const char* data, size_t size);
