@@ -43,9 +43,12 @@ void IOStatistics::Process() {
     previous_period_last_received_video_rtp_pkt_seq_ =
         current_period_last_received_video_rtp_pkt_seq_;
     if (current_period_last_received_video_rtp_pkt_seq_ > 0 &&
-        expected_video_inbound_rtp_pkt_cnt_ >= 0) {
+        expected_video_inbound_rtp_pkt_cnt_ > 0) {
       video_rtp_pkt_loss_rate_ = video_rtp_pkt_loss_cnt_.load() /
                                  (float)expected_video_inbound_rtp_pkt_cnt_;
+      if (video_rtp_pkt_loss_rate_ > 1.0f) {
+        video_rtp_pkt_loss_rate_ = 1.0f;
+      }
     } else {
       video_rtp_pkt_loss_rate_ = 0;
     }
@@ -58,9 +61,12 @@ void IOStatistics::Process() {
     previous_period_last_received_audio_rtp_pkt_seq_ =
         current_period_last_received_audio_rtp_pkt_seq_;
     if (current_period_last_received_audio_rtp_pkt_seq_ > 0 &&
-        expected_audio_inbound_rtp_pkt_cnt_ >= 0) {
+        expected_audio_inbound_rtp_pkt_cnt_ > 0) {
       audio_rtp_pkt_loss_rate_ = audio_rtp_pkt_loss_cnt_.load() /
                                  (float)expected_audio_inbound_rtp_pkt_cnt_;
+      if (audio_rtp_pkt_loss_rate_ > 1.0f) {
+        audio_rtp_pkt_loss_rate_ = 1.0f;
+      }
     } else {
       audio_rtp_pkt_loss_rate_ = 0;
     }
@@ -73,9 +79,12 @@ void IOStatistics::Process() {
     previous_period_last_received_data_rtp_pkt_seq_ =
         current_period_last_received_data_rtp_pkt_seq_;
     if (current_period_last_received_data_rtp_pkt_seq_ > 0 &&
-        expected_data_inbound_rtp_pkt_cnt_ >= 0) {
+        expected_data_inbound_rtp_pkt_cnt_ > 0) {
       data_rtp_pkt_loss_rate_ = data_rtp_pkt_loss_cnt_.load() /
                                 (float)expected_data_inbound_rtp_pkt_cnt_;
+      if (data_rtp_pkt_loss_rate_ > 1.0f) {
+        data_rtp_pkt_loss_rate_ = 1.0f;
+      }
     } else {
       data_rtp_pkt_loss_rate_ = 0;
     }
@@ -200,14 +209,14 @@ void IOStatistics::UpdateAudioOutboundBytes(uint32_t bytes) {
 void IOStatistics::UpdateAudioPacketLossCount(uint16_t seq_num) {
   const uint16_t HALF_SEQ_RANGE =
       (std::numeric_limits<uint16_t>::max() / 2) + 1;  // 32768
-  uint16_t last_v_seq = last_received_video_rtp_pkt_seq_.load();
+  uint16_t last_a_seq = last_received_audio_rtp_pkt_seq_.load();
 
-  if (last_v_seq == 0) {
+  if (last_a_seq == 0) {
     last_received_audio_rtp_pkt_seq_.store(seq_num);
     return;
   }
 
-  uint16_t diff = seq_num - last_v_seq;
+  uint16_t diff = seq_num - last_a_seq;
   if (diff == 0) {
     return;
   } else if (diff < HALF_SEQ_RANGE) {
@@ -233,14 +242,14 @@ void IOStatistics::UpdateDataOutboundBytes(uint32_t bytes) {
 void IOStatistics::UpdateDataPacketLossCount(uint16_t seq_num) {
   const uint16_t HALF_SEQ_RANGE =
       (std::numeric_limits<uint16_t>::max() / 2) + 1;  // 32768
-  uint16_t last_v_seq = last_received_video_rtp_pkt_seq_.load();
+  uint16_t last_d_seq = last_received_data_rtp_pkt_seq_.load();
 
-  if (last_v_seq == 0) {
+  if (last_d_seq == 0) {
     last_received_data_rtp_pkt_seq_.store(seq_num);
     return;
   }
 
-  uint16_t diff = seq_num - last_v_seq;
+  uint16_t diff = seq_num - last_d_seq;
   if (diff == 0) {
     return;
   } else if (diff < HALF_SEQ_RANGE) {
