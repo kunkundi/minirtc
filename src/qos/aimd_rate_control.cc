@@ -47,6 +47,7 @@ AimdRateControl::AimdRateControl(bool send_side)
       time_last_bitrate_decrease_(Timestamp::MinusInfinity()),
       time_first_throughput_estimate_(Timestamp::MinusInfinity()),
       bitrate_is_initialized_(false),
+      beta_(kDefaultBackoffFactor),
       in_alr_(false),
       rtt_(kDefaultRtt),
       send_side_(send_side) {}
