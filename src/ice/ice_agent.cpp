@@ -466,7 +466,7 @@ long IceAgent::bio_nice_ctrl(BIO* b, int cmd, long num, void* ptr) {
 }
 
 int IceAgent::StartDtls(bool is_client) {
-  if (dtls_started_) return 0;
+  if (dtls_started_ || !enable_srtp_) return 0;
 
   SSL_library_init();
   SSL_load_error_strings();
