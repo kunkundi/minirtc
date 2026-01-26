@@ -46,7 +46,7 @@ struct ConnectionCallbacks {
   OnReceiveBuffer on_receive_audio_buffer;
   OnReceiveBuffer on_receive_data_buffer;
   OnConnectionStatus on_connection_status;
-  NetStatusReport net_status_report;
+  OnNetStatusReport on_net_status_report;
   void* user_data = nullptr;
 };
 

@@ -37,9 +37,9 @@ typedef void (*OnSignalStatus)(SignalStatus, const char*, const size_t, void*);
 typedef void (*OnConnectionStatus)(ConnectionStatus, const char*, const size_t,
                                    void*);
 
-typedef void (*NetStatusReport)(const char*, const size_t, TraversalMode,
-                                const XNetTrafficStats*, const char*,
-                                const size_t, void*);
+typedef void (*OnNetStatusReport)(const char*, const size_t, TraversalMode,
+                                  const XNetTrafficStats*, const char*,
+                                  const size_t, void*);
 
 typedef struct {
   bool use_cfg_file;
@@ -71,7 +71,7 @@ typedef struct {
 
   OnSignalStatus on_signal_status;
   OnConnectionStatus on_connection_status;
-  NetStatusReport net_status_report;
+  OnNetStatusReport on_net_status_report;
 
   const char* user_id;
   void* user_data;
@@ -103,7 +103,21 @@ class PeerConnection {
   int SendAudioFrame(const char* data, size_t size, const char* stream_id);
   int SendDataFrame(const char* data, size_t size, const char* stream_id);
   int SendReliableDataFrame(const char* data, size_t size,
-                           const char* stream_id);
+                            const char* stream_id);
+
+  int SendVideoFrameToPeer(const XVideoFrame* video_frame,
+                           const char* stream_id, const char* remote_peer_id,
+                           size_t remote_peer_id_size);
+  int SendAudioFrameToPeer(const char* data, size_t size, const char* stream_id,
+                           const char* remote_peer_id,
+                           size_t remote_peer_id_size);
+  int SendDataFrameToPeer(const char* data, size_t size, const char* stream_id,
+                          const char* remote_peer_id,
+                          size_t remote_peer_id_size);
+  int SendReliableDataFrameToPeer(const char* data, size_t size,
+                                  const char* stream_id,
+                                  const char* remote_peer_id,
+                                  size_t remote_peer_id_size);
 
   int64_t GetSystemTimeMicros();
 
@@ -184,7 +198,7 @@ class PeerConnection {
 
   OnSignalStatus on_signal_status_;
   OnConnectionStatus on_connection_status_;
-  NetStatusReport net_status_report_;
+  OnNetStatusReport on_net_status_report_;
   void* user_data_;
 
   bool inited_ = false;

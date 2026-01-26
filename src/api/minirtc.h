@@ -2,12 +2,15 @@
 #define _MINIRTC_H_
 
 #if defined(_MSC_VER)
-#define DLLAPI __declspec(dllexport)
+#define MINIRTC_API __declspec(dllexport)
 #elif defined(__GNUC__)
-#define DLLAPI __attribute__((visibility("default")))
+#define MINIRTC_API __attribute__((visibility("default")))
 #else
-#define DLLAPI
+#define MINIRTC_API
 #endif
+
+// Backward-compatible alias (prefer MINIRTC_API)
+#define DLLAPI MINIRTC_API
 
 #include <cstddef>
 #include <cstdint>
@@ -76,21 +79,33 @@ typedef struct {
 
 typedef struct Peer PeerPtr;
 
-typedef void (*OnReceiveBuffer)(const char*, size_t, const char*, const size_t,
-                                const char*, const size_t, void*);
+typedef void (*OnReceiveBuffer)(const char* data, size_t size,
+                                const char* remote_peer_id,
+                                const size_t remote_peer_id_size,
+                                const char* source_id,
+                                const size_t source_id_size, void* user_data);
 
-typedef void (*OnReceiveVideoFrame)(const XVideoFrame*, const char*,
-                                    const size_t, const char*, const size_t,
-                                    void*);
+typedef void (*OnReceiveVideoFrame)(const XVideoFrame* video_frame,
+                                    const char* remote_peer_id,
+                                    const size_t remote_peer_id_size,
+                                    const char* source_id,
+                                    const size_t source_id_size,
+                                    void* user_data);
 
-typedef void (*OnSignalStatus)(SignalStatus, const char*, const size_t, void*);
+typedef void (*OnSignalStatus)(SignalStatus status, const char* peer_id,
+                               const size_t peer_id_size, void* user_data);
 
-typedef void (*OnConnectionStatus)(ConnectionStatus, const char*, const size_t,
-                                   void*);
+typedef void (*OnConnectionStatus)(ConnectionStatus status,
+                                   const char* remote_peer_id,
+                                   const size_t remote_peer_id_size,
+                                   void* user_data);
 
-typedef void (*NetStatusReport)(const char*, const size_t, TraversalMode,
-                                const XNetTrafficStats*, const char*,
-                                const size_t, void*);
+typedef void (*OnNetStatusReport)(const char* peer_id,
+                                  const size_t peer_id_size, TraversalMode mode,
+                                  const XNetTrafficStats* stats,
+                                  const char* remote_peer_id,
+                                  const size_t remote_peer_id_size,
+                                  void* user_data);
 
 typedef struct {
   bool use_cfg_file;
@@ -123,42 +138,73 @@ typedef struct {
 
   OnSignalStatus on_signal_status;
   OnConnectionStatus on_connection_status;
-  NetStatusReport net_status_report;
+  OnNetStatusReport on_net_status_report;
 
   const char* user_id;
   void* user_data;
 } Params;
 
-DLLAPI PeerPtr* CreatePeer(const Params* params);
+// Create a Peer instance
+MINIRTC_API PeerPtr* CreatePeer(const Params* params);
 
-DLLAPI void DestroyPeer(PeerPtr** peer_ptr);
+// Destroy a Peer instance
+MINIRTC_API void DestroyPeer(PeerPtr** peer_ptr);
 
-DLLAPI int Init(PeerPtr* peer_ptr);
+// Initialize a Peer instance
+MINIRTC_API int Init(PeerPtr* peer_ptr);
 
-DLLAPI int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id);
+// Join a connection
+MINIRTC_API int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id);
 
-DLLAPI int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id);
+// Leave a connection
+MINIRTC_API int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id);
 
-DLLAPI int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id);
+// Add media/data streams
+MINIRTC_API int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id);
 
-DLLAPI int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id);
+MINIRTC_API int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id);
 
-DLLAPI int AddDataStream(PeerPtr* peer_ptr, const char* stream_id,
-                         bool reliable);
+MINIRTC_API int AddDataStream(PeerPtr* peer_ptr, const char* stream_id,
+                              bool reliable);
 
-DLLAPI int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
-                          const char* stream_id);
+// Send media/data frames to all peers
+MINIRTC_API int SendVideoFrame(PeerPtr* peer_ptr,
+                               const XVideoFrame* video_frame,
+                               const char* stream_id);
 
-DLLAPI int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
-                          const char* stream_id);
+MINIRTC_API int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                               const char* stream_id);
 
-DLLAPI int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
-                         const char* stream_id);
+MINIRTC_API int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+                              const char* stream_id);
 
-DLLAPI int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data,
-                                 size_t size, const char* stream_id);
+MINIRTC_API int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data,
+                                      size_t size, const char* stream_id);
 
-DLLAPI int64_t GetSystemTimeMicros(PeerPtr* peer_ptr);
+// Send media/data frames to peer
+MINIRTC_API int SendVideoFrameToPeer(PeerPtr* peer_ptr,
+                                     const XVideoFrame* video_frame,
+                                     const char* stream_id,
+                                     const char* remote_peer_id,
+                                     size_t remote_peer_id_size);
+
+MINIRTC_API int SendAudioFrameToPeer(PeerPtr* peer_ptr, const char* data,
+                                     size_t size, const char* stream_id,
+                                     const char* remote_peer_id,
+                                     size_t remote_peer_id_size);
+
+MINIRTC_API int SendDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
+                                    size_t size, const char* stream_id,
+                                    const char* remote_peer_id,
+                                    size_t remote_peer_id_size);
+
+MINIRTC_API int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
+                                            size_t size, const char* stream_id,
+                                            const char* remote_peer_id,
+                                            size_t remote_peer_id_size);
+
+// Get system time in microseconds
+MINIRTC_API int64_t GetSystemTimeMicros(PeerPtr* peer_ptr);
 
 #ifdef __cplusplus
 }

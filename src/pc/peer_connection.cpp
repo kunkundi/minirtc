@@ -133,7 +133,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   on_signal_status_ = params.on_signal_status;
   on_connection_status_ = params.on_connection_status;
-  net_status_report_ = params.net_status_report;
+  on_net_status_report_ = params.on_net_status_report;
   user_data_ = params.user_data;
 
   connection_callbacks_.on_connection_status = params.on_connection_status;
@@ -143,7 +143,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
       params.on_receive_audio_buffer;
   connection_callbacks_.on_receive_data_buffer = params.on_receive_data_buffer;
 
-  connection_callbacks_.net_status_report = params.net_status_report;
+  connection_callbacks_.on_net_status_report = params.on_net_status_report;
   connection_callbacks_.user_data = user_data_;
 
   on_receive_ws_msg_ = [this](const std::string& msg) { ProcessSignal(msg); };
@@ -357,6 +357,78 @@ int PeerConnection::SendReliableDataFrame(const char* data, size_t size,
   return 0;
 }
 
+int PeerConnection::SendVideoFrameToPeer(const XVideoFrame* video_frame,
+                                         const char* stream_id,
+                                         const char* remote_peer_id,
+                                         size_t remote_peer_id_size) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(
+      std::string(remote_peer_id, remote_peer_id_size));
+  if (it != peer_connection_map_.end() && it->second) {
+    it->second->SendVideoFrame(video_frame, stream_id);
+  } else {
+    LOG_WARN("SendVideoFrame to remote peer [{}] failed, peer not found",
+             std::string(remote_peer_id, remote_peer_id_size));
+    return -1;
+  }
+
+  return 0;
+}
+
+int PeerConnection::SendAudioFrameToPeer(const char* data, size_t size,
+                                         const char* stream_id,
+                                         const char* remote_peer_id,
+                                         size_t remote_peer_id_size) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(
+      std::string(remote_peer_id, remote_peer_id_size));
+  if (it != peer_connection_map_.end() && it->second) {
+    it->second->SendAudioFrame(data, size, stream_id);
+  } else {
+    LOG_WARN("SendAudioFrame to remote peer [{}] failed, peer not found",
+             std::string(remote_peer_id, remote_peer_id_size));
+    return -1;
+  }
+
+  return 0;
+}
+
+int PeerConnection::SendDataFrameToPeer(const char* data, size_t size,
+                                        const char* stream_id,
+                                        const char* remote_peer_id,
+                                        size_t remote_peer_id_size) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(
+      std::string(remote_peer_id, remote_peer_id_size));
+  if (it != peer_connection_map_.end() && it->second) {
+    it->second->SendDataFrame(data, size, stream_id);
+  } else {
+    LOG_WARN("SendDataFrame to remote peer [{}] failed, peer not found",
+             std::string(remote_peer_id, remote_peer_id_size));
+    return -1;
+  }
+
+  return 0;
+}
+
+int PeerConnection::SendReliableDataFrameToPeer(const char* data, size_t size,
+                                                const char* stream_id,
+                                                const char* remote_peer_id,
+                                                size_t remote_peer_id_size) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(
+      std::string(remote_peer_id, remote_peer_id_size));
+  if (it != peer_connection_map_.end() && it->second) {
+    it->second->SendReliableDataFrame(data, size, stream_id);
+  } else {
+    LOG_WARN("SendReliableDataFrame to remote peer [{}] failed, peer not found",
+             std::string(remote_peer_id, remote_peer_id_size));
+    return -1;
+  }
+
+  return 0;
+}
+
 int64_t PeerConnection::GetSystemTimeMicros() {
   if (clock_) {
     return clock_->CurrentTimeUs();
@@ -386,9 +458,9 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         XNetTrafficStats net_traffic_stats;
         memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
-        net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
-                           TraversalMode::UnknownMode, &net_traffic_stats,
-                           user_id_.data(), user_id_.size(), user_data_);
+        on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
+                              TraversalMode::UnknownMode, &net_traffic_stats,
+                              user_id_.data(), user_id_.size(), user_data_);
         LOG_INFO("Login success with id [{}]", user_id_);
         signal_status_ = SignalStatus::SignalConnected;
         on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),

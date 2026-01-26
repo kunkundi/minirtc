@@ -194,7 +194,7 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
                                        callbacks_.on_receive_data_buffer);
 
       ice_transport_->SetOnReceiveNetStatusReportFunc(
-          callbacks_.net_status_report);
+          callbacks_.on_net_status_report);
 
       ice_transport_->InitIceTransmission(
           info_.stun_server_ip, info_.stun_server_port, info_.turn_server_ip,
@@ -254,7 +254,7 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
                                        callbacks_.on_receive_data_buffer);
 
       ice_transport_->SetOnReceiveNetStatusReportFunc(
-          callbacks_.net_status_report);
+          callbacks_.on_net_status_report);
 
       ice_transport_->InitIceTransmission(
           info_.stun_server_ip, info_.stun_server_port, info_.turn_server_ip,

@@ -57,7 +57,7 @@ PeerPtr* CreatePeer(const Params* params) {
 
   peer_ptr->pc_params.on_signal_status = params->on_signal_status;
   peer_ptr->pc_params.on_connection_status = params->on_connection_status;
-  peer_ptr->pc_params.net_status_report = params->net_status_report;
+  peer_ptr->pc_params.on_net_status_report = params->on_net_status_report;
 
   peer_ptr->pc_params.user_id = params->user_id;
   peer_ptr->pc_params.user_data = params->user_data;
@@ -197,6 +197,63 @@ int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
   }
 
   peer_ptr->peer_connection->SendReliableDataFrame(data, size, stream_id);
+
+  return 0;
+}
+
+int SendVideoFrameToPeer(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
+                         const char* stream_id, const char* remote_peer_id,
+                         size_t remote_peer_id_size) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  peer_ptr->peer_connection->SendVideoFrameToPeer(
+      video_frame, stream_id, remote_peer_id, remote_peer_id_size);
+
+  return 0;
+}
+
+int SendAudioFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,
+                         const char* stream_id, const char* remote_peer_id,
+                         size_t remote_peer_id_size) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  peer_ptr->peer_connection->SendAudioFrameToPeer(
+      data, size, stream_id, remote_peer_id, remote_peer_id_size);
+
+  return 0;
+}
+
+int SendDataFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,
+                        const char* stream_id, const char* remote_peer_id,
+                        size_t remote_peer_id_size) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  peer_ptr->peer_connection->SendDataFrameToPeer(
+      data, size, stream_id, remote_peer_id, remote_peer_id_size);
+
+  return 0;
+}
+
+int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
+                                size_t size, const char* stream_id,
+                                const char* remote_peer_id,
+                                size_t remote_peer_id_size) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  peer_ptr->peer_connection->SendReliableDataFrameToPeer(
+      data, size, stream_id, remote_peer_id, remote_peer_id_size);
 
   return 0;
 }
