@@ -8,7 +8,9 @@
 #define _TASK_QUEUE_LOCK_FREE_H_
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <exception>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -38,11 +40,21 @@ class TaskQueueLockFree {
   ~TaskQueueLockFree() { Stop(); }
 
   void PostTask(AnyInvocable<void()> task) {
-    task_queue_.enqueue(std::move(task));
+    if (!task) {
+      return;
+    }
+
     {
       std::lock_guard<std::mutex> lock(mutex_);
-      cond_var_.notify_one();
+      if (stop_flag_.load(std::memory_order_relaxed)) {
+        return;
+      }
+
+      task_queue_.enqueue(std::move(task));
+      pending_tasks_.fetch_add(1, std::memory_order_release);
     }
+
+    cond_var_.notify_one();
   }
 
   void Stop() {
@@ -51,10 +63,7 @@ class TaskQueueLockFree {
       return;
     }
 
-    {
-      std::lock_guard<std::mutex> lock(mutex_);
-      cond_var_.notify_all();
-    }
+    cond_var_.notify_all();
 
     std::vector<std::thread> workers_to_join;
     {
@@ -69,30 +78,56 @@ class TaskQueueLockFree {
     }
   }
 
+  int PendingTasks() const {
+    return pending_tasks_.load(std::memory_order_acquire);
+  }
+
  private:
   void WorkerThread() {
     AnyInvocable<void()> task;
     while (true) {
       while (task_queue_.try_dequeue(task)) {
-        if (!task) continue;
+        // A successful dequeue must always reduce the pending count.
+        pending_tasks_.fetch_sub(1, std::memory_order_acq_rel);
+
+        if (!task) {
+          LOG_ERROR("[TaskQueue: {}] Dequeued empty task", task_name_);
+          continue;
+        }
 
         if (log_enabled_) {
           auto start = std::chrono::steady_clock::now();
-          task();
+          try {
+            task();
+          } catch (const std::exception& e) {
+            LOG_ERROR("[TaskQueue: {}] Task threw exception: {}", task_name_,
+                      e.what());
+          } catch (...) {
+            LOG_ERROR("[TaskQueue: {}] Task threw unknown exception",
+                      task_name_);
+          }
           auto end = std::chrono::steady_clock::now();
           auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(
               end - start);
           LOG_INFO("[TaskQueue: {}] Task executed in {} ms", task_name_,
                    duration.count());
         } else {
-          task();
+          try {
+            task();
+          } catch (const std::exception& e) {
+            LOG_ERROR("[TaskQueue: {}] Task threw exception: {}", task_name_,
+                      e.what());
+          } catch (...) {
+            LOG_ERROR("[TaskQueue: {}] Task threw unknown exception",
+                      task_name_);
+          }
         }
       }
 
       std::unique_lock<std::mutex> lock(mutex_);
       cond_var_.wait(lock, [this] {
         return stop_flag_.load(std::memory_order_relaxed) ||
-               task_queue_.size_approx() > 0;
+               pending_tasks_.load(std::memory_order_acquire) > 0;
       });
 
       if (stop_flag_.load(std::memory_order_relaxed)) {
@@ -106,6 +141,7 @@ class TaskQueueLockFree {
   bool log_enabled_;
 
   std::atomic<bool> stop_flag_{false};
+  std::atomic<int> pending_tasks_{0};
   moodycamel::ConcurrentQueue<AnyInvocable<void()>> task_queue_;
   std::vector<std::thread> workers_;
 
