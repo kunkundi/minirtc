@@ -316,15 +316,16 @@ uint32_t IceTransportController::AddAudioSendChannel(
 
 uint32_t IceTransportController::AddDataSendChannel(
     const std::string& channel_name, bool reliable) {
-  std::shared_lock lock(stream_senders_mutex_);
+  std::unique_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
-  if (it != stream_senders_.end() && !it->second) {
+  if (it != stream_senders_.end() && it->second) {
     uint32_t ssrc =
         it->second->transceiver ? it->second->transceiver->GetSsrc() : 0;
     LOG_ERROR("Stream sender [{}] already exists with ssrc [{}]", channel_name,
               ssrc);
     return ssrc;
   }
+
   auto& context = stream_senders_[channel_name];
   if (!context) {
     context = std::make_shared<StreamContext>();
@@ -347,9 +348,9 @@ uint32_t IceTransportController::AddDataSendChannel(
 
 uint32_t IceTransportController::AddVideoReceiveChannel(
     const std::string& channel_name, uint32_t ssrc) {
-  std::shared_lock lock(stream_receivers_mutex_);
+  std::unique_lock lock(stream_receivers_mutex_);
   auto it = stream_receivers_.find(channel_name);
-  if (it != stream_receivers_.end() && !it->second) {
+  if (it != stream_receivers_.end() && it->second) {
     LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
               channel_name, ssrc);
     return ssrc;
@@ -387,9 +388,9 @@ uint32_t IceTransportController::AddVideoReceiveChannel(
 
 uint32_t IceTransportController::AddAudioReceiveChannel(
     const std::string& channel_name, uint32_t ssrc) {
-  std::shared_lock lock(stream_receivers_mutex_);
+  std::unique_lock lock(stream_receivers_mutex_);
   auto it = stream_receivers_.find(channel_name);
-  if (it != stream_receivers_.end() && !it->second) {
+  if (it != stream_receivers_.end() && it->second) {
     LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
               channel_name, ssrc);
     return ssrc;
@@ -425,9 +426,9 @@ uint32_t IceTransportController::AddAudioReceiveChannel(
 
 uint32_t IceTransportController::AddDataReceiveChannel(
     const std::string& channel_name, uint32_t ssrc, bool reliable) {
-  std::shared_lock lock(stream_receivers_mutex_);
+  std::unique_lock lock(stream_receivers_mutex_);
   auto it = stream_receivers_.find(channel_name);
-  if (it != stream_receivers_.end() && !it->second) {
+  if (it != stream_receivers_.end() && it->second) {
     LOG_ERROR("Stream receiver [{}] already exists with ssrc [{}]",
               channel_name, ssrc);
     return ssrc;
@@ -721,44 +722,65 @@ int IceTransportController::OnReceiveDataAckRtpPacket(
 void IceTransportController::OnReceiveCompleteFrame(
     std::unique_ptr<ReceivedFrame> received_frame,
     const std::string& channel_name) {
-  task_queue_decode_->PostTask([this,
+  if (!task_queue_decode_) {
+    LOG_ERROR("Decode task queue is nullptr");
+    return;
+  }
+
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  task_queue_decode_->PostTask([weak_self,
                                 received_frame = std::move(received_frame),
                                 channel_name]() mutable {
-    uint64_t t = clock_->CurrentTime();
-    std::shared_lock lock(stream_receivers_mutex_);
-    auto it = stream_receivers_.find(channel_name);
-    if (it == stream_receivers_.end() || !it->second) {
-      LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
+    auto self = weak_self.lock();
+    if (!self) {
       return;
     }
-    auto& context = it->second;
-    if (!CheckSteamContext(channel_name, context)) {
-      return;
-    } else {
-      int num_frame_returned = context->codec->Decode(
-          std::move(received_frame),
-          [this, channel_name](const DecodedFrame* decoded_frame) {
-            if (on_receive_video_ && decoded_frame) {
-              XVideoFrame x_video_frame;
-              x_video_frame.data = (const char*)decoded_frame->Buffer();
-              x_video_frame.width = decoded_frame->DecodedWidth();
-              x_video_frame.height = decoded_frame->DecodedHeight();
-              x_video_frame.size = decoded_frame->Size();
-              x_video_frame.captured_timestamp =
-                  decoded_frame->CapturedTimestamp();
-              x_video_frame.received_timestamp =
-                  decoded_frame->ReceivedTimestamp();
-              x_video_frame.decoded_timestamp =
-                  decoded_frame->DecodedTimestamp();
 
-              if (on_receive_video_) {
-                on_receive_video_(&x_video_frame, remote_user_id_.data(),
-                                  remote_user_id_.size(), channel_name.data(),
-                                  channel_name.size(), user_data_);
-              }
-            }
-          });
+    std::shared_ptr<MediaCodec> codec;
+    OnReceiveVideo on_receive_video = nullptr;
+    std::string remote_user_id;
+    void* user_data = nullptr;
+
+    {
+      std::shared_lock lock(self->stream_receivers_mutex_);
+      auto it = self->stream_receivers_.find(channel_name);
+      if (it == self->stream_receivers_.end() || !it->second) {
+        LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
+        return;
+      }
+
+      auto& context = it->second;
+      if (!self->CheckSteamContext(channel_name, context)) {
+        return;
+      }
+
+      codec = context->codec;
+      on_receive_video = self->on_receive_video_;
+      remote_user_id = self->remote_user_id_;
+      user_data = self->user_data_;
     }
+
+    int num_frame_returned = codec->Decode(
+        std::move(received_frame),
+        [on_receive_video, remote_user_id, channel_name,
+         user_data](const DecodedFrame* decoded_frame) {
+          if (!on_receive_video || !decoded_frame) {
+            return;
+          }
+
+          XVideoFrame x_video_frame;
+          x_video_frame.data = (const char*)decoded_frame->Buffer();
+          x_video_frame.width = decoded_frame->DecodedWidth();
+          x_video_frame.height = decoded_frame->DecodedHeight();
+          x_video_frame.size = decoded_frame->Size();
+          x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
+          x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
+          x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
+
+          on_receive_video(&x_video_frame, remote_user_id.data(),
+                           remote_user_id.size(), channel_name.data(),
+                           channel_name.size(), user_data);
+        });
   });
 }
 
