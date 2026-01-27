@@ -201,22 +201,43 @@ void WsClient::AsyncReConnect() {
     return;
   }
 
-  if (reconnect_thread_.joinable()) {
-    reconnect_thread_.join();
+  // Ensure only one reconnect attempt is scheduled at a time.
+  bool expected = false;
+  if (!is_reconnecting_.compare_exchange_strong(expected, true)) {
+    return;
   }
 
-  std::weak_ptr<WsClient> weak_self = shared_from_this();
-  reconnect_thread_ = std::thread([weak_self]() {
-    if (auto self = weak_self.lock()) {
-      if (self->destructed_) return;
+  if (reconnect_thread_.joinable()) {
+    if (reconnect_thread_.get_id() != std::this_thread::get_id()) {
+      reconnect_thread_.join();
+    } else {
+      reconnect_thread_.detach();
+    }
+  }
 
-      int attempts = self->reconnect_attempts_.load();
-      if (attempts > 0 && attempts < 3) {
-        int delay_ms = 500 * attempts;  // 500ms, 1s, 1.5s
-        std::this_thread::sleep_for(std::chrono::milliseconds(delay_ms));
+  // Exponential backoff: 0s, 1s, 2s, 4s, 8s ... capped at 60s
+  int attempt = reconnect_attempts_.fetch_add(1) + 1;
+  int exponent = std::min(attempt - 1, 6);  // 2^6 = 64s
+  int delay_seconds = (attempt <= 1) ? 0 : (1 << exponent);
+  delay_seconds = std::min(delay_seconds, 60);
+
+  LOG_INFO("Will retry connection after {} seconds (attempt {})", delay_seconds,
+           attempt);
+
+  std::weak_ptr<WsClient> weak_self = shared_from_this();
+  reconnect_thread_ = std::thread([weak_self, delay_seconds]() {
+    if (delay_seconds > 0) {
+      std::this_thread::sleep_for(std::chrono::seconds(delay_seconds));
+    }
+
+    if (auto self = weak_self.lock()) {
+      if (self->destructed_) {
+        self->is_reconnecting_.store(false);
+        return;
       }
 
       self->ReConnect();
+      self->is_reconnecting_.store(false);
     }
   });
 }

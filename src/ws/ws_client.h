@@ -45,8 +45,9 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
  public:
   void Shutdown();
 
-  int Connect(const std::string &uri, const std::string &expected_fingerprint,
-              std::function<void(const std::string &)> on_fingerprint_cb = nullptr);
+  int Connect(
+      const std::string &uri, const std::string &expected_fingerprint,
+      std::function<void(const std::string &)> on_fingerprint_cb = nullptr);
 
   int ReConnect();
 
@@ -62,7 +63,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   ssl_context_ptr OnTlsInit(websocketpp::connection_hdl hdl);
 
-  bool OnTlsVerify(bool preverified, websocketpp::lib::asio::ssl::verify_context &ctx);
+  bool OnTlsVerify(bool preverified,
+                   websocketpp::lib::asio::ssl::verify_context &ctx);
 
   void OnOpen(client *c, websocketpp::connection_hdl hdl);
 
@@ -111,6 +113,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
   std::atomic<int> timeout_count_{0};
   std::atomic<bool> destructed_{false};
+  std::atomic<bool> is_reconnecting_{false};
   std::atomic<int> reconnect_attempts_{0};
   std::atomic<int> tls_failure_count_{0};
 
