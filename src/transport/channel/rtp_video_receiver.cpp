@@ -85,8 +85,10 @@ RtpVideoReceiver::~RtpVideoReceiver() {
   incomplete_av1_frame_list_.clear();
   incomplete_frame_list_.clear();
 
-  std::shared_lock lock(pending_frames_mtx_);
-  pending_frames_.clear();
+  {
+    std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+    pending_frames_.clear();
+  }
 
 #ifdef SAVE_RTP_RECV_STREAM
   if (file_rtp_recv_) {
@@ -238,9 +240,11 @@ void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
            delta_ntp_internal_ms_) *
           1000);
 
-      std::shared_lock lock(pending_frames_mtx_);
-      pending_frames_[rtp_packet_h264.Timestamp()] = {
-          std::move(received_frame), true, clock_->CurrentTime().ms()};
+      {
+        std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+        pending_frames_[rtp_packet_h264.Timestamp()] = {
+            std::move(received_frame), true, clock_->CurrentTime().ms()};
+      }
     } else if (rtp::NAL_UNIT_TYPE::FU_A == nalu_type) {
       if (rtp::PAYLOAD_TYPE::H264 == rtp_packet_h264.PayloadType()) {
         incomplete_h264_frame_list_[rtp_packet_h264.SequenceNumber()] =
@@ -397,7 +401,7 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
 
   if (is_end) {
     {
-      std::shared_lock lock(pending_frames_mtx_);
+      std::lock_guard<std::mutex> lock(pending_frames_mtx_);
       if (pending_frames_.find(timestamp) == pending_frames_.end()) {
         pending_frames_[timestamp] = {nullptr, false,
                                       clock_->CurrentTime().ms()};
@@ -436,8 +440,10 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
         LOG_WARN(
             "retransmit packet [seq {} | ts {}] timeout, remove pending frame",
             seq, timestamp);
-        std::shared_lock lock(pending_frames_mtx_);
-        pending_frames_.erase(timestamp);
+        {
+          std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+          pending_frames_.erase(timestamp);
+        }
         return false;
       }
     }
@@ -505,10 +511,12 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
   fua_end_sequence_numbers_.erase(timestamp);
   missing_sequence_numbers_wait_time_.erase(timestamp);
 
-  std::shared_lock lock(pending_frames_mtx_);
-  if (pending_frames_.find(timestamp) != pending_frames_.end()) {
-    pending_frames_[timestamp] = {std::move(received_frame), true,
-                                  clock_->CurrentTime().ms()};
+  {
+    std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+    if (pending_frames_.find(timestamp) != pending_frames_.end()) {
+      pending_frames_[timestamp] = {std::move(received_frame), true,
+                                    clock_->CurrentTime().ms()};
+    }
   }
   return true;
 }
@@ -518,7 +526,7 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   uint16_t seq = rtp_packet_av1.SequenceNumber();
 
   {
-    std::shared_lock lock(pending_frames_mtx_);
+    std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     if (pending_frames_.find(timestamp) == pending_frames_.end()) {
       pending_frames_[timestamp] = {nullptr, false, clock_->CurrentTime().ms()};
     }
@@ -559,7 +567,10 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
           "AV1 retransmit packet [seq {} | ts {}] timeout, remove pending "
           "frame",
           seq, timestamp);
-      pending_frames_.erase(timestamp);
+      {
+        std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+        pending_frames_.erase(timestamp);
+      }
       return false;
     }
   }
@@ -605,10 +616,12 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   fua_end_sequence_numbers_.erase(timestamp);
   missing_sequence_numbers_wait_time_.erase(timestamp);
 
-  std::shared_lock lock(pending_frames_mtx_);
-  if (pending_frames_.find(timestamp) != pending_frames_.end()) {
-    pending_frames_[timestamp] = {std::move(received_frame), true,
-                                  clock_->CurrentTime().ms()};
+  {
+    std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+    if (pending_frames_.find(timestamp) != pending_frames_.end()) {
+      pending_frames_[timestamp] = {std::move(received_frame), true,
+                                    clock_->CurrentTime().ms()};
+    }
   }
   return true;
 }
@@ -696,29 +709,37 @@ bool RtpVideoReceiver::Process() {
     return false;
   }
 
-  std::shared_lock lock(pending_frames_mtx_);
-  if (pending_frames_.empty()) {
-    return false;
-  }
+  while (true) {
+    std::unique_ptr<ReceivedFrame> completed_frame;
 
-  auto it = pending_frames_.begin();
-  while (it != pending_frames_.end()) {
-    if (it->second.is_complete) {
-      if (on_receive_complete_frame_) {
-        on_receive_complete_frame_(std::move(it->second.frame));
+    {
+      std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+      if (pending_frames_.empty()) {
+        break;
       }
-      it = pending_frames_.erase(it);
-    } else {
-      if (clock_->CurrentTime().ms() - it->second.arrival_time >
-          MAX_WAIT_TIME_MS) {
-        LOG_WARN("pending frame [ts {}] timeout, remove it", it->first);
-        // it = pending_frames_.erase(it);
-        pending_frames_.clear();
-        RequestKeyFrame();
-        return false;
+
+      auto it = pending_frames_.begin();
+      if (it->second.is_complete) {
+        completed_frame = std::move(it->second.frame);
+        pending_frames_.erase(it);
       } else {
-        ++it;
+        if (clock_->CurrentTime().ms() - it->second.arrival_time >
+            MAX_WAIT_TIME_MS) {
+          pending_frames_.clear();
+          completed_frame.reset();
+        } else {
+          break;
+        }
       }
+    }
+
+    if (!completed_frame) {
+      RequestKeyFrame();
+      return false;
+    }
+
+    if (on_receive_complete_frame_) {
+      on_receive_complete_frame_(std::move(completed_frame));
     }
   }
 
