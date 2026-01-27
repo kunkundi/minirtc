@@ -87,14 +87,26 @@ void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
                                          const PacedPacketInfo& pacing_info,
                                          size_t overhead_bytes,
                                          Timestamp creation_time) {
+  if (!packet_to_send.transport_sequence_number().has_value()) {
+    // Transport sequence number is required for per-packet feedback tracking.
+    // If missing, do not insert into history (using a fake value like 0 would
+    // corrupt state and break BWE/in-flight tracking).
+    LOG_WARN(
+        "AddPacket called without transport_sequence_number (ssrc={}, "
+        "rtp_seq={}). "
+        "Packet will not be tracked for feedback.",
+        packet_to_send.Ssrc(), packet_to_send.SequenceNumber());
+    return;
+  }
+
   PacketFeedback feedback;
 
   feedback.creation_time = creation_time;
   // Note, if transport sequence number header extension is used, transport
   // sequence numbers are wrapped to 16 bit. See
   // RtpSenderEgress::CompleteSendPacket.
-  feedback.sent.sequence_number = seq_num_unwrapper_.Unwrap(
-      packet_to_send.transport_sequence_number().value_or(0));
+  feedback.sent.sequence_number =
+      seq_num_unwrapper_.Unwrap(*packet_to_send.transport_sequence_number());
   feedback.sent.size = DataSize::Bytes(packet_to_send.size() + overhead_bytes);
   feedback.sent.audio =
       packet_to_send.packet_type() == RtpPacketMediaType::kAudio;

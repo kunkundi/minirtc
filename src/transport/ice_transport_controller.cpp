@@ -1087,14 +1087,28 @@ void IceTransportController::OnSentPacket(
     size_t transport_overhead_bytes_per_packet_ = 0;
     webrtc::Timestamp creation_time =
         webrtc::Timestamp::Millis(clock_->CurrentTimeMs());
-    transport_feedback_adapter_.AddPacket(packet, pacing_info,
-                                          transport_overhead_bytes_per_packet_,
-                                          creation_time);
-
     rtc::SentPacket sent_packet;
-    sent_packet.packet_id = packet.transport_sequence_number().value();
+    const std::optional<int64_t> transport_seq =
+        packet.transport_sequence_number();
+    if (transport_seq.has_value()) {
+      transport_feedback_adapter_.AddPacket(
+          packet, pacing_info, transport_overhead_bytes_per_packet_,
+          creation_time);
+      sent_packet.packet_id = static_cast<int>(*transport_seq);
+      sent_packet.info.included_in_feedback = true;
+    } else {
+      // Some packets (e.g. padding/FEC or other non-media packets) may not be
+      // assigned a transport sequence number. Avoid crashing and avoid
+      // polluting send history with a fake sequence number.
+      LOG_WARN(
+          "Sent packet without transport_sequence_number (ssrc={}, "
+          "rtp_seq={}), "
+          "falling back to untracked allocation.",
+          packet.Ssrc(), packet.SequenceNumber());
+      sent_packet.packet_id = -1;
+      sent_packet.info.included_in_feedback = false;
+    }
     sent_packet.send_time_ms = clock_->CurrentTimeMs();
-    sent_packet.info.included_in_feedback = true;
     sent_packet.info.included_in_allocation = true;
     sent_packet.info.packet_size_bytes = packet.size();
     sent_packet.info.packet_type = rtc::PacketType::kData;
