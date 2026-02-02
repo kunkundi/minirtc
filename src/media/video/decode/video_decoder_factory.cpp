@@ -4,6 +4,10 @@
 #include "dav1d/dav1d_av1_decoder.h"
 #include "openh264/openh264_decoder.h"
 
+#if defined(_WIN32) || defined(_WIN64)
+#include "wmf/wmf_h264_software_decoder.h"
+#endif
+
 #if (defined(_WIN32) || defined(_WIN64)) && USE_CUDA
 #include "nvcodec/nvidia_video_decoder.h"
 #elif defined(__APPLE__)
@@ -48,11 +52,20 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
       if (CheckIsHardwareAccerlerationSupported()) {
         return std::make_unique<NvidiaVideoDecoder>(NvidiaVideoDecoder(clock));
       } else {
-        return nullptr;
+        // Hardware requested but not supported: fallback to software.
+#if defined(_WIN32) || defined(_WIN64)
+        return std::make_unique<WmfH264SoftwareDecoder>(clock);
+#else
+        return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+#endif
       }
     } else {
 #endif
-      return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+#if defined(_WIN32) || defined(_WIN64)
+      return std::make_unique<WmfH264SoftwareDecoder>(clock);
+#else
+    return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+#endif
 #if USE_CUDA
     }
 #endif

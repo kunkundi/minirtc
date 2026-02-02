@@ -158,6 +158,7 @@ target("media")
     if is_os("windows") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
+        "src/media/video/decode/wmf/*.cpp",
         "src/media/video/encode/openh264/*.cpp",
         "src/media/video/decode/openh264/*.cpp",
         "src/media/video/encode/aom/*.cpp",
@@ -166,6 +167,7 @@ target("media")
         "src/media/video/decode/aom/*.cpp")
         add_includedirs("src/media/video/encode",
         "src/media/video/decode",
+        "src/media/video/decode/wmf",
         "src/media/video/encode/openh264",
         "src/media/video/decode/openh264",
         "src/media/video/encode/aom",
@@ -260,7 +262,7 @@ target("minirtc")
             add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
         end
         add_links("Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
-        "ws2_32", "windowsapp", "User32", "Strmiids", "Mfuuid",
+        "ws2_32", "windowsapp", "User32", "Strmiids", "Mfuuid", "Mfplat", "Mf",
         "Secur32", "Bcrypt")
         -- add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
