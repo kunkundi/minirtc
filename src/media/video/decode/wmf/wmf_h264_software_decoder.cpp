@@ -7,10 +7,6 @@
 
 #include "wmf_h264_software_decoder.h"
 
-#include <algorithm>
-#include <atomic>
-#include <cstring>
-
 #include <Windows.h>
 #include <mfapi.h>
 #include <mferror.h>
@@ -18,6 +14,10 @@
 #include <mfobjects.h>
 #include <mftransform.h>
 #include <wrl/client.h>
+
+#include <algorithm>
+#include <atomic>
+#include <cstring>
 
 #include "log.h"
 
@@ -67,10 +67,11 @@ static bool IsAnnexBStartCode4(const uint8_t* p) {
 
 struct NaluView {
   const uint8_t* data = nullptr;  // points at NAL header byte
-  size_t size = 0;               // includes NAL header
+  size_t size = 0;                // includes NAL header
 };
 
-static std::vector<NaluView> SplitAnnexBNalus(const uint8_t* data, size_t size) {
+static std::vector<NaluView> SplitAnnexBNalus(const uint8_t* data,
+                                              size_t size) {
   std::vector<NaluView> nalus;
   if (!data || size < 4) {
     return nalus;
@@ -78,7 +79,8 @@ static std::vector<NaluView> SplitAnnexBNalus(const uint8_t* data, size_t size) 
 
   auto find_start = [&](size_t from) -> size_t {
     for (size_t i = from; i + 3 < size; ++i) {
-      if (IsAnnexBStartCode3(data + i) || (i + 4 <= size && IsAnnexBStartCode4(data + i))) {
+      if (IsAnnexBStartCode3(data + i) ||
+          (i + 4 <= size && IsAnnexBStartCode4(data + i))) {
         return i;
       }
     }
@@ -116,8 +118,8 @@ static std::vector<NaluView> SplitAnnexBNalus(const uint8_t* data, size_t size) 
 }
 
 static bool ExtractSpsPpsFromAnnexB(const uint8_t* data, size_t size,
-                                   std::vector<uint8_t>& sps,
-                                   std::vector<uint8_t>& pps) {
+                                    std::vector<uint8_t>& sps,
+                                    std::vector<uint8_t>& pps) {
   sps.clear();
   pps.clear();
 
@@ -150,12 +152,12 @@ static std::vector<uint8_t> BuildAvcC(const std::vector<uint8_t>& sps,
 
   avcc.reserve(7 + 2 + sps.size() + 1 + 2 + pps.size());
 
-  avcc.push_back(0x01);                 // configurationVersion
-  avcc.push_back(sps[1]);              // AVCProfileIndication
-  avcc.push_back(sps[2]);              // profile_compatibility
-  avcc.push_back(sps[3]);              // AVCLevelIndication
-  avcc.push_back(0xFC | 0x03);         // 6 bits reserved + lengthSizeMinusOne
-  avcc.push_back(0xE0 | 0x01);         // 3 bits reserved + numOfSPS
+  avcc.push_back(0x01);         // configurationVersion
+  avcc.push_back(sps[1]);       // AVCProfileIndication
+  avcc.push_back(sps[2]);       // profile_compatibility
+  avcc.push_back(sps[3]);       // AVCLevelIndication
+  avcc.push_back(0xFC | 0x03);  // 6 bits reserved + lengthSizeMinusOne
+  avcc.push_back(0xE0 | 0x01);  // 3 bits reserved + numOfSPS
 
   uint16_t sps_len = (uint16_t)sps.size();
   avcc.push_back((uint8_t)((sps_len >> 8) & 0xFF));
@@ -177,14 +179,16 @@ static bool IsHardwareMft(IMFActivate* activate) {
   }
 
   UINT32 has_attr = 0;
-  if (SUCCEEDED(activate->GetUINT32(MFT_ENUM_HARDWARE_URL_Attribute, &has_attr))) {
+  if (SUCCEEDED(
+          activate->GetUINT32(MFT_ENUM_HARDWARE_URL_Attribute, &has_attr))) {
     (void)has_attr;
     return true;
   }
 
   WCHAR* value = nullptr;
   UINT32 value_len = 0;
-  HRESULT hr = activate->GetAllocatedString(MFT_ENUM_HARDWARE_URL_Attribute, &value, &value_len);
+  HRESULT hr = activate->GetAllocatedString(MFT_ENUM_HARDWARE_URL_Attribute,
+                                            &value, &value_len);
   if (SUCCEEDED(hr) && value) {
     CoTaskMemFree(value);
     return true;
@@ -199,7 +203,8 @@ static std::string HrToString(HRESULT hr) {
   return std::string(buf);
 }
 
-static bool GetFrameSizeFromMediaType(IMFMediaType* mt, uint32_t& w, uint32_t& h) {
+static bool GetFrameSizeFromMediaType(IMFMediaType* mt, uint32_t& w,
+                                      uint32_t& h) {
   if (!mt) {
     return false;
   }
@@ -226,7 +231,14 @@ struct WmfH264SoftwareDecoder::Impl {
       decoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_END_STREAMING, 0);
     }
     decoder_.Reset();
-    MfGuard::Shutdown();
+    if (mf_started_) {
+      MfGuard::Shutdown();
+      mf_started_ = false;
+    }
+    if (com_inited_) {
+      CoUninitialize();
+      com_inited_ = false;
+    }
   }
 
   int Init() {
@@ -237,16 +249,21 @@ struct WmfH264SoftwareDecoder::Impl {
       LOG_ERROR("CoInitializeEx failed, hr={}", HrToString(hr));
       return -1;
     }
+    if (SUCCEEDED(hr)) {
+      com_inited_ = true;
+    }
 
     if (MfGuard::EnsureStartup() != 0) {
       return -1;
     }
+    mf_started_ = true;
 
     return CreateDecoderLocked();
   }
 
-  int Decode(std::unique_ptr<ReceivedFrame> received_frame,
-             std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {
+  int Decode(
+      std::unique_ptr<ReceivedFrame> received_frame,
+      std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {
     if (!received_frame) {
       return -1;
     }
@@ -270,8 +287,11 @@ struct WmfH264SoftwareDecoder::Impl {
       if (ExtractSpsPpsFromAnnexB(data, size, sps, pps)) {
         avcc_ = BuildAvcC(sps, pps);
         if (!avcc_.empty()) {
-          if (ConfigureTypesLocked(received_frame->Width(), received_frame->Height()) != 0) {
-            LOG_WARN("WMF ConfigureTypes failed, falling back to OpenH264 may be needed");
+          if (ConfigureTypesLocked(received_frame->Width(),
+                                   received_frame->Height()) != 0) {
+            LOG_WARN(
+                "WMF ConfigureTypes failed, falling back to OpenH264 may be "
+                "needed");
             return -1;
           }
         }
@@ -354,12 +374,14 @@ struct WmfH264SoftwareDecoder::Impl {
     IMFActivate** activates = nullptr;
     UINT32 activate_count = 0;
 
-    UINT32 flags = MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_LOCALMFT;
+    UINT32 flags = MFT_ENUM_FLAG_SORTANDFILTER | MFT_ENUM_FLAG_SYNCMFT |
+                   MFT_ENUM_FLAG_ASYNCMFT | MFT_ENUM_FLAG_LOCALMFT;
 
     HRESULT hr = MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER, flags, &input_info,
                            &output_info, &activates, &activate_count);
     if (FAILED(hr) || activate_count == 0) {
-      LOG_ERROR("MFTEnumEx failed/no decoder, hr={} count={}", HrToString(hr), (uint32_t)activate_count);
+      LOG_ERROR("MFTEnumEx failed/no decoder, hr={} count={}", HrToString(hr),
+                (uint32_t)activate_count);
       return -1;
     }
 
@@ -419,9 +441,11 @@ struct WmfH264SoftwareDecoder::Impl {
     in_type->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
 
     if (!avcc_.empty()) {
-      hr = in_type->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, avcc_.data(), (UINT32)avcc_.size());
+      hr = in_type->SetBlob(MF_MT_MPEG_SEQUENCE_HEADER, avcc_.data(),
+                            (UINT32)avcc_.size());
       if (FAILED(hr)) {
-        LOG_WARN("Set MF_MT_MPEG_SEQUENCE_HEADER failed, hr={}", HrToString(hr));
+        LOG_WARN("Set MF_MT_MPEG_SEQUENCE_HEADER failed, hr={}",
+                 HrToString(hr));
       }
     }
 
@@ -529,7 +553,8 @@ struct WmfH264SoftwareDecoder::Impl {
       if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
         // Refresh output type.
         ComPtr<IMFMediaType> new_type;
-        if (SUCCEEDED(decoder_->GetOutputAvailableType(0, 0, &new_type)) && new_type) {
+        if (SUCCEEDED(decoder_->GetOutputAvailableType(0, 0, &new_type)) &&
+            new_type) {
           decoder_->SetOutputType(0, new_type.Get(), 0);
         }
         continue;
@@ -560,14 +585,17 @@ struct WmfH264SoftwareDecoder::Impl {
       uint32_t decoded_h = 0;
       {
         ComPtr<IMFMediaType> cur_type;
-        if (SUCCEEDED(decoder_->GetOutputCurrentType(0, &cur_type)) && cur_type) {
+        if (SUCCEEDED(decoder_->GetOutputCurrentType(0, &cur_type)) &&
+            cur_type) {
           GetFrameSizeFromMediaType(cur_type.Get(), decoded_w, decoded_h);
         }
       }
 
       if (decoded_w == 0 || decoded_h == 0) {
-        decoded_w = received_frame->Width() ? received_frame->Width() : MINIRTC_INIT_WIDTH;
-        decoded_h = received_frame->Height() ? received_frame->Height() : MINIRTC_INIT_HEIGHT;
+        decoded_w = received_frame->Width() ? received_frame->Width()
+                                            : MINIRTC_INIT_WIDTH;
+        decoded_h = received_frame->Height() ? received_frame->Height()
+                                             : MINIRTC_INIT_HEIGHT;
       }
 
       size_t expected = (size_t)decoded_w * (size_t)decoded_h * 3 / 2;
@@ -580,7 +608,8 @@ struct WmfH264SoftwareDecoder::Impl {
       buf->Unlock();
 
       if (!decoded_frame_) {
-        decoded_frame_ = std::make_unique<DecodedFrame>(nv12_frame_.data(), copy_len, decoded_w, decoded_h);
+        decoded_frame_ = std::make_unique<DecodedFrame>(
+            nv12_frame_.data(), copy_len, decoded_w, decoded_h);
       }
 
       decoded_frame_->UpdateBuffer(nv12_frame_.data(), nv12_frame_.size());
@@ -610,16 +639,18 @@ struct WmfH264SoftwareDecoder::Impl {
   std::vector<uint8_t> avcc_;
   std::vector<uint8_t> nv12_frame_;
   std::unique_ptr<DecodedFrame> decoded_frame_;
+
+  bool mf_started_ = false;
+  bool com_inited_ = false;
 };
 
-WmfH264SoftwareDecoder::WmfH264SoftwareDecoder(std::shared_ptr<SystemClock> clock)
+WmfH264SoftwareDecoder::WmfH264SoftwareDecoder(
+    std::shared_ptr<SystemClock> clock)
     : impl_(std::make_unique<Impl>(clock)) {}
 
 WmfH264SoftwareDecoder::~WmfH264SoftwareDecoder() = default;
 
-int WmfH264SoftwareDecoder::Init() {
-  return impl_->Init();
-}
+int WmfH264SoftwareDecoder::Init() { return impl_->Init(); }
 
 int WmfH264SoftwareDecoder::Decode(
     std::unique_ptr<ReceivedFrame> received_frame,

@@ -178,6 +178,11 @@ int PeerConnection::Init(PeerConnectionParams params) {
       signal_status_ = SignalStatus::SignalServerClosed;
       on_signal_status_(SignalStatus::SignalServerClosed, user_id_.data(),
                         user_id_.size(), user_data_);
+    } else if (WsStatus::WsFingerprintMismatch == ws_status) {
+      ws_status_ = WsStatus::WsFingerprintMismatch;
+      signal_status_ = SignalStatus::SignalFingerprintMismatch;
+      on_signal_status_(SignalStatus::SignalFingerprintMismatch,
+                        user_id_.data(), user_id_.size(), user_data_);
     }
   };
 

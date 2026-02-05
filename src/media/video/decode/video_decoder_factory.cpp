@@ -54,18 +54,18 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
       } else {
         // Hardware requested but not supported: fallback to software.
 #if defined(_WIN32) || defined(_WIN64)
-        return std::make_unique<WmfH264SoftwareDecoder>(clock);
+        return std::make_unique<SoftwareDecoder>(clock);
 #else
         return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
 #endif
       }
     } else {
 #endif
-#if defined(_WIN32) || defined(_WIN64)
-      return std::make_unique<WmfH264SoftwareDecoder>(clock);
-#else
-    return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
-#endif
+      // #if defined(_WIN32) || defined(_WIN64)
+      //       return std::make_unique<WmfH264SoftwareDecoder>(clock);
+      // #else
+      return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+// #endif
 #if USE_CUDA
     }
 #endif

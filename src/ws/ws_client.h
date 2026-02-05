@@ -30,14 +30,15 @@ enum WsStatus {
   WsFailed,
   WsClosed,
   WsReconnecting,
-  WsServerClosed
+  WsServerClosed,
+  WsFingerprintMismatch
 };
 
 namespace minirtc {
 
 class WsClient : public std::enable_shared_from_this<WsClient> {
  public:
-  WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
+  WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
            std::function<void(WsStatus)> on_ws_status_cb);
 
   ~WsClient();
@@ -46,8 +47,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void Shutdown();
 
   int Connect(
-      const std::string &uri, const std::string &expected_fingerprint,
-      std::function<void(const std::string &)> on_fingerprint_cb = nullptr);
+      const std::string& uri, const std::string& expected_fingerprint,
+      std::function<void(const std::string&)> on_fingerprint_cb = nullptr);
 
   int ReConnect();
 
@@ -55,7 +56,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   void Close();
 
-  void Send(const std::string &message);
+  void Send(const std::string& message);
 
   WsStatus GetStatus();
 
@@ -64,13 +65,13 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   ssl_context_ptr OnTlsInit(websocketpp::connection_hdl hdl);
 
   bool OnTlsVerify(bool preverified,
-                   websocketpp::lib::asio::ssl::verify_context &ctx);
+                   websocketpp::lib::asio::ssl::verify_context& ctx);
 
-  void OnOpen(client *c, websocketpp::connection_hdl hdl);
+  void OnOpen(client* c, websocketpp::connection_hdl hdl);
 
-  void OnFail(client *c, websocketpp::connection_hdl hdl);
+  void OnFail(client* c, websocketpp::connection_hdl hdl);
 
-  void OnClose(client *c, websocketpp::connection_hdl hdl);
+  void OnClose(client* c, websocketpp::connection_hdl hdl);
 
   bool OnPing(websocketpp::connection_hdl hdl, std::string msg);
 
@@ -101,7 +102,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   std::string uri_;
   std::string expected_fingerprint_;
-  std::function<void(const std::string &)> on_fingerprint_cb_;
+  std::function<void(const std::string&)> on_fingerprint_cb_;
 
   std::atomic<bool> running_{false};
   std::mutex ping_mtx_;
@@ -117,7 +118,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::atomic<int> reconnect_attempts_{0};
   std::atomic<int> tls_failure_count_{0};
 
-  std::function<void(const std::string &)> on_receive_msg_ = nullptr;
+  std::function<void(const std::string&)> on_receive_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
 };
 

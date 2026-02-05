@@ -15,7 +15,7 @@
 
 namespace minirtc {
 
-std::string ComputeFingerprint(X509 *cert) {
+std::string ComputeFingerprint(X509* cert) {
   unsigned int n = 0;
   unsigned char md[EVP_MAX_MD_SIZE];
   if (X509_digest(cert, EVP_sha256(), md, &n) != 1) {
@@ -31,7 +31,7 @@ std::string ComputeFingerprint(X509 *cert) {
   return oss.str();
 }
 
-WsClient::WsClient(std::function<void(const std::string &)> on_receive_msg_cb,
+WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
     : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
@@ -142,8 +142,8 @@ void WsClient::RegisterHandlers() {
 }
 
 int WsClient::Connect(
-    const std::string &uri, const std::string &expected_fingerprint,
-    std::function<void(const std::string &)> on_fingerprint_cb) {
+    const std::string& uri, const std::string& expected_fingerprint,
+    std::function<void(const std::string&)> on_fingerprint_cb) {
   uri_ = uri;
   expected_fingerprint_ = expected_fingerprint;
   on_fingerprint_cb_ = on_fingerprint_cb;
@@ -255,7 +255,7 @@ void WsClient::Close() {
   }
 }
 
-void WsClient::Send(const std::string &message) {
+void WsClient::Send(const std::string& message) {
   websocketpp::lib::error_code ec;
   auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
   if (ec || con->get_state() != websocketpp::session::state::open) {
@@ -329,22 +329,22 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
 
     std::weak_ptr<WsClient> weak_self = shared_from_this();
     ctx->set_verify_callback(
-        [weak_self](bool preverified, asio::ssl::verify_context &ctx) {
+        [weak_self](bool preverified, asio::ssl::verify_context& ctx) {
           if (auto self = weak_self.lock()) {
             return self->OnTlsVerify(preverified, ctx);
           }
           return false;
         });
-  } catch (std::exception &e) {
+  } catch (std::exception& e) {
     LOG_ERROR("TLS init error: {}", e.what());
   }
   return ctx;
 }
 
 bool WsClient::OnTlsVerify(bool preverified,
-                           websocketpp::lib::asio::ssl::verify_context &ctx) {
-  X509_STORE_CTX *cts = ctx.native_handle();
-  X509 *cert = X509_STORE_CTX_get_current_cert(cts);
+                           websocketpp::lib::asio::ssl::verify_context& ctx) {
+  X509_STORE_CTX* cts = ctx.native_handle();
+  X509* cert = X509_STORE_CTX_get_current_cert(cts);
   if (cert) {
     int depth = X509_STORE_CTX_get_error_depth(cts);
 
@@ -379,6 +379,9 @@ bool WsClient::OnTlsVerify(bool preverified,
       } else {
         LOG_ERROR("Certificate fingerprint mismatch");
         tls_failure_count_++;
+        ws_status_ = WsStatus::WsFingerprintMismatch;
+        expected_fingerprint_.clear();
+        on_ws_status_(ws_status_);
         return false;
       }
     }
@@ -387,7 +390,7 @@ bool WsClient::OnTlsVerify(bool preverified,
   return true;
 }
 
-void WsClient::OnOpen(client *, websocketpp::connection_hdl hdl) {
+void WsClient::OnOpen(client*, websocketpp::connection_hdl hdl) {
   LOG_INFO("WebSocket connection opened");
   connection_handle_ = hdl;
   SetStatus(WsOpened);
@@ -396,7 +399,7 @@ void WsClient::OnOpen(client *, websocketpp::connection_hdl hdl) {
   RestartPingThread(hdl);
 }
 
-void WsClient::OnFail(client *c, websocketpp::connection_hdl hdl) {
+void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
   auto con = c->get_con_from_hdl(hdl);
   std::string error_msg = con ? con->get_ec().message() : "unknown";
   websocketpp::lib::error_code ec =
@@ -453,7 +456,7 @@ void WsClient::OnFail(client *c, websocketpp::connection_hdl hdl) {
   }
 }
 
-void WsClient::OnClose(client *c, websocketpp::connection_hdl hdl) {
+void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
   auto con = c->get_con_from_hdl(hdl);
   LOG_WARN("Connection closed");
   if (!destructed_) {
