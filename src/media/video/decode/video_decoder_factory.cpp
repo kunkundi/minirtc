@@ -35,36 +35,37 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     bool av1_encoding) {
   if (av1_encoding) {
-    return std::make_unique<Dav1dAv1Decoder>(Dav1dAv1Decoder(clock));
-    // return std::make_unique<AomAv1Decoder>(AomAv1Decoder(clock));
+    return std::make_unique<Dav1dAv1Decoder>(clock);
+    // return std::make_unique<AomAv1Decoder>(clock);
   } else {
 #if defined(__APPLE__)
     if (hardware_acceleration) {
-      return std::make_unique<VideoToolboxDecoder>(VideoToolboxDecoder(clock));
+      return std::make_unique<VideoToolboxDecoder>(clock);
     } else {
-      return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+      return std::make_unique<OpenH264Decoder>(clock);
     }
 #elif defined(__linux__) && defined(__aarch64__)
-    return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+    return std::make_unique<OpenH264Decoder>(clock);
 #else
 #if USE_CUDA
     if (hardware_acceleration) {
       if (CheckIsHardwareAccerlerationSupported()) {
-        return std::make_unique<NvidiaVideoDecoder>(NvidiaVideoDecoder(clock));
+        return std::make_unique<NvidiaVideoDecoder>(clock);
       } else {
         // Hardware requested but not supported: fallback to software.
-#if defined(_WIN32) || defined(_WIN64)
-        return std::make_unique<SoftwareDecoder>(clock);
-#else
-        return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
-#endif
+        // #if defined(_WIN32) || defined(_WIN64)
+        //         return std::make_unique<WmfH264SoftwareDecoder>(clock);
+        // #else
+        return std::make_unique<OpenH264Decoder>(clock);
+        // #endif
       }
     } else {
 #endif
       // #if defined(_WIN32) || defined(_WIN64)
-      //       return std::make_unique<WmfH264SoftwareDecoder>(clock);
+      //       return
+      //       std::make_unique<WmfH264SoftwareDecoder>(clock);
       // #else
-      return std::make_unique<OpenH264Decoder>(OpenH264Decoder(clock));
+      return std::make_unique<OpenH264Decoder>(clock);
 // #endif
 #if USE_CUDA
     }

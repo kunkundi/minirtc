@@ -8,6 +8,10 @@
 
 #if defined(_WIN32) || defined(_WIN64)
 
+#include <Windows.h>
+#include <mfidl.h>
+#include <wrl/client.h>
+
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -27,8 +31,14 @@ namespace minirtc {
 // - Output is NV12 to match the rest of the pipeline.
 class WmfH264SoftwareDecoder : public MediaCodec {
  public:
-  explicit WmfH264SoftwareDecoder(std::shared_ptr<SystemClock> clock);
-  ~WmfH264SoftwareDecoder() override;
+  WmfH264SoftwareDecoder(std::shared_ptr<SystemClock> clock);
+  virtual ~WmfH264SoftwareDecoder() override;
+
+  // Non-copyable, non-movable
+  WmfH264SoftwareDecoder(const WmfH264SoftwareDecoder&) = delete;
+  WmfH264SoftwareDecoder& operator=(const WmfH264SoftwareDecoder&) = delete;
+  WmfH264SoftwareDecoder(WmfH264SoftwareDecoder&&) = delete;
+  WmfH264SoftwareDecoder& operator=(WmfH264SoftwareDecoder&&) = delete;
 
   int Init() override;
 
@@ -39,8 +49,26 @@ class WmfH264SoftwareDecoder : public MediaCodec {
   std::string GetDecoderName() const override { return "WMF(H264/SW)"; }
 
  private:
-  struct Impl;
-  std::unique_ptr<Impl> impl_;
+  int CreateDecoder();
+  int ConfigureTypes(uint32_t hint_w, uint32_t hint_h);
+  void DrainOutput(ReceivedFrame* received_frame,
+                   const std::function<void(const DecodedFrame*)>& cb);
+
+ private:
+  std::mutex mtx_;
+  std::shared_ptr<SystemClock> clock_;
+
+  Microsoft::WRL::ComPtr<IMFTransform> decoder_;
+
+  bool configured_ = false;
+  bool started_ = false;
+
+  std::vector<uint8_t> avcc_;
+  std::vector<uint8_t> nv12_frame_;
+  std::unique_ptr<DecodedFrame> decoded_frame_;
+
+  bool mf_started_ = false;
+  bool com_inited_ = false;
 };
 
 }  // namespace minirtc
