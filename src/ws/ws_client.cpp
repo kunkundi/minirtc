@@ -42,13 +42,25 @@ WsClient::~WsClient() {
 
 void WsClient::Shutdown() {
   running_ = false;
+  is_reconnecting_ = false;
   cond_var_.notify_all();
+  reconnect_cv_.notify_all();  // wake up reconnect thread if sleeping
 
   if (ping_thread_.joinable()) {
     ping_thread_.join();
   }
   if (reconnect_thread_.joinable()) {
     reconnect_thread_.join();
+  }
+
+  {
+    std::lock_guard<std::mutex> lock(pending_threads_mtx_);
+    for (auto& t : pending_threads_) {
+      if (t.joinable()) {
+        t.join();
+      }
+    }
+    pending_threads_.clear();
   }
 
   if (m_endpoint_) {
@@ -69,6 +81,9 @@ void WsClient::StopThreads() {
   if (ping_thread_.joinable()) {
     ping_thread_.join();
   }
+
+  CleanupPendingThreads();
+
   if (m_endpoint_) {
     m_endpoint_->stop_perpetual();
   }
@@ -78,6 +93,73 @@ void WsClient::StopThreads() {
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
+}
+
+void WsClient::CleanupPendingThreads() {
+  // nncrement generation to signal all pending threads to exit
+  reconnect_generation_.fetch_add(1);
+  reconnect_cv_.notify_all();
+
+  std::lock_guard<std::mutex> lock(pending_threads_mtx_);
+  for (auto& t : pending_threads_) {
+    if (t.joinable()) {
+      t.join();  // threads will exit quickly after being notified
+    }
+  }
+  pending_threads_.clear();
+}
+
+void WsClient::ScheduleReconnect(int delay_seconds) {
+  if (destructed_) {
+    return;
+  }
+
+  // ensure only one reconnect attempt is scheduled at a time.
+  bool expected = false;
+  if (!is_reconnecting_.compare_exchange_strong(expected, true)) {
+    LOG_INFO("Reconnect already in progress, skipping.");
+    return;
+  }
+
+  // move old reconnect thread to pending list (non-blocking)
+  {
+    std::lock_guard<std::mutex> lock(pending_threads_mtx_);
+    if (reconnect_thread_.joinable()) {
+      pending_threads_.push_back(std::move(reconnect_thread_));
+    }
+  }
+
+  LOG_INFO("Will retry connection after {} seconds", delay_seconds);
+
+  // capture current generation to detect cancellation
+  uint64_t current_generation = reconnect_generation_.load();
+
+  std::weak_ptr<WsClient> weak_self = shared_from_this();
+  reconnect_thread_ = std::thread([weak_self, delay_seconds,
+                                   current_generation]() {
+    if (auto self = weak_self.lock()) {
+      if (delay_seconds > 0) {
+        // use interruptible wait instead of sleep
+        std::unique_lock<std::mutex> lock(self->reconnect_mtx_);
+        self->reconnect_cv_.wait_for(
+            lock, std::chrono::seconds(delay_seconds),
+            [&self, current_generation]() {
+              return self->destructed_.load() ||
+                     self->reconnect_generation_.load() != current_generation;
+            });
+      }
+
+      // generation changed or destructed, cancel this reconnect attempt
+      if (self->destructed_ ||
+          self->reconnect_generation_.load() != current_generation) {
+        self->is_reconnecting_.store(false);
+        return;
+      }
+
+      self->ReConnect();
+      self->is_reconnecting_.store(false);
+    }
+  });
 }
 
 void WsClient::RegisterHandlers() {
@@ -201,45 +283,14 @@ void WsClient::AsyncReConnect() {
     return;
   }
 
-  // Ensure only one reconnect attempt is scheduled at a time.
-  bool expected = false;
-  if (!is_reconnecting_.compare_exchange_strong(expected, true)) {
-    return;
-  }
-
-  if (reconnect_thread_.joinable()) {
-    if (reconnect_thread_.get_id() != std::this_thread::get_id()) {
-      reconnect_thread_.join();
-    } else {
-      reconnect_thread_.detach();
-    }
-  }
-
   // Exponential backoff: 0s, 1s, 2s, 4s, 8s ... capped at 60s
   int attempt = reconnect_attempts_.fetch_add(1) + 1;
   int exponent = std::min(attempt - 1, 6);  // 2^6 = 64s
   int delay_seconds = (attempt <= 1) ? 0 : (1 << exponent);
   delay_seconds = std::min(delay_seconds, 60);
 
-  LOG_INFO("Will retry connection after {} seconds (attempt {})", delay_seconds,
-           attempt);
-
-  std::weak_ptr<WsClient> weak_self = shared_from_this();
-  reconnect_thread_ = std::thread([weak_self, delay_seconds]() {
-    if (delay_seconds > 0) {
-      std::this_thread::sleep_for(std::chrono::seconds(delay_seconds));
-    }
-
-    if (auto self = weak_self.lock()) {
-      if (self->destructed_) {
-        self->is_reconnecting_.store(false);
-        return;
-      }
-
-      self->ReConnect();
-      self->is_reconnecting_.store(false);
-    }
-  });
+  LOG_INFO("AsyncReConnect: scheduling reconnect (attempt {})", attempt);
+  ScheduleReconnect(delay_seconds);
 }
 
 void WsClient::Close() {
@@ -434,19 +485,7 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
              delay_seconds, attempts + 1);
 
     if (!destructed_) {
-      if (reconnect_thread_.joinable()) {
-        reconnect_thread_.join();
-      }
-
-      std::weak_ptr<WsClient> weak_self = shared_from_this();
-      reconnect_thread_ = std::thread([weak_self, delay_seconds]() {
-        std::this_thread::sleep_for(std::chrono::seconds(delay_seconds));
-        if (auto self = weak_self.lock()) {
-          if (!self->destructed_) {
-            self->ReConnect();
-          }
-        }
-      });
+      ScheduleReconnect(delay_seconds);
     }
   } else {
     LOG_WARN("Connection failed (non-TLS error): {}", error_msg);

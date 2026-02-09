@@ -14,6 +14,7 @@
 #include <mutex>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "websocketpp/client.hpp"
 #include "websocketpp/common/memory.hpp"
@@ -92,6 +93,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   void SetStatus(WsStatus status);
 
+  void CleanupPendingThreads();
+
+  void ScheduleReconnect(int delay_seconds);
+
  private:
   std::unique_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
@@ -99,6 +104,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::thread m_thread_;
   std::thread ping_thread_;
   std::thread reconnect_thread_;
+  std::vector<std::thread> pending_threads_;
+  std::mutex pending_threads_mtx_;
+  std::condition_variable reconnect_cv_;
+  std::mutex reconnect_mtx_;
 
   std::string uri_;
   std::string expected_fingerprint_;
@@ -117,6 +126,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::atomic<bool> is_reconnecting_{false};
   std::atomic<int> reconnect_attempts_{0};
   std::atomic<int> tls_failure_count_{0};
+  std::atomic<uint64_t> reconnect_generation_{0};
 
   std::function<void(const std::string&)> on_receive_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
