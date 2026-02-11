@@ -40,9 +40,6 @@ PeerPtr* CreatePeer(const Params* params) {
     peer_ptr->pc_params.turn_server_port = params->turn_server_port;
     peer_ptr->pc_params.turn_server_username = params->turn_server_username;
     peer_ptr->pc_params.turn_server_password = params->turn_server_password;
-    peer_ptr->pc_params.tls_cert_fingerprint = params->tls_cert_fingerprint;
-    peer_ptr->pc_params.on_cert_fingerprint = params->on_cert_fingerprint;
-    peer_ptr->pc_params.fingerprint_user_data = params->fingerprint_user_data;
     peer_ptr->pc_params.hardware_acceleration = params->hardware_acceleration;
     peer_ptr->pc_params.av1_encoding = params->av1_encoding;
     peer_ptr->pc_params.enable_turn = params->enable_turn;

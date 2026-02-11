@@ -1,35 +1,22 @@
 #include "ws_client.h"
 
-#include <openssl/evp.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
+#include <openssl/x509_vfy.h>
+
+#ifdef _WIN32
+#include <wincrypt.h>
+#include <windows.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
-#include <iomanip>
 #include <iostream>
-#include <sstream>
 #include <thread>
 
 #include "log.h"
 
 namespace minirtc {
-
-std::string ComputeFingerprint(X509* cert) {
-  unsigned int n = 0;
-  unsigned char md[EVP_MAX_MD_SIZE];
-  if (X509_digest(cert, EVP_sha256(), md, &n) != 1) {
-    return "";
-  }
-
-  std::ostringstream oss;
-  for (unsigned int i = 0; i < n; i++) {
-    if (i) oss << ":";
-    oss << std::uppercase << std::hex << std::setw(2) << std::setfill('0')
-        << (int)md[i];
-  }
-  return oss.str();
-}
 
 WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
@@ -223,12 +210,10 @@ void WsClient::RegisterHandlers() {
       });
 }
 
-int WsClient::Connect(
-    const std::string& uri, const std::string& expected_fingerprint,
-    std::function<void(const std::string&)> on_fingerprint_cb) {
+int WsClient::Connect(const std::string& uri) {
   uri_ = uri;
-  expected_fingerprint_ = expected_fingerprint;
-  on_fingerprint_cb_ = on_fingerprint_cb;
+
+  LOG_INFO("Connecting WebSocket: {}", uri);
 
   StopThreads();
 
@@ -275,7 +260,7 @@ int WsClient::ReConnect() {
 
   StopThreads();
 
-  return Connect(uri_, expected_fingerprint_, on_fingerprint_cb_);
+  return Connect(uri_);
 }
 
 void WsClient::AsyncReConnect() {
@@ -378,6 +363,45 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
     ctx->set_verify_mode(asio::ssl::verify_peer |
                          asio::ssl::verify_fail_if_no_peer_cert);
 
+    // Load system CA certificates (no need to bundle cert files with client)
+#ifdef _WIN32
+    // On Windows, OpenSSL's set_default_verify_paths() does NOT read the
+    // Windows certificate store. We must manually load trusted root CAs
+    // from the Windows system store into the OpenSSL X509_STORE.
+    {
+      SSL_CTX* ssl_ctx = ctx->native_handle();
+      X509_STORE* store = SSL_CTX_get_cert_store(ssl_ctx);
+
+      HCERTSTORE sys_store = CertOpenSystemStoreW(0, L"ROOT");
+      if (sys_store) {
+        PCCERT_CONTEXT cert_ctx = nullptr;
+        int count = 0;
+        while ((cert_ctx = CertEnumCertificatesInStore(sys_store, cert_ctx)) !=
+               nullptr) {
+          const unsigned char* cert_data = cert_ctx->pbCertEncoded;
+          X509* x509 =
+              d2i_X509(nullptr, &cert_data, (long)cert_ctx->cbCertEncoded);
+          if (x509) {
+            X509_STORE_add_cert(store, x509);
+            X509_free(x509);
+            count++;
+          }
+        }
+        CertCloseStore(sys_store, 0);
+        LOG_INFO("Loaded {} root certificates from Windows system store",
+                 count);
+      } else {
+        LOG_WARN("Failed to open Windows system certificate store");
+      }
+    }
+#else
+    try {
+      ctx->set_default_verify_paths();
+    } catch (const std::exception& e) {
+      LOG_WARN("Failed to load system CA certificates: {}", e.what());
+    }
+#endif
+
     std::weak_ptr<WsClient> weak_self = shared_from_this();
     ctx->set_verify_callback(
         [weak_self](bool preverified, asio::ssl::verify_context& ctx) {
@@ -394,51 +418,23 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
 
 bool WsClient::OnTlsVerify(bool preverified,
                            websocketpp::lib::asio::ssl::verify_context& ctx) {
-  X509_STORE_CTX* cts = ctx.native_handle();
-  X509* cert = X509_STORE_CTX_get_current_cert(cts);
-  if (cert) {
-    int depth = X509_STORE_CTX_get_error_depth(cts);
-
-    // only verify the first certificate
-    if (depth == 0) {
-      std::string fingerprint = ComputeFingerprint(cert);
-
-      if (fingerprint.empty()) {
-        LOG_ERROR("Failed to compute certificate fingerprint");
-        tls_failure_count_++;
-        return false;
-      }
-
-      if (expected_fingerprint_.empty()) {
-        LOG_INFO("First connection: saving certificate fingerprint");
-        if (on_fingerprint_cb_) {
-          on_fingerprint_cb_(fingerprint);
-        }
-        tls_failure_count_ = 0;
-        return true;
-      }
-
-      if (fingerprint == expected_fingerprint_) {
-        char subject[256];
-        X509_NAME_oneline(X509_get_subject_name(cert), subject,
-                          sizeof(subject));
-        // LOG_INFO(
-        //     "TLS certificate fingerprint verified successfully. Subject: {}",
-        //     subject);
-        tls_failure_count_ = 0;
-        return true;
-      } else {
-        LOG_ERROR("Certificate fingerprint mismatch");
-        tls_failure_count_++;
-        ws_status_ = WsStatus::WsFingerprintMismatch;
-        expected_fingerprint_.clear();
-        on_ws_status_(ws_status_);
-        return false;
-      }
+  if (!preverified) {
+    // Provide more details than the generic "TLS handshake failed".
+    X509_STORE_CTX* store_ctx = ctx.native_handle();
+    if (store_ctx) {
+      int err = X509_STORE_CTX_get_error(store_ctx);
+      int depth = X509_STORE_CTX_get_error_depth(store_ctx);
+      const char* err_str = X509_verify_cert_error_string(err);
+      LOG_ERROR("TLS certificate verify failed: {} (err={}, depth={})",
+                (err_str ? err_str : "unknown"), err, depth);
+    } else {
+      LOG_ERROR("TLS certificate verify failed: no store_ctx");
     }
+    tls_failure_count_++;
+  } else {
+    tls_failure_count_ = 0;
   }
-
-  return true;
+  return preverified;
 }
 
 void WsClient::OnOpen(client*, websocketpp::connection_hdl hdl) {

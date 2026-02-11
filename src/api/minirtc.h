@@ -33,8 +33,7 @@ enum SignalStatus {
   SignalFailed,
   SignalClosed,
   SignalReconnecting,
-  SignalServerClosed,
-  SignalFingerprintMismatch
+  SignalServerClosed
 };
 
 enum TraversalMode { P2P = 0, Relay, UnknownMode };
@@ -120,9 +119,6 @@ typedef struct {
   int turn_server_port;
   char turn_server_username[256];
   char turn_server_password[256];
-  char tls_cert_fingerprint[256];
-  void (*on_cert_fingerprint)(const char* fingerprint, void* user_data);
-  void* fingerprint_user_data;
   char log_path[256];
   bool hardware_acceleration;
   bool av1_encoding;
