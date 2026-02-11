@@ -368,30 +368,42 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
     // On Windows, OpenSSL's set_default_verify_paths() does NOT read the
     // Windows certificate store. We must manually load trusted root CAs
     // from the Windows system store into the OpenSSL X509_STORE.
+    // Load from both Current User and Local Machine ROOT stores.
     {
       SSL_CTX* ssl_ctx = ctx->native_handle();
       X509_STORE* store = SSL_CTX_get_cert_store(ssl_ctx);
+      int total_count = 0;
 
-      HCERTSTORE sys_store = CertOpenSystemStoreW(0, L"ROOT");
-      if (sys_store) {
-        PCCERT_CONTEXT cert_ctx = nullptr;
-        int count = 0;
-        while ((cert_ctx = CertEnumCertificatesInStore(sys_store, cert_ctx)) !=
-               nullptr) {
-          const unsigned char* cert_data = cert_ctx->pbCertEncoded;
-          X509* x509 =
-              d2i_X509(nullptr, &cert_data, (long)cert_ctx->cbCertEncoded);
-          if (x509) {
-            X509_STORE_add_cert(store, x509);
-            X509_free(x509);
-            count++;
+      // Store flags: Current User and Local Machine
+      DWORD store_flags[] = {
+          CERT_SYSTEM_STORE_CURRENT_USER,
+          CERT_SYSTEM_STORE_LOCAL_MACHINE,
+      };
+      const char* store_names[] = {"CurrentUser", "LocalMachine"};
+
+      for (int i = 0; i < 2; i++) {
+        HCERTSTORE sys_store =
+            CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0,
+                          store_flags[i] | CERT_STORE_READONLY_FLAG, L"ROOT");
+        if (sys_store) {
+          PCCERT_CONTEXT cert_ctx = nullptr;
+          int count = 0;
+          while ((cert_ctx = CertEnumCertificatesInStore(
+                      sys_store, cert_ctx)) != nullptr) {
+            const unsigned char* cert_data = cert_ctx->pbCertEncoded;
+            X509* x509 =
+                d2i_X509(nullptr, &cert_data, (long)cert_ctx->cbCertEncoded);
+            if (x509) {
+              X509_STORE_add_cert(store, x509);
+              X509_free(x509);
+              count++;
+            }
           }
+          CertCloseStore(sys_store, 0);
+        } else {
+          LOG_WARN("Failed to open Windows {} certificate store",
+                   store_names[i]);
         }
-        CertCloseStore(sys_store, 0);
-        LOG_INFO("Loaded {} root certificates from Windows system store",
-                 count);
-      } else {
-        LOG_WARN("Failed to open Windows system certificate store");
       }
     }
 #else
