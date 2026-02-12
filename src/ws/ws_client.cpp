@@ -486,12 +486,44 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
     }
 #endif
 
+    bool loaded_system_certs = false;
     try {
       ctx->set_default_verify_paths();
+      loaded_system_certs = true;
     } catch (const std::exception& e) {
-      LOG_WARN("Failed to load system CA certificates: {}", e.what());
+      LOG_WARN(
+          "Failed to load system CA certificates from default verify paths: {}",
+          e.what());
     }
-#endif
+
+#if defined(__linux__)
+    const char* ca_bundle_paths[] = {
+        "/etc/ssl/certs/ca-certificates.crt",  // Debian/Ubuntu
+        "/etc/pki/tls/certs/ca-bundle.crt",    // RHEL/CentOS/Fedora
+        "/etc/ssl/ca-bundle.pem",              // openSUSE/SLES
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/ssl/cert.pem"  // Arch, Alpine, etc.
+    };
+
+    bool loaded_linux_bundle = false;
+    for (const char* path : ca_bundle_paths) {
+      try {
+        ctx->load_verify_file(path);
+        LOG_INFO("Loaded Linux system CA bundle from {}", path);
+        loaded_linux_bundle = true;
+        break;
+      } catch (const std::exception&) {
+        // Ignore and try the next candidate path.
+      }
+    }
+
+    if (!loaded_system_certs && !loaded_linux_bundle) {
+      LOG_WARN(
+          "Unable to load Linux system CA bundle from any known path; TLS "
+          "verification may fail if no custom CA is provided");
+    }
+#endif  // defined(__linux__)
+#endif  // _WIN32
 
     std::weak_ptr<WsClient> weak_self = shared_from_this();
     ctx->set_verify_callback(
