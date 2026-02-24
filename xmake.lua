@@ -40,6 +40,7 @@ elseif is_os("macosx") then
     add_ldflags("-Wl,-ld_classic")
     add_cxflags("-Wno-unused-variable")
     add_frameworks("VideoToolbox")
+    add_frameworks("Security")
 end
 
 target("log")

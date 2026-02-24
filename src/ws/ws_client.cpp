@@ -1,5 +1,6 @@
 #include "ws_client.h"
 
+#include <openssl/err.h>
 #include <openssl/ssl.h>
 #include <openssl/x509.h>
 #include <openssl/x509_vfy.h>
@@ -7,6 +8,11 @@
 #ifdef _WIN32
 #include <wincrypt.h>
 #include <windows.h>
+#endif
+
+#ifdef __APPLE__
+#include <CoreFoundation/CoreFoundation.h>
+#include <Security/Security.h>
 #endif
 
 #include <algorithm>
@@ -17,6 +23,68 @@
 #include "log.h"
 
 namespace minirtc {
+
+#ifdef __APPLE__
+namespace {
+bool LoadMacSystemAnchorCertificates(SSL_CTX* ssl_ctx) {
+  if (!ssl_ctx) {
+    return false;
+  }
+
+  X509_STORE* store = SSL_CTX_get_cert_store(ssl_ctx);
+  if (!store) {
+    LOG_WARN("Failed to get OpenSSL X509_STORE for macOS system certificates");
+    return false;
+  }
+
+  CFArrayRef certs = nullptr;
+  OSStatus status = SecTrustCopyAnchorCertificates(&certs);
+  if (status != errSecSuccess || certs == nullptr) {
+    LOG_WARN("SecTrustCopyAnchorCertificates failed: {}",
+             static_cast<int>(status));
+    return false;
+  }
+
+  CFIndex cert_count = CFArrayGetCount(certs);
+  int imported_count = 0;
+  for (CFIndex i = 0; i < cert_count; ++i) {
+    auto cert = reinterpret_cast<SecCertificateRef>(
+        const_cast<void*>(CFArrayGetValueAtIndex(certs, i)));
+    if (!cert) {
+      continue;
+    }
+
+    CFDataRef cert_data = SecCertificateCopyData(cert);
+    if (!cert_data) {
+      continue;
+    }
+
+    const unsigned char* data =
+        reinterpret_cast<const unsigned char*>(CFDataGetBytePtr(cert_data));
+    long data_len = static_cast<long>(CFDataGetLength(cert_data));
+    if (data && data_len > 0) {
+      const unsigned char* cursor = data;
+      X509* x509 = d2i_X509(nullptr, &cursor, data_len);
+      if (x509) {
+        if (X509_STORE_add_cert(store, x509) == 1) {
+          imported_count++;
+        } else {
+          ERR_clear_error();
+        }
+        X509_free(x509);
+      }
+    }
+
+    CFRelease(cert_data);
+  }
+
+  CFRelease(certs);
+  LOG_INFO("Loaded {} anchor certificates from macOS system trust store",
+           imported_count);
+  return imported_count > 0;
+}
+}  // namespace
+#endif
 
 WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
@@ -407,12 +475,55 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
       }
     }
 #else
-    try {
-      ctx->set_default_verify_paths();
-    } catch (const std::exception& e) {
-      LOG_WARN("Failed to load system CA certificates: {}", e.what());
+    bool loaded_macos_anchors = false;
+#ifdef __APPLE__
+    loaded_macos_anchors =
+        LoadMacSystemAnchorCertificates(ctx->native_handle());
+    if (!loaded_macos_anchors) {
+      LOG_WARN(
+          "Failed to load certificates from macOS system trust store, fallback "
+          "to OpenSSL default verify paths");
     }
 #endif
+
+    bool loaded_system_certs = false;
+    try {
+      ctx->set_default_verify_paths();
+      loaded_system_certs = true;
+    } catch (const std::exception& e) {
+      LOG_WARN(
+          "Failed to load system CA certificates from default verify paths: {}",
+          e.what());
+    }
+
+#if defined(__linux__)
+    const char* ca_bundle_paths[] = {
+        "/etc/ssl/certs/ca-certificates.crt",  // Debian/Ubuntu
+        "/etc/pki/tls/certs/ca-bundle.crt",    // RHEL/CentOS/Fedora
+        "/etc/ssl/ca-bundle.pem",              // openSUSE/SLES
+        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
+        "/etc/ssl/cert.pem"  // Arch, Alpine, etc.
+    };
+
+    bool loaded_linux_bundle = false;
+    for (const char* path : ca_bundle_paths) {
+      try {
+        ctx->load_verify_file(path);
+        LOG_INFO("Loaded Linux system CA bundle from {}", path);
+        loaded_linux_bundle = true;
+        break;
+      } catch (const std::exception&) {
+        // Ignore and try the next candidate path.
+      }
+    }
+
+    if (!loaded_system_certs && !loaded_linux_bundle) {
+      LOG_WARN(
+          "Unable to load Linux system CA bundle from any known path; TLS "
+          "verification may fail if no custom CA is provided");
+    }
+#endif  // defined(__linux__)
+#endif  // _WIN32
 
     std::weak_ptr<WsClient> weak_self = shared_from_this();
     ctx->set_verify_callback(
