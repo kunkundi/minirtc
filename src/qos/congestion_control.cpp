@@ -195,6 +195,13 @@ NetworkControlUpdate CongestionControl::OnTransportLossReport(
   return NetworkControlUpdate();
 }
 
+void CongestionControl::OnSentPacket(size_t bytes_sent, Timestamp at_time) {
+  alr_detector_->OnBytesSent(bytes_sent, at_time.ms());
+  std::optional<int64_t> alr_start_time =
+      alr_detector_->GetApplicationLimitedRegionStartTime();
+  acknowledged_bitrate_estimator_->SetAlr(alr_start_time.has_value());
+}
+
 NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
     TransportPacketsFeedback report) {
   if (report.packet_feedbacks.empty()) {

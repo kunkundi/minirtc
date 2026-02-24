@@ -44,6 +44,9 @@ IceTransportController::~IceTransportController() {
   if (task_queue_cc_) {
     task_queue_cc_->Stop();
   }
+  if (task_queue_pacer_) {
+    task_queue_pacer_->Stop();
+  }
   if (task_queue_encode_) {
     task_queue_encode_->Stop();
   }
@@ -88,14 +91,15 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   }
 
   task_queue_cc_ = std::make_shared<TaskQueue>("congest control");
+  task_queue_pacer_ = std::make_shared<TaskQueue>("pacer");
   task_queue_encode_ = std::make_shared<TaskQueueLockFree>("encode");
   task_queue_decode_ = std::make_shared<TaskQueueLockFree>("decode");
   task_queue_trans_fb_ =
       std::make_shared<TaskQueueLockFree>("transport feedback adapter");
 
   controller_ = std::make_unique<CongestionControl>();
-  paced_sender_ =
-      std::make_shared<PacedSender>(ice_agent_, webrtc_clock_, task_queue_cc_);
+  paced_sender_ = std::make_shared<PacedSender>(ice_agent_, webrtc_clock_,
+                                                task_queue_pacer_);
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(2000));
@@ -213,6 +217,7 @@ void IceTransportController::Destroy() {
   is_running_.store(false);
 
   task_queue_cc_->Stop();
+  task_queue_pacer_->Stop();
   task_queue_encode_->Stop();
   task_queue_decode_->Stop();
   task_queue_trans_fb_->Stop();
@@ -1107,8 +1112,8 @@ void IceTransportController::OnSentPacket(
   task_queue_trans_fb_->PostTask([this, packet]() mutable {
     webrtc::PacedPacketInfo pacing_info;
     size_t transport_overhead_bytes_per_packet_ = 0;
-    webrtc::Timestamp creation_time =
-        webrtc::Timestamp::Millis(clock_->CurrentTimeMs());
+    int64_t send_time_ms = clock_->CurrentTimeMs();
+    webrtc::Timestamp creation_time = webrtc::Timestamp::Millis(send_time_ms);
     rtc::SentPacket sent_packet;
     const std::optional<int64_t> transport_seq =
         packet.transport_sequence_number();
@@ -1130,10 +1135,20 @@ void IceTransportController::OnSentPacket(
       sent_packet.packet_id = -1;
       sent_packet.info.included_in_feedback = false;
     }
-    sent_packet.send_time_ms = clock_->CurrentTimeMs();
+    sent_packet.send_time_ms = send_time_ms;
     sent_packet.info.included_in_allocation = true;
     sent_packet.info.packet_size_bytes = packet.size();
     sent_packet.info.packet_type = rtc::PacketType::kData;
+
+    if (task_queue_cc_) {
+      size_t packet_size = packet.size();
+      webrtc::Timestamp sent_time = webrtc::Timestamp::Millis(send_time_ms);
+      task_queue_cc_->PostTask([this, packet_size, sent_time]() mutable {
+        if (controller_) {
+          controller_->OnSentPacket(packet_size, sent_time);
+        }
+      });
+    }
 
     transport_feedback_adapter_.ProcessSentPacket(sent_packet);
   });

@@ -190,6 +190,7 @@ class IceTransportController
   std::unique_ptr<CongestionControl> controller_;
   BitrateProber prober_;
   std::shared_ptr<TaskQueue> task_queue_cc_;
+  std::shared_ptr<TaskQueue> task_queue_pacer_;
   std::shared_ptr<TaskQueueLockFree> task_queue_encode_;
   std::shared_ptr<TaskQueueLockFree> task_queue_decode_;
   std::shared_ptr<TaskQueueLockFree> task_queue_trans_fb_;

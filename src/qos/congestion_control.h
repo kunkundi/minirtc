@@ -1,6 +1,7 @@
 #ifndef _CONGESTION_CONTROL_H_
 #define _CONGESTION_CONTROL_H_
 
+#include <cstddef>
 #include <deque>
 #include <memory>
 
@@ -33,6 +34,8 @@ class CongestionControl {
 
   NetworkControlUpdate OnTransportPacketsFeedback(
       TransportPacketsFeedback report);
+
+  void OnSentPacket(size_t bytes_sent, Timestamp at_time);
 
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
