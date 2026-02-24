@@ -13,6 +13,7 @@
 #include <wels/codec_ver.h>
 
 #include <functional>
+#include <vector>
 
 #include "media_codec.h"
 
@@ -46,13 +47,9 @@ class OpenH264Decoder : public MediaCodec {
   uint32_t frame_height_ = 720;
 
   unsigned char* yuv420p_planes_[3] = {nullptr, nullptr, nullptr};
-  unsigned char* yuv420p_frame_ = nullptr;
-  unsigned char* nv12_frame_ = nullptr;
-  int yuv420p_frame_capacity_ = 0;
-  int yuv420p_frame_size_ = 0;
-
-  int nv12_frame_capacity_ = 0;
-  int nv12_frame_size_ = 0;
+  std::vector<unsigned char> yuv420p_frame_;
+  std::vector<unsigned char> nv12_frame_;
+  size_t frame_size_ = 0;
 };
 }  // namespace minirtc
 

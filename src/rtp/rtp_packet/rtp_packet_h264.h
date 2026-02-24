@@ -26,6 +26,10 @@ class RtpPacketH264 : public RtpPacket {
 
   uint16_t GetOsn() { return osn_; }
 
+  uint8_t ForbiddenBit() const { return fu_indicator_.forbidden_bit; }
+  uint8_t NalRefIdc() const { return fu_indicator_.nal_reference_idc; }
+  uint8_t FuNalUnitType() const { return fu_header_.nal_unit_type; }
+
  private:
   uint16_t osn_;
   rtp::FU_INDICATOR fu_indicator_;

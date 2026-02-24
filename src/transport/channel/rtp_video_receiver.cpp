@@ -1,5 +1,7 @@
 #include "rtp_video_receiver.h"
 
+#include <vector>
+
 #include "api/ntp/ntp_time_util.h"
 #include "common.h"
 #include "fir.h"
@@ -230,9 +232,17 @@ void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
   if (!fec_enable_) {
     rtp::NAL_UNIT_TYPE nalu_type = rtp_packet_h264.NalUnitType();
     if (rtp::NAL_UNIT_TYPE::NALU == nalu_type) {
+      std::vector<uint8_t> bytestream;
+      bytestream.reserve(rtp_packet_h264.PayloadSize() + 1);
+      uint8_t header = (rtp_packet_h264.ForbiddenBit() << 7) |
+                       (rtp_packet_h264.NalRefIdc() << 5) |
+                       (uint8_t)rtp_packet_h264.NalUnitType();
+      bytestream.push_back(header);
+      const uint8_t* payload = rtp_packet_h264.Payload();
+      bytestream.insert(bytestream.end(), payload,
+                        payload + rtp_packet_h264.PayloadSize());
       std::unique_ptr<ReceivedFrame> received_frame =
-          std::make_unique<ReceivedFrame>(rtp_packet_h264.Payload(),
-                                          rtp_packet_h264.PayloadSize());
+          std::make_unique<ReceivedFrame>(bytestream.data(), bytestream.size());
       received_frame->SetReceivedTimestamp(clock_->CurrentTime().us());
       received_frame->SetCapturedTimestamp(
           (static_cast<int64_t>(rtp_packet_h264.Timestamp()) /
@@ -481,12 +491,20 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
 
   if (!nv12_data_) {
     nv12_data_ = new uint8_t[NV12_BUFFER_SIZE];
-  } else if (complete_frame_size > NV12_BUFFER_SIZE) {
+  } else if (complete_frame_size + 1 > NV12_BUFFER_SIZE) {
     delete[] nv12_data_;
-    nv12_data_ = new uint8_t[complete_frame_size];
+    nv12_data_ = new uint8_t[complete_frame_size + 1];
   }
 
   uint8_t* dest = nv12_data_;
+  if (incomplete_h264_frame_list_.find(start_seq) !=
+      incomplete_h264_frame_list_.end()) {
+    auto& first_pkt = incomplete_h264_frame_list_[start_seq];
+    uint8_t header = (first_pkt.ForbiddenBit() << 7) |
+                     (first_pkt.NalRefIdc() << 5) |
+                     (uint8_t)first_pkt.FuNalUnitType();
+    *dest++ = header;
+  }
   for (uint16_t seq = start_seq;; seq++) {
     if (incomplete_h264_frame_list_.find(seq) !=
         incomplete_h264_frame_list_.end()) {
@@ -500,7 +518,7 @@ bool RtpVideoReceiver::PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
   }
 
   std::unique_ptr<ReceivedFrame> received_frame =
-      std::make_unique<ReceivedFrame>(nv12_data_, complete_frame_size);
+      std::make_unique<ReceivedFrame>(nv12_data_, (size_t)(dest - nv12_data_));
   received_frame->SetReceivedTimestamp(clock_->CurrentTime().us());
   received_frame->SetCapturedTimestamp(
       (static_cast<int64_t>(timestamp) / rtp::kMsToRtpTimestamp -
