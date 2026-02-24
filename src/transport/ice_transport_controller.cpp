@@ -626,8 +626,12 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
     controller_->OnNetworkAvailability(msg);
   }
 
-  if (paced_sender_) {
-    paced_sender_->EnsureStarted();
+  if (task_queue_pacer_) {
+    task_queue_pacer_->PostTask([this]() mutable {
+      if (paced_sender_) {
+        paced_sender_->EnsureStarted();
+      }
+    });
   }
 }
 
@@ -1160,13 +1164,19 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
     UpdateCongestedState();
   }
 
-  if (update.pacer_config && paced_sender_) {
-    paced_sender_->SetPacingRates(update.pacer_config->data_rate(),
-                                  update.pacer_config->pad_rate());
+  if (update.pacer_config && task_queue_pacer_ && paced_sender_) {
+    task_queue_pacer_->PostTask([this, update = std::move(update)]() mutable {
+      paced_sender_->SetPacingRates(update.pacer_config->data_rate(),
+                                    update.pacer_config->pad_rate());
+    });
   }
 
-  if (!update.probe_cluster_configs.empty() && paced_sender_) {
-    paced_sender_->CreateProbeClusters(std::move(update.probe_cluster_configs));
+  if (!update.probe_cluster_configs.empty() && task_queue_pacer_ &&
+      paced_sender_) {
+    task_queue_pacer_->PostTask([this, update = std::move(update)]() mutable {
+      paced_sender_->CreateProbeClusters(
+          std::move(update.probe_cluster_configs));
+    });
   }
 
   if (update.target_rate) {
@@ -1253,8 +1263,10 @@ void IceTransportController::UpdateControlState() {
 void IceTransportController::UpdateCongestedState() {
   if (auto update = GetCongestedStateUpdate()) {
     is_congested_ = update.value();
-    if (paced_sender_) {
-      paced_sender_->SetCongested(update.value());
+    if (task_queue_pacer_ && paced_sender_) {
+      task_queue_pacer_->PostTask([this, update]() mutable {
+        paced_sender_->SetCongested(update.value());
+      });
     }
   }
 }
