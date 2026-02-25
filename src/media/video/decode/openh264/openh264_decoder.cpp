@@ -148,7 +148,7 @@ int OpenH264Decoder::Decode(
     if (on_receive_decoded_frame) {
       int stride_y = sDstBufInfo.UsrData.sSystemBuffer.iStride[0];
       int stride_u = sDstBufInfo.UsrData.sSystemBuffer.iStride[1];
-      int stride_v = sDstBufInfo.UsrData.sSystemBuffer.iStride[2];
+      int stride_v = stride_u;
 
       libyuv::I420Copy(
           yuv420p_planes_[0], stride_y, yuv420p_planes_[1], stride_u,
