@@ -11,7 +11,9 @@
 #define MODULES_REMOTE_BITRATE_ESTIMATOR_CONGESTION_CONTROL_FEEDBACK_TRACKER_H_
 
 #include <cstdint>
+#include <deque>
 #include <optional>
+#include <unordered_map>
 #include <vector>
 
 #include "api/transport/ecn_marking.h"
@@ -53,6 +55,10 @@ class CongestionControlFeedbackTracker {
   SeqNumUnwrapper<uint16_t> unwrapper_;
 
   std::vector<PacketInfo> packets_;
+
+  static constexpr size_t kMaxHistorySize = 16384;
+  std::unordered_map<int64_t, PacketInfo> history_;
+  std::deque<int64_t> history_order_;
 };
 
 }  // namespace webrtc
