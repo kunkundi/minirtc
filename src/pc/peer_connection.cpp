@@ -264,16 +264,19 @@ int PeerConnection::Leave(const std::string& transmission_id) {
 }
 
 int PeerConnection::AddVideoStream(const char* stream_id) {
+  LOG_INFO("Add video stream [{}]", stream_id);
   media_stream_ids_.video.push_back(stream_id);
   return 0;
 }
 
 int PeerConnection::AddAudioStream(const char* stream_id) {
+  LOG_INFO("Add audio stream [{}]", stream_id);
   media_stream_ids_.audio.push_back(stream_id);
   return 0;
 }
 
 int PeerConnection::AddDataStream(const char* stream_id, bool reliable) {
+  LOG_INFO("Add data stream [{}] reliable: {}", stream_id, reliable);
   media_stream_ids_.data.insert(std::make_pair(stream_id, reliable));
   return 0;
 }
