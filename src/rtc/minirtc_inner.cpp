@@ -53,6 +53,7 @@ PeerPtr* CreatePeer(const Params* params) {
   peer_ptr->pc_params.on_receive_video_frame = params->on_receive_video_frame;
 
   peer_ptr->pc_params.on_signal_status = params->on_signal_status;
+  peer_ptr->pc_params.on_signal_message = params->on_signal_message;
   peer_ptr->pc_params.on_connection_status = params->on_connection_status;
   peer_ptr->pc_params.on_net_status_report = params->on_net_status_report;
 
@@ -261,4 +262,12 @@ int64_t GetSystemTimeMicros(PeerPtr* peer_ptr) {
     return -1;
   }
   return peer_ptr->peer_connection->GetSystemTimeMicros();
+}
+
+int SendSignalMessage(PeerPtr* peer_ptr, const char* message, size_t size) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+  return peer_ptr->peer_connection->SendSignalMessage(message, size);
 }

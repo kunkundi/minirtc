@@ -9,9 +9,6 @@
 #define MINIRTC_API
 #endif
 
-// Backward-compatible alias (prefer MINIRTC_API)
-#define DLLAPI MINIRTC_API
-
 #include <cstddef>
 #include <cstdint>
 
@@ -95,6 +92,9 @@ typedef void (*OnReceiveVideoFrame)(const XVideoFrame* video_frame,
 typedef void (*OnSignalStatus)(SignalStatus status, const char* peer_id,
                                const size_t peer_id_size, void* user_data);
 
+typedef void (*OnSignalMessage)(const char* message, size_t size,
+                                void* user_data);
+
 typedef void (*OnConnectionStatus)(ConnectionStatus status,
                                    const char* remote_peer_id,
                                    const size_t remote_peer_id_size,
@@ -134,6 +134,7 @@ typedef struct {
   OnReceiveVideoFrame on_receive_video_frame;
 
   OnSignalStatus on_signal_status;
+  OnSignalMessage on_signal_message;
   OnConnectionStatus on_connection_status;
   OnNetStatusReport on_net_status_report;
 
@@ -199,6 +200,10 @@ MINIRTC_API int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
                                             size_t size, const char* stream_id,
                                             const char* remote_peer_id,
                                             size_t remote_peer_id_size);
+
+// Send signal message
+MINIRTC_API int SendSignalMessage(PeerPtr* peer_ptr, const char* message,
+                                  size_t size);
 
 // Get system time in microseconds
 MINIRTC_API int64_t GetSystemTimeMicros(PeerPtr* peer_ptr);

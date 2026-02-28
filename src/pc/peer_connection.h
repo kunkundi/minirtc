@@ -12,6 +12,7 @@
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "audio_decoder.h"
 #include "audio_encoder.h"
@@ -41,6 +42,8 @@ typedef void (*OnNetStatusReport)(const char*, const size_t, TraversalMode,
                                   const XNetTrafficStats*, const char*,
                                   const size_t, void*);
 
+typedef void (*OnSignalMessage)(const char*, size_t, void*);
+
 typedef struct {
   bool use_cfg_file;
   const char* cfg_path;
@@ -67,6 +70,7 @@ typedef struct {
   OnReceiveVideoFrame on_receive_video_frame;
 
   OnSignalStatus on_signal_status;
+  OnSignalMessage on_signal_message;
   OnConnectionStatus on_connection_status;
   OnNetStatusReport on_net_status_report;
 
@@ -117,6 +121,8 @@ class PeerConnection {
                                   size_t remote_peer_id_size);
 
   int64_t GetSystemTimeMicros();
+
+  int SendSignalMessage(const char* message, size_t size);
 
  private:
   int Login();
@@ -186,16 +192,17 @@ class PeerConnection {
       nullptr;
   bool ice_ready_ = false;
 
-  OnReceiveBuffer on_receive_video_buffer_;
-  OnReceiveBuffer on_receive_audio_buffer_;
-  OnReceiveBuffer on_receive_data_buffer_;
+  OnReceiveBuffer on_receive_video_buffer_ = nullptr;
+  OnReceiveBuffer on_receive_audio_buffer_ = nullptr;
+  OnReceiveBuffer on_receive_data_buffer_ = nullptr;
 
-  OnReceiveVideoFrame on_receive_video_frame_;
+  OnReceiveVideoFrame on_receive_video_frame_ = nullptr;
 
-  OnSignalStatus on_signal_status_;
-  OnConnectionStatus on_connection_status_;
-  OnNetStatusReport on_net_status_report_;
-  void* user_data_;
+  OnSignalStatus on_signal_status_ = nullptr;
+  OnSignalMessage on_signal_message_ = nullptr;
+  OnConnectionStatus on_connection_status_ = nullptr;
+  OnNetStatusReport on_net_status_report_ = nullptr;
+  void* user_data_ = nullptr;
 
   bool inited_ = false;
 
@@ -220,6 +227,16 @@ class PeerConnection {
   std::unordered_map<std::string, std::shared_ptr<ConnectionInterface>>
       peer_connection_map_;
   std::shared_mutex peer_connection_map_mutex_;
+
+  std::unordered_set<std::string> internal_signal_types_{
+      "login",
+      "transmission_id",
+      "user_join_transmission",
+      "user_leave_transmission",
+      "offer",
+      "answer",
+      "new_candidate",
+      "new_candidate_mid"};
 };
 }  // namespace minirtc
 

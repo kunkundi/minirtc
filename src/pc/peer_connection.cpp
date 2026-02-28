@@ -139,7 +139,21 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_callbacks_.on_net_status_report = params.on_net_status_report;
   connection_callbacks_.user_data = user_data_;
 
-  on_receive_ws_msg_ = [this](const std::string& msg) { ProcessSignal(msg); };
+  on_signal_message_ = params.on_signal_message;
+
+  on_receive_ws_msg_ = [this](const std::string& msg) {
+    auto j = json::parse(msg, nullptr, /*allow_exceptions=*/false);
+    if (!j.is_discarded() && j.contains("type") && j["type"].is_string()) {
+      std::string t = j["type"].get<std::string>();
+      if (internal_signal_types_.find(t) != internal_signal_types_.end()) {
+        ProcessSignal(msg);
+        return;
+      }
+    }
+    if (on_signal_message_) {
+      on_signal_message_(msg.data(), msg.size(), user_data_);
+    }
+  };
 
   on_ws_status_ = [this](WsStatus ws_status) {
     if (WsStatus::WsOpening == ws_status) {
@@ -416,6 +430,19 @@ int PeerConnection::SendReliableDataFrameToPeer(const char* data, size_t size,
   return 0;
 }
 
+int PeerConnection::SendSignalMessage(const char* message, size_t size) {
+  if (!message || size == 0) {
+    LOG_ERROR("Invalid signal message");
+    return -1;
+  }
+  if (!ws_transport_ || WsStatus::WsOpened != ws_status_) {
+    LOG_ERROR("Websocket not opened");
+    return -1;
+  }
+  ws_transport_->Send(std::string(message, size));
+  return 0;
+}
+
 int64_t PeerConnection::GetSystemTimeMicros() {
   if (clock_) {
     return clock_->CurrentTimeUs();
@@ -633,6 +660,22 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       msg.transmission_id = transmission_id;
       msg.remote_user_id = remote_user_id;
       msg.new_candidate = new_candidate;
+      PushIceWorkMsg(msg);
+
+      break;
+    }
+    case "new_candidate_mid"_H: {
+      std::string transmission_id = j["transmission_id"].get<std::string>();
+      std::string remote_user_id = j["remote_user_id"].get<std::string>();
+      std::string candidate = j["candidate"].get<std::string>();
+      std::string mid = j["mid"].get<std::string>();
+
+      IceWorkMsg msg;
+      msg.type = IceWorkMsg::Type::NewCandidateMid;
+      msg.transmission_id = transmission_id;
+      msg.remote_user_id = remote_user_id;
+      msg.candidate = candidate;
+      msg.mid = mid;
       PushIceWorkMsg(msg);
 
       break;
