@@ -7,6 +7,9 @@
 #include <string>
 #include <vector>
 
+// #define SAVE_DECODED_NV12_STREAM
+// #define SAVE_RECEIVED_H264_STREAM
+
 namespace minirtc {
 
 struct NaluUnit {
@@ -19,12 +22,12 @@ std::vector<NaluUnit> ExtractNalUnits(const uint8_t* buffer, size_t size) {
   std::vector<NaluUnit> nalus;
 
   size_t i = 0;
-  while (i + 4 < size) {
+  while (i + 3 <= size) {  // need at least a 3-byte start code
     size_t start_code_len = 0;
     if (buffer[i] == 0x00 && buffer[i + 1] == 0x00) {
-      if (buffer[i + 2] == 0x01) {
+      if (i + 3 <= size && buffer[i + 2] == 0x01) {
         start_code_len = 3;
-      } else if (buffer[i + 2] == 0x00 && buffer[i + 3] == 0x01) {
+      } else if (i + 4 <= size && buffer[i + 2] == 0x00 && buffer[i + 3] == 0x01) {
         start_code_len = 4;
       }
     }
@@ -35,18 +38,28 @@ std::vector<NaluUnit> ExtractNalUnits(const uint8_t* buffer, size_t size) {
     }
 
     size_t nalu_start = i + start_code_len;
-    size_t next_start = nalu_start;
-    while (next_start + 4 < size) {
+    if (nalu_start >= size) {
+      break;  // no more data
+    }
+
+    // find the next start code
+    size_t next_start = nalu_start + 1;  // start searching after the NALU data
+    while (next_start + 2 < size) {
       if (buffer[next_start] == 0x00 && buffer[next_start + 1] == 0x00 &&
           (buffer[next_start + 2] == 0x01 ||
-           (buffer[next_start + 2] == 0x00 && buffer[next_start + 3] == 0x01))) {
+           (next_start + 3 < size && buffer[next_start + 2] == 0x00 && buffer[next_start + 3] == 0x01))) {
         break;
       }
       ++next_start;
     }
+    
+    // if no next start code found, this is the last NALU; take until buffer end
+    if (next_start + 2 >= size) {
+      next_start = size;
+    }
 
     size_t nalu_size = next_start - nalu_start;
-    if (nalu_size > 0 && nalu_start + nalu_size <= size) {
+    if (nalu_size > 0) {
       uint8_t type = buffer[nalu_start] & 0x1F;
       nalus.push_back(NaluUnit{buffer + nalu_start, nalu_size, type});
     }
@@ -168,9 +181,14 @@ VideoToolboxDecoder::Impl::~Impl() {
 }
 
 int VideoToolboxDecoder::Impl::Init() {
+  std::string log_dir = std::string(getenv("HOME")) + "/Library/Logs/CrossDesk/";
+  // Create directory if not exists
+  std::string mkdir_cmd = "mkdir -p " + log_dir;
+  system(mkdir_cmd.c_str());
+
 #ifdef SAVE_DECODED_NV12_STREAM
   nv12_file_name_ =
-      "decoded_nv12_stream_" + std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
+      log_dir + "decoded_nv12_stream_" + std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
   file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
   if (!file_nv12_) {
     LOG_WARN("Fail to open {}", nv12_file_name_.c_str());
@@ -179,7 +197,7 @@ int VideoToolboxDecoder::Impl::Init() {
 
 #ifdef SAVE_RECEIVED_H264_STREAM
   h264_file_name_ =
-      "received_h264_stream_" + std::to_string(reinterpret_cast<uintptr_t>(this)) + ".h264";
+      log_dir + "received_h264_stream_" + std::to_string(reinterpret_cast<uintptr_t>(this)) + ".h264";
   file_h264_ = fopen(h264_file_name_.c_str(), "w+b");
   if (!file_h264_) {
     LOG_WARN("Fail to open {}", h264_file_name_.c_str());
@@ -203,7 +221,24 @@ int VideoToolboxDecoder::Impl::Decode(
   const uint8_t* data = received_frame->Buffer();
   size_t size = received_frame->Size();
 
-  if (size > 4 && (*(data + 4) & 0x1f) == 0x07) {
+#ifdef SAVE_RECEIVED_H264_STREAM
+  if (file_h264_) {
+    fwrite((unsigned char*)data, 1, size, file_h264_);
+  }
+#endif
+
+  // check if frame contains SPS (NAL type 7) using a more robust method
+  // no longer assume start code is 4 bytes, parse directly with ExtractNalUnits
+  bool has_sps = false;
+  auto all_nalus = ExtractNalUnits(data, size);
+  for (const auto& nalu : all_nalus) {
+    if (nalu.type == 7) {  // SPS
+      has_sps = true;
+      break;
+    }
+  }
+
+  if (has_sps) {
     std::vector<uint8_t> sps, pps;
     if (!ExtractSpsPps(data, size, sps, pps)) {
       LOG_ERROR("Failed to extract SPS/PPS from frame data");
@@ -211,6 +246,7 @@ int VideoToolboxDecoder::Impl::Decode(
     }
 
     if (sps != last_sps_ || pps != last_pps_) {
+      LOG_INFO("Creating new decompression session with SPS/PPS");
       if (!CreateSession(sps, pps)) {
         LOG_ERROR("Failed to create decompression session");
         return -1;
@@ -221,8 +257,10 @@ int VideoToolboxDecoder::Impl::Decode(
   }
 
   auto avcc_data = ConvertAnnexBToAVCCFiltered(data, size);
-  const uint8_t* avcc_data_ptr = avcc_data.data();
-  size_t avcc_data_size = avcc_data.size();
+  if (avcc_data.empty()) {
+    LOG_ERROR("Failed to convert Annex B to AVCC format");
+    return -1;
+  }
 
   if (!decompression_session_) {
     LOG_ERROR("Decompression session is not initialized");
@@ -230,11 +268,11 @@ int VideoToolboxDecoder::Impl::Decode(
   }
 
   CMBlockBufferRef block_buffer = nullptr;
-  OSStatus status = CMBlockBufferCreateWithMemoryBlock(nullptr, (void*)avcc_data_ptr,
-                                                       avcc_data_size, kCFAllocatorNull, nullptr, 0,
-                                                       avcc_data_size, 0, &block_buffer);
+  OSStatus status = CMBlockBufferCreateWithMemoryBlock(nullptr, (void*)avcc_data.data(),
+                                                       avcc_data.size(), kCFAllocatorNull, nullptr, 0,
+                                                       avcc_data.size(), 0, &block_buffer);
   if (status != kCMBlockBufferNoErr) {
-    LOG_ERROR("Failed to create block buffer");
+    LOG_ERROR("Failed to create block buffer, status: {}", status);
     return -1;
   }
 
