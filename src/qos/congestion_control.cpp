@@ -421,6 +421,11 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
     target_rate_msg.network_estimate.round_trip_time = round_trip_time;
     target_rate_msg.network_estimate.loss_rate_ratio = fraction_loss / 255.0f;
     target_rate_msg.network_estimate.bwe_period = bwe_period;
+    {
+      std::optional<int64_t> alr_start_time =
+          alr_detector_->GetApplicationLimitedRegionStartTime();
+      target_rate_msg.network_estimate.in_alr = alr_start_time.has_value();
+    }
 
     update->target_rate = target_rate_msg;
 

@@ -103,12 +103,12 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(2000));
+  paced_sender_->SetAllowProbeWithoutMediaPacket(true);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
   paced_sender_->SetOnSentPacketFunc(
       [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet) {
         if (auto self = weak_this.lock()) {
           if (self->ice_agent_) {
-            self->last_active_stream_ = packet->get_stream_name();
             webrtc::Timestamp now = self->webrtc_clock_->CurrentTime();
 
             if (self->enable_srtp_) {
@@ -140,6 +140,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
               switch (packet->packet_type().value()) {
                 case webrtc::RtpPacketMediaType::kVideo:
                 case webrtc::RtpPacketMediaType::kRetransmission: {
+                  self->last_active_stream_ = packet->get_stream_name();
                   std::shared_lock lock(self->stream_senders_mutex_);
                   if (self->stream_senders_.find(self->last_active_stream_) !=
                       self->stream_senders_.end()) {
@@ -160,13 +161,30 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           -> std::vector<std::unique_ptr<RtpPacket>> {
         if (auto self = weak_this.lock()) {
           std::shared_lock lock(self->stream_senders_mutex_);
-          if (self->stream_senders_.find(self->last_active_stream_) !=
-              self->stream_senders_.end()) {
-            return self->stream_senders_[self->last_active_stream_]
-                ->transceiver->GeneratePadding(size, captured_timestamp_us);
-          } else {
-            return {};
+          auto it = self->stream_senders_.find(self->last_active_stream_);
+          if (it != self->stream_senders_.end() && it->second &&
+              it->second->type == StreamType::kVideo &&
+              it->second->transceiver) {
+            return it->second->transceiver->GeneratePadding(
+                size, captured_timestamp_us);
           }
+          std::shared_ptr<StreamContext> best_ctx = nullptr;
+          int64_t best_ts = std::numeric_limits<int64_t>::min();
+          for (auto& [name, context] : self->stream_senders_) {
+            if (context && context->type == StreamType::kVideo &&
+                context->transceiver) {
+              int64_t ts = context->last_active_time.value_or(0);
+              if (ts > best_ts) {
+                best_ts = ts;
+                best_ctx = context;
+              }
+            }
+          }
+          if (best_ctx) {
+            return best_ctx->transceiver->GeneratePadding(
+                size, captured_timestamp_us);
+          }
+          return {};
         } else {
           return {};
         }
@@ -1226,23 +1244,48 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
       // Allocate bandwidth to video channels
       if (video_count > 0) {
         int sub_target_bitrate = video_bitrate_total / video_count;
+        bool freeze_resolution = false;
+        if (update.target_rate.has_value()) {
+          auto& ne = update.target_rate->network_estimate;
+          freeze_resolution =
+              ne.in_alr && ne.loss_rate_ratio <= 0.01f &&
+              ne.round_trip_time <= webrtc::TimeDelta::Millis(40);
+        }
+        if (freeze_resolution) {
+          LOG_INFO(
+              "Freeze resolution due to ALR: target_bps={} rtt_ms={} loss={}",
+              available_transport_bitrate_,
+              update.target_rate->network_estimate.round_trip_time.ms(),
+              update.target_rate->network_estimate.loss_rate_ratio);
+        }
         for (auto& [channel_name, context] : stream_senders_) {
           if (context->codec && context->type == StreamType::kVideo) {
-            int width, height, target_width, target_height;
-            if (!context->codec->GetResolution(&width, &height)) {
-              if (0 == resolution_adapter_->GetResolution(
-                           sub_target_bitrate, width, height, &target_width,
-                           &target_height)) {
-                if (target_width != context->target_width ||
-                    target_height != context->target_height) {
-                  context->target_width = target_width;
-                  context->target_height = target_height;
-                  b_force_i_frame_ = true;
-                }
-              } else if (context->target_width.has_value() &&
-                         context->target_height.has_value()) {
+            if (freeze_resolution) {
+              if (context->target_width.has_value() &&
+                  context->target_height.has_value()) {
+                LOG_INFO("Channel [{}] freeze: clear res_map {}x{}",
+                         channel_name, context->target_width.value(),
+                         context->target_height.value());
                 context->target_width.reset();
                 context->target_height.reset();
+              }
+            } else {
+              int width, height, target_width, target_height;
+              if (!context->codec->GetResolution(&width, &height)) {
+                if (0 == resolution_adapter_->GetResolution(
+                             sub_target_bitrate, width, height, &target_width,
+                             &target_height)) {
+                  if (target_width != context->target_width ||
+                      target_height != context->target_height) {
+                    context->target_width = target_width;
+                    context->target_height = target_height;
+                    b_force_i_frame_ = true;
+                  }
+                } else if (context->target_width.has_value() &&
+                           context->target_height.has_value()) {
+                  context->target_width.reset();
+                  context->target_height.reset();
+                }
               }
             }
             context->codec->SetTargetBitrate(sub_target_bitrate);

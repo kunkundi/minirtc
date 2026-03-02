@@ -200,6 +200,7 @@ struct NetworkEstimate {
   TimeDelta bwe_period = TimeDelta::PlusInfinity();
 
   float loss_rate_ratio = 0;
+  bool in_alr = false;
 };
 
 // Network control
