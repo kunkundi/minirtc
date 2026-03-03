@@ -91,35 +91,23 @@ int NvidiaVideoDecoder::Init() {
 
 int NvidiaVideoDecoder::Decode(
     std::unique_ptr<ReceivedFrame> received_frame,
-    std::function<void(const DecodedFrame *)> on_receive_decoded_frame) {
+    std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {
   if (!decoder_) {
     return -1;
   }
 
-  const uint8_t *data = received_frame->Buffer();
+  const uint8_t* data = received_frame->Buffer();
   size_t size = received_frame->Size();
 
 #ifdef SAVE_RECEIVED_H264_STREAM
-  fwrite((unsigned char *)data, 1, size, file_h264_);
+  fwrite((unsigned char*)data, 1, size, file_h264_);
 #endif
-
-  if ((data[4] & 0x1f) == 0x07) {
-    LOG_INFO("Receive key frame");
-    int width = 0, height = 0;
-    ParseSPSResolution(data + 4, size - 4, width, height);
-    if (width != frame_width_ || height != frame_height_) {
-      delete decoder_;
-      decoder_ =
-          new NvDecoder(cuda_context_, false, cudaVideoCodec_H264, true, false,
-                        nullptr, nullptr, 4096, 4096, 1000, false);
-    }
-  }
 
   int num_frame_returned = decoder_->Decode(data, (int)size);
   for (size_t i = 0; i < num_frame_returned; ++i) {
     cudaVideoSurfaceFormat format = decoder_->GetOutputFormat();
     if (format == cudaVideoSurfaceFormat_NV12) {
-      uint8_t *decoded_frame_buffer = nullptr;
+      uint8_t* decoded_frame_buffer = nullptr;
       decoded_frame_buffer = decoder_->GetFrame();
       frame_width_ = decoder_->GetWidth();
       frame_height_ = decoder_->GetHeight();
@@ -137,12 +125,13 @@ int NvidiaVideoDecoder::Decode(
               received_frame->CapturedTimestamp());
           decoded_frame_->SetDecodedTimestamp(clock_->CurrentTime());
 #ifdef SAVE_DECODED_NV12_STREAM
-          fwrite((unsigned char *)decoded_frame_->Buffer(), 1,
+          fwrite((unsigned char*)decoded_frame_->Buffer(), 1,
                  decoded_frame_->Size(), file_nv12_);
 #endif
           on_receive_decoded_frame(decoded_frame_);
         }
       }
+      decoder_->UnlockFrame(&decoded_frame_buffer);
     }
   }
 
