@@ -1226,7 +1226,7 @@ int IceTransport::SendReliableDataFrame(const char* data, size_t size,
 }
 
 uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
-  if (size < 2) {
+  if (size < kFixedHeaderSize) {
     return 0;
   }
 

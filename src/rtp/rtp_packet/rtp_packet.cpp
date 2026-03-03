@@ -8,20 +8,20 @@ RtpPacket::RtpPacket() {}
 
 RtpPacket::RtpPacket(size_t size) : buffer_(size) {}
 
-RtpPacket::RtpPacket(const uint8_t *buffer, uint32_t size)
+RtpPacket::RtpPacket(const uint8_t* buffer, uint32_t size)
     : buffer_(buffer, size) {}
 
-RtpPacket::RtpPacket(const RtpPacket &rtp_packet) = default;
+RtpPacket::RtpPacket(const RtpPacket& rtp_packet) = default;
 
-RtpPacket::RtpPacket(RtpPacket &&rtp_packet) = default;
+RtpPacket::RtpPacket(RtpPacket&& rtp_packet) = default;
 
-RtpPacket &RtpPacket::operator=(const RtpPacket &rtp_packet) = default;
+RtpPacket& RtpPacket::operator=(const RtpPacket& rtp_packet) = default;
 
-RtpPacket &RtpPacket::operator=(RtpPacket &&rtp_packet) = default;
+RtpPacket& RtpPacket::operator=(RtpPacket&& rtp_packet) = default;
 
 RtpPacket::~RtpPacket() = default;
 
-bool RtpPacket::Build(const uint8_t *buffer, uint32_t size) {
+bool RtpPacket::Build(const uint8_t* buffer, uint32_t size) {
   if (!Parse(buffer, size)) {
     LOG_WARN("RtpPacket::Build: parse failed");
     return false;
@@ -31,7 +31,7 @@ bool RtpPacket::Build(const uint8_t *buffer, uint32_t size) {
   return true;
 }
 
-bool RtpPacket::Parse(const uint8_t *buffer, uint32_t size) {
+bool RtpPacket::Parse(const uint8_t* buffer, uint32_t size) {
   payload_offset_ = 0;
 
   if (size < kFixedHeaderSize) {
@@ -135,8 +135,10 @@ bool RtpPacket::Parse(const uint8_t *buffer, uint32_t size) {
   if (has_padding_ && payload_offset_ < size) {
     padding_size_ = buffer[size - 1];
     if (padding_size_ == 0) {
-      LOG_WARN("Padding was set, but padding size is zero");
-      return false;
+      // TODO: consider this case as invalid packet or just treat it as no
+      // padding?
+      has_padding_ = false;
+      padding_size_ = 0;
     }
   } else {
     padding_size_ = 0;

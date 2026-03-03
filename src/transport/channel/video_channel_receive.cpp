@@ -1,13 +1,14 @@
 #include "video_channel_receive.h"
 
 #include "log.h"
+#include "rtp_packet.h"
 
 namespace minirtc {
 
 VideoChannelReceive::VideoChannelReceive() {}
 
 VideoChannelReceive::VideoChannelReceive(
-    const std::string &channel_name, uint32_t ssrc,
+    const std::string& channel_name, uint32_t ssrc,
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics,
     std::function<void(std::unique_ptr<ReceivedFrame>)>
@@ -29,7 +30,7 @@ void VideoChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
         on_receive_complete_frame_(std::move(received_frame));
       });
 
-  rtp_video_receiver_->SetSendDataFunc([this](const char *data,
+  rtp_video_receiver_->SetSendDataFunc([this](const char* data,
                                               size_t size) -> int {
     if (!ice_agent_) {
       LOG_ERROR("ice_agent_ is nullptr");
@@ -57,17 +58,21 @@ void VideoChannelReceive::Destroy() {
   }
 }
 
-int VideoChannelReceive::OnReceiveRtpPacket(const char *data, size_t size) {
+int VideoChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
   if (ice_io_statistics_) {
     ice_io_statistics_->UpdateVideoInboundBytes((uint32_t)size);
   }
 
   if (rtp_video_receiver_) {
+    if (size < kFixedHeaderSize) {
+      LOG_ERROR("Received RTP packet is too small, size={}", size);
+      return -1;
+    }
     RtpPacket rtp_packet;
-    rtp_packet.Build((uint8_t *)data, (uint32_t)size);
+    rtp_packet.Build((uint8_t*)data, (uint32_t)size);
     rtp_video_receiver_->InsertRtpPacket(rtp_packet);
   }
 
   return 0;
 }
-}
+}  // namespace minirtc
