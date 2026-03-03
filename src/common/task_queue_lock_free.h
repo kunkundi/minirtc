@@ -50,7 +50,10 @@ class TaskQueueLockFree {
         return;
       }
 
-      task_queue_.enqueue(std::move(task));
+      TaskItem item;
+      item.enqueue_time = std::chrono::steady_clock::now();
+      item.task = std::move(task);
+      task_queue_.enqueue(std::move(item));
       pending_tasks_.fetch_add(1, std::memory_order_release);
     }
 
@@ -82,23 +85,58 @@ class TaskQueueLockFree {
     return pending_tasks_.load(std::memory_order_acquire);
   }
 
+  long long CurrentTaskQueueDelayMs() const { return tls_current_delay_ms_; }
+  long long LastQueueDelayMs() const {
+    return last_delay_ms_.load(std::memory_order_acquire);
+  }
+  long long MaxQueueDelayMs() const {
+    return max_delay_ms_.load(std::memory_order_acquire);
+  }
+  double AvgQueueDelayMs() const {
+    return avg_delay_ms_.load(std::memory_order_acquire);
+  }
+
  private:
-  void WorkerThread() {
+  struct TaskItem {
+    std::chrono::steady_clock::time_point enqueue_time;
     AnyInvocable<void()> task;
+  };
+
+  void WorkerThread() {
+    TaskItem item;
     while (true) {
-      while (task_queue_.try_dequeue(task)) {
+      while (task_queue_.try_dequeue(item)) {
         // A successful dequeue must always reduce the pending count.
         pending_tasks_.fetch_sub(1, std::memory_order_acq_rel);
 
-        if (!task) {
+        if (!item.task) {
           LOG_ERROR("[TaskQueue: {}] Dequeued empty task", task_name_);
           continue;
+        }
+
+        auto now = std::chrono::steady_clock::now();
+        auto delay_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                            now - item.enqueue_time)
+                            .count();
+        tls_current_delay_ms_ = delay_ms;
+        last_delay_ms_.store(delay_ms, std::memory_order_release);
+        long long prev_max = max_delay_ms_.load(std::memory_order_relaxed);
+        if (delay_ms > prev_max) {
+          max_delay_ms_.store(delay_ms, std::memory_order_relaxed);
+        }
+        double prev_avg = avg_delay_ms_.load(std::memory_order_relaxed);
+        if (prev_avg == 0.0) {
+          avg_delay_ms_.store(static_cast<double>(delay_ms),
+                              std::memory_order_relaxed);
+        } else {
+          double updated = prev_avg * 0.9 + static_cast<double>(delay_ms) * 0.1;
+          avg_delay_ms_.store(updated, std::memory_order_relaxed);
         }
 
         if (log_enabled_) {
           auto start = std::chrono::steady_clock::now();
           try {
-            task();
+            item.task();
           } catch (const std::exception& e) {
             LOG_ERROR("[TaskQueue: {}] Task threw exception: {}", task_name_,
                       e.what());
@@ -113,7 +151,7 @@ class TaskQueueLockFree {
                    duration.count());
         } else {
           try {
-            task();
+            item.task();
           } catch (const std::exception& e) {
             LOG_ERROR("[TaskQueue: {}] Task threw exception: {}", task_name_,
                       e.what());
@@ -142,11 +180,16 @@ class TaskQueueLockFree {
 
   std::atomic<bool> stop_flag_{false};
   std::atomic<int> pending_tasks_{0};
-  moodycamel::ConcurrentQueue<AnyInvocable<void()>> task_queue_;
+  moodycamel::ConcurrentQueue<TaskItem> task_queue_;
   std::vector<std::thread> workers_;
 
   std::mutex mutex_;
   std::condition_variable cond_var_;
+
+  inline static thread_local long long tls_current_delay_ms_ = 0;
+  std::atomic<long long> last_delay_ms_{0};
+  std::atomic<long long> max_delay_ms_{0};
+  std::atomic<double> avg_delay_ms_{0.0};
 };
 }  // namespace minirtc
 
