@@ -109,4 +109,22 @@ int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
 
   return 0;
 }
+
+std::pair<int, int> ResolutionAdapter::GetNextLowerResolution(int current_w,
+                                                              int current_h) {
+  auto limits = GetBitrateLimits();
+  if (limits.empty()) {
+    return {-1, -1};
+  }
+  int current_area = current_w * current_h;
+  int best_w = -1, best_h = -1;
+  for (const auto& r : limits) {
+    int area = r.width * r.height;
+    if (area < current_area) {
+      best_w = r.width;
+      best_h = r.height;
+    }
+  }
+  return {best_w, best_h};
+}
 }  // namespace minirtc

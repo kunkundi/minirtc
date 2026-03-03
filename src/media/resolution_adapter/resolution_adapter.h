@@ -7,6 +7,7 @@
 #ifndef _RESOLUTION_ADAPTER_H_
 #define _RESOLUTION_ADAPTER_H_
 
+#include <utility>
 #include <vector>
 
 #include "minirtc.h"
@@ -29,6 +30,8 @@ class ResolutionAdapter {
 
   int ResolutionDowngrade(const RawFrame& video_frame, int target_width,
                           int target_height, RawFrame& scaled_frame);
+
+  std::pair<int, int> GetNextLowerResolution(int current_w, int current_h);
 
  public:
   std::vector<ResolutionBitrateLimits> GetBitrateLimits() {

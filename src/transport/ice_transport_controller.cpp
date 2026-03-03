@@ -521,9 +521,9 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
     return -1;
   }
 
+  bool force_i_frame = false;
   if (b_force_i_frame_) {
-    context->codec->ForceIdr();
-    LOG_INFO("Force I frame");
+    force_i_frame = true;
     b_force_i_frame_ = false;
   }
 
@@ -531,6 +531,37 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
     RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                        video_frame->width, video_frame->height);
     raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
+
+    if (task_queue_encode_->PendingTasks() > 0) {
+      return 0;
+    }
+
+    auto post_encode = [this, channel_name, context,
+                        force_i_frame](RawFrame&& frame) mutable {
+      task_queue_encode_->PostTask([this, channel_name, context, force_i_frame,
+                                    frame = std::move(frame)]() mutable {
+        int64_t queue_delay_ms = task_queue_encode_->CurrentTaskQueueDelayMs();
+        if (force_i_frame) {
+          context->codec->ForceIdr();
+          LOG_INFO("Force I frame");
+        }
+        int ret = context->codec->Encode(
+            std::move(frame),
+            [this, channel_name, context, queue_delay_ms,
+             is_first_callback =
+                 true](const EncodedFrame& encoded_frame) mutable -> int {
+              if (is_first_callback) {
+                is_first_callback = false;
+                MaybeDegradeResolutionOnEncodeTime(
+                    channel_name, static_cast<int>(queue_delay_ms),
+                    encoded_frame.EncodedWidth(),
+                    encoded_frame.EncodedHeight());
+              }
+              context->last_active_time = clock_->CurrentTimeMs();
+              return context->transceiver->SendVideo(encoded_frame);
+            });
+      });
+    };
 
     if (context->target_width.has_value() &&
         context->target_height.has_value() &&
@@ -547,32 +578,53 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
           raw_frame, context->target_width.value(),
           context->target_height.value(), scaled_frame);
 
-      task_queue_encode_->PostTask([this,
-                                    scaled_frame = std::move(scaled_frame),
-                                    channel_name, context]() mutable {
-        int ret = context->codec->Encode(
-            std::move(scaled_frame),
-            [this, channel_name,
-             context](const EncodedFrame& encoded_frame) -> int {
-              context->last_active_time = clock_->CurrentTimeMs();
-              return context->transceiver->SendVideo(encoded_frame);
-            });
-      });
+      post_encode(std::move(scaled_frame));
     } else {
-      task_queue_encode_->PostTask([this, raw_frame = std::move(raw_frame),
-                                    channel_name, context]() mutable {
-        int ret = context->codec->Encode(
-            std::move(raw_frame),
-            [this, channel_name,
-             context](const EncodedFrame& encoded_frame) -> int {
-              context->last_active_time = clock_->CurrentTimeMs();
-              return context->transceiver->SendVideo(encoded_frame);
-            });
-      });
+      post_encode(std::move(raw_frame));
     }
   }
 
   return 0;
+}
+
+void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
+    const std::string& channel_name, int queue_delay_ms, uint32_t encoded_w,
+    uint32_t encoded_h) {
+  const int kQueueDelayThresholdMs = 8;
+  const int kConsecutiveThreshold = 3;
+  std::unique_lock lock(stream_senders_mutex_);
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || !it->second) {
+    return;
+  }
+  auto& context = it->second;
+  if (queue_delay_ms >= kQueueDelayThresholdMs) {
+    context->encode_exceed_count += 1;
+  } else {
+    context->encode_exceed_count = 0;
+  }
+  if (context->encode_exceed_count < kConsecutiveThreshold) {
+    return;
+  }
+  int base_w = encoded_w;
+  int base_h = encoded_h;
+  if (context->target_width.has_value() && context->target_height.has_value()) {
+    base_w = context->target_width.value();
+    base_h = context->target_height.value();
+  }
+  auto [next_w, next_h] =
+      resolution_adapter_
+          ? resolution_adapter_->GetNextLowerResolution(base_w, base_h)
+          : std::pair<int, int>{-1, -1};
+  if (next_w <= 0 || next_h <= 0) {
+    context->encode_exceed_count = 0;
+    return;
+  }
+  context->target_width = next_w;
+  context->target_height = next_h;
+  context->encode_exceed_count = 0;
+  LOG_INFO("Resolution downgrade: channel={} {}x{} -> {}x{}", channel_name,
+           base_w, base_h, next_w, next_h);
 }
 
 int IceTransportController::SendAudio(const char* data, size_t size,

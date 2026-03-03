@@ -119,6 +119,10 @@ class IceTransportController
   void UpdateControlState();
   void UpdateCongestedState();
   std::optional<bool> GetCongestedStateUpdate() const;
+  void MaybeDegradeResolutionOnEncodeTime(const std::string& channel_name,
+                                          int queue_delay_ms,
+                                          uint32_t encoded_w,
+                                          uint32_t encoded_h);
 
  private:
   bool Process() override;
@@ -137,6 +141,7 @@ class IceTransportController
     std::optional<int> target_width;
     std::optional<int> target_height;
     std::optional<int64_t> last_active_time;
+    int encode_exceed_count = 0;
 
     std::shared_ptr<MediaChannel> transceiver;
     std::shared_ptr<MediaCodec> codec;
