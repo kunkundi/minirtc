@@ -31,42 +31,24 @@ class ResolutionAdapter {
   int ResolutionDowngrade(const RawFrame& video_frame, int target_width,
                           int target_height, RawFrame& scaled_frame);
 
-  std::pair<int, int> GetNextLowerResolution(int current_w, int current_h);
+  std::pair<int, int> GetNextLowerResolution(int current_w, int current_h,
+                                             int source_w, int source_h);
+  std::pair<int, int> GetNextHigherResolution(int current_w, int current_h,
+                                              int source_w, int source_h);
 
  public:
-  std::vector<ResolutionBitrateLimits> GetBitrateLimits() {
-    if (video_quality_ == QualityHigh) {
-      return {
-          {320, 180, 30'000, 80'000, 150'000},               // 180p
-          {480, 270, 80'000, 150'000, 250'000},              // 270p
-          {640, 360, 150'000, 250'000, 400'000},             // 360p
-          {960, 540, 300'000, 500'000, 800'000},             // 540p
-          {1280, 720, 500'000, 800'000, 1'200'000},          // 720p
-          {1920, 1080, 800'000, 1'200'000, 2'000'000},       // 1080p
-          {2560, 1440, 1'500'000, 2'500'000, 4'000'000},     // 1440p
-          {3840, 2160, 4'000'000, 8'000'000, 1'200'000'000}  // 4K
-      };
-    } else if (video_quality_ == QualityMedium) {
-      return {
-          {320, 180, 30'000, 80'000, 150'000},              // 180p
-          {480, 270, 80'000, 150'000, 250'000},             // 270p
-          {640, 360, 150'000, 250'000, 400'000},            // 360p
-          {960, 540, 300'000, 500'000, 800'000},            // 540p
-          {1280, 720, 500'000, 800'000, 1'200'000},         // 720p
-          {1920, 1080, 800'000, 1'200'000, 2'000'000'000},  // 1080p
-      };
-    } else {
-      return {
-          {320, 180, 30'000, 80'000, 150'000},           // 180p
-          {480, 270, 80'000, 150'000, 250'000},          // 270p
-          {640, 360, 150'000, 250'000, 400'000},         // 360p
-          {960, 540, 300'000, 500'000, 800'000},         // 540p
-          {1280, 720, 500'000, 800'000, 1'000'200'000},  // 720p
-      };
-    }
-  }
+  std::vector<ResolutionBitrateLimits> GetBitrateLimits() const;
 
   int SetTargetBitrate(int bitrate);
+
+ private:
+  // Compute bitrate limits for a single resolution tier.
+  // |is_highest| marks the top tier whose max_bitrate is set to INT_MAX,
+  // signalling "no upper cap" so the encoder is never forced to upgrade.
+  ResolutionBitrateLimits ComputeBitrateLimitsForResolution(
+      int w, int h, bool is_highest) const;
+
+  int GetMaxPixelsForQuality() const;
 
  private:
   std::vector<uint8_t> tmp_buffer_;

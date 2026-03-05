@@ -140,8 +140,18 @@ class IceTransportController
 
     std::optional<int> target_width;
     std::optional<int> target_height;
+    int source_width = 0;   // original capture width  (aspect-ratio anchor)
+    int source_height = 0;  // original capture height (aspect-ratio anchor)
     std::optional<int64_t> last_active_time;
     int encode_exceed_count = 0;
+    int encode_below_threshold_count = 0;
+    std::optional<int> mapped_target_width;
+    std::optional<int> mapped_target_height;
+    bool freeze_resolution = false;
+    std::optional<int> pending_mapped_width;
+    std::optional<int> pending_mapped_height;
+    int mapping_stability_count = 0;
+    int64_t last_resolution_change_ms = 0;
 
     std::shared_ptr<MediaChannel> transceiver;
     std::shared_ptr<MediaCodec> codec;
