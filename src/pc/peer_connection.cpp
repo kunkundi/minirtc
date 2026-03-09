@@ -11,6 +11,29 @@ namespace minirtc {
 
 using nlohmann::json;
 
+namespace {
+
+const char* SignalStatusToString(SignalStatus status) {
+  switch (status) {
+    case SignalStatus::SignalConnecting:
+      return "connecting";
+    case SignalStatus::SignalConnected:
+      return "connected";
+    case SignalStatus::SignalFailed:
+      return "failed";
+    case SignalStatus::SignalClosed:
+      return "closed";
+    case SignalStatus::SignalReconnecting:
+      return "reconnecting";
+    case SignalStatus::SignalServerClosed:
+      return "server_closed";
+    default:
+      return "unknown";
+  }
+}
+
+}  // namespace
+
 PeerConnection::PeerConnection() {}
 
 PeerConnection::~PeerConnection() { user_data_ = nullptr; }
@@ -224,8 +247,16 @@ int PeerConnection::Login() {
 }
 
 int PeerConnection::Join(const std::string& transmission_id) {
-  if (SignalStatus::SignalConnected != GetSignalStatus()) {
-    LOG_ERROR("Signal not connected");
+  SignalStatus signal_status = GetSignalStatus();
+  if (SignalStatus::SignalConnected != signal_status) {
+    if (signal_status == SignalStatus::SignalConnecting ||
+        signal_status == SignalStatus::SignalReconnecting) {
+      LOG_WARN("Signal service not ready for join yet, status = [{}]",
+               SignalStatusToString(signal_status));
+    } else {
+      LOG_ERROR("Signal server not connected, status = [{}]",
+                SignalStatusToString(signal_status));
+    }
     return -1;
   }
 
@@ -251,8 +282,16 @@ int PeerConnection::Join(const std::string& transmission_id) {
 }
 
 int PeerConnection::Leave(const std::string& transmission_id) {
-  if (SignalStatus::SignalConnected != GetSignalStatus()) {
-    LOG_ERROR("Signal not connected");
+  SignalStatus signal_status = GetSignalStatus();
+  if (SignalStatus::SignalConnected != signal_status) {
+    if (signal_status == SignalStatus::SignalConnecting ||
+        signal_status == SignalStatus::SignalReconnecting) {
+      LOG_WARN("Signal not ready for leave yet, status=[{}]",
+               SignalStatusToString(signal_status));
+    } else {
+      LOG_ERROR("Signal not connected, status=[{}]",
+                SignalStatusToString(signal_status));
+    }
     return -1;
   }
 

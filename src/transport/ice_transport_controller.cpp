@@ -510,9 +510,16 @@ bool IceTransportController::CheckSteamContext(
 
 int IceTransportController::SendVideo(const XVideoFrame* video_frame,
                                       const std::string& channel_name) {
+  if (!is_running_.load()) {
+    return -1;
+  }
+
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
+    if (!is_running_.load()) {
+      return -1;
+    }
     LOG_ERROR("Failed to find stream sender [{}]", channel_name);
     return -1;
   }
@@ -685,9 +692,16 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
 int IceTransportController::SendAudio(const char* data, size_t size,
                                       const std::string& channel_name) {
+  if (!is_running_.load()) {
+    return -1;
+  }
+
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
+    if (!is_running_.load()) {
+      return -1;
+    }
     LOG_ERROR("Failed to find stream sender [{}]", channel_name);
     return -1;
   }
@@ -709,9 +723,16 @@ int IceTransportController::SendAudio(const char* data, size_t size,
 
 int IceTransportController::SendData(const char* data, size_t size,
                                      const std::string& channel_name) {
+  if (!is_running_.load()) {
+    return -1;
+  }
+
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
+    if (!is_running_.load()) {
+      return -1;
+    }
     LOG_ERROR("Failed to find stream sender [{}]", channel_name);
     return -1;
   }
@@ -727,9 +748,16 @@ int IceTransportController::SendData(const char* data, size_t size,
 
 int IceTransportController::SendReliableData(const char* data, size_t size,
                                              const std::string& channel_name) {
+  if (!is_running_.load()) {
+    return -1;
+  }
+
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
+    if (!is_running_.load()) {
+      return -1;
+    }
     LOG_ERROR("Failed to find stream sender [{}]", channel_name);
     return -1;
   }
