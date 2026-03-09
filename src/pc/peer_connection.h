@@ -128,6 +128,16 @@ class PeerConnection {
   int Login();
 
   void ProcessSignal(const std::string& signal);
+  bool IsTerminalConnectionStatus(ConnectionStatus status) const;
+  std::shared_ptr<ConnectionInterface> CreateManagedPeerConnection(
+      const std::string& remote_user_id);
+  void CleanupPeerConnection(
+      const std::string& remote_user_id,
+      const std::shared_ptr<ConnectionInterface>& connection,
+      ConnectionStatus status);
+  std::shared_ptr<ConnectionInterface> ReplaceOrCreatePeerConnection(
+      const std::string& remote_user_id, const char* context);
+  void ClearPeerConnections(const char* reason);
 
  private:
   void StartIceWorker();

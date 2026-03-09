@@ -13,6 +13,29 @@ using nlohmann::json;
 
 namespace {
 
+const char* ConnectionStatusToString(ConnectionStatus status) {
+  switch (status) {
+    case ConnectionStatus::Connecting:
+      return "connecting";
+    case ConnectionStatus::Connected:
+      return "connected";
+    case ConnectionStatus::Gathering:
+      return "gathering";
+    case ConnectionStatus::Disconnected:
+      return "disconnected";
+    case ConnectionStatus::Failed:
+      return "failed";
+    case ConnectionStatus::Closed:
+      return "closed";
+    case ConnectionStatus::IncorrectPassword:
+      return "incorrect_password";
+    case ConnectionStatus::NoSuchTransmissionId:
+      return "no_such_transmission_id";
+    default:
+      return "unknown";
+  }
+}
+
 const char* SignalStatusToString(SignalStatus status) {
   switch (status) {
     case SignalStatus::SignalConnecting:
@@ -152,8 +175,6 @@ int PeerConnection::Init(PeerConnectionParams params) {
   on_net_status_report_ = params.on_net_status_report;
   user_data_ = params.user_data;
 
-  connection_callbacks_.on_connection_status = params.on_connection_status;
-
   connection_callbacks_.on_receive_video_frame = params.on_receive_video_frame;
   connection_callbacks_.on_receive_audio_buffer =
       params.on_receive_audio_buffer;
@@ -191,11 +212,13 @@ int PeerConnection::Init(PeerConnectionParams params) {
     } else if (WsStatus::WsFailed == ws_status) {
       ws_status_ = WsStatus::WsFailed;
       signal_status_ = SignalStatus::SignalFailed;
+      ClearPeerConnections("signal failed");
       on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsClosed == ws_status) {
       ws_status_ = WsStatus::WsClosed;
       signal_status_ = SignalStatus::SignalClosed;
+      ClearPeerConnections("signal closed");
       on_signal_status_(SignalStatus::SignalClosed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsReconnecting == ws_status) {
@@ -206,6 +229,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     } else if (WsStatus::WsServerClosed == ws_status) {
       ws_status_ = WsStatus::WsServerClosed;
       signal_status_ = SignalStatus::SignalServerClosed;
+      ClearPeerConnections("signal server closed");
       on_signal_status_(SignalStatus::SignalServerClosed, user_id_.data(),
                         user_id_.size(), user_data_);
     }
@@ -306,12 +330,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
 
   leave_ = true;
 
-  std::shared_lock lock(peer_connection_map_mutex_);
-  for (auto& peer_connection : peer_connection_map_) {
-    if (peer_connection.second) {
-      peer_connection.second->ReleaseAllIceTransmission();
-    }
-  }
+  ClearPeerConnections("leave transmission");
 
   return 0;
 }
@@ -335,6 +354,7 @@ int PeerConnection::AddDataStream(const char* stream_id, bool reliable) {
 }
 
 int PeerConnection::Destroy() {
+  ClearPeerConnections("destroy peer connection");
   StopIceWorker();
   if (ws_transport_) {
     LOG_INFO("Close websocket");
@@ -347,6 +367,115 @@ int PeerConnection::Destroy() {
 SignalStatus PeerConnection::GetSignalStatus() {
   std::lock_guard<std::mutex> l(signal_status_mutex_);
   return signal_status_;
+}
+
+bool PeerConnection::IsTerminalConnectionStatus(ConnectionStatus status) const {
+  return status == ConnectionStatus::Disconnected ||
+         status == ConnectionStatus::Failed ||
+         status == ConnectionStatus::Closed;
+}
+
+std::shared_ptr<ConnectionInterface>
+PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
+  auto weak_connection = std::make_shared<std::weak_ptr<ConnectionInterface>>();
+  ConnectionCallbacks callbacks = connection_callbacks_;
+  callbacks.on_connection_status = [this, remote_user_id, weak_connection](
+                                       ConnectionStatus status,
+                                       const char* peer_id, size_t peer_id_size,
+                                       void* user_data) {
+    if (on_connection_status_) {
+      on_connection_status_(status, peer_id, peer_id_size, user_data);
+    }
+
+    if (!IsTerminalConnectionStatus(status)) {
+      return;
+    }
+
+    auto connection = weak_connection->lock();
+    if (!connection) {
+      return;
+    }
+
+    CleanupPeerConnection(remote_user_id, connection, status);
+  };
+
+  std::shared_ptr<ConnectionInterface> connection;
+  if (remote_user_id.find("web") == std::string::npos) {
+    connection = std::make_shared<MiniRTCConnection>(
+        clock_, ws_transport_, connection_info_, media_stream_ids_, callbacks);
+  } else {
+    connection = std::make_shared<DataChannelConnection>(
+        clock_, ws_transport_, connection_info_, media_stream_ids_, callbacks);
+  }
+
+  *weak_connection = connection;
+  return connection;
+}
+
+void PeerConnection::CleanupPeerConnection(
+    const std::string& remote_user_id,
+    const std::shared_ptr<ConnectionInterface>& connection,
+    ConnectionStatus status) {
+  std::unique_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(remote_user_id);
+  if (it != peer_connection_map_.end() && it->second == connection) {
+    peer_connection_map_.erase(it);
+    LOG_INFO("[{}] Remove peer connection for user [{}] after status [{}]",
+             user_id_, remote_user_id, ConnectionStatusToString(status));
+  }
+}
+
+std::shared_ptr<ConnectionInterface>
+PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
+                                              const char* context) {
+  std::shared_ptr<ConnectionInterface> replaced;
+  std::shared_ptr<ConnectionInterface> connection;
+  {
+    std::unique_lock lock(peer_connection_map_mutex_);
+    auto it = peer_connection_map_.find(remote_user_id);
+    if (it != peer_connection_map_.end()) {
+      replaced = it->second;
+      peer_connection_map_.erase(it);
+      LOG_WARN("[{}] Replace existing peer connection for user [{}] on {}",
+               user_id_, remote_user_id, context);
+    }
+
+    connection = CreateManagedPeerConnection(remote_user_id);
+    peer_connection_map_.emplace(remote_user_id, connection);
+  }
+
+  if (replaced) {
+    replaced->ReleaseAllIceTransmission();
+  }
+
+  if (connection) {
+    connection->Init();
+  }
+
+  return connection;
+}
+
+void PeerConnection::ClearPeerConnections(const char* reason) {
+  std::vector<std::shared_ptr<ConnectionInterface>> connections;
+  {
+    std::unique_lock lock(peer_connection_map_mutex_);
+    for (auto& peer_connection : peer_connection_map_) {
+      if (peer_connection.second) {
+        connections.push_back(peer_connection.second);
+      }
+    }
+    peer_connection_map_.clear();
+  }
+
+  if (connections.empty()) {
+    return;
+  }
+
+  LOG_INFO("[{}] Clear [{}] peer connection(s), reason=[{}]", user_id_,
+           connections.size(), reason);
+  for (auto& connection : connections) {
+    connection->ReleaseAllIceTransmission();
+  }
 }
 
 int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
@@ -554,36 +683,6 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       } else {
         std::string remote_user_id = j["user_id"].get<std::string>();
 
-        connection_info_.transmission_id = transmission_id;
-        connection_info_.user_id = user_id_;
-        connection_info_.remote_user_id = remote_user_id;
-
-        {
-          std::unique_lock lock(peer_connection_map_mutex_);
-          if (peer_connection_map_.find(remote_user_id) ==
-              peer_connection_map_.end()) {
-            if (remote_user_id.find("web") == std::string::npos) {
-              peer_connection_map_.emplace(
-                  remote_user_id,
-                  std::make_shared<MiniRTCConnection>(
-                      clock_, ws_transport_, connection_info_,
-                      media_stream_ids_, connection_callbacks_));
-            } else {
-              // web client use libdatachannel
-              peer_connection_map_.emplace(
-                  remote_user_id,
-                  std::make_shared<DataChannelConnection>(
-                      clock_, ws_transport_, connection_info_,
-                      media_stream_ids_, connection_callbacks_));
-            }
-
-            peer_connection_map_[remote_user_id]->Init();
-          } else {
-            LOG_ERROR("Peer connection already exists");
-            break;
-          }
-        }
-
         if (remote_user_id.empty()) {
           LOG_ERROR(
               "Invalid remote user join transmission msg without user id");
@@ -593,6 +692,12 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         if (remote_user_id == user_id_) {
           break;
         }
+
+        connection_info_.transmission_id = transmission_id;
+        connection_info_.user_id = user_id_;
+        connection_info_.remote_user_id = remote_user_id;
+
+        ReplaceOrCreatePeerConnection(remote_user_id, "join");
 
         IceWorkMsg msg;
         msg.type = IceWorkMsg::Type::UserJoinTransmission;
@@ -621,34 +726,16 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         std::string remote_sdp = j["sdp"].get<std::string>();
         LOG_INFO("[{}] receive offer from [{}]", user_id_, remote_user_id);
 
+        if (remote_user_id.empty()) {
+          LOG_ERROR("Invalid offer msg without remote user id");
+          break;
+        }
+
         connection_info_.transmission_id = transmission_id;
         connection_info_.user_id = user_id_;
         connection_info_.remote_user_id = remote_user_id;
 
-        {
-          std::unique_lock lock(peer_connection_map_mutex_);
-          if (peer_connection_map_.find(remote_user_id) ==
-              peer_connection_map_.end()) {
-            if (remote_user_id.find("web") == std::string::npos) {
-              peer_connection_map_.emplace(
-                  remote_user_id,
-                  std::make_shared<MiniRTCConnection>(
-                      clock_, ws_transport_, connection_info_,
-                      media_stream_ids_, connection_callbacks_));
-            } else {
-              peer_connection_map_.emplace(
-                  remote_user_id,
-                  std::make_shared<DataChannelConnection>(
-                      clock_, ws_transport_, connection_info_,
-                      media_stream_ids_, connection_callbacks_));
-            }
-
-            peer_connection_map_[remote_user_id]->Init();
-          } else {
-            LOG_ERROR("Peer connection already exists");
-            break;
-          }
-        }
+        ReplaceOrCreatePeerConnection(remote_user_id, "offer");
 
         IceWorkMsg msg;
         msg.type = IceWorkMsg::Type::Offer;
@@ -764,33 +851,48 @@ void PeerConnection::PushIceWorkMsg(const IceWorkMsg& msg) {
 }
 
 void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
-  if (msg.remote_user_id != "") {
-    if (msg.type == IceWorkMsg::Type::UserLeaveTransmission) {
-      std::string remote_user_id = msg.remote_user_id;
-      {
-        std::shared_lock lock(peer_connection_map_mutex_);
-        auto it = peer_connection_map_.find(remote_user_id);
-        if (it != peer_connection_map_.end()) {
-          it->second->ProcessIceWorkMsg(msg);
-        }
-      }
-      {
-        std::unique_lock lock(peer_connection_map_mutex_);
-        auto it = peer_connection_map_.find(remote_user_id);
-        if (it != peer_connection_map_.end()) {
-          LOG_INFO(
-              "[{}] Remove peer connection for user [{}] after leave "
-              "transmission",
-              user_id_, remote_user_id);
-          peer_connection_map_.erase(it);
-        }
-      }
-    } else {
+  if (msg.remote_user_id.empty()) {
+    return;
+  }
+
+  if (msg.type == IceWorkMsg::Type::UserLeaveTransmission) {
+    std::string remote_user_id = msg.remote_user_id;
+    std::shared_ptr<ConnectionInterface> connection;
+    {
       std::shared_lock lock(peer_connection_map_mutex_);
-      if (peer_connection_map_.find(msg.remote_user_id) !=
-          peer_connection_map_.end()) {
-        peer_connection_map_[msg.remote_user_id]->ProcessIceWorkMsg(msg);
+      auto it = peer_connection_map_.find(remote_user_id);
+      if (it != peer_connection_map_.end()) {
+        connection = it->second;
       }
+    }
+    // Release lock before calling ProcessIceWorkMsg, because
+    // DestroyIceTransmission may trigger ICE status callbacks that
+    // call CleanupPeerConnection which needs a unique_lock.
+    if (connection) {
+      connection->ProcessIceWorkMsg(msg);
+    }
+    {
+      std::unique_lock lock(peer_connection_map_mutex_);
+      auto it = peer_connection_map_.find(remote_user_id);
+      if (it != peer_connection_map_.end()) {
+        LOG_INFO(
+            "[{}] Remove peer connection for user [{}] after leave "
+            "transmission",
+            user_id_, remote_user_id);
+        peer_connection_map_.erase(it);
+      }
+    }
+  } else {
+    std::shared_ptr<ConnectionInterface> connection;
+    {
+      std::shared_lock lock(peer_connection_map_mutex_);
+      auto it = peer_connection_map_.find(msg.remote_user_id);
+      if (it != peer_connection_map_.end()) {
+        connection = it->second;
+      }
+    }
+    if (connection) {
+      connection->ProcessIceWorkMsg(msg);
     }
   }
 }

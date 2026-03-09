@@ -7,6 +7,7 @@
 #ifndef _CONNECTION_INTERFACE_H_
 #define _CONNECTION_INTERFACE_H_
 
+#include <functional>
 #include <map>
 #include <string>
 #include <vector>
@@ -45,7 +46,8 @@ struct ConnectionCallbacks {
   OnReceiveVideoFrame on_receive_video_frame;
   OnReceiveBuffer on_receive_audio_buffer;
   OnReceiveBuffer on_receive_data_buffer;
-  OnConnectionStatus on_connection_status;
+  std::function<void(ConnectionStatus, const char*, size_t, void*)>
+      on_connection_status;
   OnNetStatusReport on_net_status_report;
   void* user_data = nullptr;
 };
