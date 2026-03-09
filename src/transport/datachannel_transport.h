@@ -7,6 +7,7 @@
 #ifndef _DATACHANNEL_TRANSPORT_H_
 #define _DATACHANNEL_TRANSPORT_H_
 
+#include <atomic>
 #include <memory>
 #include <optional>
 #include <shared_mutex>
@@ -49,6 +50,8 @@ class DataChannelTransport
                        std::string local_id, std::string remote_id,
                        bool offer_peer);
   ~DataChannelTransport();
+
+  void Shutdown();
 
  public:
   int SendVideoFrame(const XVideoFrame* video_frame,
@@ -119,6 +122,7 @@ class DataChannelTransport
   std::shared_ptr<SystemClock> clock_;
   std::shared_ptr<TaskQueueLockFree> task_queue_encode_;
   std::shared_ptr<TaskQueueLockFree> task_queue_decode_;
+  std::atomic<bool> shutdown_{false};
 };
 }  // namespace minirtc
 #endif

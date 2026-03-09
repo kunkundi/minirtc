@@ -7,6 +7,7 @@
 #ifndef _DATACHANNEL_CONNECTION_H_
 #define _DATACHANNEL_CONNECTION_H_
 
+#include <atomic>
 #include <shared_mutex>
 #include <unordered_map>
 
@@ -71,6 +72,8 @@ class DataChannelConnection : public ConnectionInterface {
   std::shared_ptr<Stream> CreateStream(const std::string h264Samples,
                                        const unsigned fps,
                                        const std::string opusSamples);
+
+  void ResetDataChannelTransport();
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;

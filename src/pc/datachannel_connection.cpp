@@ -52,7 +52,7 @@ DataChannelConnection::DataChannelConnection(
              });
 }
 
-DataChannelConnection::~DataChannelConnection() {}
+DataChannelConnection::~DataChannelConnection() { ResetDataChannelTransport(); }
 
 int DataChannelConnection::Init() {
   std::string stun_server = "stun:" + info_.stun_server_ip + ":" +
@@ -77,12 +77,7 @@ int DataChannelConnection::Init() {
 }
 
 int DataChannelConnection::ReleaseAllIceTransmission() {
-  if (dc_transport_) {
-    auto pc = dc_transport_->GetPeerConnection();
-    if (pc) {
-      pc->close();
-    }
-  }
+  ResetDataChannelTransport();
   return 0;
 }
 
@@ -144,6 +139,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       LOG_INFO("[{}] Receive notification: user id [{}] join transmission",
                (void*)this, remote_user_id);
       LOG_INFO("Create transmission to user [{}]", remote_user_id);
+      ResetDataChannelTransport();
       dc_transport_ = CreateDataChannelConnection(
           peer_connection_config_, clock_, make_weak_ptr(ws_), true,
           remote_user_id, remote_user_id);
@@ -165,6 +161,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
       LOG_INFO("Receive offer from user [{}]", remote_user_id);
 
+      ResetDataChannelTransport();
       dc_transport_ = CreateDataChannelConnection(
           peer_connection_config_, clock_, make_weak_ptr(ws_), false,
           transmission_id, remote_user_id);
@@ -260,6 +257,22 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     default: {
       break;
     }
+  }
+}
+
+void DataChannelConnection::ResetDataChannelTransport() {
+  auto transport = std::move(dc_transport_);
+  dc_ready_ = false;
+
+  if (!transport) {
+    return;
+  }
+
+  transport->Shutdown();
+
+  auto pc = transport->GetPeerConnection();
+  if (pc) {
+    pc->close();
   }
 }
 

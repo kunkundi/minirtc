@@ -35,12 +35,7 @@ DataChannelTransport::DataChannelTransport(
 }
 
 DataChannelTransport::~DataChannelTransport() {
-  if (task_queue_encode_) {
-    task_queue_encode_->Stop();
-  }
-  if (task_queue_decode_) {
-    task_queue_decode_->Stop();
-  }
+  Shutdown();
 
   {
     std::unique_lock lock_video(video_streams_mutex_);
@@ -67,6 +62,22 @@ DataChannelTransport::~DataChannelTransport() {
   }
 #endif
   load_nvcodec_dll_success_ = false;
+}
+
+void DataChannelTransport::Shutdown() {
+  bool expected = false;
+  if (!shutdown_.compare_exchange_strong(expected, true)) {
+    return;
+  }
+
+  if (task_queue_encode_) {
+    task_queue_encode_->Stop();
+    task_queue_encode_.reset();
+  }
+  if (task_queue_decode_) {
+    task_queue_decode_->Stop();
+    task_queue_decode_.reset();
+  }
 }
 
 int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
