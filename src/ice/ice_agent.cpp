@@ -544,31 +544,99 @@ int IceAgent::StartDtls(bool is_client) {
 }
 
 void IceAgent::GenerateDtlsCertificate(int days_valid) {
-  EVP_PKEY* pkey = EVP_PKEY_new();
-  RSA* rsa = RSA_new();
-  BIGNUM* e = BN_new();
-  BN_set_word(e, RSA_F4);
-  RSA_generate_key_ex(rsa, 2048, e, nullptr);
-  EVP_PKEY_assign_RSA(pkey, rsa);
-  BN_free(e);
+  EVP_PKEY_CTX* keygen_ctx = nullptr;
+  EVP_PKEY* pkey = nullptr;
+  X509* x509 = nullptr;
 
-  X509* x509 = X509_new();
-  ASN1_INTEGER_set(X509_get_serialNumber(x509), 1);
-  X509_gmtime_adj(X509_get_notBefore(x509), 0);
-  X509_gmtime_adj(X509_get_notAfter(x509), (long)60 * 60 * 24 * days_valid);
-  X509_set_pubkey(x509, pkey);
+  auto fail = [&]() {
+    log_openssl_errors();
+    if (x509) {
+      X509_free(x509);
+      x509 = nullptr;
+    }
+    if (pkey) {
+      EVP_PKEY_free(pkey);
+      pkey = nullptr;
+    }
+    if (keygen_ctx) {
+      EVP_PKEY_CTX_free(keygen_ctx);
+      keygen_ctx = nullptr;
+    }
+  };
+
+  keygen_ctx = EVP_PKEY_CTX_new_id(EVP_PKEY_RSA, nullptr);
+  if (!keygen_ctx) {
+    LOG_ERROR("EVP_PKEY_CTX_new_id failed");
+    fail();
+    return;
+  }
+
+  if (EVP_PKEY_keygen_init(keygen_ctx) <= 0) {
+    LOG_ERROR("EVP_PKEY_keygen_init failed");
+    fail();
+    return;
+  }
+
+  if (EVP_PKEY_CTX_set_rsa_keygen_bits(keygen_ctx, 2048) <= 0) {
+    LOG_ERROR("EVP_PKEY_CTX_set_rsa_keygen_bits failed");
+    fail();
+    return;
+  }
+
+  if (EVP_PKEY_keygen(keygen_ctx, &pkey) <= 0) {
+    LOG_ERROR("EVP_PKEY_keygen failed");
+    fail();
+    return;
+  }
+
+  x509 = X509_new();
+  if (!x509) {
+    LOG_ERROR("X509_new failed");
+    fail();
+    return;
+  }
+
+  if (ASN1_INTEGER_set(X509_get_serialNumber(x509), 1) != 1 ||
+      X509_gmtime_adj(X509_get_notBefore(x509), 0) == nullptr ||
+      X509_gmtime_adj(X509_get_notAfter(x509),
+                      (long)60 * 60 * 24 * days_valid) == nullptr ||
+      X509_set_pubkey(x509, pkey) != 1) {
+    LOG_ERROR("Failed to initialize X509 fields");
+    fail();
+    return;
+  }
 
   X509_NAME* name = X509_get_subject_name(x509);
-  X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
-                             (unsigned char*)"DTLS-SRTP Self-Signed", -1, -1,
-                             0);
-  X509_set_issuer_name(x509, name);
+  if (!name ||
+      X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                 (unsigned char*)"DTLS-SRTP Self-Signed", -1,
+                                 -1, 0) != 1 ||
+      X509_set_issuer_name(x509, name) != 1) {
+    LOG_ERROR("Failed to set X509 subject/issuer");
+    fail();
+    return;
+  }
 
-  X509_sign(x509, pkey, EVP_sha256());
+  if (X509_sign(x509, pkey, EVP_sha256()) <= 0) {
+    LOG_ERROR("X509_sign failed");
+    fail();
+    return;
+  }
+
+  std::string fingerprint = ComputeFingerprint(x509);
+
+  if (dtls_pkey_) {
+    EVP_PKEY_free(dtls_pkey_);
+  }
+  if (dtls_cert_) {
+    X509_free(dtls_cert_);
+  }
 
   dtls_pkey_ = pkey;
   dtls_cert_ = x509;
-  dtls_fingerprint_ = ComputeFingerprint(x509);
+  dtls_fingerprint_ = std::move(fingerprint);
+
+  EVP_PKEY_CTX_free(keygen_ctx);
 }
 
 std::string IceAgent::AppendFingerprintLine(const std::string& sdp) {
