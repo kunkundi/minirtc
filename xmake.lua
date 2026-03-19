@@ -263,7 +263,7 @@ target("minirtc")
             add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
         end
         add_links("Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
-        "ws2_32", "windowsapp", "User32", "Strmiids", "Mfuuid", "Mfplat", "Mf",
+        "ws2_32", "User32", "Strmiids", "Mfuuid", "Mfplat", "Mf",
         "Secur32", "Bcrypt")
         -- add_links("cuda", "nvencodeapi", "nvcuvid")
     elseif is_os("linux") then
@@ -293,4 +293,4 @@ target("minirtc")
 -- after_install(function (target)
 --     os.rm("$(projectdir)/out/lib/*.a")
 --     os.rm("$(projectdir)/out/include/log.h")
--- end)ss
+-- end)
