@@ -37,7 +37,7 @@ class AomAv1Encoder : public MediaCodec {
   virtual ~AomAv1Encoder();
 
  public:
-  int Init(const MediaCodecConfig& config);
+  int Init(const MediaCodecConfig& config) override;
 
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame& encoded_frame)>

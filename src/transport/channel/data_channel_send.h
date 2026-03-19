@@ -87,9 +87,9 @@ class DataChannelSend : public MediaChannel {
 
   int SendReliableData(const char* data, size_t size) override;
 
-  void OnReceiverReport(const ReceiverReport& receiver_report) {}
+  void OnReceiverReport(const ReceiverReport& receiver_report) override {}
 
-  int OnReceiveRtpPacket(const char* data, size_t size);
+  int OnReceiveRtpPacket(const char* data, size_t size) override;
 
  private:
   std::string channel_name_;
