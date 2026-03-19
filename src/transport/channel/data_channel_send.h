@@ -74,9 +74,9 @@ class DataChannelSend : public MediaChannel {
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
                   std::shared_ptr<PacedSender> packet_sender) override;
-  void Destroy();
+  void Destroy() override;
 
-  uint32_t GetSsrc() {
+  uint32_t GetSsrc() override {
     if (rtp_data_sender_) {
       return rtp_data_sender_->GetSsrc();
     }
