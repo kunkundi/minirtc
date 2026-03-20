@@ -13,6 +13,7 @@
 #include <openssl/x509.h>
 
 #include <atomic>
+#include <condition_variable>
 #include <cstring>
 #include <iostream>
 #include <mutex>
@@ -129,6 +130,11 @@ class IceAgent {
   std::atomic<NiceAgent*> agent_{nullptr};
   std::atomic<GMainLoop*> gloop_{nullptr};
   std::atomic<bool> nice_inited_{false};
+  std::atomic<bool> init_failed_{false};
+  std::mutex init_mutex_;
+  std::condition_variable init_cv_;
+  bool init_done_ = false;
+  int init_status_ = -1;
 
   gboolean exit_nice_thread_ = false;
   bool controlling_ = false;

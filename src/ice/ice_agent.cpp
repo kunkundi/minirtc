@@ -78,7 +78,25 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                              nice_cb_recv_t on_recv,
                              nice_cb_dtls_done_t on_cb_dtls_done,
                              void* user_ptr) {
+  if (nice_thread_.joinable() || nice_inited_) {
+    LOG_ERROR("Nice agent has already been created");
+    return -1;
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(init_mutex_);
+    init_done_ = false;
+    init_status_ = -1;
+  }
+
   destroyed_ = false;
+  nice_inited_ = false;
+  init_failed_ = false;
+  agent_closed_ = false;
+  stream_id_ = 0;
+  agent_ = nullptr;
+  gloop_ = nullptr;
+
   on_state_changed_ = on_state_changed;
   on_new_selected_pair_ = on_new_selected_pair;
   on_new_candidate_ = on_new_candidate;
@@ -91,71 +109,114 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   exit_nice_thread_ = false;
 
   nice_thread_ = std::thread([this]() {
-    gloop_ = g_main_loop_new(nullptr, false);
+    auto notify_init = [this](int status) {
+      {
+        std::lock_guard<std::mutex> lk(init_mutex_);
+        init_status_ = status;
+        init_done_ = true;
+      }
+      init_cv_.notify_one();
+    };
 
-    agent_ = nice_agent_new_full(
-        g_main_loop_get_context(gloop_), NICE_COMPATIBILITY_RFC5245,
+    GMainLoop* loop = g_main_loop_new(nullptr, false);
+    gloop_ = loop;
+    if (loop == nullptr) {
+      LOG_ERROR("Failed to create glib main loop");
+      init_failed_ = true;
+      notify_init(-1);
+      exit_nice_thread_ = true;
+      return;
+    }
+
+    NiceAgent* agent = nice_agent_new_full(
+        g_main_loop_get_context(loop), NICE_COMPATIBILITY_RFC5245,
         (NiceAgentOption)(use_trickle_ice_
                               ? (NICE_AGENT_OPTION_ICE_TRICKLE |
                                  (use_reliable_ice_ ? NICE_AGENT_OPTION_RELIABLE
                                                     : NICE_AGENT_OPTION_NONE))
                               : (use_reliable_ice_ ? NICE_AGENT_OPTION_RELIABLE
                                                    : NICE_AGENT_OPTION_NONE)));
+    agent_ = agent;
 
     LOG_INFO(
         "Nice agent init with [trickle ice|{}], [reliable mode|{}], [turn "
         "support|{}], [force turn|{}]]",
         use_trickle_ice_, use_reliable_ice_, enable_turn_, force_turn_);
 
-    if (agent_ == nullptr) {
+    if (agent == nullptr) {
       LOG_ERROR("Failed to create agent_");
+      init_failed_ = true;
+      g_main_loop_unref(loop);
+      gloop_ = nullptr;
+      notify_init(-1);
+      exit_nice_thread_ = true;
+      return;
     }
 
-    g_object_set(agent_, "stun-server", stun_ip_.c_str(), nullptr);
-    g_object_set(agent_, "stun-server-port", stun_port_, nullptr);
-    g_object_set(agent_, "controlling-mode", controlling_, nullptr);
+    g_object_set(agent, "stun-server", stun_ip_.c_str(), nullptr);
+    g_object_set(agent, "stun-server-port", stun_port_, nullptr);
+    g_object_set(agent, "controlling-mode", controlling_, nullptr);
 
-    g_signal_connect(agent_, "candidate-gathering-done",
+    g_signal_connect(agent, "candidate-gathering-done",
                      G_CALLBACK(on_gathering_done_), user_ptr_);
-    g_signal_connect(agent_, "new-selected-pair",
+    g_signal_connect(agent, "new-selected-pair",
                      G_CALLBACK(on_new_selected_pair_), user_ptr_);
-    g_signal_connect(agent_, "new-candidate", G_CALLBACK(on_new_candidate_),
+    g_signal_connect(agent, "new-candidate", G_CALLBACK(on_new_candidate_),
                      user_ptr_);
-    g_signal_connect(agent_, "component-state-changed",
+    g_signal_connect(agent, "component-state-changed",
                      G_CALLBACK(&IceAgent::OnNiceStateChangedStatic), this);
 
-    stream_id_ = nice_agent_add_stream(agent_, n_components_);
+    stream_id_ = nice_agent_add_stream(agent, n_components_);
     if (stream_id_ == 0) {
       LOG_ERROR("Failed to add stream");
+      init_failed_ = true;
+      g_object_unref(agent);
+      agent_ = nullptr;
+      g_main_loop_unref(loop);
+      gloop_ = nullptr;
+      notify_init(-1);
+      exit_nice_thread_ = true;
+      return;
     }
 
     if (has_video_stream_) {
-      nice_agent_set_stream_name(agent_, stream_id_, "video");
+      nice_agent_set_stream_name(agent, stream_id_, "video");
     }
 
     if (enable_turn_) {
-      nice_agent_set_relay_info(agent_, stream_id_, n_components_,
+      nice_agent_set_relay_info(agent, stream_id_, n_components_,
                                 turn_ip_.c_str(), turn_port_,
                                 turn_username_.c_str(), turn_password_.c_str(),
                                 NICE_RELAY_TYPE_TURN_TCP);
     }
 
     if (force_turn_) {
-      g_object_set(agent_, "force-relay", true, NULL);
+      g_object_set(agent, "force-relay", true, NULL);
     }
 
-    nice_agent_attach_recv(agent_, stream_id_, NICE_COMPONENT_TYPE_RTP,
-                           g_main_loop_get_context(gloop_),
+    nice_agent_attach_recv(agent, stream_id_, NICE_COMPONENT_TYPE_RTP,
+                           g_main_loop_get_context(loop),
                            &IceAgent::OnNiceRecvStatic, this);
 
     nice_inited_ = true;
-    g_main_loop_run(gloop_);
+    init_failed_ = false;
+    notify_init(0);
+    g_main_loop_run(loop);
     exit_nice_thread_ = true;
   });
 
-  do {
-    g_usleep(1000);
-  } while (!nice_inited_);
+  {
+    std::unique_lock<std::mutex> lk(init_mutex_);
+    init_cv_.wait(lk, [this]() { return init_done_; });
+  }
+
+  if (init_status_ != 0 || init_failed_) {
+    if (nice_thread_.joinable()) {
+      nice_thread_.join();
+    }
+    LOG_ERROR("Nice agent initialization failed");
+    return -1;
+  }
 
 #ifdef SAVE_IO_STREAM
   std::string in_file_name =
@@ -169,7 +230,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     LOG_WARN("Fail to open ice_in.rtp");
   }
   file_out_ = fopen(out_file_name.c_str(), "w+b");
-  if (!file_in_) {
+  if (!file_out_) {
     LOG_WARN("Fail to open ice_out.rtp");
   }
 #endif
@@ -188,21 +249,40 @@ void cb_closed(GObject* src, [[maybe_unused]] GAsyncResult* res,
 }
 
 int IceAgent::DestroyIceAgent() {
-  if (!nice_inited_) {
-    LOG_ERROR("Nice agent has not been initialized");
-    return -1;
+  if (destroyed_) {
+    return 0;
   }
 
-  nice_agent_remove_stream(agent_, stream_id_);
-  nice_agent_close_async(agent_, cb_closed, &agent_closed_);
-
   destroyed_ = true;
-  g_main_loop_quit(gloop_);
-  g_main_loop_unref(gloop_);
+  NiceAgent* agent = agent_.load();
+  GMainLoop* loop = gloop_.load();
+
+  if (nice_inited_ && agent != nullptr && stream_id_ != 0) {
+    nice_agent_remove_stream(agent, stream_id_);
+    nice_agent_close_async(agent, cb_closed, &agent_closed_);
+  }
+
+  if (loop != nullptr) {
+    g_main_loop_quit(loop);
+  }
 
   if (nice_thread_.joinable()) {
     nice_thread_.join();
   }
+
+  if (loop != nullptr) {
+    g_main_loop_unref(loop);
+    gloop_ = nullptr;
+  }
+
+  {
+    std::lock_guard<std::mutex> lk(init_mutex_);
+    init_done_ = false;
+    init_status_ = -1;
+  }
+  nice_inited_ = false;
+  init_failed_ = false;
+  stream_id_ = 0;
 
   CleanupDtls();
 
@@ -213,17 +293,17 @@ int IceAgent::DestroyIceAgent() {
 std::string IceAgent::GenerateLocalSdp() {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
-    return nullptr;
+    return "";
   }
 
   if (nullptr == agent_) {
     LOG_ERROR("Nice agent is nullptr");
-    return nullptr;
+    return "";
   }
 
   if (destroyed_) {
     LOG_ERROR("Nice agent is destroyed");
-    return nullptr;
+    return "";
   }
 
   gchar* video_sdp_gstr = nice_agent_generate_local_sdp(agent_);
@@ -264,20 +344,27 @@ std::string IceAgent::GenerateLocalSdp() {
 std::string IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
-    return nullptr;
+    return "";
   }
 
   if (nullptr == agent_) {
     LOG_ERROR("Nice agent is nullptr");
-    return nullptr;
+    return "";
   }
 
   if (destroyed_) {
     LOG_ERROR("Nice agent is destroyed");
-    return nullptr;
+    return "";
   }
 
-  local_sdp_ = nice_agent_generate_local_stream_sdp(agent_, stream_id, true);
+  gchar* stream_sdp =
+      nice_agent_generate_local_stream_sdp(agent_, stream_id, true);
+  if (stream_sdp == nullptr) {
+    LOG_ERROR("Failed to generate local stream sdp");
+    return "";
+  }
+  local_sdp_ = stream_sdp;
+  g_free(stream_sdp);
   return local_sdp_;
 }
 
@@ -365,13 +452,13 @@ int IceAgent::Send(const char* data, size_t size) {
     return -1;
   }
 
-  bool ret = nice_agent_send(agent_, stream_id_, 1, (guint)size, data);
+  gint ret = nice_agent_send(agent_, stream_id_, 1, (guint)size, data);
 
 #ifdef SAVE_IO_STREAM
   if (file_out_) fwrite(data, 1, size, file_out_);
 #endif
 
-  return ret ? 0 : -1;
+  return (ret >= 0) ? 0 : -1;
 }
 
 void IceAgent::CleanupDtls() {
