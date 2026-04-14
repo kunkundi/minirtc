@@ -193,19 +193,15 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
 
       std::shared_ptr<::rtc::DataChannel> dc;
       pc->onDataChannel([&](std::shared_ptr<::rtc::DataChannel> _dc) {
-        std::cout << "[Got a DataChannel with label: " << _dc->label() << "]"
-                  << std::endl;
+        LOG_INFO("Got a DataChannel with label: {}", _dc->label());
         dc = _dc;
 
-        dc->onClosed([&]() {
-          std::cout << "[DataChannel closed: " << dc->label() << "]"
-                    << std::endl;
-        });
+        dc->onClosed(
+            [&]() { LOG_INFO("DataChannel closed: {}", dc->label()); });
 
         dc->onMessage([](auto data) {
           if (std::holds_alternative<std::string>(data)) {
-            std::cout << "[Received message: " << std::get<std::string>(data)
-                      << "]" << std::endl;
+            LOG_INFO("Received message: {}", std::get<std::string>(data));
           }
         });
       });
@@ -551,9 +547,7 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
   auto dc = peer_connection->createDataChannel("ping-pong");
   dc->onOpen(onOpen);
 
-  dc->onClosed([dc]() {
-    std::cout << "[DataChannel closed: " << dc->label() << "]" << std::endl;
-  });
+  dc->onClosed([dc]() { LOG_INFO("DataChannel closed: {}", dc->label()); });
 
   dc->onMessage([msid, cname, wdc = std::weak_ptr(dc),
                  callbacks](std::variant<::rtc::binary, std::string> msg) {
