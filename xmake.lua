@@ -8,6 +8,25 @@ option("USE_CUDA")
     set_description("Use CUDA for hardware codec acceleration")
 option_end()
 
+option("CUDA_DIR")
+    set_default("")
+    set_showmenu(true)
+    set_description("CUDA SDK directory (auto-detected if empty)")
+option_end()
+
+function get_cuda_dir()
+    local dir = get_config("CUDA_DIR")
+    if dir and dir ~= "" then return dir end
+    dir = os.getenv("CUDA_PATH") or os.getenv("CUDA_HOME")
+    if dir then return dir end
+    -- common default paths
+    local defaults = {"/usr/local/cuda", "/opt/cuda"}
+    for _, d in ipairs(defaults) do
+        if os.isdir(d) then return d end
+    end
+    return nil
+end
+
 add_rules("mode.release", "mode.debug")
 set_languages("c++17")
 set_encodings("utf-8")
@@ -183,7 +202,7 @@ target("media")
             "src/media/video/decode/nvcodec",
             "src/media/nvcodec",
             "thirdparty/nvcodec/interface", {public = true})
-            add_includedirs(path.join(os.getenv("CUDA_PATH"), "include"), {public = true})
+            add_includedirs(path.join(get_cuda_dir(), "include"), {public = true})
         end
     elseif is_os("linux") then
         add_files("src/media/video/encode/*.cpp",
@@ -210,7 +229,7 @@ target("media")
             "src/media/video/decode/nvcodec",
             "src/media/nvcodec",
             "thirdparty/nvcodec/interface", {public = true})
-            add_includedirs(path.join(os.getenv("CUDA_PATH"), "include"), {public = true})
+            add_includedirs(path.join(get_cuda_dir(), "include"), {public = true})
         elseif is_arch("arm64", "aarch64") then
         end
     elseif is_os("macosx") then
@@ -260,7 +279,7 @@ target("minirtc")
     if is_os("windows") then
         if is_config("USE_CUDA", true) then
             add_linkdirs("thirdparty/nvcodec/lib/x64")
-            add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib/x64"))
+            add_linkdirs(path.join(get_cuda_dir(), "lib/x64"))
         end
         add_links("Shell32", "Advapi32", "Dnsapi", "Shlwapi", "Crypt32", 
         "ws2_32", "User32", "Strmiids", "Mfuuid", "Mfplat", "Mf",
@@ -270,7 +289,7 @@ target("minirtc")
         if is_arch("x86_64") and is_config("USE_CUDA", true) then
             add_linkdirs("thirdparty/nvcodec/lib/x64")
             add_linkdirs("thirdparty/nvcodec/lib/linux/stubs/x86_64")
-            add_linkdirs(path.join(os.getenv("CUDA_PATH"), "lib64"))
+            add_linkdirs(path.join(get_cuda_dir(), "lib64"))
             -- add_links("cuda", "nvidia-encode", "nvcuvid")
         elseif is_arch("arm64", "aarch64") then
         end
