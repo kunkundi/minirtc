@@ -133,8 +133,8 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   encodeConfig.rcParams.enableLookahead = 0;
   encodeConfig.encodeCodecConfig.h264Config.idrPeriod = encodeConfig.gopLength;
   encodeConfig.encodeCodecConfig.h264Config.level = NV_ENC_LEVEL_H264_52;
-  // encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 1;
-  // encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
+  encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 0;
+  encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
 
   encoder_->CreateEncoder(&init_params);
 
