@@ -101,6 +101,8 @@ class PeerConnection {
   SignalStatus GetSignalStatus();
 
   int SendVideoFrame(const XVideoFrame* video_frame, const char* stream_id);
+  int RequestVideoKeyFrame(const char* stream_id);
+  int RequestAllVideoKeyFrames();
   int SendAudioFrame(const char* data, size_t size, const char* stream_id);
   int SendDataFrame(const char* data, size_t size, const char* stream_id);
   int SendReliableDataFrame(const char* data, size_t size,

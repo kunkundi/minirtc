@@ -1,6 +1,7 @@
 #include "ice_transport_controller.h"
 
 #include <memory>
+#include <vector>
 
 #include "data_channel_send.h"
 #include "video_frame_wrapper.h"
@@ -529,9 +530,16 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
   }
 
   bool force_i_frame = false;
-  if (b_force_i_frame_) {
+  if (b_force_i_frame_.exchange(false)) {
     force_i_frame = true;
-    b_force_i_frame_ = false;
+  }
+  {
+    std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+    auto it_force = force_i_frame_streams_.find(channel_name);
+    if (it_force != force_i_frame_streams_.end()) {
+      force_i_frame = true;
+      force_i_frame_streams_.erase(it_force);
+    }
   }
 
   if (task_queue_encode_) {
@@ -659,7 +667,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     ctx->target_height = nh;
     ctx->encode_below_threshold_count = 0;
     ctx->last_resolution_change_ms = now;
-    b_force_i_frame_ = true;
+    FullIntraRequest(channel_name);
     return;
   }
 
@@ -687,7 +695,30 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   ctx->target_height = nh;
   ctx->last_resolution_change_ms = now;
   ctx->encode_exceed_count = 0;
-  b_force_i_frame_ = true;
+  FullIntraRequest(channel_name);
+}
+
+void IceTransportController::FullIntraRequestAllVideoStreams() {
+  std::vector<std::string> channel_names;
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+    for (const auto& stream_sender : stream_senders_) {
+      const auto& context = stream_sender.second;
+      if (context && context->type == StreamType::kVideo) {
+        channel_names.push_back(stream_sender.first);
+      }
+    }
+  }
+
+  if (channel_names.empty()) {
+    FullIntraRequest();
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+  for (const auto& channel_name : channel_names) {
+    force_i_frame_streams_.insert(channel_name);
+  }
 }
 
 int IceTransportController::SendAudio(const char* data, size_t size,

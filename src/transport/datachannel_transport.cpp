@@ -1,5 +1,7 @@
 #include "datachannel_transport.h"
 
+#include <vector>
+
 #include "log.h"
 #include "video_frame_wrapper.h"
 
@@ -26,6 +28,7 @@ DataChannelTransport::DataChannelTransport(
       local_id_(local_id),
       remote_id_(remote_id),
       offer_peer_(offer_peer),
+      b_force_i_frame_(true),
       video_codec_inited_(false),
       audio_codec_inited_(false),
       load_nvcodec_dll_success_(false),
@@ -120,13 +123,24 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
   RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                      video_frame->width, video_frame->height);
   raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
+  const bool force_i_frame = b_force_i_frame_.exchange(false);
+  bool force_stream_i_frame = false;
+  {
+    std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+    auto it_force = force_i_frame_streams_.find(stream_id);
+    if (it_force != force_i_frame_streams_.end()) {
+      force_stream_i_frame = true;
+      force_i_frame_streams_.erase(it_force);
+    }
+  }
 
   std::weak_ptr<DataChannelTransport> weak_self = shared_from_this();
   std::weak_ptr<::rtc::Track> weak_track = track;
+  const bool should_force_i_frame = force_i_frame || force_stream_i_frame;
 
   task_queue_encode_->PostTask([weak_self, weak_track, codec,
                                 raw_frame = std::move(raw_frame),
-                                stream_id]() mutable {
+                                stream_id, should_force_i_frame]() mutable {
     auto self = weak_self.lock();
     if (!self) return -1;
 
@@ -141,6 +155,11 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
     }
 
     std::shared_ptr<::rtc::Track> track_shared = track_ptr;
+
+    if (should_force_i_frame) {
+      codec->ForceIdr();
+      LOG_INFO("Force I frame");
+    }
 
     codec->Encode(
         std::move(raw_frame),
@@ -226,6 +245,28 @@ void DataChannelTransport::AddVideoStream(std::string stream_id,
                                           std::shared_ptr<Stream> stream) {
   std::unique_lock lock(video_streams_mutex_);
   video_streams_.emplace(stream_id, stream);
+}
+
+void DataChannelTransport::RequestAllVideoKeyFrames() {
+  std::vector<std::string> stream_ids;
+  {
+    std::shared_lock lock(video_streams_mutex_);
+    for (const auto& video_stream : video_streams_) {
+      if (video_stream.second) {
+        stream_ids.push_back(video_stream.first);
+      }
+    }
+  }
+
+  if (stream_ids.empty()) {
+    b_force_i_frame_ = true;
+    return;
+  }
+
+  std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+  for (const auto& stream_id : stream_ids) {
+    force_i_frame_streams_.insert(stream_id);
+  }
 }
 
 void DataChannelTransport::AddAudioStream(std::string stream_id,

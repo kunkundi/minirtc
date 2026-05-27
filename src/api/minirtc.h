@@ -170,6 +170,11 @@ MINIRTC_API int SendVideoFrame(PeerPtr* peer_ptr,
                                const XVideoFrame* video_frame,
                                const char* stream_id);
 
+MINIRTC_API int RequestVideoKeyFrame(PeerPtr* peer_ptr,
+                                     const char* stream_id);
+
+MINIRTC_API int RequestAllVideoKeyFrames(PeerPtr* peer_ptr);
+
 MINIRTC_API int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
                                const char* stream_id);
 

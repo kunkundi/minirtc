@@ -148,6 +148,24 @@ int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
   return 0;
 }
 
+int RequestVideoKeyFrame(PeerPtr* peer_ptr, const char* stream_id) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  return peer_ptr->peer_connection->RequestVideoKeyFrame(stream_id);
+}
+
+int RequestAllVideoKeyFrames(PeerPtr* peer_ptr) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  return peer_ptr->peer_connection->RequestAllVideoKeyFrames();
+}
+
 int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
                    const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {

@@ -1177,6 +1177,24 @@ int IceTransport::SendVideoFrame(const XVideoFrame* video_frame,
   return -1;
 }
 
+int IceTransport::RequestVideoKeyFrame(const std::string& stream_name) {
+  if (!ice_transport_controller_) {
+    return -1;
+  }
+
+  ice_transport_controller_->FullIntraRequest(stream_name);
+  return 0;
+}
+
+int IceTransport::RequestAllVideoKeyFrames() {
+  if (!ice_transport_controller_) {
+    return -1;
+  }
+
+  ice_transport_controller_->FullIntraRequestAllVideoStreams();
+  return 0;
+}
+
 int IceTransport::SendAudioFrame(const char* data, size_t size,
                                  const std::string& stream_name) {
   if (state_ != NICE_COMPONENT_STATE_CONNECTED &&

@@ -105,6 +105,22 @@ int MiniRTCConnection::SendVideoFrame(const XVideoFrame* video_frame,
   return 0;
 }
 
+int MiniRTCConnection::RequestVideoKeyFrame(const char* stream_id) {
+  if (!ice_transport_) {
+    return -1;
+  }
+
+  return ice_transport_->RequestVideoKeyFrame(stream_id ? stream_id : "");
+}
+
+int MiniRTCConnection::RequestAllVideoKeyFrames() {
+  if (!ice_transport_) {
+    return -1;
+  }
+
+  return ice_transport_->RequestAllVideoKeyFrames();
+}
+
 int MiniRTCConnection::ReleaseAllIceTransmission() {
   if (ice_transport_) {
     ice_transport_->DestroyIceTransmission();

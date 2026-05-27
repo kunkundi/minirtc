@@ -80,6 +80,10 @@ class IceTransport {
   int SendVideoFrame(const XVideoFrame* video_frame,
                      const std::string& stream_name);
 
+  int RequestVideoKeyFrame(const std::string& stream_name);
+
+  int RequestAllVideoKeyFrames();
+
   int SendAudioFrame(const char* data, size_t size,
                      const std::string& stream_name);
 

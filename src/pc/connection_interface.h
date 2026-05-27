@@ -86,6 +86,8 @@ class ConnectionInterface {
 
   virtual int SendVideoFrame(const XVideoFrame* video_frame,
                              const char* stream_id) = 0;
+  virtual int RequestVideoKeyFrame(const char* stream_id) = 0;
+  virtual int RequestAllVideoKeyFrames() = 0;
   virtual int SendAudioFrame(const char* data, size_t size,
                              const char* stream_id) = 0;
   virtual int SendDataFrame(const char* data, size_t size,

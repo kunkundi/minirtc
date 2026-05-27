@@ -9,9 +9,11 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <shared_mutex>
 #include <unordered_map>
+#include <unordered_set>
 
 #include "audio_decoder.h"
 #include "audio_encoder.h"
@@ -57,6 +59,16 @@ class DataChannelTransport
   int SendVideoFrame(const XVideoFrame* video_frame,
                      const std::string& stream_id);
 
+  void RequestVideoKeyFrame(const std::string& stream_id) {
+    if (stream_id.empty()) {
+      b_force_i_frame_ = true;
+      return;
+    }
+    std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+    force_i_frame_streams_.insert(stream_id);
+  }
+  void RequestAllVideoKeyFrames();
+
   int SendAudioFrame(const char* data, size_t size,
                      const std::string& stream_id);
 
@@ -101,6 +113,8 @@ class DataChannelTransport
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
   std::atomic<bool> b_force_i_frame_;
+  std::mutex force_i_frame_streams_mutex_;
+  std::unordered_set<std::string> force_i_frame_streams_;
   bool video_codec_inited_;
   bool audio_codec_inited_;
   bool load_nvcodec_dll_success_;

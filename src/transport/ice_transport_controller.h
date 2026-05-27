@@ -6,7 +6,9 @@
 
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
 #define _ICE_TRANSPORT_CONTROLLER_H_
+#include <mutex>
 #include <shared_mutex>
+#include <unordered_set>
 
 #include "api/clock/clock.h"
 #include "api/transport/network_types.h"
@@ -80,6 +82,15 @@ class IceTransportController
                        const std::string& channel_name);
 
   void FullIntraRequest() { b_force_i_frame_ = true; }
+  void FullIntraRequest(const std::string& channel_name) {
+    if (channel_name.empty()) {
+      FullIntraRequest();
+      return;
+    }
+    std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+    force_i_frame_streams_.insert(channel_name);
+  }
+  void FullIntraRequestAllVideoStreams();
 
   void UpdateNetworkAvaliablity(bool network_available);
 
@@ -216,6 +227,8 @@ class IceTransportController
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
   std::atomic<bool> b_force_i_frame_;
+  std::mutex force_i_frame_streams_mutex_;
+  std::unordered_set<std::string> force_i_frame_streams_;
   bool video_codec_inited_;
   bool load_nvcodec_dll_success_;
   bool hardware_acceleration_;

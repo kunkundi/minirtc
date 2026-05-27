@@ -95,6 +95,24 @@ int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
   return 0;
 }
 
+int DataChannelConnection::RequestVideoKeyFrame(const char* stream_id) {
+  if (!dc_ready_ || !dc_transport_) {
+    return -1;
+  }
+
+  dc_transport_->RequestVideoKeyFrame(stream_id ? stream_id : "");
+  return 0;
+}
+
+int DataChannelConnection::RequestAllVideoKeyFrames() {
+  if (!dc_ready_ || !dc_transport_) {
+    return -1;
+  }
+
+  dc_transport_->RequestAllVideoKeyFrames();
+  return 0;
+}
+
 int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
                                           const char* stream_id) {
   if (!dc_ready_) {

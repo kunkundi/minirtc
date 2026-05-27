@@ -490,6 +490,32 @@ int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
   return 0;
 }
 
+int PeerConnection::RequestVideoKeyFrame(const char* stream_id) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  int ret = -1;
+  for (auto& peer_connection : peer_connection_map_) {
+    if (peer_connection.second &&
+        peer_connection.second->RequestVideoKeyFrame(stream_id) == 0) {
+      ret = 0;
+    }
+  }
+
+  return ret;
+}
+
+int PeerConnection::RequestAllVideoKeyFrames() {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  int ret = -1;
+  for (auto& peer_connection : peer_connection_map_) {
+    if (peer_connection.second &&
+        peer_connection.second->RequestAllVideoKeyFrames() == 0) {
+      ret = 0;
+    }
+  }
+
+  return ret;
+}
+
 int PeerConnection::SendAudioFrame(const char* data, size_t size,
                                    const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);

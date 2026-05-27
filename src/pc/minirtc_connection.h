@@ -32,6 +32,8 @@ class MiniRTCConnection : public ConnectionInterface {
 
   int SendVideoFrame(const XVideoFrame* video_frame,
                      const char* stream_id) override;
+  int RequestVideoKeyFrame(const char* stream_id) override;
+  int RequestAllVideoKeyFrames() override;
   int SendAudioFrame(const char* data, size_t size,
                      const char* stream_id) override;
   int SendDataFrame(const char* data, size_t size,
