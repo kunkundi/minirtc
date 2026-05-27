@@ -183,7 +183,7 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
   NiceCandidate* local = nullptr;
   NiceCandidate* remote = nullptr;
   nice_agent_get_selected_pair(agent, stream_id, component_id, &local, &remote);
-  if (local->type == NICE_CANDIDATE_TYPE_RELAYED &&
+  if (local->type == NICE_CANDIDATE_TYPE_RELAYED ||
       remote->type == NICE_CANDIDATE_TYPE_RELAYED) {
     LOG_INFO("Traversal using relay server");
     traversal_type_ = TraversalType::TRelay;
