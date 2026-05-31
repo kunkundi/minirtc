@@ -131,6 +131,151 @@ bool LoadWindowsRootCertificates(SSL_CTX* ssl_ctx) {
 
 #ifdef __APPLE__
 namespace {
+int AddMacCertificateToOpenSslStore(X509_STORE* store, SecCertificateRef cert) {
+  if (!store || !cert) {
+    return 0;
+  }
+
+  CFDataRef cert_data = SecCertificateCopyData(cert);
+  if (!cert_data) {
+    return 0;
+  }
+
+  int imported_count = 0;
+  const unsigned char* data =
+      reinterpret_cast<const unsigned char*>(CFDataGetBytePtr(cert_data));
+  long data_len = static_cast<long>(CFDataGetLength(cert_data));
+  if (data && data_len > 0) {
+    const unsigned char* cursor = data;
+    X509* x509 = d2i_X509(nullptr, &cursor, data_len);
+    if (x509) {
+      if (X509_STORE_add_cert(store, x509) == 1) {
+        imported_count = 1;
+      } else {
+        ERR_clear_error();
+      }
+      X509_free(x509);
+    } else {
+      ERR_clear_error();
+    }
+  }
+
+  CFRelease(cert_data);
+  return imported_count;
+}
+
+bool MacTrustSettingsAllowRoot(SecCertificateRef cert,
+                               SecTrustSettingsDomain domain) {
+  CFArrayRef trust_settings = nullptr;
+  OSStatus status =
+      SecTrustSettingsCopyTrustSettings(cert, domain, &trust_settings);
+  if (status != errSecSuccess || trust_settings == nullptr) {
+    return false;
+  }
+
+  bool allow_root = false;
+  CFIndex settings_count = CFArrayGetCount(trust_settings);
+  if (settings_count == 0) {
+    allow_root = true;
+  }
+
+  for (CFIndex i = 0; i < settings_count; ++i) {
+    CFTypeRef setting = CFArrayGetValueAtIndex(trust_settings, i);
+    if (!setting || CFGetTypeID(setting) != CFDictionaryGetTypeID()) {
+      continue;
+    }
+
+    auto setting_dict =
+        reinterpret_cast<CFDictionaryRef>(const_cast<void*>(setting));
+    SecTrustSettingsResult result = kSecTrustSettingsResultTrustRoot;
+    CFTypeRef result_value =
+        CFDictionaryGetValue(setting_dict, kSecTrustSettingsResult);
+    if (result_value) {
+      if (CFGetTypeID(result_value) != CFNumberGetTypeID()) {
+        continue;
+      }
+
+      SInt32 raw_result = kSecTrustSettingsResultInvalid;
+      if (!CFNumberGetValue(reinterpret_cast<CFNumberRef>(
+                                const_cast<void*>(result_value)),
+                            kCFNumberSInt32Type, &raw_result)) {
+        continue;
+      }
+      result = static_cast<SecTrustSettingsResult>(raw_result);
+    }
+
+    if (result == kSecTrustSettingsResultTrustRoot ||
+        result == kSecTrustSettingsResultTrustAsRoot) {
+      allow_root = true;
+      break;
+    }
+  }
+
+  CFRelease(trust_settings);
+  return allow_root;
+}
+
+int LoadMacCertificatesFromArray(X509_STORE* store, CFArrayRef certs) {
+  if (!store || !certs) {
+    return 0;
+  }
+
+  int imported_count = 0;
+  CFIndex cert_count = CFArrayGetCount(certs);
+  for (CFIndex i = 0; i < cert_count; ++i) {
+    auto cert = reinterpret_cast<SecCertificateRef>(
+        const_cast<void*>(CFArrayGetValueAtIndex(certs, i)));
+    imported_count += AddMacCertificateToOpenSslStore(store, cert);
+  }
+  return imported_count;
+}
+
+int LoadMacAnchorCertificates(X509_STORE* store) {
+  CFArrayRef certs = nullptr;
+  OSStatus status = SecTrustCopyAnchorCertificates(&certs);
+  if (status != errSecSuccess || certs == nullptr) {
+    LOG_WARN("SecTrustCopyAnchorCertificates failed: {}",
+             static_cast<int>(status));
+    return 0;
+  }
+
+  int imported_count = LoadMacCertificatesFromArray(store, certs);
+  CFRelease(certs);
+
+  LOG_INFO("Loaded {} anchor certificates from macOS default anchors",
+           imported_count);
+  return imported_count;
+}
+
+int LoadMacTrustSettingsCertificates(X509_STORE* store,
+                                     SecTrustSettingsDomain domain,
+                                     const char* domain_name) {
+  CFArrayRef certs = nullptr;
+  OSStatus status = SecTrustSettingsCopyCertificates(domain, &certs);
+  if (status != errSecSuccess || certs == nullptr) {
+    if (status != errSecNoTrustSettings) {
+      LOG_WARN("SecTrustSettingsCopyCertificates({}) failed: {}",
+               domain_name, static_cast<int>(status));
+    }
+    return 0;
+  }
+
+  int imported_count = 0;
+  CFIndex cert_count = CFArrayGetCount(certs);
+  for (CFIndex i = 0; i < cert_count; ++i) {
+    auto cert = reinterpret_cast<SecCertificateRef>(
+        const_cast<void*>(CFArrayGetValueAtIndex(certs, i)));
+    if (MacTrustSettingsAllowRoot(cert, domain)) {
+      imported_count += AddMacCertificateToOpenSslStore(store, cert);
+    }
+  }
+
+  CFRelease(certs);
+  LOG_INFO("Loaded {} trusted root certificates from macOS {} trust settings",
+           imported_count, domain_name);
+  return imported_count;
+}
+
 bool LoadMacSystemAnchorCertificates(SSL_CTX* ssl_ctx) {
   if (!ssl_ctx) {
     return false;
@@ -142,51 +287,14 @@ bool LoadMacSystemAnchorCertificates(SSL_CTX* ssl_ctx) {
     return false;
   }
 
-  CFArrayRef certs = nullptr;
-  OSStatus status = SecTrustCopyAnchorCertificates(&certs);
-  if (status != errSecSuccess || certs == nullptr) {
-    LOG_WARN("SecTrustCopyAnchorCertificates failed: {}",
-             static_cast<int>(status));
-    return false;
-  }
+  int total_count = LoadMacAnchorCertificates(store);
+  total_count += LoadMacTrustSettingsCertificates(
+      store, kSecTrustSettingsDomainAdmin, "Admin");
+  total_count += LoadMacTrustSettingsCertificates(
+      store, kSecTrustSettingsDomainUser, "User");
 
-  CFIndex cert_count = CFArrayGetCount(certs);
-  int imported_count = 0;
-  for (CFIndex i = 0; i < cert_count; ++i) {
-    auto cert = reinterpret_cast<SecCertificateRef>(
-        const_cast<void*>(CFArrayGetValueAtIndex(certs, i)));
-    if (!cert) {
-      continue;
-    }
-
-    CFDataRef cert_data = SecCertificateCopyData(cert);
-    if (!cert_data) {
-      continue;
-    }
-
-    const unsigned char* data =
-        reinterpret_cast<const unsigned char*>(CFDataGetBytePtr(cert_data));
-    long data_len = static_cast<long>(CFDataGetLength(cert_data));
-    if (data && data_len > 0) {
-      const unsigned char* cursor = data;
-      X509* x509 = d2i_X509(nullptr, &cursor, data_len);
-      if (x509) {
-        if (X509_STORE_add_cert(store, x509) == 1) {
-          imported_count++;
-        } else {
-          ERR_clear_error();
-        }
-        X509_free(x509);
-      }
-    }
-
-    CFRelease(cert_data);
-  }
-
-  CFRelease(certs);
-  LOG_INFO("Loaded {} anchor certificates from macOS system trust store",
-           imported_count);
-  return imported_count > 0;
+  LOG_INFO("Loaded {} certificates from macOS trust stores", total_count);
+  return total_count > 0;
 }
 }  // namespace
 #endif
@@ -623,6 +731,12 @@ bool WsClient::OnTlsVerify(bool preverified,
       const char* err_str = X509_verify_cert_error_string(err);
       LOG_ERROR("TLS certificate verify failed: {} (err={}, depth={})",
                 (err_str ? err_str : "unknown"), err, depth);
+      if (err == X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN ||
+          err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT ||
+          err == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY ||
+          err == X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE) {
+        SetStatus(WsTlsCertError);
+      }
     } else {
       LOG_ERROR("TLS certificate verify failed: no store_ctx");
     }
@@ -669,6 +783,13 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
   if (is_tls_error) {
     LOG_ERROR("TLS connection failed: {} (TLS failure count: {})", error_msg,
               tls_failure_count_.load());
+
+    if (ws_status_ == WsTlsCertError) {
+      LOG_WARN(
+          "TLS certificate is not trusted. For self-hosted servers, install "
+          "the self-signed root certificate into the trusted root store.");
+      return;
+    }
 
     int attempts = reconnect_attempts_.fetch_add(1);
     int delay_seconds = std::min(1 << attempts, 60);  // 1, 2, 4, 8, 16, 32, 60

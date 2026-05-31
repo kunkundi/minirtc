@@ -50,6 +50,8 @@ const char* SignalStatusToString(SignalStatus status) {
       return "reconnecting";
     case SignalStatus::SignalServerClosed:
       return "server_closed";
+    case SignalStatus::SignalTlsCertError:
+      return "tls_cert_error";
     default:
       return "unknown";
   }
@@ -231,6 +233,12 @@ int PeerConnection::Init(PeerConnectionParams params) {
       signal_status_ = SignalStatus::SignalServerClosed;
       ClearPeerConnections("signal server closed");
       on_signal_status_(SignalStatus::SignalServerClosed, user_id_.data(),
+                        user_id_.size(), user_data_);
+    } else if (WsStatus::WsTlsCertError == ws_status) {
+      ws_status_ = WsStatus::WsTlsCertError;
+      signal_status_ = SignalStatus::SignalTlsCertError;
+      ClearPeerConnections("signal TLS certificate error");
+      on_signal_status_(SignalStatus::SignalTlsCertError, user_id_.data(),
                         user_id_.size(), user_data_);
     }
   };

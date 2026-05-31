@@ -31,7 +31,8 @@ enum WsStatus {
   WsFailed,
   WsClosed,
   WsReconnecting,
-  WsServerClosed
+  WsServerClosed,
+  WsTlsCertError
 };
 
 namespace minirtc {
