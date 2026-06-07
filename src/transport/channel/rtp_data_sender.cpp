@@ -11,8 +11,9 @@ namespace minirtc {
 
 RtpDataSender::RtpDataSender() {}
 
-RtpDataSender::RtpDataSender(std::shared_ptr<IOStatistics> io_statistics)
-    : ssrc_(GenerateUniqueSsrc()), io_statistics_(io_statistics) {
+RtpDataSender::RtpDataSender(std::shared_ptr<IOStatistics> io_statistics, bool is_file_model)
+    : ssrc_(GenerateUniqueSsrc()), io_statistics_(io_statistics), 
+      rtp_packet_queue_(is_file_model ? 16384 : 1280), is_file_model_(is_file_model) {
   SetPeriod(std::chrono::milliseconds(5));
   SetThreadName("RtpDataSender");
 }
@@ -128,18 +129,48 @@ bool RtpDataSender::CheckIsTimeSendSR() {
   }
 }
 
+// bool RtpDataSender::Process() {
+//   last_send_bytes_ = 0;
+
+//   for (size_t i = 0; i < 10; i++)
+//     if (!rtp_packet_queue_.isEmpty()) {
+//       std::optional<std::unique_ptr<RtpPacket>> rtp_packet =
+//           rtp_packet_queue_.pop();
+//       if (rtp_packet) {
+//         SendRtpPacket(std::move(*rtp_packet));
+//       }
+//     }
+
+//   return true;
+// }
+
 bool RtpDataSender::Process() {
   last_send_bytes_ = 0;
-
-  for (size_t i = 0; i < 10; i++)
-    if (!rtp_packet_queue_.isEmpty()) {
-      std::optional<std::unique_ptr<RtpPacket>> rtp_packet =
-          rtp_packet_queue_.pop();
-      if (rtp_packet) {
-        SendRtpPacket(std::move(*rtp_packet));
-      }
+  int send_count = 0;
+  while (!rtp_packet_queue_.isEmpty()) {
+    std::optional<std::unique_ptr<RtpPacket>> rtp_packet =
+        rtp_packet_queue_.pop();
+    if (rtp_packet) {
+      SendRtpPacket(std::move(*rtp_packet));
     }
-
+    send_count++;
+    if (send_count >= 10 && !is_file_model_) {
+      break;
+    }
+  }
   return true;
 }
+
+// bool RtpDataSender::Process() {
+//   last_send_bytes_ = 0;
+//   while (!rtp_packet_queue_.isEmpty()) {
+//     std::optional<std::unique_ptr<RtpPacket>> rtp_packet =
+//         rtp_packet_queue_.pop();
+//     if (rtp_packet) {
+//       SendRtpPacket(std::move(*rtp_packet));
+//     }
+//   }
+//   return true;
+// }
+
 }  // namespace minirtc

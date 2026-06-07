@@ -26,8 +26,10 @@ DataChannelSend::DataChannelSend(
     : channel_name_(channel_name),
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
-      use_reliable_(use_reliable),
-      rtp_data_sender_(std::make_unique<RtpDataSender>(ice_io_statistics)) {}
+      use_reliable_(use_reliable) {
+  const bool is_file_model = (channel_name_.find("file") != std::string::npos);
+  rtp_data_sender_ = std::make_unique<RtpDataSender>(ice_io_statistics_, is_file_model);
+}
 
 void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
                                  std::shared_ptr<PacedSender> packet_sender) {
@@ -141,14 +143,26 @@ bool DataChannelSend::InitKcp() {
     return false;
   }
 
-  ikcp_nodelay(kcp_, 1, 10, 2, 1);
-  ikcp_wndsize(kcp_, 256, 256);
-  ikcp_setmtu(kcp_, 1200);
-  kcp_->output = &DataChannelSend::KcpOutputCallback;
-
   // Create and start periodic update timer for this KCP instance
   kcp_update_timer_ =
       std::make_unique<KcpUpdateTimer>(kcp_, kcp_mutex_, channel_name_);
+
+  if (channel_name_.find("file") != std::string::npos) {
+    LOG_INFO("KCP initialized for file channel [{}], kcp params: nodelay=1, 2, 2, 1, wndsize=2048, 2048", 
+             channel_name_);
+    ikcp_nodelay(kcp_, 1, 2, 2, 1);
+    ikcp_wndsize(kcp_, 2048, 2048);
+    kcp_update_timer_->SetPeriod(std::chrono::milliseconds(2));
+    rtp_data_sender_->SetPeriod(std::chrono::milliseconds(2));
+  } else {
+    LOG_INFO("KCP initialized for data channel [{}], kcp params: nodelay=1, 10, 2, 1, wndsize=256, 256", 
+             channel_name_);
+    ikcp_nodelay(kcp_, 1, 10, 2, 1);
+    ikcp_wndsize(kcp_, 256, 256);
+  }
+  ikcp_setmtu(kcp_, 1200);
+  kcp_->output = &DataChannelSend::KcpOutputCallback;
+
   kcp_update_timer_->Start();
 
   LOG_INFO("KCP initialized for data channel [{}], conv={}, ssrc={}",
@@ -161,6 +175,9 @@ int DataChannelSend::OnKcpOutput(const char* data, int len) {
     LOG_ERROR("OnKcpOutput called before initialization");
     return -1;
   }
+
+  // LOG_TRACE("Sender:\n Send Queue (snd_queue): {}\n Send Buffer (snd_buf): {} \n Recv Buffer (rcv_buf): {} \n Recv Queue (rcv_queue): {}", 
+  //   kcp_->nsnd_que, kcp_->nsnd_buf, kcp_->nrcv_buf, kcp_->nrcv_que);
 
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
       rtp_packetizer_->Build((uint8_t*)data, len, 0, true);

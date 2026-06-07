@@ -23,7 +23,7 @@ namespace minirtc {
 class RtpDataSender : public ThreadBase {
  public:
   RtpDataSender();
-  RtpDataSender(std::shared_ptr<IOStatistics> io_statistics);
+  RtpDataSender(std::shared_ptr<IOStatistics> io_statistics, bool is_file_model);
   virtual ~RtpDataSender();
 
  public:
@@ -60,6 +60,8 @@ class RtpDataSender : public ThreadBase {
   std::chrono::steady_clock::time_point last_update_time_;
   static constexpr int64_t kWindowMs =
       500;  // 500ms window for bandwidth budget
+  
+  bool is_file_model_ = false;
 };
 }  // namespace minirtc
 

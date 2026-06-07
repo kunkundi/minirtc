@@ -160,9 +160,9 @@ int PeerConnection::Init(PeerConnectionParams params) {
              cfg_turn_server_password_);
   }
 
-  LOG_INFO("Hardware accelerated codec [{}]",
-           hardware_acceleration_ ? "ON" : "OFF");
-  LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
+  // LOG_INFO("Hardware accelerated codec [{}]",
+  //          hardware_acceleration_ ? "ON" : "OFF");
+  // LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
 
   on_receive_video_buffer_ = params.on_receive_video_buffer;
   on_receive_audio_buffer_ = params.on_receive_audio_buffer;
@@ -725,6 +725,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       if (j.contains("sdp")) {
         std::string remote_sdp = j["sdp"].get<std::string>();
         LOG_INFO("[{}] receive offer from [{}]", user_id_, remote_user_id);
+        LOG_DEBUG("offer sdp:\n[\n{}]", remote_sdp.c_str());
 
         if (remote_user_id.empty()) {
           LOG_ERROR("Invalid offer msg without remote user id");
@@ -760,6 +761,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       if (j.contains("sdp")) {
         std::string remote_sdp = j["sdp"].get<std::string>();
         LOG_INFO("[{}] receive answer from [{}]", user_id_, remote_user_id);
+        LOG_DEBUG("answer sdp:\n[\n{}]", remote_sdp.c_str());
 
         IceWorkMsg msg;
         msg.type = IceWorkMsg::Type::Answer;
