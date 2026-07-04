@@ -31,6 +31,8 @@ const char* ConnectionStatusToString(ConnectionStatus status) {
       return "incorrect_password";
     case ConnectionStatus::NoSuchTransmissionId:
       return "no_such_transmission_id";
+    case ConnectionStatus::RemoteUnavailable:
+      return "remote_unavailable";
     default:
       return "unknown";
   }
@@ -711,6 +713,10 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
                                 user_data_);
         } else if ("No such transmission id" == reason) {
           on_connection_status_(ConnectionStatus::NoSuchTransmissionId,
+                                transmission_id.data(), transmission_id.size(),
+                                user_data_);
+        } else if ("Remote unavailable" == reason) {
+          on_connection_status_(ConnectionStatus::RemoteUnavailable,
                                 transmission_id.data(), transmission_id.size(),
                                 user_data_);
         }

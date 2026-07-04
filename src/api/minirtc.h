@@ -21,7 +21,8 @@ enum ConnectionStatus {
   Failed,
   Closed,
   IncorrectPassword,
-  NoSuchTransmissionId
+  NoSuchTransmissionId,
+  RemoteUnavailable
 };
 
 enum SignalStatus {
