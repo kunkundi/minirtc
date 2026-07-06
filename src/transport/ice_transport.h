@@ -45,7 +45,7 @@ class IceTransport {
   int SetLocalCapabilities(bool hardware_acceleration, bool use_trickle_ice,
                            bool use_reliable_ice, bool enable_turn,
                            bool force_turn, bool enable_srtp,
-                           VideoQuality video_quality,
+                           bool enable_fec, VideoQuality video_quality,
                            rtp::PAYLOAD_TYPE prefered_video_payload_type,
                            std::vector<int>& video_payload_types,
                            std::vector<int>& audio_payload_types);
@@ -177,6 +177,9 @@ class IceTransport {
   bool use_reliable_ice_ = false;
   bool force_turn_ = false;
   bool enable_srtp_ = true;
+  bool enable_fec_ = false;
+  bool remote_fec_supported_ = false;
+  bool negotiated_fec_ = false;
   VideoQuality video_quality_ = QualityHigh;
 
   std::vector<std::string> video_stream_ids_;

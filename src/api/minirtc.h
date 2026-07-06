@@ -126,6 +126,7 @@ typedef struct {
   bool av1_encoding;
   bool enable_turn;
   bool enable_srtp;
+  bool enable_fec;
 
   VideoQuality video_quality;
 

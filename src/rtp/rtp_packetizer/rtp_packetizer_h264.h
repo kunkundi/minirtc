@@ -7,6 +7,8 @@
 #ifndef _RTP_PACKETIZER_H264_H_
 #define _RTP_PACKETIZER_H264_H_
 
+#include "fec_encoder.h"
+#include "rtp_fec.h"
 #include "rtp_packetizer.h"
 
 namespace minirtc {
@@ -34,10 +36,21 @@ class RtpPacketizerH264 : public RtpPacketizer {
       uint32_t payload_size, uint32_t rtp_timestamp,
       bool use_rtp_packet_to_send) override;
 
+  void SetFecConfig(const FecConfig& fec_config) override {
+    fec_config_ = fec_config;
+  }
+
  private:
   bool EncodeH264Fua(RtpPacket& rtp_packet, uint8_t* payload,
                      size_t payload_size);
   void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
+  std::vector<std::unique_ptr<RtpPacket>> BuildFec(
+      uint8_t* payload, uint32_t payload_size, uint32_t rtp_timestamp,
+      bool use_rtp_packet_to_send);
+  std::unique_ptr<RtpPacket> BuildFecRtpPacket(
+      rtp::PAYLOAD_TYPE payload_type, const H264FecHeader& fec_header,
+      const std::vector<uint8_t>& fec_symbol, uint32_t rtp_timestamp,
+      bool marker, bool use_rtp_packet_to_send);
 
  private:
   uint8_t version_;
@@ -62,6 +75,8 @@ class RtpPacketizerH264 : public RtpPacketizer {
   uint8_t fec_symbol_id_ = 0;
   uint8_t fec_source_symbol_num_ = 0;
   uint8_t av1_aggr_header_ = 0;
+  FecConfig fec_config_;
+  uint32_t fec_frame_id_ = 0;
 
  private:
   std::vector<uint8_t> rtp_packet_frame_;

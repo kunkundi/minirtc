@@ -1,8 +1,10 @@
 #include "ice_transport.h"
 
+#include <algorithm>
 #include <chrono>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <thread>
 
 #include "common.h"
@@ -11,6 +13,18 @@
 using nlohmann::json;
 
 namespace minirtc {
+namespace {
+
+constexpr const char* kH264FecCapabilityLine =
+    "a=x-minirtc-fec:h264-rs;source=97;repair=98;ratio=1/2\n";
+
+bool HasH264FecCapability(const std::string& sdp) {
+  return sdp.find("a=x-minirtc-fec:h264-rs") != std::string::npos &&
+         sdp.find("source=97") != std::string::npos &&
+         sdp.find("repair=98") != std::string::npos;
+}
+
+}  // namespace
 
 IceTransport::IceTransport(
     std::shared_ptr<SystemClock> clock, bool offer_peer,
@@ -32,7 +46,8 @@ IceTransport::~IceTransport() {}
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
     bool enable_turn, bool force_turn, bool enable_srtp,
-    VideoQuality video_quality, rtp::PAYLOAD_TYPE prefered_video_payload_type,
+    bool enable_fec, VideoQuality video_quality,
+    rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
   hardware_acceleration_ = hardware_acceleration;
@@ -41,6 +56,7 @@ int IceTransport::SetLocalCapabilities(
   enable_turn_ = enable_turn;
   force_turn_ = force_turn;
   enable_srtp_ = enable_srtp;
+  enable_fec_ = enable_fec;
   video_quality_ = video_quality;
   prefered_video_payload_type_ = prefered_video_payload_type;
   support_video_payload_types_ = video_payload_types;
@@ -609,21 +625,23 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
   std::string video_capabilities = "UDP/TLS/RTP/SAVPF ";
   std::string audio_capabilities = "UDP/TLS/RTP/SAVPF 111";
   std::string data_capabilities = "UDP/TLS/RTP/SAVPF 120 121";
+  std::string fec_payload_types =
+      enable_fec_ ? " 97 98" : "";
 
   switch (prefered_video_payload_type_) {
     case rtp::PAYLOAD_TYPE::H264: {
       preferred_video_pt = std::to_string(rtp::PAYLOAD_TYPE::H264);
-      video_capabilities += preferred_video_pt + " 97 98 99";
+      video_capabilities += preferred_video_pt + fec_payload_types + " 99";
       break;
     }
     case rtp::PAYLOAD_TYPE::AV1: {
       preferred_video_pt = std::to_string(rtp::PAYLOAD_TYPE::AV1);
-      video_capabilities += preferred_video_pt + " 96 97 98";
+      video_capabilities += preferred_video_pt + " 96" + fec_payload_types;
       break;
     }
     default: {
       preferred_video_pt = std::to_string(rtp::PAYLOAD_TYPE::H264);
-      video_capabilities += preferred_video_pt + " 97 98 99";
+      video_capabilities += preferred_video_pt + fec_payload_types + " 99";
       break;
     }
   }
@@ -660,6 +678,10 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
   std::string video_ssrc_lines;
   std::string audio_ssrc_lines;
   std::string data_ssrc_lines;
+
+  if (enable_fec_) {
+    video_ssrc_lines += kH264FecCapabilityLine;
+  }
 
   for (auto& stream_id : video_stream_ids_) {
     uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
@@ -721,6 +743,9 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
 
   std::string negotiated_video_pt =
       protocol + std::to_string(negotiated_video_pt_);
+  if (negotiated_fec_) {
+    negotiated_video_pt += " 97 98";
+  }
   std::string negotiated_audio_pt =
       protocol + std::to_string(negotiated_audio_pt_);
   std::string negotiated_data_pt =
@@ -729,6 +754,10 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
   std::string video_ssrc_lines;
   std::string audio_ssrc_lines;
   std::string data_ssrc_lines;
+
+  if (negotiated_fec_) {
+    video_ssrc_lines += kH264FecCapabilityLine;
+  }
 
   for (auto& stream_id : video_stream_ids_) {
     uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
@@ -759,8 +788,8 @@ int IceTransport::AppendLocalCapabilitiesToAnswer(
   if (ice_transport_controller_) {
     ice_transport_controller_->Create(
         offer_peer_, remote_user_id_, negotiated_video_pt_,
-        hardware_acceleration_, on_receive_video_, on_receive_audio_,
-        on_receive_data_, user_data_);
+        hardware_acceleration_, negotiated_fec_, on_receive_video_,
+        on_receive_audio_, on_receive_data_, user_data_);
     ice_transport_controller_->Start();
   }
 
@@ -840,6 +869,9 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
         bool reliable = (value_str == "1");
         ssrc_to_reliable[ssrc] = reliable;
       }
+    } else if (line.find("a=x-minirtc-fec:") == 0 &&
+               media_type == "video") {
+      continue;
     } else {
       new_sdp_block << line << "\n";
     }
@@ -861,6 +893,7 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
 
 std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   std::string media_stream_sdp;
+  remote_fec_supported_ = HasH264FecCapability(remote_sdp);
 
   std::size_t video_start = remote_sdp.find("m=video");
   std::size_t audio_start = remote_sdp.find("m=audio");
@@ -948,14 +981,16 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
     }
 
     if (!NegotiateVideoPayloadType(remote_sdp)) return std::string();
+    negotiated_fec_ = enable_fec_ && remote_fec_supported_ &&
+                      negotiated_video_pt_ == rtp::PAYLOAD_TYPE::H264;
     if (!NegotiateAudioPayloadType(remote_sdp)) return std::string();
     if (!NegotiateDataPayloadType(remote_sdp)) return std::string();
 
     if (ice_transport_controller_ && offer_peer_) {
       ice_transport_controller_->Create(
           offer_peer_, remote_user_id_, negotiated_video_pt_,
-          hardware_acceleration_, on_receive_video_, on_receive_audio_,
-          on_receive_data_, user_data_);
+          hardware_acceleration_, negotiated_fec_, on_receive_video_,
+          on_receive_audio_, on_receive_data_, user_data_);
       ice_transport_controller_->Start();
     }
 
@@ -1260,6 +1295,10 @@ uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
   // Debug: log unexpected PT values that might be KCP packets
   if (payload_type == 69 || (payload_type >= 100 && payload_type <= 127 &&
                              payload_type != rtp::PAYLOAD_TYPE::H264 &&
+                             payload_type !=
+                                 rtp::PAYLOAD_TYPE::H264_FEC_SOURCE &&
+                             payload_type !=
+                                 rtp::PAYLOAD_TYPE::H264_FEC_REPAIR &&
                              payload_type != rtp::PAYLOAD_TYPE::AV1 &&
                              payload_type != rtp::PAYLOAD_TYPE::OPUS &&
                              payload_type != rtp::PAYLOAD_TYPE::RTX &&
@@ -1273,6 +1312,8 @@ uint8_t IceTransport::CheckIsRtpPacket(const char* buffer, size_t size) {
   }
 
   if (payload_type == rtp::PAYLOAD_TYPE::H264 ||
+      payload_type == rtp::PAYLOAD_TYPE::H264_FEC_SOURCE ||
+      payload_type == rtp::PAYLOAD_TYPE::H264_FEC_REPAIR ||
       payload_type == rtp::PAYLOAD_TYPE::AV1 ||
       payload_type == rtp::PAYLOAD_TYPE::OPUS ||
       payload_type == rtp::PAYLOAD_TYPE::RTX ||

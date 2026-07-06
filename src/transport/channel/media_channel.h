@@ -14,6 +14,7 @@
 #include "log.h"
 #include "paced_sender.h"
 #include "receiver_report.h"
+#include "rtp_fec.h"
 #include "sender_report.h"
 
 namespace minirtc {
@@ -93,6 +94,8 @@ class MediaChannel {
     LOG_INFO("GeneratePadding() default implementation");
     return {};
   }
+
+  virtual void SetFecConfig(const FecConfig& fec_config) {}
 };
 }  // namespace minirtc
 

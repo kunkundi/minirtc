@@ -43,6 +43,7 @@ class VideoChannelSend : public MediaChannel {
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
                   std::shared_ptr<PacedSender> packet_sender);
   void Destroy();
+  void SetFecConfig(const FecConfig& fec_config) override;
 
   uint32_t GetSsrc() { return ssrc_; }
 
@@ -70,6 +71,7 @@ class VideoChannelSend : public MediaChannel {
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
+  FecConfig fec_config_;
 
  private:
   uint32_t ssrc_ = 0;

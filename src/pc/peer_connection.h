@@ -60,6 +60,7 @@ typedef struct {
   bool av1_encoding;
   bool enable_turn;
   bool enable_srtp;
+  bool enable_fec;
 
   VideoQuality video_quality;
 
@@ -161,6 +162,7 @@ class PeerConnection {
   std::string cfg_av1_encoding_;
   std::string cfg_enable_turn_;
   std::string cfg_enable_srtp_;
+  std::string cfg_enable_fec_;
   std::string cfg_video_quality_;
   int signal_server_port_ = 0;
   int stun_server_port_ = 0;
@@ -169,6 +171,7 @@ class PeerConnection {
   bool av1_encoding_ = false;
   bool enable_turn_ = false;
   bool enable_srtp_ = true;
+  bool enable_fec_ = false;
   VideoQuality video_quality_ = VideoQuality::QualityHigh;
   bool trickle_ice_ = true;
   bool reliable_ice_ = false;

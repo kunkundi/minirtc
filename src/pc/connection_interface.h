@@ -38,6 +38,7 @@ struct ConnectionInfo {
   bool reliable_ice;
   bool enable_turn;
   bool enable_srtp;
+  bool enable_fec;
   bool av1_encoding;
   VideoQuality video_quality;
 };

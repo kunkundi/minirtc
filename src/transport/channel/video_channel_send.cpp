@@ -42,7 +42,15 @@ void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
                                   std::shared_ptr<PacedSender> packet_sender) {
   paced_sender_ = packet_sender;
   rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
+  rtp_packetizer_->SetFecConfig(fec_config_);
   task_queue_history_ = std::make_shared<TaskQueue>("rtp pakcet history");
+}
+
+void VideoChannelSend::SetFecConfig(const FecConfig& fec_config) {
+  fec_config_ = fec_config;
+  if (rtp_packetizer_) {
+    rtp_packetizer_->SetFecConfig(fec_config_);
+  }
 }
 
 void VideoChannelSend::OnSentRtpPacket(

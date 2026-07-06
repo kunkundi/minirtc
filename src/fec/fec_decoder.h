@@ -9,6 +9,11 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <map>
+#include <set>
+#include <vector>
+
+#include "fec_encoder.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +24,45 @@ extern "C" {
 #endif
 
 namespace minirtc {
+
+enum class FecDecodeStatus {
+  kAccepted,
+  kDuplicate,
+  kComplete,
+  kError,
+};
+
+class FecBlockDecoder {
+ public:
+  explicit FecBlockDecoder(const FecBlockConfig& config);
+  ~FecBlockDecoder();
+
+  FecBlockDecoder(const FecBlockDecoder&) = delete;
+  FecBlockDecoder& operator=(const FecBlockDecoder&) = delete;
+
+  FecDecodeStatus AddSymbol(const FecSymbol& symbol);
+  bool IsComplete() const { return complete_; }
+  const std::vector<uint8_t>& DecodedData() const { return decoded_data_; }
+
+ private:
+  bool InitSession();
+  void ReleaseSession();
+  bool BuildDecodedData();
+
+ private:
+  FecBlockConfig config_;
+  bool initialized_ = false;
+  bool complete_ = false;
+  std::map<uint16_t, std::vector<uint8_t>> received_symbols_;
+  std::set<uint16_t> received_symbol_ids_;
+  std::vector<uint8_t> decoded_data_;
+
+  of_codec_id_t fec_codec_id_ = OF_CODEC_REED_SOLOMON_GF_2_M_STABLE;
+  of_session_t* fec_session_ = nullptr;
+  of_parameters_t* fec_params_ = nullptr;
+  of_rs_2_m_parameters_t* fec_rs_params_ = nullptr;
+};
+
 class FecDecoder {
  public:
   FecDecoder();

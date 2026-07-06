@@ -58,9 +58,9 @@ class IceTransportController
  public:
   void Create(bool offer_peer, std::string remote_user_id,
               rtp::PAYLOAD_TYPE video_codec_payload_type,
-              bool hardware_acceleration, OnReceiveVideo on_receive_video,
-              OnReceiveAudio on_receive_audio, OnReceiveData on_receive_data,
-              void* user_data);
+              bool hardware_acceleration, bool enable_fec,
+              OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
+              OnReceiveData on_receive_data, void* user_data);
   void Destroy();
 
   uint32_t AddVideoSendChannel(const std::string& channel_name);
@@ -202,6 +202,7 @@ class IceTransportController
   std::atomic<bool> is_running_;
 
   bool enable_srtp_;
+  bool enable_fec_ = false;
   VideoQuality video_quality_;
 
   std::vector<uint8_t> local_key_;

@@ -1,8 +1,132 @@
 #include "fec_encoder.h"
 
+#include <algorithm>
+#include <cmath>
+#include <cstdlib>
+#include <cstring>
+#include <stdexcept>
+
 #include "log.h"
 
 namespace minirtc {
+
+namespace {
+
+constexpr of_codec_id_t kFecCodecId = OF_CODEC_REED_SOLOMON_GF_2_M_STABLE;
+constexpr int kFecVerbosity = 0;
+
+of_parameters_t* CreateRsParams(const FecBlockConfig& config) {
+  auto* rs_params =
+      static_cast<of_rs_2_m_parameters_t*>(
+          calloc(1, sizeof(of_rs_2_m_parameters_t)));
+  if (!rs_params) {
+    return nullptr;
+  }
+
+  rs_params->m = 8;
+  auto* params = reinterpret_cast<of_parameters_t*>(rs_params);
+  params->nb_source_symbols = config.source_symbol_count;
+  params->nb_repair_symbols = config.repair_symbol_count;
+  params->encoding_symbol_length = config.symbol_size;
+  return params;
+}
+
+void ReleaseRsParams(of_parameters_t* params) {
+  if (params) {
+    free(params);
+  }
+}
+
+}  // namespace
+
+FecBlockEncoder::FecBlockEncoder(const FecBlockConfig& config)
+    : config_(config) {
+  if (!config_.IsValid()) {
+    throw std::invalid_argument("invalid FEC block config");
+  }
+}
+
+uint16_t FecBlockEncoder::RepairSymbolsForRatio(uint16_t source_symbol_count,
+                                                double repair_ratio) {
+  if (source_symbol_count == 0 || repair_ratio <= 0.0) {
+    return 0;
+  }
+  const auto repair_count = static_cast<uint16_t>(
+      std::ceil(static_cast<double>(source_symbol_count) * repair_ratio));
+  return std::max<uint16_t>(1, repair_count);
+}
+
+std::vector<FecSymbol> FecBlockEncoder::Encode(
+    const std::vector<uint8_t>& payload) {
+  return Encode(payload.data(), payload.size());
+}
+
+std::vector<FecSymbol> FecBlockEncoder::Encode(const uint8_t* payload,
+                                               size_t payload_size) {
+  if (!payload || payload_size != config_.original_size) {
+    throw std::invalid_argument("payload size does not match FEC config");
+  }
+
+  of_session_t* session = nullptr;
+  of_parameters_t* params = CreateRsParams(config_);
+  if (!params) {
+    throw std::runtime_error("failed to allocate FEC parameters");
+  }
+
+  if (OF_STATUS_OK !=
+      of_create_codec_instance(&session, kFecCodecId, OF_ENCODER,
+                               kFecVerbosity)) {
+    ReleaseRsParams(params);
+    throw std::runtime_error("failed to create FEC encoder");
+  }
+
+  if (OF_STATUS_OK != of_set_fec_parameters(session, params)) {
+    of_release_codec_instance(session);
+    ReleaseRsParams(params);
+    throw std::runtime_error("failed to set FEC parameters");
+  }
+
+  std::vector<std::vector<uint8_t>> raw_symbols(config_.total_symbol_count());
+  std::vector<void*> symbol_ptrs(config_.total_symbol_count(), nullptr);
+
+  for (uint16_t esi = 0; esi < config_.source_symbol_count; ++esi) {
+    raw_symbols[esi].assign(config_.symbol_size, 0);
+    const size_t offset = static_cast<size_t>(esi) * config_.symbol_size;
+    const size_t remaining = payload_size > offset ? payload_size - offset : 0;
+    const size_t copy_size =
+        std::min<size_t>(remaining, config_.symbol_size);
+    if (copy_size > 0) {
+      memcpy(raw_symbols[esi].data(), payload + offset, copy_size);
+    }
+    symbol_ptrs[esi] = raw_symbols[esi].data();
+  }
+
+  for (uint16_t esi = config_.source_symbol_count;
+       esi < config_.total_symbol_count(); ++esi) {
+    raw_symbols[esi].assign(config_.symbol_size, 0);
+    symbol_ptrs[esi] = raw_symbols[esi].data();
+    if (OF_STATUS_OK != of_build_repair_symbol(session, symbol_ptrs.data(),
+                                               esi)) {
+      of_release_codec_instance(session);
+      ReleaseRsParams(params);
+      throw std::runtime_error("failed to build FEC repair symbol");
+    }
+  }
+
+  std::vector<FecSymbol> symbols;
+  symbols.reserve(config_.total_symbol_count());
+  for (uint16_t esi = 0; esi < config_.total_symbol_count(); ++esi) {
+    FecSymbol symbol;
+    symbol.symbol_id = esi;
+    symbol.is_repair = esi >= config_.source_symbol_count;
+    symbol.data = std::move(raw_symbols[esi]);
+    symbols.push_back(std::move(symbol));
+  }
+
+  of_release_codec_instance(session);
+  ReleaseRsParams(params);
+  return symbols;
+}
 
 FecEncoder::FecEncoder() {}
 

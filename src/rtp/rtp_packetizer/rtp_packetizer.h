@@ -12,6 +12,7 @@
 #include <memory>
 
 #include "rtp_packet.h"
+#include "rtp_fec.h"
 #include "rtp_packet_to_send.h"
 
 namespace minirtc {
@@ -30,6 +31,8 @@ class RtpPacketizer {
   virtual std::vector<std::unique_ptr<RtpPacket>> BuildPadding(
       uint32_t payload_size, uint32_t rtp_timestamp,
       bool use_rtp_packet_to_send) = 0;
+
+  virtual void SetFecConfig(const FecConfig& fec_config) {}
 };
 }  // namespace minirtc
 

@@ -112,6 +112,57 @@ target("fec")
     add_files("src/fec/*.cpp")
     add_includedirs("src/fec", {public = true})
 
+target("fec_block_tests")
+    set_kind("binary")
+    add_deps("fec", "log")
+    add_files("tests/fec/fec_block_tests.cpp")
+    add_includedirs("src/fec", "src/log")
+
+target("rtp_h264_fec_tests")
+    set_kind("binary")
+    add_deps("fec", "log")
+    add_files("tests/rtp/rtp_h264_fec_tests.cpp",
+    "src/rtp/rtp_packet/rtp_packet.cpp",
+    "src/rtp/rtp_packet/rtp_fec.cpp",
+    "src/rtp/rtp_packet/rtp_packet_to_send.cpp",
+    "src/rtp/rtp_packetizer/rtp_packetizer_h264.cpp")
+    add_includedirs("src/rtp/rtp_packet",
+    "src/rtp/rtp_packetizer",
+    "src/common",
+    "src/fec",
+    "src/log")
+
+target("h264_fec_frame_buffer_tests")
+    set_kind("binary")
+    add_deps("fec", "log")
+    add_files("tests/rtp/h264_fec_frame_buffer_tests.cpp",
+    "src/rtp/rtp_packet/rtp_packet.cpp",
+    "src/rtp/rtp_packet/rtp_fec.cpp",
+    "src/rtp/rtp_packet/rtp_packet_to_send.cpp",
+    "src/rtp/rtp_packetizer/rtp_packetizer_h264.cpp",
+    "src/transport/channel/h264_fec_frame_buffer.cpp")
+    add_includedirs("src/rtp/rtp_packet",
+    "src/rtp/rtp_packetizer",
+    "src/transport/channel",
+    "src/common",
+    "src/fec",
+    "src/log")
+
+target("rtp_video_receiver_fec_tests")
+    set_kind("binary")
+    add_deps("transport")
+    add_files("tests/rtp/rtp_video_receiver_fec_tests.cpp")
+    add_includedirs("src/transport/channel",
+    "src/rtp/rtp_packet",
+    "src/rtp/rtp_packetizer",
+    "src/common",
+    "src/frame",
+    "src/fec",
+    "src/log")
+    if is_os("windows") then
+        add_syslinks("winmm")
+    end
+
 target("statistics")
     set_kind("object")
     add_deps("log")

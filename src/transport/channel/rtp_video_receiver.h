@@ -5,21 +5,18 @@
 #include <map>
 #include <mutex>
 #include <queue>
-#include <set>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
 
 #include "api/clock/clock.h"
 #include "clock/system_clock.h"
-#include "fec_decoder.h"
-#include "h264_frame_assember.h"
+#include "h264_fec_frame_buffer.h"
 #include "io_statistics.h"
 #include "nack_requester.h"
 #include "receive_side_congestion_controller.h"
 #include "received_frame.h"
 #include "receiver_report.h"
-#include "ringbuffer.h"
 #include "rtcp_sender.h"
 #include "rtp_packet_av1.h"
 #include "rtp_packet_h264.h"
@@ -62,6 +59,8 @@ class RtpVideoReceiver : public ThreadBase,
 
  private:
   void ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264);
+  void ProcessH264FecRtpPacket(RtpPacket& rtp_packet,
+                               const webrtc::RtpPacketReceived& received);
   bool CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264, bool is_start,
                                  bool is_end, bool is_rtx);
   bool PopCompleteFrame(uint16_t start_seq, uint16_t end_seq,
@@ -103,8 +102,6 @@ class RtpVideoReceiver : public ThreadBase,
   uint8_t* nv12_data_ = nullptr;
   std::function<void(std::unique_ptr<ReceivedFrame>)>
       on_receive_complete_frame_ = nullptr;
-  uint32_t last_complete_frame_ts_ = 0;
-  RingBuffer<ReceivedFrame> compelete_video_frame_queue_;
 
  private:
   struct PendingFrame {
@@ -126,21 +123,11 @@ class RtpVideoReceiver : public ThreadBase,
   std::function<int(const char*, size_t)> data_send_func_ = nullptr;
 
  private:
-  bool fec_enable_ = false;
-  FecDecoder fec_decoder_;
-  uint64_t last_packet_ts_ = 0;
-  // std::map<uint16_t, RtpPacket> incomplete_fec_frame_list_;
-  // std::map<uint32_t, std::map<uint16_t, RtpPacket>> fec_source_symbol_list_;
-  // std::map<uint32_t, std::map<uint16_t, RtpPacket>> fec_repair_symbol_list_;
-  std::set<uint64_t> incomplete_fec_frame_list_;
-  std::map<uint64_t, std::map<uint16_t, RtpPacket>> incomplete_fec_packet_list_;
   std::unordered_set<uint16_t> padding_sequence_numbers_;
-  std::unordered_map<uint64_t, std::unordered_set<uint16_t>>
-      missing_sequence_numbers_;
   std::unordered_map<uint64_t, uint16_t> fua_end_sequence_numbers_;
   std::unordered_map<uint64_t, uint16_t> fua_start_sequence_numbers_;
   std::unordered_map<uint64_t, int64_t> missing_sequence_numbers_wait_time_;
-  H264FrameAssembler h264_frame_assembler_;
+  H264FecFrameBuffer h264_fec_frame_buffer_;
 
  private:
   std::thread rtcp_thread_;

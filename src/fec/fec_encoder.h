@@ -9,6 +9,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,6 +20,46 @@ extern "C" {
 #endif
 
 namespace minirtc {
+
+struct FecBlockConfig {
+  uint16_t source_symbol_count = 0;
+  uint16_t repair_symbol_count = 0;
+  uint16_t symbol_size = 0;
+  uint32_t original_size = 0;
+
+  uint16_t total_symbol_count() const {
+    return static_cast<uint16_t>(source_symbol_count + repair_symbol_count);
+  }
+
+  bool IsValid() const {
+    return source_symbol_count > 0 && repair_symbol_count > 0 &&
+           symbol_size > 0 && original_size > 0 &&
+           total_symbol_count() <= 255;
+  }
+};
+
+struct FecSymbol {
+  uint16_t symbol_id = 0;
+  bool is_repair = false;
+  std::vector<uint8_t> data;
+};
+
+class FecBlockEncoder {
+ public:
+  explicit FecBlockEncoder(const FecBlockConfig& config);
+  ~FecBlockEncoder() = default;
+
+  std::vector<FecSymbol> Encode(const std::vector<uint8_t>& payload);
+  std::vector<FecSymbol> Encode(const uint8_t* payload, size_t payload_size);
+
+  const FecBlockConfig& config() const { return config_; }
+
+  static uint16_t RepairSymbolsForRatio(uint16_t source_symbol_count,
+                                        double repair_ratio);
+
+ private:
+  FecBlockConfig config_;
+};
 
 class FecEncoder {
  public:

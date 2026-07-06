@@ -73,13 +73,14 @@ IceTransportController::~IceTransportController() {
 
 void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     rtp::PAYLOAD_TYPE video_codec_payload_type,
-                                    bool hardware_acceleration,
+                                    bool hardware_acceleration, bool enable_fec,
                                     OnReceiveVideo on_receive_video,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
                                     void* user_data) {
   offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
+  enable_fec_ = enable_fec && video_codec_payload_type == rtp::PAYLOAD_TYPE::H264;
   on_receive_video_ = on_receive_video;
   on_receive_audio_ = on_receive_audio;
   on_receive_data_ = on_receive_data;
@@ -140,6 +141,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
             if (packet->packet_type().has_value()) {
               switch (packet->packet_type().value()) {
                 case webrtc::RtpPacketMediaType::kVideo:
+                case webrtc::RtpPacketMediaType::kForwardErrorCorrection:
                 case webrtc::RtpPacketMediaType::kRetransmission: {
                   self->last_active_stream_ = packet->get_stream_name();
                   std::shared_lock lock(self->stream_senders_mutex_);
@@ -198,6 +200,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
     for (auto& [channel_name, context] : stream_senders_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
+          FecConfig fec_config;
+          fec_config.enabled = enable_fec_;
+          context->transceiver->SetFecConfig(fec_config);
           context->transceiver->Initialize(video_codec_payload_type,
                                            paced_sender_);
         } else if (context->type == StreamType::kAudio) {
