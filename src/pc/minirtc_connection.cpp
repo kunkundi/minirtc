@@ -328,7 +328,7 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string remote_user_id = msg.remote_user_id;
 
       // LOG_INFO("[{}] receive new candidate from [{}]:[{}]", info_.user_id,
-      //          remote_user_id, new_candidate);
+      //          remote_user_id, sdp_without_cands_ + new_candidate);
       if (ice_transport_) {
         ice_transport_->SetRemoteSdp(sdp_without_cands_ + new_candidate);
       }

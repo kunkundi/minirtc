@@ -194,6 +194,17 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
   XNetTrafficStats net_traffic_stats;
   memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
+  char local_ip[INET6_ADDRSTRLEN];
+  guint local_port;
+  char remote_ip[INET6_ADDRSTRLEN];
+  guint remote_port;
+  nice_address_to_string(&local->addr, local_ip);
+  local_port = nice_address_get_port(&local->addr);
+  LOG_INFO("Local: {}:{}, type[{}]", local_ip, local_port, (int)local->type);
+  nice_address_to_string(&remote->addr, remote_ip);
+  remote_port = nice_address_get_port(&remote->addr);
+  LOG_INFO("remote: {}:{}, type[{}]", remote_ip, remote_port, (int)remote->type);
+
   on_receive_net_status_report_(user_id_.data(), user_id_.size(),
                                 TraversalMode(traversal_type_),
                                 &net_traffic_stats, remote_user_id_.data(),

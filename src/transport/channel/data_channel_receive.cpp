@@ -36,7 +36,8 @@ void DataChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
   rtp_data_receiver_ = std::make_unique<RtpDataReceiver>(ice_io_statistics_);
 
   if (use_reliable_) {
-    rtp_data_sender_ = std::make_unique<RtpDataSender>(ice_io_statistics_);
+    const bool is_file_model = (channel_name_.find("file") != std::string::npos);
+    rtp_data_sender_ = std::make_unique<RtpDataSender>(ice_io_statistics_, is_file_model);
     rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
 
     rtp_data_sender_->SetSendDataFunc([this](const char* data,
@@ -168,15 +169,26 @@ bool DataChannelReceive::InitKcp() {
     return false;
   }
 
-  ikcp_nodelay(kcp_, 1, 10, 2, 1);
-  ikcp_wndsize(kcp_, 256, 256);
-  ikcp_setmtu(kcp_, 1200);
-  kcp_->output = &DataChannelReceive::KcpOutputCallback;
-
   // Create and start periodic update timer for this KCP instance
   // The timer will also trigger TryReceiveKcpData() to continuously read data
   kcp_update_timer_ = std::make_unique<KcpUpdateTimerReceive>(
       kcp_, kcp_mutex_, channel_name_, [this]() { this->TryReceiveKcpData(); });
+
+  if (channel_name_.find("file") != std::string::npos) {
+    LOG_INFO("KCP initialized for file channel [{}], kcp params: nodelay=1, 2, 2, 1, wndsize=2048, 2048", 
+             channel_name_);
+    ikcp_nodelay(kcp_, 1, 2, 2, 1);
+    ikcp_wndsize(kcp_, 2048, 2048);
+    kcp_update_timer_->SetPeriod(std::chrono::milliseconds(2));
+  } else {
+    LOG_INFO("KCP initialized for data channel [{}], kcp params: nodelay=1, 10, 2, 1, wndsize=256, 256", 
+             channel_name_);
+    ikcp_nodelay(kcp_, 1, 10, 2, 1);
+    ikcp_wndsize(kcp_, 256, 256);
+  }
+  ikcp_setmtu(kcp_, 1200);
+  kcp_->output = &DataChannelReceive::KcpOutputCallback;
+
   kcp_update_timer_->Start();
 
   LOG_INFO("KCP initialized for data channel [{}], conv={}, ssrc={}",
@@ -251,6 +263,9 @@ void DataChannelReceive::TryReceiveKcpData() {
       ikcp_update(kcp_, GetCurrentTimeMs());
     }
   }
+
+  // LOG_TRACE("Receiver:\n Send Queue (snd_queue): {}\n Send Buffer (snd_buf): {} \n Recv Buffer (rcv_buf): {} \n Recv Queue (rcv_queue): {}", 
+  //   kcp_->nsnd_que, kcp_->nsnd_buf, kcp_->nrcv_buf, kcp_->nrcv_que);
 
   // Deliver all received messages outside the lock
   for (const auto& message : received_messages) {
