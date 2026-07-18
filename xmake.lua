@@ -122,7 +122,7 @@ target("ice")
     set_kind("object")
     add_deps("log", "common", "ws")
     add_files("src/ice/*.cpp")
-    add_includedirs("src/ws", "src/ice", {public = true})
+    add_includedirs("src/ws", "src/ice", "src/api", {public = true})
     
 target("ws")
     set_kind("object")

@@ -169,7 +169,7 @@
 // +-+-+-+-+-+-+-+-+
 
 #define DEFAULT_MTU 1500
-#define MAX_NALU_LEN 1400
+#define MAX_NALU_LEN 1150
 
 namespace minirtc {
 

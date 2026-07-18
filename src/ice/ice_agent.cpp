@@ -1,15 +1,124 @@
 #include "ice_agent.h"
 
+#include <gio/gio.h>
 #include <glib.h>
 
 #include <algorithm>
 #include <cassert>
+#include <vector>
 
 #include "log.h"
 
 // #define SAVE_IO_STREAM
 
 namespace minirtc {
+
+namespace {
+
+// libnice requires a numeric address in nice_agent_set_relay_info().  The
+// application configuration normally uses the same hostname for signaling,
+// STUN and TURN, so resolve it before registering relay servers.  Keep the
+// address list bounded so candidate gathering does not fan out indefinitely.
+std::vector<std::string> ResolveTurnServerAddresses(const std::string& server) {
+  constexpr size_t kMaxAddresses = 4;
+  std::vector<std::string> addresses;
+
+  if (server.empty()) {
+    return addresses;
+  }
+
+  GInetAddress* literal = g_inet_address_new_from_string(server.c_str());
+  if (literal != nullptr) {
+    addresses.push_back(server);
+    g_object_unref(literal);
+    return addresses;
+  }
+
+  GResolver* resolver = g_resolver_get_default();
+  GError* error = nullptr;
+  GList* resolved =
+      g_resolver_lookup_by_name(resolver, server.c_str(), nullptr, &error);
+
+  for (GList* item = resolved;
+       item != nullptr && addresses.size() < kMaxAddresses; item = item->next) {
+    auto* address = G_INET_ADDRESS(item->data);
+    gchar* numeric_address = g_inet_address_to_string(address);
+    if (numeric_address == nullptr) {
+      continue;
+    }
+
+    if (std::find(addresses.begin(), addresses.end(), numeric_address) ==
+        addresses.end()) {
+      addresses.emplace_back(numeric_address);
+    }
+    g_free(numeric_address);
+  }
+
+  if (resolved != nullptr) {
+    g_resolver_free_addresses(resolved);
+  }
+  g_object_unref(resolver);
+
+  if (error != nullptr) {
+    LOG_ERROR("Failed to resolve TURN server [{}]: {}", server, error->message);
+    g_error_free(error);
+  }
+
+  return addresses;
+}
+
+bool AddTurnRelay(NiceAgent* agent, guint stream_id, const std::string& address,
+                  guint port, const std::string& username,
+                  const std::string& password, NiceRelayType type) {
+  const gboolean accepted = nice_agent_set_relay_info(
+      agent, stream_id, NICE_COMPONENT_TYPE_RTP, address.c_str(), port,
+      username.c_str(), password.c_str(), type);
+  const char* transport = type == NICE_RELAY_TYPE_TURN_UDP ? "UDP" : "TCP";
+
+  if (accepted) {
+    LOG_INFO("Registered TURN/{} relay [{}:{}]", transport, address, port);
+    return true;
+  }
+
+  LOG_WARN("libnice rejected TURN/{} relay [{}:{}]", transport, address, port);
+  return false;
+}
+
+const char* TurnModeName(TurnMode mode) {
+  switch (mode) {
+    case TurnMode::TurnDisabled:
+      return "disabled";
+    case TurnMode::TurnAutoUdpTcp:
+      return "auto_udp_tcp";
+    case TurnMode::TurnForceUdp:
+      return "force_udp";
+    case TurnMode::TurnForceTcp:
+      return "force_tcp";
+    default:
+      return "invalid";
+  }
+}
+
+bool IsTurnEnabled(TurnMode mode) {
+  return mode != TurnMode::TurnDisabled;
+}
+
+bool IsTurnForced(TurnMode mode) {
+  return mode == TurnMode::TurnForceUdp ||
+         mode == TurnMode::TurnForceTcp;
+}
+
+bool UsesTurnUdp(TurnMode mode) {
+  return mode == TurnMode::TurnAutoUdpTcp ||
+         mode == TurnMode::TurnForceUdp;
+}
+
+bool UsesTurnTcp(TurnMode mode) {
+  return mode == TurnMode::TurnAutoUdpTcp ||
+         mode == TurnMode::TurnForceTcp;
+}
+
+}  // namespace
 
 auto log_openssl_errors = []() {
   unsigned long e;
@@ -26,15 +135,14 @@ static int DtlsVerifyCallback(X509_STORE_CTX* ctx, void* arg) {
 }
 
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-                   bool enable_turn, bool force_turn, bool enable_srtp,
+                   TurnMode turn_mode, bool enable_srtp,
                    std::string& stun_ip, uint16_t stun_port,
                    std::string& turn_ip, uint16_t turn_port,
                    std::string& turn_username, std::string& turn_password)
     : stun_ip_(stun_ip),
       use_trickle_ice_(use_trickle_ice),
       use_reliable_ice_(use_reliable_ice),
-      enable_turn_(enable_turn),
-      force_turn_(force_turn),
+      turn_mode_(turn_mode),
       enable_srtp_(enable_srtp),
       stun_port_(stun_port),
       turn_ip_(turn_ip),
@@ -138,10 +246,9 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                                                    : NICE_AGENT_OPTION_NONE)));
     agent_ = agent;
 
-    LOG_INFO(
-        "Nice agent init with [trickle ice|{}], [reliable mode|{}], [turn "
-        "support|{}], [force turn|{}]]",
-        use_trickle_ice_, use_reliable_ice_, enable_turn_, force_turn_);
+    LOG_INFO("Nice agent init with [trickle ice|{}], [reliable mode|{}], "
+             "[turn mode|{}]",
+             use_trickle_ice_, use_reliable_ice_, TurnModeName(turn_mode_));
 
     if (agent == nullptr) {
       LOG_ERROR("Failed to create agent_");
@@ -183,14 +290,43 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       nice_agent_set_stream_name(agent, stream_id_, "video");
     }
 
-    if (enable_turn_) {
-      nice_agent_set_relay_info(agent, stream_id_, n_components_,
-                                turn_ip_.c_str(), turn_port_,
-                                turn_username_.c_str(), turn_password_.c_str(),
-                                NICE_RELAY_TYPE_TURN_TCP);
+    if (IsTurnEnabled(turn_mode_)) {
+      const std::vector<std::string> relay_addresses =
+          ResolveTurnServerAddresses(turn_ip_);
+      bool relay_registered = false;
+
+      for (const std::string& address : relay_addresses) {
+        if (UsesTurnUdp(turn_mode_)) {
+          relay_registered |= AddTurnRelay(
+              agent, stream_id_, address, turn_port_, turn_username_,
+              turn_password_, NICE_RELAY_TYPE_TURN_UDP);
+        }
+        if (UsesTurnTcp(turn_mode_)) {
+          relay_registered |= AddTurnRelay(
+              agent, stream_id_, address, turn_port_, turn_username_,
+              turn_password_, NICE_RELAY_TYPE_TURN_TCP);
+        }
+      }
+
+      if (!relay_registered) {
+        LOG_ERROR(
+            "TURN is enabled but no relay endpoint could be registered for "
+            "[{}:{}]",
+            turn_ip_, turn_port_);
+        if (IsTurnForced(turn_mode_)) {
+          init_failed_ = true;
+          g_object_unref(agent);
+          agent_ = nullptr;
+          g_main_loop_unref(loop);
+          gloop_ = nullptr;
+          notify_init(-1);
+          exit_nice_thread_ = true;
+          return;
+        }
+      }
     }
 
-    if (force_turn_) {
+    if (IsTurnForced(turn_mode_)) {
       g_object_set(agent, "force-relay", true, NULL);
     }
 

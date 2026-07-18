@@ -47,7 +47,7 @@ class SvtAv1Encoder : public MediaCodec {
   int key_frame_interval_ = 3000;
   int target_bitrate_ = 1000;
   int max_bitrate_ = 2500000;
-  int max_payload_size_ = 1400;
+  int max_payload_size_ = 1150;
   int max_fps_ = 60;
   bool force_idr_ = false;
   unsigned int seq_ = 0;

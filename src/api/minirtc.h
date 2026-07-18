@@ -39,6 +39,13 @@ enum TraversalMode { P2P = 0, Relay, UnknownMode };
 
 enum VideoQuality { QualityLow = 0, QualityMedium, QualityHigh };
 
+enum TurnMode : uint8_t {
+  TurnDisabled = 0,  // Direct/STUN candidates only.
+  TurnAutoUdpTcp,    // Direct candidates plus TURN/UDP and TURN/TCP fallback.
+  TurnForceUdp,      // Relay-only candidates using TURN/UDP.
+  TurnForceTcp,      // Relay-only candidates using TURN/TCP.
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -124,7 +131,7 @@ typedef struct {
   char log_path[256];
   bool hardware_acceleration;
   bool av1_encoding;
-  bool enable_turn;
+  TurnMode turn_mode;
   bool enable_srtp;
 
   VideoQuality video_quality;

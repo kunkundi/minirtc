@@ -23,6 +23,7 @@
 
 #include "gio/gnetworking.h"
 #include "glib.h"
+#include "minirtc.h"
 #include "nice/agent.h"
 
 namespace minirtc {
@@ -67,7 +68,7 @@ typedef struct {
 class IceAgent {
  public:
   IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-           bool enable_turn, bool force_turn, bool enable_srtp,
+           TurnMode turn_mode, bool enable_srtp,
            std::string& stun_ip, uint16_t stun_port, std::string& turn_ip,
            uint16_t turn_port, std::string& turn_username,
            std::string& turn_password);
@@ -104,8 +105,7 @@ class IceAgent {
  public:
   bool use_trickle_ice_ = true;
   bool use_reliable_ice_ = false;
-  bool enable_turn_ = false;
-  bool force_turn_ = false;
+  TurnMode turn_mode_ = TurnMode::TurnDisabled;
   bool enable_srtp_ = true;
 
   std::string stun_ip_ = "";

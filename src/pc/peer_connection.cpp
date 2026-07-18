@@ -59,6 +59,48 @@ const char* SignalStatusToString(SignalStatus status) {
   }
 }
 
+bool IsValidTurnMode(TurnMode mode) {
+  return mode >= TurnMode::TurnDisabled && mode <= TurnMode::TurnForceTcp;
+}
+
+const char* TurnModeToString(TurnMode mode) {
+  switch (mode) {
+    case TurnMode::TurnDisabled:
+      return "disabled";
+    case TurnMode::TurnAutoUdpTcp:
+      return "auto_udp_tcp";
+    case TurnMode::TurnForceUdp:
+      return "force_udp";
+    case TurnMode::TurnForceTcp:
+      return "force_tcp";
+    default:
+      return "invalid";
+  }
+}
+
+TurnMode ParseTurnMode(const std::string& mode, bool legacy_enabled) {
+  if (mode.empty()) {
+    return legacy_enabled ? TurnMode::TurnAutoUdpTcp
+                          : TurnMode::TurnDisabled;
+  }
+  if (mode == "disabled" || mode == "0") {
+    return TurnMode::TurnDisabled;
+  }
+  if (mode == "auto" || mode == "auto_udp_tcp" || mode == "1") {
+    return TurnMode::TurnAutoUdpTcp;
+  }
+  if (mode == "force_udp" || mode == "2") {
+    return TurnMode::TurnForceUdp;
+  }
+  if (mode == "force_tcp" || mode == "3") {
+    return TurnMode::TurnForceTcp;
+  }
+
+  LOG_WARN("Invalid TURN mode [{}], falling back to legacy enable flag", mode);
+  return legacy_enabled ? TurnMode::TurnAutoUdpTcp
+                        : TurnMode::TurnDisabled;
+}
+
 }  // namespace
 
 PeerConnection::PeerConnection() {}
@@ -92,6 +134,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_hardware_acceleration_ =
         reader.Get("hardware acceleration", "turn_on", "false");
     cfg_av1_encoding_ = reader.Get("av1 encoding", "turn_on", "false");
+    cfg_turn_mode_ = reader.Get("turn mode", "mode", "");
     cfg_enable_turn_ = reader.Get("enable turn", "turn_on", "false");
     cfg_enable_srtp_ = reader.Get("enable srtp", "turn_on", "true");
     cfg_video_quality_ = reader.Get("video quality", "quality", "high");
@@ -105,7 +148,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     hardware_acceleration_ =
         cfg_hardware_acceleration_ == "true" ? true : false;
     av1_encoding_ = cfg_av1_encoding_ == "true" ? true : false;
-    enable_turn_ = cfg_enable_turn_ == "true" ? true : false;
+    turn_mode_ = ParseTurnMode(cfg_turn_mode_, cfg_enable_turn_ == "true");
     enable_srtp_ = cfg_enable_srtp_ == "true" ? true : false;
     if (cfg_video_quality_ == "low") {
       video_quality_ = VideoQuality::QualityLow;
@@ -125,7 +168,13 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_turn_server_password_ = params.turn_server_password;
     hardware_acceleration_ = params.hardware_acceleration;
     av1_encoding_ = params.av1_encoding;
-    enable_turn_ = params.enable_turn;
+    if (IsValidTurnMode(params.turn_mode)) {
+      turn_mode_ = params.turn_mode;
+    } else {
+      LOG_WARN("Invalid TURN mode value [{}], disabling TURN",
+               static_cast<int>(params.turn_mode));
+      turn_mode_ = TurnMode::TurnDisabled;
+    }
     enable_srtp_ = params.enable_srtp;
     video_quality_ = params.video_quality;
 
@@ -143,7 +192,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_info_.hardware_acceleration = hardware_acceleration_;
   connection_info_.trickle_ice = trickle_ice_;
   connection_info_.reliable_ice = reliable_ice_;
-  connection_info_.enable_turn = enable_turn_;
+  connection_info_.turn_mode = turn_mode_;
   connection_info_.enable_srtp = enable_srtp_;
   connection_info_.av1_encoding = av1_encoding_;
   connection_info_.video_quality = video_quality_;
@@ -167,6 +216,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   LOG_INFO("Hardware accelerated codec [{}]",
            hardware_acceleration_ ? "ON" : "OFF");
   LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
+  LOG_INFO("TURN mode [{}]", TurnModeToString(turn_mode_));
 
   on_receive_video_buffer_ = params.on_receive_video_buffer;
   on_receive_audio_buffer_ = params.on_receive_audio_buffer;

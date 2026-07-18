@@ -31,15 +31,14 @@ IceTransport::~IceTransport() {}
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
-    bool enable_turn, bool force_turn, bool enable_srtp,
+    TurnMode turn_mode, bool enable_srtp,
     VideoQuality video_quality, rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
   hardware_acceleration_ = hardware_acceleration;
   use_trickle_ice_ = use_trickle_ice;
   use_reliable_ice_ = use_reliable_ice;
-  enable_turn_ = enable_turn;
-  force_turn_ = force_turn;
+  turn_mode_ = turn_mode;
   enable_srtp_ = enable_srtp;
   video_quality_ = video_quality;
   prefered_video_payload_type_ = prefered_video_payload_type;
@@ -54,8 +53,8 @@ int IceTransport::InitIceTransmission(std::string& stun_ip, int stun_port,
                                       std::string& turn_username,
                                       std::string& turn_password) {
   ice_agent_ = std::make_unique<IceAgent>(
-      offer_peer_, use_trickle_ice_, use_reliable_ice_, enable_turn_,
-      force_turn_, enable_srtp_, stun_ip, stun_port, turn_ip, turn_port,
+      offer_peer_, use_trickle_ice_, use_reliable_ice_, turn_mode_,
+      enable_srtp_, stun_ip, stun_port, turn_ip, turn_port,
       turn_username, turn_password);
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
