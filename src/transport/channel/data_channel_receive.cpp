@@ -6,6 +6,10 @@
 #include "log.h"
 
 namespace {
+// Keep one complete KCP datagram inside one generic RTP payload.  See the
+// matching setting in data_channel_send.cpp.
+constexpr int kReliableDataKcpMtu = MAX_NALU_LEN;
+
 uint32_t GetCurrentTimeMs() {
   using namespace std::chrono;
   return static_cast<uint32_t>(
@@ -170,7 +174,13 @@ bool DataChannelReceive::InitKcp() {
 
   ikcp_nodelay(kcp_, 1, 10, 2, 1);
   ikcp_wndsize(kcp_, 256, 256);
-  ikcp_setmtu(kcp_, 1200);
+  if (ikcp_setmtu(kcp_, kReliableDataKcpMtu) != 0) {
+    LOG_ERROR("Failed to set KCP MTU for data channel [{}], mtu={}",
+              channel_name_, kReliableDataKcpMtu);
+    ikcp_release(kcp_);
+    kcp_ = nullptr;
+    return false;
+  }
   kcp_->output = &DataChannelReceive::KcpOutputCallback;
 
   // Create and start periodic update timer for this KCP instance

@@ -6,6 +6,13 @@
 #include "log.h"
 
 namespace {
+// RtpPacketizerGeneric emits at most MAX_NALU_LEN payload bytes per RTP
+// packet.  KCP output is a datagram, so allowing a KCP segment to exceed that
+// limit would split one datagram into multiple RTP payloads.  The receiver
+// passes every RTP payload directly to ikcp_input(), which cannot reassemble
+// that second layer of fragmentation.
+constexpr int kReliableDataKcpMtu = MAX_NALU_LEN;
+
 uint32_t GetCurrentTimeMs() {
   using namespace std::chrono;
   return static_cast<uint32_t>(
@@ -143,7 +150,13 @@ bool DataChannelSend::InitKcp() {
 
   ikcp_nodelay(kcp_, 1, 10, 2, 1);
   ikcp_wndsize(kcp_, 256, 256);
-  ikcp_setmtu(kcp_, 1200);
+  if (ikcp_setmtu(kcp_, kReliableDataKcpMtu) != 0) {
+    LOG_ERROR("Failed to set KCP MTU for data channel [{}], mtu={}",
+              channel_name_, kReliableDataKcpMtu);
+    ikcp_release(kcp_);
+    kcp_ = nullptr;
+    return false;
+  }
   kcp_->output = &DataChannelSend::KcpOutputCallback;
 
   // Create and start periodic update timer for this KCP instance
