@@ -133,10 +133,13 @@ class PeerConnection {
   bool IsTerminalConnectionStatus(ConnectionStatus status) const;
   std::shared_ptr<ConnectionInterface> CreateManagedPeerConnection(
       const std::string& remote_user_id);
-  void CleanupPeerConnection(
+  bool CleanupPeerConnection(
       const std::string& remote_user_id,
       const std::shared_ptr<ConnectionInterface>& connection,
       ConnectionStatus status);
+  bool IsCurrentPeerConnection(
+      const std::string& remote_user_id,
+      const std::shared_ptr<ConnectionInterface>& connection);
   std::shared_ptr<ConnectionInterface> ReplaceOrCreatePeerConnection(
       const std::string& remote_user_id, const char* context);
   void ClearPeerConnections(const char* reason);

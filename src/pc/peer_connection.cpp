@@ -443,20 +443,34 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
                                        ConnectionStatus status,
                                        const char* peer_id, size_t peer_id_size,
                                        void* user_data) {
-    if (on_connection_status_) {
-      on_connection_status_(status, peer_id, peer_id_size, user_data);
-    }
-
-    if (!IsTerminalConnectionStatus(status)) {
-      return;
-    }
-
     auto connection = weak_connection->lock();
     if (!connection) {
       return;
     }
 
-    CleanupPeerConnection(remote_user_id, connection, status);
+    if (IsTerminalConnectionStatus(status)) {
+      // Removing first serializes terminal transport callbacks against an
+      // explicit leave or a bulk clear. Exactly one path wins the map entry
+      // and therefore exactly one terminal callback reaches the API user.
+      if (!CleanupPeerConnection(remote_user_id, connection, status)) {
+        return;
+      }
+      if (on_connection_status_) {
+        on_connection_status_(status, peer_id, peer_id_size, user_data);
+      }
+      return;
+    }
+
+    if (!IsCurrentPeerConnection(remote_user_id, connection)) {
+      // A managed connection can be removed before its transport finishes
+      // shutting down. Ignore those late callbacks so callers observe one
+      // authoritative terminal transition for that connection generation.
+      return;
+    }
+
+    if (on_connection_status_) {
+      on_connection_status_(status, peer_id, peer_id_size, user_data);
+    }
   };
 
   std::shared_ptr<ConnectionInterface> connection;
@@ -472,7 +486,7 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
   return connection;
 }
 
-void PeerConnection::CleanupPeerConnection(
+bool PeerConnection::CleanupPeerConnection(
     const std::string& remote_user_id,
     const std::shared_ptr<ConnectionInterface>& connection,
     ConnectionStatus status) {
@@ -482,7 +496,17 @@ void PeerConnection::CleanupPeerConnection(
     peer_connection_map_.erase(it);
     LOG_INFO("[{}] Remove peer connection for user [{}] after status [{}]",
              user_id_, remote_user_id, ConnectionStatusToString(status));
+    return true;
   }
+  return false;
+}
+
+bool PeerConnection::IsCurrentPeerConnection(
+    const std::string& remote_user_id,
+    const std::shared_ptr<ConnectionInterface>& connection) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(remote_user_id);
+  return it != peer_connection_map_.end() && it->second == connection;
 }
 
 std::shared_ptr<ConnectionInterface>
@@ -516,12 +540,13 @@ PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
 }
 
 void PeerConnection::ClearPeerConnections(const char* reason) {
-  std::vector<std::shared_ptr<ConnectionInterface>> connections;
+  std::vector<std::pair<std::string, std::shared_ptr<ConnectionInterface>>>
+      connections;
   {
     std::unique_lock lock(peer_connection_map_mutex_);
-    for (auto& peer_connection : peer_connection_map_) {
-      if (peer_connection.second) {
-        connections.push_back(peer_connection.second);
+    for (auto& [remote_user_id, connection] : peer_connection_map_) {
+      if (connection) {
+        connections.emplace_back(remote_user_id, connection);
       }
     }
     peer_connection_map_.clear();
@@ -533,7 +558,11 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
 
   LOG_INFO("[{}] Clear [{}] peer connection(s), reason=[{}]", user_id_,
            connections.size(), reason);
-  for (auto& connection : connections) {
+  for (auto& [remote_user_id, connection] : connections) {
+    if (on_connection_status_) {
+      on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+                            remote_user_id.size(), user_data_);
+    }
     connection->ReleaseAllIceTransmission();
   }
 }
@@ -949,28 +978,26 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     std::string remote_user_id = msg.remote_user_id;
     std::shared_ptr<ConnectionInterface> connection;
     {
-      std::shared_lock lock(peer_connection_map_mutex_);
-      auto it = peer_connection_map_.find(remote_user_id);
-      if (it != peer_connection_map_.end()) {
-        connection = it->second;
-      }
-    }
-    // Release lock before calling ProcessIceWorkMsg, because
-    // DestroyIceTransmission may trigger ICE status callbacks that
-    // call CleanupPeerConnection which needs a unique_lock.
-    if (connection) {
-      connection->ProcessIceWorkMsg(msg);
-    }
-    {
       std::unique_lock lock(peer_connection_map_mutex_);
       auto it = peer_connection_map_.find(remote_user_id);
       if (it != peer_connection_map_.end()) {
-        LOG_INFO(
-            "[{}] Remove peer connection for user [{}] after leave "
-            "transmission",
-            user_id_, remote_user_id);
+        connection = it->second;
         peer_connection_map_.erase(it);
       }
+    }
+    if (connection) {
+      LOG_INFO(
+          "[{}] Remove peer connection for user [{}] after leave "
+          "transmission",
+          user_id_, remote_user_id);
+      if (on_connection_status_) {
+        on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+                              remote_user_id.size(), user_data_);
+      }
+      // The map entry is already gone, so any transport callback emitted by
+      // teardown is recognized as stale and suppressed by the managed
+      // callback wrapper above.
+      connection->ProcessIceWorkMsg(msg);
     }
   } else {
     std::shared_ptr<ConnectionInterface> connection;
