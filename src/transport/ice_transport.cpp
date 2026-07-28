@@ -31,8 +31,8 @@ IceTransport::~IceTransport() {}
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
-    TurnMode turn_mode, bool enable_srtp,
-    VideoQuality video_quality, rtp::PAYLOAD_TYPE prefered_video_payload_type,
+    TurnMode turn_mode, bool enable_srtp, VideoQuality video_quality,
+    rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
   hardware_acceleration_ = hardware_acceleration;
@@ -54,8 +54,8 @@ int IceTransport::InitIceTransmission(std::string& stun_ip, int stun_port,
                                       std::string& turn_password) {
   ice_agent_ = std::make_unique<IceAgent>(
       offer_peer_, use_trickle_ice_, use_reliable_ice_, turn_mode_,
-      enable_srtp_, stun_ip, stun_port, turn_ip, turn_port,
-      turn_username, turn_password);
+      enable_srtp_, stun_ip, stun_port, turn_ip, turn_port, turn_username,
+      turn_password);
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
@@ -571,7 +571,11 @@ int IceTransport::SendOffer() {
 int IceTransport::SendAnswer() {
   local_sdp_ = ice_agent_->GenerateLocalSdp();
   AppendLocalCapabilitiesToAnswer(local_sdp_);
-  local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
+
+  if (enable_srtp_) {
+    local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
+  }
+
   json message = {{"type", "answer"},
                   {"transmission_id", transmission_id_},
                   {"user_id", user_id_},
@@ -928,6 +932,10 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   }
 
   if (!remote_capabilities_got_) {
+    if (ice_transport_controller_) {
+      ice_transport_controller_->SetSrtpEnabled(enable_srtp_);
+    }
+
     for (const auto& entry : video_receivers_ssrc_) {
       ice_transport_controller_->AddVideoReceiveChannel(entry.first,
                                                         entry.second);

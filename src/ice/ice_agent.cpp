@@ -99,23 +99,18 @@ const char* TurnModeName(TurnMode mode) {
   }
 }
 
-bool IsTurnEnabled(TurnMode mode) {
-  return mode != TurnMode::TurnDisabled;
-}
+bool IsTurnEnabled(TurnMode mode) { return mode != TurnMode::TurnDisabled; }
 
 bool IsTurnForced(TurnMode mode) {
-  return mode == TurnMode::TurnForceUdp ||
-         mode == TurnMode::TurnForceTcp;
+  return mode == TurnMode::TurnForceUdp || mode == TurnMode::TurnForceTcp;
 }
 
 bool UsesTurnUdp(TurnMode mode) {
-  return mode == TurnMode::TurnAutoUdpTcp ||
-         mode == TurnMode::TurnForceUdp;
+  return mode == TurnMode::TurnAutoUdpTcp || mode == TurnMode::TurnForceUdp;
 }
 
 bool UsesTurnTcp(TurnMode mode) {
-  return mode == TurnMode::TurnAutoUdpTcp ||
-         mode == TurnMode::TurnForceTcp;
+  return mode == TurnMode::TurnAutoUdpTcp || mode == TurnMode::TurnForceTcp;
 }
 
 }  // namespace
@@ -135,9 +130,8 @@ static int DtlsVerifyCallback(X509_STORE_CTX* ctx, void* arg) {
 }
 
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-                   TurnMode turn_mode, bool enable_srtp,
-                   std::string& stun_ip, uint16_t stun_port,
-                   std::string& turn_ip, uint16_t turn_port,
+                   TurnMode turn_mode, bool enable_srtp, std::string& stun_ip,
+                   uint16_t stun_port, std::string& turn_ip, uint16_t turn_port,
                    std::string& turn_username, std::string& turn_password)
     : stun_ip_(stun_ip),
       use_trickle_ice_(use_trickle_ice),
@@ -246,9 +240,10 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                                                    : NICE_AGENT_OPTION_NONE)));
     agent_ = agent;
 
-    LOG_INFO("Nice agent init with [trickle ice|{}], [reliable mode|{}], "
-             "[turn mode|{}]",
-             use_trickle_ice_, use_reliable_ice_, TurnModeName(turn_mode_));
+    LOG_INFO(
+        "Nice agent init with [trickle ice|{}], [reliable mode|{}], "
+        "[turn mode|{}]",
+        use_trickle_ice_, use_reliable_ice_, TurnModeName(turn_mode_));
 
     if (agent == nullptr) {
       LOG_ERROR("Failed to create agent_");
@@ -926,9 +921,10 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
   if (file_in_) fwrite(buffer, 1, size, file_in_);
 #endif
 
-  if (enable_srtp_) {
-    bool looks_dtls = IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
-    if (dtls_started_ && (!dtls_handshake_done_ || looks_dtls)) {
+  const bool looks_dtls =
+      IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
+  if (enable_srtp_ && looks_dtls) {
+    if (dtls_started_) {
       {
         std::lock_guard<std::mutex> lk(dtls_mutex_);
         dtls_incoming_.push(
@@ -978,6 +974,14 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
       }
       return;
     }
+
+    LOG_WARN("Received DTLS record before the local handshake started");
+    return;
+  }
+
+  if (!enable_srtp_ && looks_dtls) {
+    LOG_WARN("Ignoring DTLS record because SRTP is disabled");
+    return;
   }
 
   if (on_recv_) {
