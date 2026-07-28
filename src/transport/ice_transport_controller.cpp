@@ -235,50 +235,65 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 void IceTransportController::Destroy() {
   is_running_.store(false);
 
-  task_queue_cc_->Stop();
-  task_queue_pacer_->Stop();
-  task_queue_encode_->Stop();
-  task_queue_decode_->Stop();
-  task_queue_trans_fb_->Stop();
+  if (task_queue_cc_) {
+    task_queue_cc_->Stop();
+  }
+  if (task_queue_pacer_) {
+    task_queue_pacer_->Stop();
+  }
+  if (task_queue_encode_) {
+    task_queue_encode_->Stop();
+  }
+  if (task_queue_decode_) {
+    task_queue_decode_->Stop();
+  }
+  if (task_queue_trans_fb_) {
+    task_queue_trans_fb_->Stop();
+  }
+
+  std::map<std::string, std::shared_ptr<StreamContext>> senders;
+  std::map<std::string, std::shared_ptr<StreamContext>> receivers;
+  std::vector<std::shared_ptr<MediaCodec>> codecs;
 
   {
-    std::shared_lock lock(stream_senders_mutex_);
-    for (auto& [_, context] : stream_senders_) {
-      if (context) {
-        if (context->type == StreamType::kVideo) {
-          context->transceiver->Destroy();
-        } else if (context->type == StreamType::kAudio) {
-          context->transceiver->Destroy();
-        } else if (context->type == StreamType::kData) {
-          context->transceiver->Destroy();
-        }
-      }
-    }
-    stream_senders_.clear();
+    std::unique_lock lock(stream_senders_mutex_);
+    senders.swap(stream_senders_);
   }
 
   {
-    std::shared_lock lock(stream_receivers_mutex_);
-    for (auto& [_, context] : stream_receivers_) {
-      if (context) {
-        if (context->type == StreamType::kVideo) {
-          context->transceiver->Destroy();
-        } else if (context->type == StreamType::kAudio) {
-          context->transceiver->Destroy();
-        } else if (context->type == StreamType::kData) {
-          context->transceiver->Destroy();
-        }
-      }
-    }
-    stream_receivers_.clear();
+    std::unique_lock lock(stream_receivers_mutex_);
+    receivers.swap(stream_receivers_);
   }
+
+  for (auto& [_, context] : senders) {
+    if (context && context->transceiver) {
+      context->transceiver->Destroy();
+    }
+    if (context && context->codec) {
+      codecs.push_back(std::move(context->codec));
+    }
+  }
+  for (auto& [_, context] : receivers) {
+    if (context && context->transceiver) {
+      context->transceiver->Destroy();
+    }
+    if (context && context->codec) {
+      codecs.push_back(std::move(context->codec));
+    }
+  }
+
+  // Destroy contexts before codecs so a callback cannot become the last owner
+  // of its encoder and destroy VideoToolbox from inside its own callback.
+  senders.clear();
+  receivers.clear();
+  codecs.clear();
 
   Stop();
 }
 
 uint32_t IceTransportController::AddVideoSendChannel(
     const std::string& channel_name) {
-  std::shared_lock lock(stream_senders_mutex_);
+  std::unique_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it != stream_senders_.end() && it->second) {
     uint32_t ssrc =
@@ -309,9 +324,9 @@ uint32_t IceTransportController::AddVideoSendChannel(
 
 uint32_t IceTransportController::AddAudioSendChannel(
     const std::string& channel_name) {
-  std::shared_lock lock(stream_senders_mutex_);
+  std::unique_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
-  if (it != stream_senders_.end() && !it->second) {
+  if (it != stream_senders_.end() && it->second) {
     uint32_t ssrc =
         it->second->transceiver ? it->second->transceiver->GetSsrc() : 0;
     LOG_ERROR("Stream sender [{}] already exists with ssrc [{}]", channel_name,
@@ -560,29 +575,44 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
       return 0;
     }
 
-    auto post_encode = [this, channel_name, context,
+    std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+    std::weak_ptr<StreamContext> weak_context = context;
+    std::shared_ptr<TaskQueueLockFree> encode_queue = task_queue_encode_;
+    auto post_encode = [weak_self, weak_context, encode_queue, channel_name,
                         force_i_frame](RawFrame&& frame) mutable {
-      task_queue_encode_->PostTask([this, channel_name, context, force_i_frame,
-                                    frame = std::move(frame)]() mutable {
-        int64_t queue_delay_ms = task_queue_encode_->CurrentTaskQueueDelayMs();
+      encode_queue->PostTask([weak_self, weak_context, encode_queue,
+                              channel_name, force_i_frame,
+                              frame = std::move(frame)]() mutable {
+        auto self = weak_self.lock();
+        auto context = weak_context.lock();
+        if (!self || !context || !self->is_running_.load()) {
+          return;
+        }
+
+        if (!context->codec) {
+          return;
+        }
+        int64_t queue_delay_ms = encode_queue->CurrentTaskQueueDelayMs();
         if (force_i_frame) {
           context->codec->ForceIdr();
           LOG_INFO("Force I frame");
         }
-        int ret = context->codec->Encode(
+        context->codec->Encode(
             std::move(frame),
-            [this, channel_name, context, queue_delay_ms,
+            [weak_self, weak_context, channel_name, queue_delay_ms,
              is_first_callback =
                  true](const EncodedFrame& encoded_frame) mutable -> int {
-              if (is_first_callback) {
-                is_first_callback = false;
-                MaybeDegradeResolutionOnEncodeTime(
-                    channel_name, static_cast<int>(queue_delay_ms),
-                    encoded_frame.EncodedWidth(),
-                    encoded_frame.EncodedHeight());
+              auto self = weak_self.lock();
+              auto context = weak_context.lock();
+              if (!self || !context || !self->is_running_.load()) {
+                return -1;
               }
-              context->last_active_time = clock_->CurrentTimeMs();
-              return context->transceiver->SendVideo(encoded_frame);
+
+              const bool measure_encode_delay = is_first_callback;
+              is_first_callback = false;
+              return self->OnVideoEncoded(channel_name, context,
+                                          static_cast<int>(queue_delay_ms),
+                                          measure_encode_delay, encoded_frame);
             });
       });
     };
@@ -620,7 +650,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   constexpr int kUpgradeCooldownMs = 5000;
   constexpr int kDowngradeCooldownMs = 3000;
 
+  if (!is_running_.load()) return;
+
   std::unique_lock lock(stream_senders_mutex_);
+  if (!is_running_.load()) return;
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) return;
   auto& ctx = it->second;
@@ -719,6 +752,35 @@ void IceTransportController::FullIntraRequestAllVideoStreams() {
   for (const auto& channel_name : channel_names) {
     force_i_frame_streams_.insert(channel_name);
   }
+}
+
+int IceTransportController::OnVideoEncoded(
+    const std::string& channel_name,
+    const std::shared_ptr<StreamContext>& context, int queue_delay_ms,
+    bool measure_encode_delay, const EncodedFrame& encoded_frame) {
+  if (!is_running_.load()) {
+    return -1;
+  }
+
+  if (measure_encode_delay) {
+    MaybeDegradeResolutionOnEncodeTime(channel_name, queue_delay_ms,
+                                       encoded_frame.EncodedWidth(),
+                                       encoded_frame.EncodedHeight());
+  }
+
+  std::shared_lock lock(stream_senders_mutex_);
+  if (!is_running_.load()) {
+    return -1;
+  }
+
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || it->second != context ||
+      !context->transceiver) {
+    return -1;
+  }
+
+  context->last_active_time = clock_->CurrentTimeMs();
+  return context->transceiver->SendVideo(encoded_frame);
 }
 
 int IceTransportController::SendAudio(const char* data, size_t size,

@@ -177,6 +177,10 @@ class IceTransportController
 
   bool CheckSteamContext(const std::string& channel_name,
                          const std::shared_ptr<StreamContext>& context);
+  int OnVideoEncoded(const std::string& channel_name,
+                     const std::shared_ptr<StreamContext>& context,
+                     int queue_delay_ms, bool measure_encode_delay,
+                     const EncodedFrame& encoded_frame);
 
   std::map<std::string, std::shared_ptr<StreamContext>> stream_senders_;
   std::map<std::string, std::shared_ptr<StreamContext>> stream_receivers_;
