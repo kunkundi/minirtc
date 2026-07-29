@@ -63,6 +63,11 @@ class IceTransportController
               OnReceiveData on_receive_data, void* user_data);
   void Destroy();
 
+  // SRTP is negotiated from the local setting and the remote SDP before
+  // Create() starts the media pipelines. Keep the controller in sync when the
+  // remote peer does not advertise a DTLS fingerprint.
+  void SetSrtpEnabled(bool enable_srtp) { enable_srtp_ = enable_srtp; }
+
   uint32_t AddVideoSendChannel(const std::string& channel_name);
   uint32_t AddAudioSendChannel(const std::string& channel_name);
   uint32_t AddDataSendChannel(const std::string& channel_name, bool reliable);
@@ -172,6 +177,10 @@ class IceTransportController
 
   bool CheckSteamContext(const std::string& channel_name,
                          const std::shared_ptr<StreamContext>& context);
+  int OnVideoEncoded(const std::string& channel_name,
+                     const std::shared_ptr<StreamContext>& context,
+                     int queue_delay_ms, bool measure_encode_delay,
+                     const EncodedFrame& encoded_frame);
 
   std::map<std::string, std::shared_ptr<StreamContext>> stream_senders_;
   std::map<std::string, std::shared_ptr<StreamContext>> stream_receivers_;

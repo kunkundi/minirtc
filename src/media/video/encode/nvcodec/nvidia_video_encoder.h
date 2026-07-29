@@ -67,7 +67,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   uint32_t average_bitrate_ = 2000000;
   uint32_t max_bitrate_ = 10000000;
   uint32_t max_fps_ = 60;
-  int max_payload_size_ = 3000;
+  int max_payload_size_ = 1150;
   NvEncoder* encoder_ = nullptr;
   CUcontext cuda_context_ = nullptr;
   std::vector<std::vector<uint8_t>> encoded_packets_;

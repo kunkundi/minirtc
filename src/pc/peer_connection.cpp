@@ -59,6 +59,48 @@ const char* SignalStatusToString(SignalStatus status) {
   }
 }
 
+bool IsValidTurnMode(TurnMode mode) {
+  return mode >= TurnMode::TurnDisabled && mode <= TurnMode::TurnForceTcp;
+}
+
+const char* TurnModeToString(TurnMode mode) {
+  switch (mode) {
+    case TurnMode::TurnDisabled:
+      return "disabled";
+    case TurnMode::TurnAutoUdpTcp:
+      return "auto_udp_tcp";
+    case TurnMode::TurnForceUdp:
+      return "force_udp";
+    case TurnMode::TurnForceTcp:
+      return "force_tcp";
+    default:
+      return "invalid";
+  }
+}
+
+TurnMode ParseTurnMode(const std::string& mode, bool legacy_enabled) {
+  if (mode.empty()) {
+    return legacy_enabled ? TurnMode::TurnAutoUdpTcp
+                          : TurnMode::TurnDisabled;
+  }
+  if (mode == "disabled" || mode == "0") {
+    return TurnMode::TurnDisabled;
+  }
+  if (mode == "auto" || mode == "auto_udp_tcp" || mode == "1") {
+    return TurnMode::TurnAutoUdpTcp;
+  }
+  if (mode == "force_udp" || mode == "2") {
+    return TurnMode::TurnForceUdp;
+  }
+  if (mode == "force_tcp" || mode == "3") {
+    return TurnMode::TurnForceTcp;
+  }
+
+  LOG_WARN("Invalid TURN mode [{}], falling back to legacy enable flag", mode);
+  return legacy_enabled ? TurnMode::TurnAutoUdpTcp
+                        : TurnMode::TurnDisabled;
+}
+
 }  // namespace
 
 PeerConnection::PeerConnection() {}
@@ -92,6 +134,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_hardware_acceleration_ =
         reader.Get("hardware acceleration", "turn_on", "false");
     cfg_av1_encoding_ = reader.Get("av1 encoding", "turn_on", "false");
+    cfg_turn_mode_ = reader.Get("turn mode", "mode", "");
     cfg_enable_turn_ = reader.Get("enable turn", "turn_on", "false");
     cfg_enable_srtp_ = reader.Get("enable srtp", "turn_on", "true");
     cfg_enable_fec_ = reader.Get("fec", "turn_on", "false");
@@ -106,7 +149,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     hardware_acceleration_ =
         cfg_hardware_acceleration_ == "true" ? true : false;
     av1_encoding_ = cfg_av1_encoding_ == "true" ? true : false;
-    enable_turn_ = cfg_enable_turn_ == "true" ? true : false;
+    turn_mode_ = ParseTurnMode(cfg_turn_mode_, cfg_enable_turn_ == "true");
     enable_srtp_ = cfg_enable_srtp_ == "true" ? true : false;
     enable_fec_ = cfg_enable_fec_ == "true" ? true : false;
     if (cfg_video_quality_ == "low") {
@@ -127,9 +170,15 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_turn_server_password_ = params.turn_server_password;
     hardware_acceleration_ = params.hardware_acceleration;
     av1_encoding_ = params.av1_encoding;
-    enable_turn_ = params.enable_turn;
+    if (IsValidTurnMode(params.turn_mode)) {
+      turn_mode_ = params.turn_mode;
+    } else {
+      LOG_WARN("Invalid TURN mode value [{}], disabling TURN",
+               static_cast<int>(params.turn_mode));
+      turn_mode_ = TurnMode::TurnDisabled;
+    }
     enable_srtp_ = params.enable_srtp;
-    enable_fec_ = true;
+    enable_fec_ = params.enable_fec;
     video_quality_ = params.video_quality;
 
     cfg_signal_server_port_ = std::to_string(signal_server_port_);
@@ -146,7 +195,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_info_.hardware_acceleration = hardware_acceleration_;
   connection_info_.trickle_ice = trickle_ice_;
   connection_info_.reliable_ice = reliable_ice_;
-  connection_info_.enable_turn = enable_turn_;
+  connection_info_.turn_mode = turn_mode_;
   connection_info_.enable_srtp = enable_srtp_;
   connection_info_.enable_fec = enable_fec_;
   connection_info_.av1_encoding = av1_encoding_;
@@ -171,6 +220,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   LOG_INFO("Hardware accelerated codec [{}]",
            hardware_acceleration_ ? "ON" : "OFF");
   LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
+  LOG_INFO("TURN mode [{}]", TurnModeToString(turn_mode_));
 
   on_receive_video_buffer_ = params.on_receive_video_buffer;
   on_receive_audio_buffer_ = params.on_receive_audio_buffer;
@@ -397,20 +447,34 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
                                        ConnectionStatus status,
                                        const char* peer_id, size_t peer_id_size,
                                        void* user_data) {
-    if (on_connection_status_) {
-      on_connection_status_(status, peer_id, peer_id_size, user_data);
-    }
-
-    if (!IsTerminalConnectionStatus(status)) {
-      return;
-    }
-
     auto connection = weak_connection->lock();
     if (!connection) {
       return;
     }
 
-    CleanupPeerConnection(remote_user_id, connection, status);
+    if (IsTerminalConnectionStatus(status)) {
+      // Removing first serializes terminal transport callbacks against an
+      // explicit leave or a bulk clear. Exactly one path wins the map entry
+      // and therefore exactly one terminal callback reaches the API user.
+      if (!CleanupPeerConnection(remote_user_id, connection, status)) {
+        return;
+      }
+      if (on_connection_status_) {
+        on_connection_status_(status, peer_id, peer_id_size, user_data);
+      }
+      return;
+    }
+
+    if (!IsCurrentPeerConnection(remote_user_id, connection)) {
+      // A managed connection can be removed before its transport finishes
+      // shutting down. Ignore those late callbacks so callers observe one
+      // authoritative terminal transition for that connection generation.
+      return;
+    }
+
+    if (on_connection_status_) {
+      on_connection_status_(status, peer_id, peer_id_size, user_data);
+    }
   };
 
   std::shared_ptr<ConnectionInterface> connection;
@@ -426,7 +490,7 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
   return connection;
 }
 
-void PeerConnection::CleanupPeerConnection(
+bool PeerConnection::CleanupPeerConnection(
     const std::string& remote_user_id,
     const std::shared_ptr<ConnectionInterface>& connection,
     ConnectionStatus status) {
@@ -436,7 +500,17 @@ void PeerConnection::CleanupPeerConnection(
     peer_connection_map_.erase(it);
     LOG_INFO("[{}] Remove peer connection for user [{}] after status [{}]",
              user_id_, remote_user_id, ConnectionStatusToString(status));
+    return true;
   }
+  return false;
+}
+
+bool PeerConnection::IsCurrentPeerConnection(
+    const std::string& remote_user_id,
+    const std::shared_ptr<ConnectionInterface>& connection) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(remote_user_id);
+  return it != peer_connection_map_.end() && it->second == connection;
 }
 
 std::shared_ptr<ConnectionInterface>
@@ -470,12 +544,13 @@ PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
 }
 
 void PeerConnection::ClearPeerConnections(const char* reason) {
-  std::vector<std::shared_ptr<ConnectionInterface>> connections;
+  std::vector<std::pair<std::string, std::shared_ptr<ConnectionInterface>>>
+      connections;
   {
     std::unique_lock lock(peer_connection_map_mutex_);
-    for (auto& peer_connection : peer_connection_map_) {
-      if (peer_connection.second) {
-        connections.push_back(peer_connection.second);
+    for (auto& [remote_user_id, connection] : peer_connection_map_) {
+      if (connection) {
+        connections.emplace_back(remote_user_id, connection);
       }
     }
     peer_connection_map_.clear();
@@ -487,7 +562,11 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
 
   LOG_INFO("[{}] Clear [{}] peer connection(s), reason=[{}]", user_id_,
            connections.size(), reason);
-  for (auto& connection : connections) {
+  for (auto& [remote_user_id, connection] : connections) {
+    if (on_connection_status_) {
+      on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+                            remote_user_id.size(), user_data_);
+    }
     connection->ReleaseAllIceTransmission();
   }
 }
@@ -903,28 +982,26 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     std::string remote_user_id = msg.remote_user_id;
     std::shared_ptr<ConnectionInterface> connection;
     {
-      std::shared_lock lock(peer_connection_map_mutex_);
-      auto it = peer_connection_map_.find(remote_user_id);
-      if (it != peer_connection_map_.end()) {
-        connection = it->second;
-      }
-    }
-    // Release lock before calling ProcessIceWorkMsg, because
-    // DestroyIceTransmission may trigger ICE status callbacks that
-    // call CleanupPeerConnection which needs a unique_lock.
-    if (connection) {
-      connection->ProcessIceWorkMsg(msg);
-    }
-    {
       std::unique_lock lock(peer_connection_map_mutex_);
       auto it = peer_connection_map_.find(remote_user_id);
       if (it != peer_connection_map_.end()) {
-        LOG_INFO(
-            "[{}] Remove peer connection for user [{}] after leave "
-            "transmission",
-            user_id_, remote_user_id);
+        connection = it->second;
         peer_connection_map_.erase(it);
       }
+    }
+    if (connection) {
+      LOG_INFO(
+          "[{}] Remove peer connection for user [{}] after leave "
+          "transmission",
+          user_id_, remote_user_id);
+      if (on_connection_status_) {
+        on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+                              remote_user_id.size(), user_data_);
+      }
+      // The map entry is already gone, so any transport callback emitted by
+      // teardown is recognized as stale and suppressed by the managed
+      // callback wrapper above.
+      connection->ProcessIceWorkMsg(msg);
     }
   } else {
     std::shared_ptr<ConnectionInterface> connection;

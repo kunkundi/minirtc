@@ -45,16 +45,15 @@ IceTransport::~IceTransport() {}
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
-    bool enable_turn, bool force_turn, bool enable_srtp,
-    bool enable_fec, VideoQuality video_quality,
+    TurnMode turn_mode, bool enable_srtp, bool enable_fec,
+    VideoQuality video_quality,
     rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
   hardware_acceleration_ = hardware_acceleration;
   use_trickle_ice_ = use_trickle_ice;
   use_reliable_ice_ = use_reliable_ice;
-  enable_turn_ = enable_turn;
-  force_turn_ = force_turn;
+  turn_mode_ = turn_mode;
   enable_srtp_ = enable_srtp;
   enable_fec_ = enable_fec;
   video_quality_ = video_quality;
@@ -70,9 +69,9 @@ int IceTransport::InitIceTransmission(std::string& stun_ip, int stun_port,
                                       std::string& turn_username,
                                       std::string& turn_password) {
   ice_agent_ = std::make_unique<IceAgent>(
-      offer_peer_, use_trickle_ice_, use_reliable_ice_, enable_turn_,
-      force_turn_, enable_srtp_, stun_ip, stun_port, turn_ip, turn_port,
-      turn_username, turn_password);
+      offer_peer_, use_trickle_ice_, use_reliable_ice_, turn_mode_,
+      enable_srtp_, stun_ip, stun_port, turn_ip, turn_port, turn_username,
+      turn_password);
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
@@ -588,7 +587,11 @@ int IceTransport::SendOffer() {
 int IceTransport::SendAnswer() {
   local_sdp_ = ice_agent_->GenerateLocalSdp();
   AppendLocalCapabilitiesToAnswer(local_sdp_);
-  local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
+
+  if (enable_srtp_) {
+    local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
+  }
+
   json message = {{"type", "answer"},
                   {"transmission_id", transmission_id_},
                   {"user_id", user_id_},
@@ -962,6 +965,10 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   }
 
   if (!remote_capabilities_got_) {
+    if (ice_transport_controller_) {
+      ice_transport_controller_->SetSrtpEnabled(enable_srtp_);
+    }
+
     for (const auto& entry : video_receivers_ssrc_) {
       ice_transport_controller_->AddVideoReceiveChannel(entry.first,
                                                         entry.second);

@@ -36,7 +36,7 @@ struct ConnectionInfo {
   bool hardware_acceleration;
   bool trickle_ice;
   bool reliable_ice;
-  bool enable_turn;
+  TurnMode turn_mode;
   bool enable_srtp;
   bool enable_fec;
   bool av1_encoding;
