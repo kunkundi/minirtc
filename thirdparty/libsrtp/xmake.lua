@@ -26,7 +26,12 @@ package("libsrtp")
         add_syslinks("ws2_32")
     end
 
-    add_deps("cmake")
+    -- libsrtp 2.7.0 requires CMake 3.21 or newer. Keep the version
+    -- constraint here so xmake installs a compatible CMake when the system
+    -- one is too old (for example, Ubuntu 20.04 ships CMake 3.16). Stay on
+    -- CMake 3.x because some bundled dependencies still use legacy policies
+    -- removed by CMake 4.
+    add_deps("cmake >=3.21 <4.0")
 
     on_load(function (package)
         if package:config("openssl") then
