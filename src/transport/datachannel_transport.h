@@ -8,6 +8,7 @@
 #define _DATACHANNEL_TRANSPORT_H_
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -39,6 +40,8 @@ class Stream {
   std::shared_ptr<::rtc::Track> track_;
   std::shared_ptr<::rtc::RtcpSrReporter> sender_;
   std::shared_ptr<MediaCodec> codec_;
+  std::mutex audio_encode_mutex_;
+  uint64_t audio_timestamp_us_ = 0;
 };
 
 class DataChannelTransport

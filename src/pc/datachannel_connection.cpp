@@ -123,8 +123,7 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
     return -1;
   }
 
-  dc_transport_->SendAudioFrame(data, size, stream_id);
-  return 0;
+  return dc_transport_->SendAudioFrame(data, size, stream_id);
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
@@ -426,11 +425,6 @@ DataChannelConnection::CreateDataChannelConnection(
                    }));
     }
 
-    dc_transport->CreateCodecs(
-        clock_,
-        info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-        info_.hardware_acceleration);
-
     for (auto& audio_stream_id : media_stream_ids_.audio) {
       dc_transport->AddAudioStream(
           audio_stream_id,
@@ -440,6 +434,11 @@ DataChannelConnection::CreateDataChannelConnection(
                      LOG_INFO("Audio stream {} opened", audio_stream_id);
                    }));
     }
+
+    dc_transport->CreateCodecs(
+        clock_,
+        info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+        info_.hardware_acceleration);
 
     for (auto& data_stream_id_kv : media_stream_ids_.data) {
       std::string data_stream_id = data_stream_id_kv.first;

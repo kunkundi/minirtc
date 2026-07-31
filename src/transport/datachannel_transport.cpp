@@ -15,6 +15,10 @@
 
 namespace minirtc {
 
+namespace {
+constexpr uint64_t kAudioFrameDurationUs = 10'000;
+}  // namespace
+
 Stream::Stream(std::shared_ptr<::rtc::Track> track,
                std::shared_ptr<::rtc::RtcpSrReporter> sender)
     : track_(track), sender_(sender) {}
@@ -189,29 +193,59 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
 int DataChannelTransport::SendAudioFrame(const char* data, size_t size,
                                          const std::string& stream_id) {
   std::shared_ptr<Stream> stream;
+  std::shared_ptr<MediaCodec> codec;
+  std::shared_ptr<::rtc::Track> track;
   {
     std::shared_lock lock(audio_streams_mutex_);
     auto it = audio_streams_.find(stream_id);
     if (it == audio_streams_.end()) {
+      LOG_ERROR("Audio stream [{}] not found", stream_id);
       return -1;
     }
     stream = it->second;
+    if (!stream) {
+      LOG_ERROR("[{}] Audio stream is null", stream_id);
+      return -1;
+    }
+
+    codec = stream->codec_;
+    track = stream->track_;
   }
 
-  if (!stream || !stream->track_) {
+  if (!codec) {
+    LOG_ERROR("[{}] Audio codec not found", stream_id);
     return -1;
   }
-
-  auto track = stream->track_;
+  if (!track) {
+    LOG_ERROR("[{}] Audio track not found", stream_id);
+    return -1;
+  }
   if (!track->isOpen()) {
     LOG_ERROR("[{}] Track is closed, drop audio frame size {}", local_id_,
               size);
     return -1;
   }
 
-  track->sendFrame(reinterpret_cast<const std::byte*>(data), size,
-                   std::chrono::duration<double, std::micro>(90000));
-  return 0;
+  std::lock_guard<std::mutex> encode_lock(stream->audio_encode_mutex_);
+  const uint64_t timestamp_us = stream->audio_timestamp_us_;
+  const int ret = codec->Encode(
+      reinterpret_cast<const uint8_t*>(data), size,
+      [track, timestamp_us](char* encoded_audio_buffer,
+                            size_t encoded_size) -> int {
+        if (!track->isOpen()) {
+          return -1;
+        }
+
+        track->sendFrame(
+            reinterpret_cast<const std::byte*>(encoded_audio_buffer),
+            encoded_size,
+            std::chrono::duration<double, std::micro>(timestamp_us));
+        return 0;
+      });
+  if (ret == 0) {
+    stream->audio_timestamp_us_ += kAudioFrameDurationUs;
+  }
+  return ret;
 }
 
 int DataChannelTransport::SendDataFrame(const char* data, size_t size,
