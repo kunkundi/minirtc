@@ -55,20 +55,25 @@ DataChannelConnection::DataChannelConnection(
 DataChannelConnection::~DataChannelConnection() { ResetDataChannelTransport(); }
 
 int DataChannelConnection::Init() {
-  std::string stun_server = "stun:" + info_.stun_server_ip + ":" +
-                            std::to_string(info_.stun_server_port);
-  std::string turn_server =
-      "turn:" + info_.turn_server_username + ":" + info_.turn_server_password +
-      "@" + info_.turn_server_ip + ":" +
-      std::to_string(info_.turn_server_port) + "?transport=udp";
-  std::string turn_server_tcp =
-      "turn:" + info_.turn_server_username + ":" + info_.turn_server_password +
-      "@" + info_.turn_server_ip + ":" +
-      std::to_string(info_.turn_server_port) + "?transport=tcp";
-
-  peer_connection_config_.iceServers.emplace_back(stun_server);
-  peer_connection_config_.iceServers.emplace_back(turn_server);
-  peer_connection_config_.iceServers.emplace_back(turn_server_tcp);
+  if (!info_.stun_server_ip.empty() && info_.stun_server_port > 0 &&
+      info_.stun_server_port <= 65535) {
+    peer_connection_config_.iceServers.emplace_back(
+        info_.stun_server_ip,
+        static_cast<uint16_t>(info_.stun_server_port));
+  }
+  if (!info_.turn_server_ip.empty() && info_.turn_server_port > 0 &&
+      info_.turn_server_port <= 65535 &&
+      !info_.turn_server_username.empty() &&
+      !info_.turn_server_password.empty()) {
+    peer_connection_config_.iceServers.emplace_back(
+        info_.turn_server_ip, static_cast<uint16_t>(info_.turn_server_port),
+        info_.turn_server_username, info_.turn_server_password,
+        ::rtc::IceServer::RelayType::TurnUdp);
+    peer_connection_config_.iceServers.emplace_back(
+        info_.turn_server_ip, static_cast<uint16_t>(info_.turn_server_port),
+        info_.turn_server_username, info_.turn_server_password,
+        ::rtc::IceServer::RelayType::TurnTcp);
+  }
   // use trickle ice by default
   peer_connection_config_.disableAutoNegotiation = true;
   peer_connection_config_.disableAutoGathering = true;

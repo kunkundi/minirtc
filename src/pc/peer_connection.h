@@ -14,6 +14,8 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "nlohmann/json.hpp"
+
 #include "audio_decoder.h"
 #include "audio_encoder.h"
 #include "clock/system_clock.h"
@@ -130,6 +132,7 @@ class PeerConnection {
   int Login();
 
   void ProcessSignal(const std::string& signal);
+  bool ApplyTurnCredentials(const nlohmann::json& message);
   bool IsTerminalConnectionStatus(ConnectionStatus status) const;
   std::shared_ptr<ConnectionInterface> CreateManagedPeerConnection(
       const std::string& remote_user_id);
@@ -160,6 +163,7 @@ class PeerConnection {
   std::string cfg_turn_server_port_;
   std::string cfg_turn_server_username_;
   std::string cfg_turn_server_password_;
+  int64_t turn_credential_expires_at_ = 0;
   std::string cfg_hardware_acceleration_;
   std::string cfg_av1_encoding_;
   std::string cfg_turn_mode_;
@@ -252,7 +256,8 @@ class PeerConnection {
       "offer",
       "answer",
       "new_candidate",
-      "new_candidate_mid"};
+      "new_candidate_mid",
+      "turn_credentials"};
 };
 }  // namespace minirtc
 

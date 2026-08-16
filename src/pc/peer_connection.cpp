@@ -1,5 +1,6 @@
 #include "peer_connection.h"
 
+#include <chrono>
 #include <regex>
 
 #include "INIReader.h"
@@ -208,9 +209,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
   if (!cfg_turn_server_ip_.empty() && 0 != turn_server_port_ &&
       !cfg_turn_server_username_.empty() &&
       !cfg_turn_server_password_.empty()) {
-    LOG_INFO("Turn server ip [{}] port [{}] username [{}] password [{}]",
-             cfg_turn_server_ip_, turn_server_port_, cfg_turn_server_username_,
-             cfg_turn_server_password_);
+    LOG_INFO("Turn server ip [{}] port [{}] username [{}]",
+             cfg_turn_server_ip_, turn_server_port_, cfg_turn_server_username_);
   }
 
   LOG_INFO("Hardware accelerated codec [{}]",
@@ -733,6 +733,57 @@ int64_t PeerConnection::GetSystemTimeMicros() {
   return 0;
 }
 
+bool PeerConnection::ApplyTurnCredentials(const json& message) {
+  if (!message.contains("turn") || !message["turn"].is_object()) {
+    return false;
+  }
+
+  const json& turn = message["turn"];
+  if (!turn.contains("host") || !turn["host"].is_string() ||
+      !turn.contains("port") ||
+      (!turn["port"].is_number_integer() &&
+       !turn["port"].is_number_unsigned()) ||
+      !turn.contains("username") || !turn["username"].is_string() ||
+      !turn.contains("password") || !turn["password"].is_string() ||
+      !turn.contains("expires_at") ||
+      (!turn["expires_at"].is_number_integer() &&
+       !turn["expires_at"].is_number_unsigned())) {
+    LOG_WARN("Ignore malformed dynamic TURN credentials");
+    return false;
+  }
+
+  const std::string host = turn["host"].get<std::string>();
+  const int64_t port = turn["port"].get<int64_t>();
+  const std::string username = turn["username"].get<std::string>();
+  const std::string password = turn["password"].get<std::string>();
+  const int64_t expires_at = turn["expires_at"].get<int64_t>();
+  const int64_t now = std::chrono::duration_cast<std::chrono::seconds>(
+                          std::chrono::system_clock::now().time_since_epoch())
+                          .count();
+
+  if (host.empty() || port < 1 || port > 65535 || username.empty() ||
+      password.empty() || expires_at <= now) {
+    LOG_WARN("Ignore invalid or expired dynamic TURN credentials");
+    return false;
+  }
+
+  cfg_turn_server_ip_ = host;
+  turn_server_port_ = static_cast<int>(port);
+  cfg_turn_server_port_ = std::to_string(turn_server_port_);
+  cfg_turn_server_username_ = username;
+  cfg_turn_server_password_ = password;
+  turn_credential_expires_at_ = expires_at;
+
+  connection_info_.turn_server_ip = cfg_turn_server_ip_;
+  connection_info_.turn_server_port = turn_server_port_;
+  connection_info_.turn_server_username = cfg_turn_server_username_;
+  connection_info_.turn_server_password = cfg_turn_server_password_;
+
+  LOG_INFO("Updated dynamic TURN credentials for [{}:{}], expires at [{}]",
+           cfg_turn_server_ip_, turn_server_port_, turn_credential_expires_at_);
+  return true;
+}
+
 // Process signal message from signal server
 void PeerConnection::ProcessSignal(const std::string& signal) {
   auto j = json::parse(signal);
@@ -741,6 +792,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
   switch (HASH_STRING_PIECE(type.c_str())) {
     case "login"_H: {
       if (j["status"].get<std::string>() == "success") {
+        ApplyTurnCredentials(j);
         std::string user_id_with_pwd = j["user_id"].get<std::string>();
         std::string password;
 
@@ -800,6 +852,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
                                 user_data_);
         }
       } else {
+        ApplyTurnCredentials(j);
         std::string remote_user_id = j["user_id"].get<std::string>();
 
         if (remote_user_id.empty()) {
@@ -842,6 +895,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       remote_user_id_ = remote_user_id;
 
       if (j.contains("sdp")) {
+        ApplyTurnCredentials(j);
         std::string remote_sdp = j["sdp"].get<std::string>();
         LOG_INFO("[{}] receive offer from [{}]", user_id_, remote_user_id);
 
@@ -923,6 +977,15 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       msg.mid = mid;
       PushIceWorkMsg(msg);
 
+      break;
+    }
+    case "turn_credentials"_H: {
+      if (j.value("status", "fail") == "success") {
+        ApplyTurnCredentials(j);
+      } else {
+        LOG_WARN("Failed to refresh dynamic TURN credentials: [{}]",
+                 j.value("reason", "Unknown error"));
+      }
       break;
     }
     default: {
