@@ -106,6 +106,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::mutex pending_threads_mtx_;
   std::condition_variable reconnect_cv_;
   std::mutex reconnect_mtx_;
+  std::mutex shutdown_mtx_;
 
   std::string uri_;
 
@@ -118,7 +119,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
   std::atomic<int> timeout_count_{0};
-  std::atomic<bool> destructed_{false};
+  std::atomic<bool> shutdown_{false};
   std::atomic<bool> is_reconnecting_{false};
   std::atomic<int> reconnect_attempts_{0};
   std::atomic<int> tls_failure_count_{0};

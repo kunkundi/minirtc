@@ -303,40 +303,64 @@ WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
     : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
-WsClient::~WsClient() {
-  destructed_ = true;
-  Shutdown();
+namespace {
+void JoinThread(std::thread& thread) {
+  if (!thread.joinable()) {
+    return;
+  }
+
+  // A worker can temporarily own the last shared_ptr to WsClient. Never try to
+  // join that worker from its own destructor path.
+  if (thread.get_id() == std::this_thread::get_id()) {
+    thread.detach();
+    return;
+  }
+
+  thread.join();
 }
+}  // namespace
+
+WsClient::~WsClient() { Shutdown(); }
 
 void WsClient::Shutdown() {
+  std::lock_guard<std::mutex> shutdown_lock(shutdown_mtx_);
+
+  // Shutdown is terminal. In particular, wake and invalidate a delayed
+  // reconnect before waiting for any worker so an obsolete client cannot be
+  // revived after its PeerConnection has been destroyed.
+  shutdown_ = true;
   running_ = false;
   is_reconnecting_ = false;
   cond_var_.notify_all();
-  reconnect_cv_.notify_all();  // wake up reconnect thread if sleeping
+  reconnect_generation_.fetch_add(1);
+  reconnect_cv_.notify_all();
 
-  if (ping_thread_.joinable()) {
-    ping_thread_.join();
-  }
-  if (reconnect_thread_.joinable()) {
-    reconnect_thread_.join();
-  }
-
+  std::vector<std::thread> reconnect_threads;
   {
     std::lock_guard<std::mutex> lock(pending_threads_mtx_);
-    for (auto& t : pending_threads_) {
-      if (t.joinable()) {
-        t.join();
-      }
+    if (reconnect_thread_.joinable()) {
+      reconnect_threads.push_back(std::move(reconnect_thread_));
+    }
+    for (auto& thread : pending_threads_) {
+      reconnect_threads.push_back(std::move(thread));
     }
     pending_threads_.clear();
   }
 
+  for (auto& thread : reconnect_threads) {
+    JoinThread(thread);
+  }
+
+  // A reconnect that was already running may have restarted the heartbeat.
+  running_ = false;
+  cond_var_.notify_all();
+  JoinThread(ping_thread_);
+
   if (m_endpoint_) {
     m_endpoint_->stop_perpetual();
+    m_endpoint_->stop();
   }
-  if (m_thread_.joinable()) {
-    m_thread_.join();
-  }
+  JoinThread(m_thread_);
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
@@ -346,39 +370,37 @@ void WsClient::StopThreads() {
   running_ = false;
   cond_var_.notify_all();
 
-  if (ping_thread_.joinable()) {
-    ping_thread_.join();
-  }
+  JoinThread(ping_thread_);
 
   CleanupPendingThreads();
 
   if (m_endpoint_) {
     m_endpoint_->stop_perpetual();
   }
-  if (m_thread_.joinable()) {
-    m_thread_.join();
-  }
+  JoinThread(m_thread_);
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
 }
 
 void WsClient::CleanupPendingThreads() {
-  // nncrement generation to signal all pending threads to exit
+  // Increment generation to signal all pending threads to exit.
   reconnect_generation_.fetch_add(1);
   reconnect_cv_.notify_all();
 
-  std::lock_guard<std::mutex> lock(pending_threads_mtx_);
-  for (auto& t : pending_threads_) {
-    if (t.joinable()) {
-      t.join();  // threads will exit quickly after being notified
-    }
+  std::vector<std::thread> pending_threads;
+  {
+    std::lock_guard<std::mutex> lock(pending_threads_mtx_);
+    pending_threads.swap(pending_threads_);
   }
-  pending_threads_.clear();
+
+  for (auto& thread : pending_threads) {
+    JoinThread(thread);
+  }
 }
 
 void WsClient::ScheduleReconnect(int delay_seconds) {
-  if (destructed_) {
+  if (shutdown_) {
     return;
   }
 
@@ -389,22 +411,14 @@ void WsClient::ScheduleReconnect(int delay_seconds) {
     return;
   }
 
-  // move old reconnect thread to pending list (non-blocking)
-  {
-    std::lock_guard<std::mutex> lock(pending_threads_mtx_);
-    if (reconnect_thread_.joinable()) {
-      pending_threads_.push_back(std::move(reconnect_thread_));
-    }
-  }
-
   LOG_INFO("Will retry connection after {} seconds", delay_seconds);
 
   // capture current generation to detect cancellation
   uint64_t current_generation = reconnect_generation_.load();
 
   std::weak_ptr<WsClient> weak_self = shared_from_this();
-  reconnect_thread_ = std::thread([weak_self, delay_seconds,
-                                   current_generation]() {
+  std::thread reconnect_thread([weak_self, delay_seconds,
+                                current_generation]() {
     if (auto self = weak_self.lock()) {
       if (delay_seconds > 0) {
         // use interruptible wait instead of sleep
@@ -412,13 +426,13 @@ void WsClient::ScheduleReconnect(int delay_seconds) {
         self->reconnect_cv_.wait_for(
             lock, std::chrono::seconds(delay_seconds),
             [&self, current_generation]() {
-              return self->destructed_.load() ||
+              return self->shutdown_.load() ||
                      self->reconnect_generation_.load() != current_generation;
             });
       }
 
-      // generation changed or destructed, cancel this reconnect attempt
-      if (self->destructed_ ||
+      // Generation changed or shutdown started; cancel this reconnect attempt.
+      if (self->shutdown_ ||
           self->reconnect_generation_.load() != current_generation) {
         self->is_reconnecting_.store(false);
         return;
@@ -428,6 +442,26 @@ void WsClient::ScheduleReconnect(int delay_seconds) {
       self->is_reconnecting_.store(false);
     }
   });
+
+  // Serialize publication of the new worker with Shutdown(). Recheck the
+  // terminal flag while holding the same mutex so Shutdown cannot miss a
+  // reconnect thread created concurrently.
+  {
+    std::lock_guard<std::mutex> lock(pending_threads_mtx_);
+    if (shutdown_) {
+      reconnect_generation_.fetch_add(1);
+      reconnect_cv_.notify_all();
+      is_reconnecting_ = false;
+    } else {
+      if (reconnect_thread_.joinable()) {
+        pending_threads_.push_back(std::move(reconnect_thread_));
+      }
+      reconnect_thread_ = std::move(reconnect_thread);
+      return;
+    }
+  }
+
+  JoinThread(reconnect_thread);
 }
 
 void WsClient::RegisterHandlers() {
@@ -492,6 +526,10 @@ void WsClient::RegisterHandlers() {
 }
 
 int WsClient::Connect(const std::string& uri) {
+  if (shutdown_) {
+    return -1;
+  }
+
   uri_ = uri;
 
   LOG_INFO("Connecting WebSocket: {}", uri);
@@ -521,6 +559,10 @@ int WsClient::Connect(const std::string& uri) {
 }
 
 int WsClient::ReConnect() {
+  if (shutdown_) {
+    return -1;
+  }
+
   if (ws_status_ == WsReconnecting) {
     LOG_INFO("Already reconnecting, ignore duplicate call.");
     return 0;
@@ -545,7 +587,7 @@ int WsClient::ReConnect() {
 }
 
 void WsClient::AsyncReConnect() {
-  if (destructed_) {
+  if (shutdown_) {
     return;
   }
 
@@ -560,16 +602,7 @@ void WsClient::AsyncReConnect() {
 }
 
 void WsClient::Close() {
-  if (connection_handle_.expired()) {
-    return;
-  }
-
-  websocketpp::lib::error_code ec;
-  auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
-  if (!ec && con && con->get_state() == websocketpp::session::state::open) {
-    m_endpoint_->close(connection_handle_, websocketpp::close::status::normal,
-                       "Client requested close", ec);
-  }
+  Shutdown();
 }
 
 void WsClient::Send(const std::string& message) {
@@ -590,16 +623,20 @@ WsStatus WsClient::GetStatus() { return ws_status_; }
 
 void WsClient::SetStatus(WsStatus status) {
   ws_status_ = status;
-  if (on_ws_status_) {
+  if (!shutdown_ && on_ws_status_) {
     on_ws_status_(status);
   }
 }
 
 void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
+  if (shutdown_) {
+    return;
+  }
+
   if (ping_thread_.joinable()) {
     running_ = false;
     cond_var_.notify_all();
-    ping_thread_.join();
+    JoinThread(ping_thread_);
   }
 
   running_ = true;
@@ -797,12 +834,12 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
     LOG_INFO("Will retry TLS connection after {} seconds (attempt {})",
              delay_seconds, attempts + 1);
 
-    if (!destructed_) {
+    if (!shutdown_) {
       ScheduleReconnect(delay_seconds);
     }
   } else {
     LOG_WARN("Connection failed (non-TLS error): {}", error_msg);
-    if (!destructed_) {
+    if (!shutdown_) {
       AsyncReConnect();
     }
   }
@@ -811,7 +848,7 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
 void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
   auto con = c->get_con_from_hdl(hdl);
   LOG_WARN("Connection closed");
-  if (!destructed_) {
+  if (!shutdown_) {
     AsyncReConnect();
   }
 }
