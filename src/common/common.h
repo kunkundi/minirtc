@@ -18,7 +18,7 @@ constexpr size_t HASH_STRING_PIECE(const char *string_piece) {
   return result;
 }
 
-constexpr size_t operator"" _H(const char *string_piece, size_t) {
+constexpr size_t operator""_H(const char *string_piece, size_t) {
   return HASH_STRING_PIECE(string_piece);
 }
 
