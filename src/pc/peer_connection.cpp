@@ -815,7 +815,14 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),
                           user_id_.size(), user_data_);
       } else if (j["status"].get<std::string>() == "fail") {
-        LOG_WARN("Login failed with id [{}]", user_id_);
+        auto reason = std::string("Unknown error");
+        if (j.contains("reason") && j["reason"].is_string()) {
+          reason = j["reason"].get<std::string>();
+        }
+        LOG_WARN("Login failed with id [{}], due to [{}]", user_id_, reason);
+        signal_status_ = SignalStatus::SignalFailed;
+        on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
+                          user_id_.size(), user_data_);
       }
       break;
     }
