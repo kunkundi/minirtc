@@ -56,6 +56,9 @@ elseif is_os("linux") then
     add_syslinks("pthread")
 elseif is_os("macosx") then
     -- add_ldflags("-fsanitize=address")
+    if is_arch("x86_64") then
+        add_ldflags("-Wl,-ld_classic")
+    end
     add_cxflags("-Wno-unused-variable")
     add_frameworks("VideoToolbox")
     add_frameworks("Security")
