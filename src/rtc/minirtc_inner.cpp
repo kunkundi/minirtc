@@ -16,7 +16,7 @@ PeerPtr* CreatePeer(const Params* params) {
     return nullptr;
   }
 
-  if (params->log_path) {
+  if (params->log_path[0] != '\0') {
     InitLogger(params->log_path);
   } else {
     InitLogger("logs");
