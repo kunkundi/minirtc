@@ -146,14 +146,15 @@ IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
       controlling_(offer_peer) {}
 
 IceAgent::~IceAgent() {
-  if (!destroyed_) {
+  if (!destroyed_.load()) {
     DestroyIceAgent();
   }
 
   CleanupDtls();
 
-  if (agent_) {
-    g_object_unref(agent_);
+  NiceAgent* agent = agent_.exchange(nullptr);
+  if (agent != nullptr) {
+    g_object_unref(agent);
   }
   g_free(ice_ufrag_);
   g_free(ice_password_);
@@ -191,13 +192,14 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     init_status_ = -1;
   }
 
-  destroyed_ = false;
-  nice_inited_ = false;
-  init_failed_ = false;
-  agent_closed_ = false;
+  destroyed_.store(false);
+  nice_inited_.store(false);
+  init_failed_.store(false);
+  agent_closed_.store(false);
   stream_id_ = 0;
-  agent_ = nullptr;
-  gloop_ = nullptr;
+  agent_.store(nullptr);
+  gcontext_.store(nullptr);
+  gloop_.store(nullptr);
 
   on_state_changed_ = on_state_changed;
   on_new_selected_pair_ = on_new_selected_pair;
@@ -220,11 +222,30 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       init_cv_.notify_one();
     };
 
-    GMainLoop* loop = g_main_loop_new(nullptr, false);
-    gloop_ = loop;
+    GMainContext* context = g_main_context_new();
+    gcontext_.store(context);
+    if (context == nullptr) {
+      LOG_ERROR("Failed to create glib main context");
+      init_failed_.store(true);
+      notify_init(-1);
+      exit_nice_thread_ = true;
+      return;
+    }
+
+    // Keep all sources and asynchronous callbacks for this NiceAgent on its
+    // own context. Using a nullptr context here would make every IceAgent
+    // share GLib's global-default context across their worker threads.
+    // GMainLoop* loop = g_main_loop_new(nullptr, false);
+    g_main_context_push_thread_default(context);
+
+    GMainLoop* loop = g_main_loop_new(context, false);
+    gloop_.store(loop);
     if (loop == nullptr) {
       LOG_ERROR("Failed to create glib main loop");
-      init_failed_ = true;
+      init_failed_.store(true);
+      g_main_context_pop_thread_default(context);
+      g_main_context_unref(context);
+      gcontext_.store(nullptr);
       notify_init(-1);
       exit_nice_thread_ = true;
       return;
@@ -238,7 +259,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                                                     : NICE_AGENT_OPTION_NONE))
                               : (use_reliable_ice_ ? NICE_AGENT_OPTION_RELIABLE
                                                    : NICE_AGENT_OPTION_NONE)));
-    agent_ = agent;
+    agent_.store(agent);
 
     LOG_INFO(
         "Nice agent init with [trickle ice|{}], [reliable mode|{}], "
@@ -247,9 +268,12 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
 
     if (agent == nullptr) {
       LOG_ERROR("Failed to create agent_");
-      init_failed_ = true;
+      init_failed_.store(true);
       g_main_loop_unref(loop);
-      gloop_ = nullptr;
+      gloop_.store(nullptr);
+      g_main_context_pop_thread_default(context);
+      g_main_context_unref(context);
+      gcontext_.store(nullptr);
       notify_init(-1);
       exit_nice_thread_ = true;
       return;
@@ -271,11 +295,14 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     stream_id_ = nice_agent_add_stream(agent, n_components_);
     if (stream_id_ == 0) {
       LOG_ERROR("Failed to add stream");
-      init_failed_ = true;
+      init_failed_.store(true);
       g_object_unref(agent);
-      agent_ = nullptr;
+      agent_.store(nullptr);
       g_main_loop_unref(loop);
-      gloop_ = nullptr;
+      gloop_.store(nullptr);
+      g_main_context_pop_thread_default(context);
+      g_main_context_unref(context);
+      gcontext_.store(nullptr);
       notify_init(-1);
       exit_nice_thread_ = true;
       return;
@@ -309,11 +336,14 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
             "[{}:{}]",
             turn_ip_, turn_port_);
         if (IsTurnForced(turn_mode_)) {
-          init_failed_ = true;
+          init_failed_.store(true);
           g_object_unref(agent);
-          agent_ = nullptr;
+          agent_.store(nullptr);
           g_main_loop_unref(loop);
-          gloop_ = nullptr;
+          gloop_.store(nullptr);
+          g_main_context_pop_thread_default(context);
+          g_main_context_unref(context);
+          gcontext_.store(nullptr);
           notify_init(-1);
           exit_nice_thread_ = true;
           return;
@@ -329,10 +359,11 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                            g_main_loop_get_context(loop),
                            &IceAgent::OnNiceRecvStatic, this);
 
-    nice_inited_ = true;
-    init_failed_ = false;
+    nice_inited_.store(true);
+    init_failed_.store(false);
     notify_init(0);
     g_main_loop_run(loop);
+    g_main_context_pop_thread_default(context);
     exit_nice_thread_ = true;
   });
 
@@ -341,7 +372,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     init_cv_.wait(lk, [this]() { return init_done_; });
   }
 
-  if (init_status_ != 0 || init_failed_) {
+  if (init_status_ != 0 || init_failed_.load()) {
     if (nice_thread_.joinable()) {
       nice_thread_.join();
     }
@@ -373,27 +404,60 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   return 0;
 }
 
-void cb_closed(GObject* src, [[maybe_unused]] GAsyncResult* res,
-               [[maybe_unused]] gpointer data) {
-  [[maybe_unused]] NiceAgent* agent = NICE_AGENT(src);
+gboolean IceAgent::CloseNiceAgentStatic(gpointer data) {
+  auto* self = static_cast<IceAgent*>(data);
+  NiceAgent* agent = self->agent_.load();
+
+  if (self->nice_inited_.load() && agent != nullptr &&
+      self->stream_id_ != 0) {
+    // close_async must run while this agent's thread-default context is still
+    // being iterated. The completion callback removes the stream only after
+    // libnice has released remote resources such as TURN allocations.
+    nice_agent_close_async(agent, &IceAgent::OnNiceAgentClosedStatic, self);
+  } else {
+    self->agent_closed_.store(true);
+    GMainLoop* loop = self->gloop_.load();
+    if (loop != nullptr) {
+      g_main_loop_quit(loop);
+    }
+  }
+
+  return G_SOURCE_REMOVE;
+}
+
+void IceAgent::OnNiceAgentClosedStatic(
+    GObject* source, [[maybe_unused]] GAsyncResult* result, gpointer data) {
+  auto* self = static_cast<IceAgent*>(data);
+  NiceAgent* agent = NICE_AGENT(source);
+
+  if (self->stream_id_ != 0) {
+    nice_agent_remove_stream(agent, self->stream_id_);
+    self->stream_id_ = 0;
+  }
+
+  self->agent_closed_.store(true);
   LOG_INFO("Nice agent closed");
+
+  GMainLoop* loop = self->gloop_.load();
+  if (loop != nullptr) {
+    g_main_loop_quit(loop);
+  }
 }
 
 int IceAgent::DestroyIceAgent() {
-  if (destroyed_) {
+  std::lock_guard<std::mutex> destroy_lock(destroy_mutex_);
+
+  if (destroyed_.exchange(true)) {
     return 0;
   }
 
-  destroyed_ = true;
   NiceAgent* agent = agent_.load();
+  GMainContext* context = gcontext_.load();
   GMainLoop* loop = gloop_.load();
 
-  if (nice_inited_ && agent != nullptr && stream_id_ != 0) {
-    nice_agent_remove_stream(agent, stream_id_);
-    nice_agent_close_async(agent, cb_closed, &agent_closed_);
-  }
-
-  if (loop != nullptr) {
+  if (context != nullptr && loop != nullptr && nice_thread_.joinable()) {
+    g_main_context_invoke(context, &IceAgent::CloseNiceAgentStatic, this);
+  } else if (loop != nullptr) {
     g_main_loop_quit(loop);
   }
 
@@ -401,9 +465,21 @@ int IceAgent::DestroyIceAgent() {
     nice_thread_.join();
   }
 
+  // Destroy the agent while its private context is still alive so any
+  // remaining libnice sources are detached before the context is released.
+  if (agent != nullptr) {
+    g_object_unref(agent);
+    agent_.store(nullptr);
+  }
+
   if (loop != nullptr) {
     g_main_loop_unref(loop);
-    gloop_ = nullptr;
+    gloop_.store(nullptr);
+  }
+
+  if (context != nullptr) {
+    g_main_context_unref(context);
+    gcontext_.store(nullptr);
   }
 
   {
@@ -411,8 +487,8 @@ int IceAgent::DestroyIceAgent() {
     init_done_ = false;
     init_status_ = -1;
   }
-  nice_inited_ = false;
-  init_failed_ = false;
+  nice_inited_.store(false);
+  init_failed_.store(false);
   stream_id_ = 0;
 
   CleanupDtls();

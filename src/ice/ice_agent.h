@@ -128,6 +128,7 @@ class IceAgent {
  public:
   std::thread nice_thread_;
   std::atomic<NiceAgent*> agent_{nullptr};
+  std::atomic<GMainContext*> gcontext_{nullptr};
   std::atomic<GMainLoop*> gloop_{nullptr};
   std::atomic<bool> nice_inited_{false};
   std::atomic<bool> init_failed_{false};
@@ -144,8 +145,8 @@ class IceAgent {
   uint32_t n_components_ = 1;
   std::string local_sdp_ = "";
   ICE_STATE state_ = ICE_STATE_LAST;
-  bool destroyed_ = false;
-  gboolean agent_closed_ = false;
+  std::atomic<bool> destroyed_{false};
+  std::atomic<bool> agent_closed_{false};
 
   nice_cb_state_changed_t on_state_changed_{};
   nice_cb_new_selected_pair_t on_new_selected_pair_{};
@@ -178,6 +179,9 @@ class IceAgent {
   static void OnNiceStateChangedStatic(NiceAgent* agent, guint stream_id,
                                        guint component_id,
                                        NiceComponentState state, gpointer data);
+  static gboolean CloseNiceAgentStatic(gpointer data);
+  static void OnNiceAgentClosedStatic(GObject* source, GAsyncResult* result,
+                                      gpointer data);
   void OnNiceStateChanged(guint stream_id, guint component_id,
                           NiceComponentState state);
   void OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
@@ -197,6 +201,7 @@ class IceAgent {
   std::string ExtractAndStripFingerprint(const std::string& sdp);
 
   std::mutex dtls_mutex_;
+  std::mutex destroy_mutex_;
   std::queue<std::vector<uint8_t>> dtls_incoming_;
 
   void CleanupDtls();
