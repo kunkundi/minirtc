@@ -2,6 +2,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <VideoToolbox/VideoToolbox.h>
+#include <algorithm>
 #include <atomic>
 #include <mutex>
 #include "log.h"
@@ -26,6 +27,11 @@ class VideoToolboxEncoder::Impl {
   std::string GetEncoderName() { return "VideoToolboxH264"; }
 
  private:
+  int CreateCompressionSession(int width, int height, VTCompressionSessionRef* session_out);
+  int ResetEncodeResolution(int width, int height);
+  int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate);
+  void ResetCodecState();
+
   static void CompressionOutputCallback(void* outputCallbackRefCon, void* sourceFrameRefCon,
                                         OSStatus status, VTEncodeInfoFlags infoFlags,
                                         CMSampleBufferRef sampleBuffer);
@@ -40,7 +46,6 @@ class VideoToolboxEncoder::Impl {
   int seq_ = 0;
   int ref_buffer_count_ = 3;
   std::atomic<bool> force_idr_ = false;
-  bool sps_pps_got_ = false;
 
   VTCompressionSessionRef session_ = nullptr;
   mutex lock_;
@@ -53,11 +58,6 @@ class VideoToolboxEncoder::Impl {
 
   std::string h264_file_name_;
   std::string nv12_file_name_;
-
-  const uint8_t* sps = nullptr;
-  const uint8_t* pps = nullptr;
-  size_t spsSize = 0, ppsSize = 0;
-  size_t spsCount, ppsCount;
 
   void HandleEncodedSampleBuffer(CMSampleBufferRef sampleBuffer);
 };
@@ -93,78 +93,13 @@ VideoToolboxEncoder::Impl::~Impl() {
 
 int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   lock_guard<mutex> guard(lock_);
-  width_ = config.init_width;
-  height_ = config.init_height;
   max_fps_ = config.max_frame_rate;
   average_bitrate_ = config.average_bitrate;
   keyframe_interval_ = config.key_frame_interval;
 
-  if (session_) {
-    VTCompressionSessionInvalidate(session_);
-    CFRelease(session_);
-    session_ = nullptr;
-  }
-
-  CFMutableDictionaryRef encoder_spec = CFDictionaryCreateMutable(
-      nullptr, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-
-  CFDictionarySetValue(encoder_spec,
-                       kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
-                       kCFBooleanTrue);
-
-  OSStatus status =
-      VTCompressionSessionCreate(nullptr, width_, height_, kCMVideoCodecType_H264, encoder_spec,
-                                 nullptr, nullptr, CompressionOutputCallback, this, &session_);
-  if (status != noErr || session_ == nullptr) {
+  if (ResetEncodeResolution(config.init_width, config.init_height) != 0) {
     return -1;
   }
-
-  // kVTCompressionPropertyKey_MinAllowedFrameQP/kVTCompressionPropertyKey_MaxAllowedFrameQP
-
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-                       kCFBooleanTrue);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_MoreFramesBeforeStart, kCFBooleanFalse);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_ProfileLevel,
-                       kVTProfileLevel_H264_High_5_2);
-
-  CFNumberRef frameIntervalRef = CFNumberCreate(nullptr, kCFNumberIntType, &keyframe_interval_);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_MaxKeyFrameInterval, frameIntervalRef);
-  CFRelease(frameIntervalRef);
-
-  CFNumberRef fpsRef = CFNumberCreate(nullptr, kCFNumberIntType, &max_fps_);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_ExpectedFrameRate, fpsRef);
-  CFRelease(fpsRef);
-
-  CFNumberRef bitRateRef = CFNumberCreate(nullptr, kCFNumberSInt32Type, &average_bitrate_);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_AverageBitRate, bitRateRef);
-  CFRelease(bitRateRef);
-
-  // CFNumberRef refBufferCount =
-  //     CFNumberCreate(nullptr, kCFNumberSInt32Type, &ref_buffer_count_);
-  // VTSessionSetProperty(session_, kVTCompressionPropertyKey_ReferenceBufferCount, refBufferCount);
-  // CFRelease(refBufferCount);
-
-  int maxFrameDelayCount = 1;
-  CFNumberRef maxFrameDelayCountRef =
-      CFNumberCreate(nullptr, kCFNumberIntType, &maxFrameDelayCount);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_MaxFrameDelayCount,
-                       maxFrameDelayCountRef);
-  CFRelease(maxFrameDelayCountRef);
-
-  int dataRateLimit[2] = {average_bitrate_ / 8, 1};
-  CFNumberRef dataRateLimitNum[2] = {CFNumberCreate(nullptr, kCFNumberIntType, &dataRateLimit[0]),
-                                     CFNumberCreate(nullptr, kCFNumberIntType, &dataRateLimit[1])};
-  CFArrayRef dataRateLimits =
-      CFArrayCreate(nullptr, (const void**)dataRateLimitNum, 2, &kCFTypeArrayCallBacks);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_DataRateLimits, dataRateLimits);
-  for (int i = 0; i < 2; ++i) {
-    CFRelease(dataRateLimitNum[i]);
-  }
-  CFRelease(dataRateLimits);
-
-  VTCompressionSessionPrepareToEncodeFrames(session_);
 
   frame_count_ = 0;
 
@@ -187,6 +122,154 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
 #endif
 
   return 0;
+}
+
+int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
+                                                        VTCompressionSessionRef* session_out) {
+  if (!session_out || width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0) {
+    LOG_ERROR("Invalid VideoToolbox encoder resolution [{}x{}]", width, height);
+    return -1;
+  }
+
+  *session_out = nullptr;
+
+  CFMutableDictionaryRef encoder_spec = CFDictionaryCreateMutable(
+      nullptr, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+
+  if (!encoder_spec) {
+    LOG_ERROR("Failed to create VideoToolbox encoder specification");
+    return -1;
+  }
+
+  CFDictionarySetValue(encoder_spec,
+                       kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+                       kCFBooleanTrue);
+
+  VTCompressionSessionRef new_session = nullptr;
+  OSStatus status =
+      VTCompressionSessionCreate(nullptr, width, height, kCMVideoCodecType_H264, encoder_spec,
+                                 nullptr, nullptr, CompressionOutputCallback, this, &new_session);
+  CFRelease(encoder_spec);
+  if (status != noErr || new_session == nullptr) {
+    LOG_ERROR("Failed to create VideoToolbox encoder session [{}x{}]: {}", width, height, status);
+    return -1;
+  }
+
+  // kVTCompressionPropertyKey_MinAllowedFrameQP/kVTCompressionPropertyKey_MaxAllowedFrameQP
+
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+                       kCFBooleanTrue);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MoreFramesBeforeStart,
+                       kCFBooleanFalse);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_AllowFrameReordering,
+                       kCFBooleanFalse);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_ProfileLevel,
+                       kVTProfileLevel_H264_High_5_2);
+
+  CFNumberRef frameIntervalRef = CFNumberCreate(nullptr, kCFNumberIntType, &keyframe_interval_);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MaxKeyFrameInterval,
+                       frameIntervalRef);
+  CFRelease(frameIntervalRef);
+
+  CFNumberRef fpsRef = CFNumberCreate(nullptr, kCFNumberIntType, &max_fps_);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_ExpectedFrameRate, fpsRef);
+  CFRelease(fpsRef);
+
+  if (ApplyBitrateProperties(new_session, average_bitrate_) != 0) {
+    VTCompressionSessionInvalidate(new_session);
+    CFRelease(new_session);
+    return -1;
+  }
+
+  // CFNumberRef refBufferCount =
+  //     CFNumberCreate(nullptr, kCFNumberSInt32Type, &ref_buffer_count_);
+  // VTSessionSetProperty(session_,
+  // kVTCompressionPropertyKey_ReferenceBufferCount, refBufferCount);
+  // CFRelease(refBufferCount);
+
+  int maxFrameDelayCount = 1;
+  CFNumberRef maxFrameDelayCountRef =
+      CFNumberCreate(nullptr, kCFNumberIntType, &maxFrameDelayCount);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MaxFrameDelayCount,
+                       maxFrameDelayCountRef);
+  CFRelease(maxFrameDelayCountRef);
+
+  status = VTCompressionSessionPrepareToEncodeFrames(new_session);
+  if (status != noErr) {
+    LOG_ERROR("Failed to prepare VideoToolbox encoder session [{}x{}]: {}", width, height, status);
+    VTCompressionSessionInvalidate(new_session);
+    CFRelease(new_session);
+    return -1;
+  }
+
+  *session_out = new_session;
+  return 0;
+}
+
+int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
+  VTCompressionSessionRef new_session = nullptr;
+  if (CreateCompressionSession(width, height, &new_session) != 0) {
+    return -1;
+  }
+
+  const int previous_width = width_;
+  const int previous_height = height_;
+  if (session_) {
+    // Pending frames belong to the old resolution. Drop them so an old
+    // callback cannot race with output from the newly selected session.
+    VTCompressionSessionInvalidate(session_);
+    CFRelease(session_);
+  }
+
+  session_ = new_session;
+  width_ = width;
+  height_ = height;
+  ResetCodecState();
+
+  LOG_INFO("VideoToolbox encoder resolution changed: {}x{} -> {}x{}", previous_width,
+           previous_height, width_, height_);
+  return 0;
+}
+
+int VideoToolboxEncoder::Impl::ApplyBitrateProperties(VTCompressionSessionRef session,
+                                                      int bitrate) {
+  if (!session || bitrate <= 0) {
+    LOG_ERROR("Invalid VideoToolbox bitrate [{}]", bitrate);
+    return -1;
+  }
+
+  CFNumberRef bit_rate_ref = CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate);
+  OSStatus average_status =
+      VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, bit_rate_ref);
+  CFRelease(bit_rate_ref);
+
+  int data_rate_limit[2] = {std::max(1, bitrate / 8), 1};
+  CFNumberRef data_rate_limit_numbers[2] = {
+      CFNumberCreate(nullptr, kCFNumberIntType, &data_rate_limit[0]),
+      CFNumberCreate(nullptr, kCFNumberIntType, &data_rate_limit[1])};
+  const void* data_rate_limit_values[2] = {data_rate_limit_numbers[0], data_rate_limit_numbers[1]};
+  CFArrayRef data_rate_limits =
+      CFArrayCreate(nullptr, data_rate_limit_values, 2, &kCFTypeArrayCallBacks);
+  OSStatus limit_status =
+      VTSessionSetProperty(session, kVTCompressionPropertyKey_DataRateLimits, data_rate_limits);
+  for (CFNumberRef number : data_rate_limit_numbers) {
+    CFRelease(number);
+  }
+  CFRelease(data_rate_limits);
+
+  if (average_status != noErr || limit_status != noErr) {
+    LOG_ERROR("Failed to set VideoToolbox bitrate [{}]: average={}, limit={}", bitrate,
+              average_status, limit_status);
+    return -1;
+  }
+
+  return 0;
+}
+
+void VideoToolboxEncoder::Impl::ResetCodecState() {
+  seq_ = 0;
+  force_idr_ = true;
 }
 
 static CVPixelBufferRef CreateNV12PixelBufferFromData(const char* data, size_t width,
@@ -222,24 +305,28 @@ static CVPixelBufferRef CreateNV12PixelBufferFromData(const char* data, size_t w
   return pixelBuffer;
 }
 
-static int CreateEncoderDictH264(bool i_frame, CFDictionaryRef* dict_out) {
-  CFDictionaryRef dict = nullptr;
-  if (i_frame) {
-    const void* keys[] = {kVTEncodeFrameOptionKey_ForceKeyFrame};
-    const void* vals[] = {kCFBooleanTrue};
-
-    dict = CFDictionaryCreate(nullptr, keys, vals, 1, nullptr, nullptr);
-    if (!dict) return -1;
-  }
-
-  *dict_out = dict;
-  return 0;
-}
-
 int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
                                       function<int(const EncodedFrame&)> on_encoded_image) {
   lock_guard<mutex> guard(lock_);
   if (!session_) return -1;
+
+  const int raw_width = static_cast<int>(raw_frame.Width());
+  const int raw_height = static_cast<int>(raw_frame.Height());
+  const uint64_t expected_size =
+      static_cast<uint64_t>(raw_frame.Width()) * raw_frame.Height() * 3 / 2;
+  if (!raw_frame.Buffer() || raw_width <= 0 || raw_height <= 0 || raw_width % 2 != 0 ||
+      raw_height % 2 != 0 || raw_frame.Size() < expected_size) {
+    LOG_ERROR("Invalid NV12 frame for VideoToolbox: {}x{}, size={}", raw_width, raw_height,
+              raw_frame.Size());
+    return -1;
+  }
+
+  if (raw_width != width_ || raw_height != height_) {
+    if (ResetEncodeResolution(raw_width, raw_height) != 0) {
+      LOG_ERROR("Failed to reset VideoToolbox encoder resolution to {}x{}", raw_width, raw_height);
+      return -1;
+    }
+  }
 
   callback_ = on_encoded_image;
 
@@ -249,34 +336,39 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
 
   CVPixelBufferRef pixel_buffer = CreateNV12PixelBufferFromData(
       (const char*)raw_frame.Buffer(), raw_frame.Width(), raw_frame.Height());
+  if (!pixel_buffer) {
+    LOG_ERROR("Failed to create VideoToolbox pixel buffer [{}x{}]", raw_width, raw_height);
+    return -1;
+  }
 
   CMTime pts = CMTimeMake(raw_frame.CapturedTimestamp(), 1000000);
-  CFDictionaryRef frame_dict = nullptr;
-
-  if (0 == seq_++ % keyframe_interval_ || force_idr_) {
-    CreateEncoderDictH264(true, &frame_dict);
-    NSDictionary* properties = @{(__bridge NSString*)kVTEncodeFrameOptionKey_ForceKeyFrame : @YES};
-    OSStatus status =
-        VTCompressionSessionEncodeFrame(session_, pixel_buffer, pts, kCMTimeInvalid,
-                                        (__bridge CFDictionaryRef)properties, nullptr, nullptr);
-    if (status != noErr) {
-      LOG_ERROR("VTCompressionSessionEncodeFrame failed: {}", status);
-      return -2;
-    }
-    force_idr_ = false;
-  } else {
-    CreateEncoderDictH264(false, &frame_dict);
-    OSStatus status = VTCompressionSessionEncodeFrame(session_, pixel_buffer, pts, kCMTimeInvalid,
-                                                      nullptr, nullptr, nullptr);
-    if (status != noErr) {
-      LOG_ERROR("VTCompressionSessionEncodeFrame failed: {}", status);
-      return -2;
+  const int keyframe_interval = std::max(1, keyframe_interval_);
+  const bool force_keyframe = (seq_++ % keyframe_interval == 0) || force_idr_.load();
+  CFDictionaryRef frame_options = nullptr;
+  if (force_keyframe) {
+    const void* keys[] = {kVTEncodeFrameOptionKey_ForceKeyFrame};
+    const void* values[] = {kCFBooleanTrue};
+    frame_options = CFDictionaryCreate(nullptr, keys, values, 1, &kCFTypeDictionaryKeyCallBacks,
+                                       &kCFTypeDictionaryValueCallBacks);
+    if (!frame_options) {
+      CFRelease(pixel_buffer);
+      LOG_ERROR("Failed to create VideoToolbox keyframe options");
+      return -1;
     }
   }
 
+  OSStatus status = VTCompressionSessionEncodeFrame(session_, pixel_buffer, pts, kCMTimeInvalid,
+                                                    frame_options, nullptr, nullptr);
   CFRelease(pixel_buffer);
-  if (frame_dict) {
-    CFRelease(frame_dict);
+  if (frame_options) {
+    CFRelease(frame_options);
+  }
+  if (status != noErr) {
+    LOG_ERROR("VTCompressionSessionEncodeFrame failed: {}", status);
+    return -2;
+  }
+  if (force_keyframe) {
+    force_idr_ = false;
   }
 
   return 0;
@@ -289,16 +381,18 @@ int VideoToolboxEncoder::Impl::ForceIdr() {
 
 int VideoToolboxEncoder::Impl::SetTargetBitrate(int bitrate) {
   lock_guard<mutex> guard(lock_);
+  if (bitrate <= 0) return -1;
+
   average_bitrate_ = bitrate;
   if (!session_) return -1;
-
-  CFNumberRef bitRateRef = CFNumberCreate(nullptr, kCFNumberSInt32Type, &average_bitrate_);
-  VTSessionSetProperty(session_, kVTCompressionPropertyKey_AverageBitRate, bitRateRef);
-  CFRelease(bitRateRef);
+  if (ApplyBitrateProperties(session_, average_bitrate_) != 0) {
+    return -1;
+  }
   return 0;
 }
 
 int VideoToolboxEncoder::Impl::GetResolution(int* width, int* height) {
+  lock_guard<mutex> guard(lock_);
   if (width) *width = width_;
   if (height) *height = height_;
   return 0;
@@ -316,29 +410,56 @@ void VideoToolboxEncoder::Impl::CompressionOutputCallback(void* outputCallbackRe
 }
 
 void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(CMSampleBufferRef sampleBuffer) {
-  if (!sps_pps_got_) {
-    CMFormatDescriptionRef formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer);
-
-    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, 0, &sps, &spsSize, &spsCount,
-                                                       nullptr);
-    CMVideoFormatDescriptionGetH264ParameterSetAtIndex(formatDesc, 1, &pps, &ppsSize, &ppsCount,
-                                                       nullptr);
-    sps_pps_got_ = true;
+  CMFormatDescriptionRef formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer);
+  if (!formatDesc) {
+    LOG_ERROR("VideoToolbox sample has no format description");
+    return;
   }
 
   CFArrayRef attachments = CMSampleBufferGetSampleAttachmentsArray(sampleBuffer, true);
-  if (!attachments) {
-    LOG_ERROR("attachments is nullptr");
+  if (!attachments || CFArrayGetCount(attachments) == 0) {
+    LOG_ERROR("VideoToolbox sample has no attachments");
     return;
   }
 
   CFDictionaryRef dict = (CFDictionaryRef)CFArrayGetValueAtIndex(attachments, 0);
   bool isKeyframe = !CFDictionaryContainsKey(dict, kCMSampleAttachmentKey_NotSync);
 
+  std::vector<uint8_t> sps;
+  std::vector<uint8_t> pps;
+  if (isKeyframe) {
+    const uint8_t* sps_data = nullptr;
+    const uint8_t* pps_data = nullptr;
+    size_t sps_size = 0;
+    size_t pps_size = 0;
+    size_t sps_count = 0;
+    size_t pps_count = 0;
+    OSStatus sps_status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+        formatDesc, 0, &sps_data, &sps_size, &sps_count, nullptr);
+    OSStatus pps_status = CMVideoFormatDescriptionGetH264ParameterSetAtIndex(
+        formatDesc, 1, &pps_data, &pps_size, &pps_count, nullptr);
+    if (sps_status != noErr || pps_status != noErr || !sps_data || !pps_data || sps_size == 0 ||
+        pps_size == 0) {
+      LOG_ERROR("Failed to get VideoToolbox SPS/PPS: sps={}, pps={}", sps_status, pps_status);
+      return;
+    }
+    sps.assign(sps_data, sps_data + sps_size);
+    pps.assign(pps_data, pps_data + pps_size);
+  }
+
   CMBlockBufferRef dataBuffer = CMSampleBufferGetDataBuffer(sampleBuffer);
+  if (!dataBuffer) {
+    LOG_ERROR("VideoToolbox sample has no data buffer");
+    return;
+  }
   size_t totalLength = 0;
   char* dataPointer = nullptr;
-  CMBlockBufferGetDataPointer(dataBuffer, 0, nullptr, &totalLength, &dataPointer);
+  OSStatus block_status =
+      CMBlockBufferGetDataPointer(dataBuffer, 0, nullptr, &totalLength, &dataPointer);
+  if (block_status != noErr || !dataPointer) {
+    LOG_ERROR("Failed to read VideoToolbox data buffer: {}", block_status);
+    return;
+  }
 
   std::vector<uint8_t> annexBData;
 
@@ -346,16 +467,21 @@ void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(CMSampleBufferRef samp
   size_t offset = 0;
 
   if (isKeyframe) {
-    annexBData.insert(annexBData.begin(), pps, pps + ppsSize);
-    annexBData.insert(annexBData.begin(), startCode, startCode + 4);
-    annexBData.insert(annexBData.begin(), sps, sps + spsSize);
-    annexBData.insert(annexBData.begin(), startCode, startCode + 4);
+    annexBData.insert(annexBData.end(), startCode, startCode + 4);
+    annexBData.insert(annexBData.end(), sps.begin(), sps.end());
+    annexBData.insert(annexBData.end(), startCode, startCode + 4);
+    annexBData.insert(annexBData.end(), pps.begin(), pps.end());
   }
 
   while (offset + 4 <= totalLength) {
     uint32_t nalLength = 0;
     memcpy(&nalLength, dataPointer + offset, 4);
     nalLength = CFSwapInt32BigToHost(nalLength);
+    if (nalLength > totalLength - offset - 4) {
+      LOG_ERROR("Invalid VideoToolbox NAL length [{}], remaining={}", nalLength,
+                totalLength - offset - 4);
+      return;
+    }
     annexBData.insert(annexBData.end(), startCode, startCode + 4);
     annexBData.insert(annexBData.end(), dataPointer + offset + 4,
                       dataPointer + offset + 4 + nalLength);
@@ -369,8 +495,9 @@ void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(CMSampleBufferRef samp
   EncodedFrame frame(annexBData.data(), annexBData.size());
   frame.SetFrameType(isKeyframe ? VideoFrameType::kVideoFrameKey
                                 : VideoFrameType::kVideoFrameDelta);
-  frame.SetEncodedWidth(width_);
-  frame.SetEncodedHeight(height_);
+  const CMVideoDimensions dimensions = CMVideoFormatDescriptionGetDimensions(formatDesc);
+  frame.SetEncodedWidth(dimensions.width);
+  frame.SetEncodedHeight(dimensions.height);
   frame.SetCapturedTimestamp(CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer).value);
   frame.SetEncodedTimestamp(clock_->CurrentTime());
 
