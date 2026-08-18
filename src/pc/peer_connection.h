@@ -136,7 +136,7 @@ class PeerConnection {
   bool IsTerminalConnectionStatus(ConnectionStatus status) const;
   std::shared_ptr<ConnectionInterface> CreateManagedPeerConnection(
       const std::string& remote_user_id);
-  bool CleanupPeerConnection(
+  bool RetirePeerConnection(
       const std::string& remote_user_id,
       const std::shared_ptr<ConnectionInterface>& connection,
       ConnectionStatus status);
@@ -233,6 +233,8 @@ class PeerConnection {
   std::thread ice_worker_;
   std::atomic<bool> ice_worker_running_{true};
   std::queue<IceWorkMsg> ice_work_msg_queue_;
+  std::queue<std::shared_ptr<ConnectionInterface>>
+      terminal_connection_cleanup_queue_;
   std::condition_variable ice_work_cv_;
   std::condition_variable empty_notify_cv_;
   std::mutex ice_work_mutex_;

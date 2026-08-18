@@ -449,10 +449,11 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
     }
 
     if (IsTerminalConnectionStatus(status)) {
-      // Removing first serializes terminal transport callbacks against an
-      // explicit leave or a bulk clear. Exactly one path wins the map entry
-      // and therefore exactly one terminal callback reaches the API user.
-      if (!CleanupPeerConnection(remote_user_id, connection, status)) {
+      // Retiring first serializes terminal transport callbacks against an
+      // explicit leave or a bulk clear. The ICE worker owns an extra strong
+      // reference and shuts the transport down before releasing it, so a
+      // libnice callback can never destroy and join its own worker thread.
+      if (!RetirePeerConnection(remote_user_id, connection, status)) {
         return;
       }
       if (on_connection_status_) {
@@ -486,16 +487,27 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
   return connection;
 }
 
-bool PeerConnection::CleanupPeerConnection(
+bool PeerConnection::RetirePeerConnection(
     const std::string& remote_user_id,
     const std::shared_ptr<ConnectionInterface>& connection,
     ConnectionStatus status) {
   std::unique_lock lock(peer_connection_map_mutex_);
   auto it = peer_connection_map_.find(remote_user_id);
   if (it != peer_connection_map_.end() && it->second == connection) {
+    {
+      // Queue the strong reference before erasing the map entry. Destroy()
+      // clears the map before stopping the worker, so this lock ordering also
+      // prevents a terminal callback from enqueueing after the worker exits.
+      std::lock_guard<std::mutex> work_lock(ice_work_mutex_);
+      if (!ice_worker_running_.load()) {
+        return false;
+      }
+      terminal_connection_cleanup_queue_.push(connection);
+    }
     peer_connection_map_.erase(it);
-    LOG_INFO("[{}] Remove peer connection for user [{}] after status [{}]",
+    LOG_INFO("[{}] Retire peer connection for user [{}] after status [{}]",
              user_id_, remote_user_id, ConnectionStatusToString(status));
+    ice_work_cv_.notify_one();
     return true;
   }
   return false;
@@ -1002,31 +1014,54 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 }
 
 void PeerConnection::StartIceWorker() {
+  ice_worker_running_ = true;
   ice_worker_ = std::thread([this]() {
     while (true) {
+      std::shared_ptr<ConnectionInterface> connection_to_cleanup;
+      IceWorkMsg msg{};
+      bool has_msg = false;
+
       std::unique_lock<std::mutex> lck(ice_work_mutex_);
-      while (ice_work_msg_queue_.empty() && ice_worker_running_) {
-        ice_work_cv_.wait(lck, [this] {
-          return !ice_work_msg_queue_.empty() || !ice_worker_running_;
-        });
-      }
+      ice_work_cv_.wait(lck, [this] {
+        return !terminal_connection_cleanup_queue_.empty() ||
+               !ice_work_msg_queue_.empty() || !ice_worker_running_;
+      });
 
-      if (!ice_worker_running_) {
+      // Terminal cleanup has priority, including while the worker is being
+      // stopped. ReleaseAllIceTransmission() joins the transport thread
+      // before this worker drops the final shared_ptr.
+      if (!terminal_connection_cleanup_queue_.empty()) {
+        connection_to_cleanup =
+            std::move(terminal_connection_cleanup_queue_.front());
+        terminal_connection_cleanup_queue_.pop();
+      } else if (!ice_worker_running_) {
         break;
+      } else {
+        msg = std::move(ice_work_msg_queue_.front());
+        ice_work_msg_queue_.pop();
+        has_msg = true;
       }
 
-      IceWorkMsg msg = ice_work_msg_queue_.front();
-      ice_work_msg_queue_.pop();
       lck.unlock();
-      ProcessIceWorkMsg(msg);
+
+      if (connection_to_cleanup) {
+        connection_to_cleanup->ReleaseAllIceTransmission();
+      } else if (has_msg) {
+        ProcessIceWorkMsg(msg);
+      }
     }
+
+    std::lock_guard<std::mutex> lck(ice_work_mutex_);
     std::queue<IceWorkMsg> empty_queue;
     std::swap(ice_work_msg_queue_, empty_queue);
   });
 }
 
 void PeerConnection::StopIceWorker() {
-  ice_worker_running_ = false;
+  {
+    std::lock_guard<std::mutex> lck(ice_work_mutex_);
+    ice_worker_running_ = false;
+  }
   ice_work_cv_.notify_one();
   if (ice_worker_.joinable()) {
     ice_worker_.join();
