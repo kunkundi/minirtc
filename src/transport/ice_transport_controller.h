@@ -132,6 +132,7 @@ class IceTransportController
  private:
   void OnSentPacket(const webrtc::RtpPacketToSend& packet);
   void PostUpdates(webrtc::NetworkControlUpdate update);
+  void UpdateVideoBitrateAllocation();
   void UpdateControlState();
   void UpdateCongestedState();
   std::optional<bool> GetCongestedStateUpdate() const;
@@ -159,6 +160,7 @@ class IceTransportController
     int source_width = 0;   // original capture width  (aspect-ratio anchor)
     int source_height = 0;  // original capture height (aspect-ratio anchor)
     std::optional<int64_t> last_active_time;
+    std::optional<int> applied_target_bitrate;
     int encode_exceed_count = 0;
     int encode_below_threshold_count = 0;
     std::optional<int> mapped_target_width;

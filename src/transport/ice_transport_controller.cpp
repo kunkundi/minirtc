@@ -1151,6 +1151,7 @@ int IceTransportController::CreateStreamCodecs(
             LOG_ERROR("Encoder [{}] init failed", channel_name);
             return -1;
           }
+          context->applied_target_bitrate.reset();
           if (video_sender_init_first_time) {
             if (!stream_senders_.empty()) {
               LOG_INFO("Use video encoder [{}]",
@@ -1412,17 +1413,19 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   }
 
   if (update.pacer_config && task_queue_pacer_ && paced_sender_) {
-    task_queue_pacer_->PostTask([this, update = std::move(update)]() mutable {
-      paced_sender_->SetPacingRates(update.pacer_config->data_rate(),
-                                    update.pacer_config->pad_rate());
+    const DataRate data_rate = update.pacer_config->data_rate();
+    const DataRate pad_rate = update.pacer_config->pad_rate();
+    task_queue_pacer_->PostTask([this, data_rate, pad_rate]() {
+      paced_sender_->SetPacingRates(data_rate, pad_rate);
     });
   }
 
   if (!update.probe_cluster_configs.empty() && task_queue_pacer_ &&
       paced_sender_) {
-    task_queue_pacer_->PostTask([this, update = std::move(update)]() mutable {
-      paced_sender_->CreateProbeClusters(
-          std::move(update.probe_cluster_configs));
+    auto probe_cluster_configs = std::move(update.probe_cluster_configs);
+    task_queue_pacer_->PostTask([this, probe_cluster_configs = std::move(
+                                           probe_cluster_configs)]() mutable {
+      paced_sender_->CreateProbeClusters(std::move(probe_cluster_configs));
     });
   }
 
@@ -1433,11 +1436,12 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                    ? target_bitrate_
                    : update.target_rate->target_rate.bps())
             : target_bitrate_;
-    std::shared_lock lock(stream_senders_mutex_);
-    if (available_transport_bitrate_ != target_bitrate_ &&
-        !stream_senders_.empty()) {
-      target_bitrate_ = available_transport_bitrate_;
+    const bool target_bitrate_changed =
+        available_transport_bitrate_ != target_bitrate_;
+    target_bitrate_ = available_transport_bitrate_;
 
+    std::shared_lock lock(stream_senders_mutex_);
+    if (target_bitrate_changed && !stream_senders_.empty()) {
       // Count active video and data channels separately
       int video_count = 0;
       int data_count = 0;
@@ -1452,10 +1456,6 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             }
           }
         }
-      }
-
-      if (video_count == 0 && data_count == 0) {
-        return;
       }
 
       // Allocate bandwidth: reserve 10% for all data channels
@@ -1535,13 +1535,100 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                 }
               }
             }
-            context->codec->SetTargetBitrate(sub_target_bitrate);
-            // LOG_WARN("Set target bitrate [{}]bps", sub_target_bitrate);
           }
         }
       }
     }
     UpdateControlState();
+  }
+
+  // Stream activity can change while the network estimate stays constant.
+  // Re-evaluate the per-stream allocation on every controller update, and
+  // only touch encoders whose successfully applied target is stale.
+  UpdateVideoBitrateAllocation();
+}
+
+void IceTransportController::UpdateVideoBitrateAllocation() {
+  constexpr int64_t kActiveStreamTimeoutMs = 100;
+
+  if (target_bitrate_ <= 0 || !is_running_.load()) {
+    return;
+  }
+
+  struct PendingBitrateUpdate {
+    std::string channel_name;
+    std::shared_ptr<StreamContext> context;
+    std::shared_ptr<MediaCodec> codec;
+    int target_bitrate;
+  };
+
+  std::vector<PendingBitrateUpdate> pending_updates;
+  const int64_t now_ms = clock_->CurrentTimeMs();
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+
+    auto is_active = [now_ms](const std::shared_ptr<StreamContext>& context) {
+      return context && context->last_active_time.has_value() &&
+             now_ms - context->last_active_time.value() <
+                 kActiveStreamTimeoutMs;
+    };
+
+    int active_video_count = 0;
+    int active_data_count = 0;
+    for (const auto& [_, context] : stream_senders_) {
+      if (!is_active(context)) {
+        continue;
+      }
+      if (context->type == StreamType::kVideo && context->codec) {
+        ++active_video_count;
+      } else if (context->type == StreamType::kData) {
+        ++active_data_count;
+      }
+    }
+
+    if (active_video_count == 0) {
+      return;
+    }
+
+    int64_t video_bitrate_total = target_bitrate_;
+    if (active_data_count > 0) {
+      video_bitrate_total = static_cast<int64_t>(target_bitrate_ * 0.9);
+    }
+    const int per_video_bitrate =
+        static_cast<int>(video_bitrate_total / active_video_count);
+
+    for (const auto& [channel_name, context] : stream_senders_) {
+      if (!is_active(context) || context->type != StreamType::kVideo ||
+          !context->codec ||
+          context->applied_target_bitrate == per_video_bitrate) {
+        continue;
+      }
+      pending_updates.push_back(
+          {channel_name, context, context->codec, per_video_bitrate});
+    }
+  }
+
+  // Do not hold stream_senders_mutex_ while entering an encoder. An encoder
+  // callback can re-enter the controller and take the same mutex.
+  for (const auto& update : pending_updates) {
+    if (update.codec->SetTargetBitrate(update.target_bitrate) != 0) {
+      LOG_WARN("Failed to apply video target bitrate: channel={} bitrate={}",
+               update.channel_name, update.target_bitrate);
+      continue;
+    }
+
+    {
+      std::unique_lock lock(stream_senders_mutex_);
+      auto it = stream_senders_.find(update.channel_name);
+      if (it == stream_senders_.end() || it->second != update.context ||
+          update.context->codec != update.codec) {
+        continue;
+      }
+      update.context->applied_target_bitrate = update.target_bitrate;
+    }
+
+    LOG_INFO("Applied video target bitrate: channel={} bitrate={}",
+             update.channel_name, update.target_bitrate);
   }
 }
 
