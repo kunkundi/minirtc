@@ -6,6 +6,7 @@
 
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
 #define _ICE_TRANSPORT_CONTROLLER_H_
+#include <atomic>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_set>
@@ -135,6 +136,8 @@ class IceTransportController
   void UpdateVideoBitrateAllocation();
   void UpdateControlState();
   void UpdateCongestedState();
+  bool CanProbeWithoutMedia();
+  void UpdateMediaTransportState();
   std::optional<bool> GetCongestedStateUpdate() const;
   void MaybeDegradeResolutionOnEncodeTime(const std::string& channel_name,
                                           int queue_delay_ms,
@@ -213,6 +216,9 @@ class IceTransportController
   std::atomic<bool> is_running_;
 
   bool enable_srtp_;
+  std::atomic<bool> ice_ready_{false};
+  std::atomic<bool> dtls_ready_{false};
+  std::atomic<bool> media_transport_ready_{false};
   VideoQuality video_quality_;
 
   std::vector<uint8_t> local_key_;

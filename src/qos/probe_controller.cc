@@ -286,6 +286,9 @@ void ProbeController::EnablePeriodicAlrProbing(bool enable) {
 
 void ProbeController::EnableRepeatedInitialProbing(bool enable) {
   repeated_initial_probing_enabled_ = enable;
+  if (!enable) {
+    last_allowed_repeated_initial_probe_ = Timestamp::Zero();
+  }
 }
 
 void ProbeController::SetAlrStartTimeMs(
@@ -397,7 +400,8 @@ bool ProbeController::TimeForNetworkStateProbe(Timestamp at_time) const {
 }
 
 bool ProbeController::TimeForNextRepeatedInitialProbe(Timestamp at_time) const {
-  if (state_ != State::kWaitingForProbingResult &&
+  if (repeated_initial_probing_enabled_ &&
+      state_ != State::kWaitingForProbingResult &&
       last_allowed_repeated_initial_probe_ > at_time) {
     Timestamp next_probe_time =
         time_last_probing_initiated_ + kMaxWaitingTimeForProbingResult;

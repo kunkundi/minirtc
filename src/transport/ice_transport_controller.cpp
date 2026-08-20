@@ -104,7 +104,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(2000));
-  paced_sender_->SetAllowProbeWithoutMediaPacket(true);
+  paced_sender_->SetAllowProbeWithoutMediaPacket(false);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
   paced_sender_->SetOnSentPacketFunc(
       [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet) {
@@ -230,6 +230,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
       }
     }
   }
+
+  UpdateMediaTransportState();
 }
 
 void IceTransportController::Destroy() {
@@ -865,20 +867,61 @@ int IceTransportController::SendReliableData(const char* data, size_t size,
 }
 
 void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
-  if (controller_) {
-    webrtc::NetworkAvailability msg;
-    msg.at_time =
-        webrtc::Timestamp::Millis(webrtc_clock_->TimeInMilliseconds());
-    msg.network_available = network_available;
-    controller_->OnNetworkAvailability(msg);
+  ice_ready_.store(network_available);
+  if (!network_available) {
+    dtls_ready_.store(false);
+  }
+  UpdateMediaTransportState();
+}
+
+bool IceTransportController::CanProbeWithoutMedia() {
+  std::shared_lock lock(stream_senders_mutex_);
+  for (const auto& [_, context] : stream_senders_) {
+    if (context && context->type == StreamType::kVideo &&
+        context->transceiver && context->transceiver->CanGeneratePadding()) {
+      return true;
+    }
+  }
+  return false;
+}
+
+void IceTransportController::UpdateMediaTransportState() {
+  const bool transport_ready =
+      ice_ready_.load() && (!enable_srtp_ || dtls_ready_.load());
+  const bool allow_probe_without_media =
+      transport_ready && CanProbeWithoutMedia();
+  const bool was_transport_ready =
+      media_transport_ready_.exchange(transport_ready);
+
+  if (task_queue_pacer_ && paced_sender_) {
+    auto paced_sender = paced_sender_;
+    task_queue_pacer_->PostTask(
+        [paced_sender, allow_probe_without_media, transport_ready,
+         was_transport_ready]() mutable {
+          paced_sender->SetAllowProbeWithoutMediaPacket(
+              allow_probe_without_media);
+          if (transport_ready && !was_transport_ready) {
+            paced_sender->EnsureStarted();
+          }
+        });
   }
 
-  if (task_queue_pacer_) {
-    task_queue_pacer_->PostTask([this]() mutable {
-      if (paced_sender_) {
-        paced_sender_->EnsureStarted();
-      }
-    });
+  if (task_queue_cc_ && controller_) {
+    task_queue_cc_->PostTask(
+        [this, allow_probe_without_media, transport_ready,
+         was_transport_ready]() mutable {
+          if (!controller_) {
+            return;
+          }
+          controller_->SetRepeatedInitialProbing(allow_probe_without_media);
+          if (transport_ready != was_transport_ready) {
+            webrtc::NetworkAvailability msg;
+            msg.at_time = webrtc::Timestamp::Millis(
+                webrtc_clock_->TimeInMilliseconds());
+            msg.network_available = transport_ready;
+            PostUpdates(controller_->OnNetworkAvailability(msg));
+          }
+        });
   }
 }
 
@@ -1117,6 +1160,9 @@ void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
           SrtpEngine::CreateReceiverPtr(receiver_params);
     }
   }
+
+  dtls_ready_.store(true);
+  UpdateMediaTransportState();
 }
 
 int IceTransportController::CreateStreamCodecs(

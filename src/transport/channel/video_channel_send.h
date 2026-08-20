@@ -39,6 +39,10 @@ class VideoChannelSend : public MediaChannel {
   std::vector<std::unique_ptr<RtpPacket>> GeneratePadding(
       uint32_t payload_size, int64_t captured_timestamp_us);
 
+  bool CanGeneratePadding() const override {
+    return rtp_packetizer_ != nullptr;
+  }
+
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
                   std::shared_ptr<PacedSender> packet_sender);

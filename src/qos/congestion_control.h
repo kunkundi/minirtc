@@ -37,6 +37,8 @@ class CongestionControl {
 
   void OnSentPacket(size_t bytes_sent, Timestamp at_time);
 
+  void SetRepeatedInitialProbing(bool enable);
+
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
 

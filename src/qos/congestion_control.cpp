@@ -87,7 +87,7 @@ CongestionControl::CongestionControl()
 
   config.stream_based_config.at_time = Timestamp::PlusInfinity();
   config.stream_based_config.requests_alr_probing = true;
-  config.stream_based_config.enable_repeated_initial_probing = true;
+  config.stream_based_config.enable_repeated_initial_probing = false;
   config.stream_based_config.pacing_factor = kDefaultPaceMultiplier;
   config.stream_based_config.min_total_allocated_bitrate = DataRate::Zero();
   config.stream_based_config.max_padding_rate = DataRate::Zero();
@@ -97,6 +97,14 @@ CongestionControl::CongestionControl()
 }
 
 CongestionControl::~CongestionControl() {}
+
+void CongestionControl::SetRepeatedInitialProbing(bool enable) {
+  if (initial_config_) {
+    initial_config_->stream_based_config.enable_repeated_initial_probing =
+        enable;
+  }
+  probe_controller_->EnableRepeatedInitialProbing(enable);
+}
 
 NetworkControlUpdate CongestionControl::OnNetworkAvailability(
     NetworkAvailability msg) {

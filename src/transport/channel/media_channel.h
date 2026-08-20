@@ -93,6 +93,8 @@ class MediaChannel {
     LOG_INFO("GeneratePadding() default implementation");
     return {};
   }
+
+  virtual bool CanGeneratePadding() const { return false; }
 };
 }  // namespace minirtc
 
