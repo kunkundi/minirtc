@@ -66,7 +66,16 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
 
   RemoveExpiredClusters(packet_feedback.receive_time);
 
-  AggregatedCluster* cluster = &clusters_[cluster_id];
+  auto cluster_it = clusters_.find(cluster_id);
+  if (cluster_it == clusters_.end()) {
+    if (max_expired_cluster_id_ && cluster_id <= *max_expired_cluster_id_) {
+      LOG_INFO("Probe feedback ignored: id={} reason=expired_cluster",
+               cluster_id);
+      return std::nullopt;
+    }
+    cluster_it = clusters_.try_emplace(cluster_id).first;
+  }
+  AggregatedCluster* cluster = &cluster_it->second;
   cluster->target_probes =
       packet_feedback.sent_packet.pacing_info.probe_cluster_min_probes;
   cluster->target_size = DataSize::Bytes(
@@ -178,6 +187,10 @@ void ProbeBitrateEstimator::RemoveExpiredClusters(Timestamp timestamp) {
             "target_bytes={}",
             it->first, it->second.num_probes, it->second.target_probes,
             it->second.size_total.bytes(), it->second.target_size.bytes());
+      }
+      if (!max_expired_cluster_id_ ||
+          it->first > *max_expired_cluster_id_) {
+        max_expired_cluster_id_ = it->first;
       }
       it = clusters_.erase(it);
     } else {

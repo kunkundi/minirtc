@@ -54,6 +54,10 @@ class ProbeBitrateEstimator {
   };
 
   std::map<int, AggregatedCluster> clusters_;
+  // Probe cluster ids increase monotonically for the lifetime of the
+  // controller. Remembering the largest expired id prevents late feedback from
+  // recreating a removed cluster without retaining an unbounded id set.
+  std::optional<int> max_expired_cluster_id_;
   std::optional<DataRate> estimated_data_rate_;
 };
 

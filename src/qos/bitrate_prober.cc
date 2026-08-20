@@ -114,7 +114,7 @@ void BitrateProber::CreateProbeCluster(
     const ProbeClusterConfig& cluster_config) {
   RemoveExpiredClusters(cluster_config.at_time);
   while (!clusters_.empty() &&
-         clusters_.size() > kMaxPendingProbeClusters) {
+         clusters_.size() >= kMaxPendingProbeClusters) {
     const ProbeCluster& cluster = clusters_.front();
     LOG_WARN(
         "Probe cluster discarded: id={} reason=pending_queue_limit "
