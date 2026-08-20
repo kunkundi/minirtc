@@ -4,6 +4,7 @@
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
+#include <cstdint>
 #include <functional>
 #include <iostream>
 #include <memory>
@@ -32,22 +33,25 @@ class TaskQueue {
 
   ~TaskQueue() { Stop(); }
 
-  void PostTask(AnyInvocable<void()> task) {
-    PostDelayedTask(std::move(task), 0);
+  bool PostTask(AnyInvocable<void()> task) {
+    return PostDelayedTask(std::move(task), 0);
   }
 
-  void PostDelayedTask(AnyInvocable<void()> task, int delay_ms) {
+  bool IsCurrent() const { return current_queue_ == this; }
+
+  bool PostDelayedTask(AnyInvocable<void()> task, int delay_ms) {
     auto delay = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
         std::chrono::milliseconds(delay_ms));
-    PostDelayedTaskAt(std::move(task), std::chrono::steady_clock::now() + delay);
+    return PostDelayedTaskAt(std::move(task),
+                             std::chrono::steady_clock::now() + delay);
   }
 
-  void PostDelayedHighPrecisionTask(AnyInvocable<void()> task,
+  bool PostDelayedHighPrecisionTask(AnyInvocable<void()> task,
                                     std::chrono::microseconds delay) {
     auto precise_delay =
         std::chrono::duration_cast<std::chrono::steady_clock::duration>(delay);
-    PostDelayedTaskAt(std::move(task),
-                      std::chrono::steady_clock::now() + precise_delay);
+    return PostDelayedTaskAt(std::move(task),
+                             std::chrono::steady_clock::now() + precise_delay);
   }
 
   void ClearTasks() {
@@ -74,41 +78,60 @@ class TaskQueue {
   }
 
  private:
-  void PostDelayedTaskAt(
+  bool PostDelayedTaskAt(
       AnyInvocable<void()> task,
       std::chrono::steady_clock::time_point execute_time) {
     bool notify = false;
     {
       std::unique_lock<std::mutex> lock(mutex_);
+      if (stop_) {
+        return false;
+      }
       if (taskQueue_.empty() || execute_time < taskQueue_.top().execute_time) {
         notify = true;
       }
-      taskQueue_.emplace(execute_time, std::move(task));
+      taskQueue_.emplace(execute_time, next_sequence_id_++, std::move(task));
     }
     if (notify) {
       cond_var_.notify_one();
     }
+    return true;
   }
 
   struct TaskItem {
     std::chrono::steady_clock::time_point enqueue_time;
     std::chrono::steady_clock::time_point execute_time;
+    uint64_t sequence_id;
     AnyInvocable<void()> task = nullptr;
 
     TaskItem(std::chrono::steady_clock::time_point execute_time_,
+             uint64_t sequence_id_,
              AnyInvocable<void()> func)
         : enqueue_time(std::chrono::steady_clock::now()),
           execute_time(execute_time_),
+          sequence_id(sequence_id_),
           task(std::move(func)) {}
 
     bool operator>(const TaskItem& other) const {
-      return execute_time > other.execute_time;
+      if (execute_time != other.execute_time) {
+        return execute_time > other.execute_time;
+      }
+      return sequence_id > other.sequence_id;
     }
   };
 
   void WorkerThread() {
+    const TaskQueue* previous_queue = current_queue_;
+    current_queue_ = this;
+    auto reset_current_queue =
+        std::unique_ptr<const TaskQueue,
+                        std::function<void(const TaskQueue*)>>(
+            this, [previous_queue](const TaskQueue*) {
+              current_queue_ = previous_queue;
+            });
+
     while (true) {
-      TaskItem task_item(std::chrono::steady_clock::now(), nullptr);
+      TaskItem task_item(std::chrono::steady_clock::now(), 0, nullptr);
 
       {
         std::unique_lock<std::mutex> lock(mutex_);
@@ -173,6 +196,9 @@ class TaskQueue {
   std::mutex mutex_;
   std::condition_variable cond_var_;
   bool stop_;
+  uint64_t next_sequence_id_ = 0;
+
+  inline static thread_local const TaskQueue* current_queue_ = nullptr;
 };
 }  // namespace minirtc
 

@@ -186,7 +186,7 @@ class PacingController {
   // testing. Must be called before any packets are being sent to have an
   // effect.
   void SetProbingEnabled(bool enabled);
-  void AbortProbing();
+  void AbortProbing(const char* reason);
 
   // Returns the next time we expect ProcessPackets() to be called.
   Timestamp NextSendTime() const;
@@ -213,6 +213,7 @@ class PacingController {
   void UpdateBudgetWithElapsedTime(TimeDelta delta);
   void UpdateBudgetWithSentData(DataSize size);
   void UpdatePaddingBudgetWithSentData(DataSize size);
+  void ClearProbingSendFailure(const char* trigger);
 
   DataSize PaddingToAdd(DataSize recommended_probe_size,
                         DataSize data_sent) const;

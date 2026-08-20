@@ -8,6 +8,7 @@
 #define _PACED_SENDER__H_
 
 #include <memory>
+#include <mutex>
 
 #include "api/array_view.h"
 #include "api/transport/network_types.h"
@@ -49,15 +50,11 @@ class PacedSender : public webrtc::RtpPacketPacer,
  public:
   void SetOnSentPacketFunc(
       std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>)>
-          on_sent_packet_func) {
-    on_sent_packet_func_ = on_sent_packet_func;
-  }
+          on_sent_packet_func);
 
   void SetGeneratePaddingFunc(
       std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
-          generat_padding_func) {
-    generat_padding_func_ = generat_padding_func;
-  }
+          generat_padding_func);
 
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
@@ -100,7 +97,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void SetAllowProbeWithoutMediaPacket(bool allow);
 
   // Stops all sending and discards pending probes while the media transport
-  // is unavailable. Must be called on the pacer task queue.
+  // is unavailable.
   void SetTransportReady(bool ready);
 
   // Ensure that necessary delayed tasks are scheduled.
@@ -174,6 +171,12 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void OnStatsUpdated(const Stats& stats);
 
  private:
+  void RunOrPost(AnyInvocable<void()> task);
+  void EnqueuePacketsOnQueue(
+      std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> packets);
+  void EnqueuePacketOnQueue(
+      std::unique_ptr<webrtc::RtpPacketToSend> packet);
+
   // Call in response to state updates that could warrant sending out packets.
   // Protected against re-entry from packet sent receipts.
   void MaybeScheduleProcessPackets();
@@ -225,6 +228,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   bool include_overhead_;
 
   Stats current_stats_;
+  mutable std::mutex stats_mutex_;
   // Protects against ProcessPackets reentry from packet sent receipts.
   bool processing_packets_ = false;
 

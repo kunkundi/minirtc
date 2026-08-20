@@ -51,7 +51,7 @@ class BitrateProber {
 
   void SetEnabled(bool enable);
   void SetAllowProbeWithoutMediaPacket(bool allow);
-  void AbortProbing();
+  void AbortProbing(const char* reason);
 
   // Returns true if the prober is in a probing session, i.e., it currently
   // wants packets to be sent out according to the time returned by
@@ -65,6 +65,10 @@ class BitrateProber {
 
   // Create a cluster used to probe.
   void CreateProbeCluster(const ProbeClusterConfig& cluster_config);
+  // Removes clusters that have not completed before their deadline.
+  bool RemoveExpiredClusters(Timestamp now);
+  // Returns the deadline of the oldest pending cluster.
+  Timestamp NextClusterExpiration() const;
   // Returns the time at which the next probe should be sent to get accurate
   // probing. If probing is not desired at this time, Timestamp::PlusInfinity()
   // will be returned.
@@ -82,7 +86,7 @@ class BitrateProber {
   // Called to report to the prober that a probe has been sent. In case of
   // multiple packets per probe, this call would be made at the end of sending
   // the last packet in probe. `size` is the total size of all packets in probe.
-  void ProbeSent(Timestamp now, DataSize size);
+  void ProbeSent(Timestamp now, DataSize size, int packet_count);
 
  private:
   enum class ProbingState {
@@ -102,6 +106,7 @@ class BitrateProber {
     PacedPacketInfo pace_info;
 
     int sent_probes = 0;
+    int sent_packets = 0;
     int sent_bytes = 0;
     TimeDelta min_probe_delta = TimeDelta::Zero();
     Timestamp requested_at = Timestamp::MinusInfinity();

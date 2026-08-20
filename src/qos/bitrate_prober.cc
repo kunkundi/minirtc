@@ -57,11 +57,17 @@ void BitrateProber::SetAllowProbeWithoutMediaPacket(bool allow) {
   MaybeSetActiveState(/*packet_size=*/DataSize::Zero());
 }
 
-void BitrateProber::AbortProbing() {
-  if (!clusters_.empty()) {
-    LOG_INFO("Aborting {} pending probe cluster(s)", clusters_.size());
-  }
+void BitrateProber::AbortProbing(const char* reason) {
   while (!clusters_.empty()) {
+    const ProbeCluster& cluster = clusters_.front();
+    LOG_INFO(
+        "Probe cluster aborted: id={} reason={} actual_bytes={} "
+        "actual_packets={} actual_probe_batches={} target_bytes={} "
+        "target_probe_batches={}",
+        cluster.pace_info.probe_cluster_id, reason, cluster.sent_bytes,
+        cluster.sent_packets, cluster.sent_probes,
+        cluster.pace_info.probe_cluster_min_bytes,
+        cluster.pace_info.probe_cluster_min_probes);
     clusters_.pop();
   }
   next_probe_time_ = Timestamp::PlusInfinity();
@@ -106,10 +112,17 @@ void BitrateProber::OnIncomingPacket(DataSize packet_size) {
 
 void BitrateProber::CreateProbeCluster(
     const ProbeClusterConfig& cluster_config) {
+  RemoveExpiredClusters(cluster_config.at_time);
   while (!clusters_.empty() &&
-         (cluster_config.at_time - clusters_.front().requested_at >
-              kProbeClusterTimeout ||
-          clusters_.size() > kMaxPendingProbeClusters)) {
+         clusters_.size() > kMaxPendingProbeClusters) {
+    const ProbeCluster& cluster = clusters_.front();
+    LOG_WARN(
+        "Probe cluster discarded: id={} reason=pending_queue_limit "
+        "actual_bytes={} "
+        "actual_packets={} target_bytes={} target_probe_batches={}",
+        cluster.pace_info.probe_cluster_id, cluster.sent_bytes,
+        cluster.sent_packets, cluster.pace_info.probe_cluster_min_bytes,
+        cluster.pace_info.probe_cluster_min_probes);
     clusters_.pop();
   }
 
@@ -125,7 +138,60 @@ void BitrateProber::CreateProbeCluster(
   cluster.pace_info.probe_cluster_id = cluster_config.id;
   clusters_.push(cluster);
 
+  LOG_INFO(
+      "Probe cluster queued: id={} target_bitrate_bps={} target_bytes={} "
+      "target_probe_batches={} min_probe_delta_ms={} "
+      "allow_without_media={}",
+      cluster_config.id, cluster_config.target_data_rate.bps(),
+      cluster.pace_info.probe_cluster_min_bytes,
+      cluster.pace_info.probe_cluster_min_probes,
+      cluster.min_probe_delta.ms(),
+      config_.allow_start_probing_immediately ? "true" : "false");
+
   MaybeSetActiveState(/*packet_size=*/DataSize::Zero());
+}
+
+bool BitrateProber::RemoveExpiredClusters(Timestamp now) {
+  bool removed_cluster = false;
+  while (!clusters_.empty() &&
+         now - clusters_.front().requested_at >= kProbeClusterTimeout) {
+    const ProbeCluster& cluster = clusters_.front();
+    const char* reason = probing_state_ == ProbingState::kActive
+                             ? "send_timeout"
+                             : "pending_timeout";
+    LOG_WARN(
+        "Probe cluster aborted: id={} reason={} actual_bytes={} "
+        "actual_packets={} actual_probe_batches={} target_bytes={} "
+        "target_probe_batches={} age_ms={}",
+        cluster.pace_info.probe_cluster_id, reason, cluster.sent_bytes,
+        cluster.sent_packets, cluster.sent_probes,
+        cluster.pace_info.probe_cluster_min_bytes,
+        cluster.pace_info.probe_cluster_min_probes,
+        (now - cluster.requested_at).ms());
+    clusters_.pop();
+    removed_cluster = true;
+  }
+
+  if (!removed_cluster) {
+    return false;
+  }
+
+  if (clusters_.empty()) {
+    next_probe_time_ = Timestamp::PlusInfinity();
+    if (probing_state_ != ProbingState::kDisabled) {
+      probing_state_ = ProbingState::kInactive;
+    }
+  } else if (probing_state_ == ProbingState::kActive) {
+    next_probe_time_ = Timestamp::MinusInfinity();
+  }
+  return true;
+}
+
+Timestamp BitrateProber::NextClusterExpiration() const {
+  if (clusters_.empty()) {
+    return Timestamp::PlusInfinity();
+  }
+  return clusters_.front().requested_at + kProbeClusterTimeout;
 }
 
 Timestamp BitrateProber::NextProbeTime(Timestamp /* now */) const {
@@ -144,10 +210,16 @@ std::optional<PacedPacketInfo> BitrateProber::CurrentCluster(Timestamp now) {
 
   if (next_probe_time_.IsFinite() &&
       now - next_probe_time_ > config_.max_probe_delay) {
+    const ProbeCluster& cluster = clusters_.front();
     LOG_WARN(
-        "Probe delay too high (next_ms:{}, now_ms: {}), discarding probe "
-        "cluster.",
-        next_probe_time_.ms(), now.ms());
+        "Probe cluster aborted: id={} reason=schedule_delay delay_ms={} "
+        "actual_bytes={} actual_packets={} actual_probe_batches={} "
+        "target_bytes={} target_probe_batches={}",
+        cluster.pace_info.probe_cluster_id,
+        (now - next_probe_time_).ms(), cluster.sent_bytes,
+        cluster.sent_packets, cluster.sent_probes,
+        cluster.pace_info.probe_cluster_min_bytes,
+        cluster.pace_info.probe_cluster_min_probes);
     clusters_.pop();
     if (clusters_.empty()) {
       probing_state_ = ProbingState::kInactive;
@@ -168,17 +240,31 @@ DataSize BitrateProber::RecommendedMinProbeSize() const {
   return send_rate * clusters_.front().min_probe_delta;
 }
 
-void BitrateProber::ProbeSent(Timestamp now, DataSize size) {
+void BitrateProber::ProbeSent(Timestamp now, DataSize size, int packet_count) {
   if (!clusters_.empty()) {
     ProbeCluster* cluster = &clusters_.front();
     if (cluster->sent_probes == 0) {
       cluster->started_at = now;
     }
     cluster->sent_bytes += size.bytes<int>();
+    cluster->sent_packets += packet_count;
     cluster->sent_probes += 1;
     next_probe_time_ = CalculateNextProbeTime(*cluster);
     if (cluster->sent_bytes >= cluster->pace_info.probe_cluster_min_bytes &&
         cluster->sent_probes >= cluster->pace_info.probe_cluster_min_probes) {
+      LOG_INFO(
+          "Probe cluster sent: id={} actual_bitrate_bps={} actual_bytes={} "
+          "actual_packets={} actual_probe_batches={} target_bitrate_bps={} "
+          "target_bytes={} target_probe_batches={} duration_ms={}",
+          cluster->pace_info.probe_cluster_id,
+          (DataSize::Bytes(cluster->sent_bytes) /
+           std::max(now - cluster->started_at, TimeDelta::Micros(1)))
+              .bps(),
+          cluster->sent_bytes, cluster->sent_packets, cluster->sent_probes,
+          cluster->pace_info.send_bitrate.bps(),
+          cluster->pace_info.probe_cluster_min_bytes,
+          cluster->pace_info.probe_cluster_min_probes,
+          (now - cluster->started_at).ms());
       clusters_.pop();
     }
     if (clusters_.empty()) {

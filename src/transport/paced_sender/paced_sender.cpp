@@ -29,6 +29,34 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
 
 PacedSender::~PacedSender() { is_shutdown_ = true; }
 
+void PacedSender::RunOrPost(AnyInvocable<void()> task) {
+  if (task_queue_pacer_->IsCurrent()) {
+    task();
+    return;
+  }
+  if (!task_queue_pacer_->PostTask(std::move(task))) {
+    LOG_WARN("PacedSender task rejected: pacer task queue is stopped");
+  }
+}
+
+void PacedSender::SetOnSentPacketFunc(
+    std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>)>
+        on_sent_packet_func) {
+  RunOrPost([this, on_sent_packet_func = std::move(on_sent_packet_func)]()
+                mutable {
+    on_sent_packet_func_ = std::move(on_sent_packet_func);
+  });
+}
+
+void PacedSender::SetGeneratePaddingFunc(
+    std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
+        generat_padding_func) {
+  RunOrPost([this, generat_padding_func = std::move(generat_padding_func)]()
+                mutable {
+    generat_padding_func_ = std::move(generat_padding_func);
+  });
+}
+
 std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
 PacedSender::GeneratePadding(webrtc::DataSize size) {
   std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> to_send_rtp_packets;
@@ -49,114 +77,154 @@ PacedSender::GeneratePadding(webrtc::DataSize size) {
 }
 
 void PacedSender::SetSendBurstInterval(webrtc::TimeDelta burst_interval) {
-  pacing_controller_.SetSendBurstInterval(burst_interval);
+  RunOrPost([this, burst_interval] {
+    pacing_controller_.SetSendBurstInterval(burst_interval);
+  });
 }
 
 void PacedSender::SetAllowProbeWithoutMediaPacket(bool allow) {
-  pacing_controller_.SetAllowProbeWithoutMediaPacket(allow);
+  RunOrPost([this, allow] {
+    pacing_controller_.SetAllowProbeWithoutMediaPacket(allow);
+    MaybeScheduleProcessPackets();
+  });
 }
 
 void PacedSender::SetTransportReady(bool ready) {
-  transport_ready_ = ready;
-  if (ready) {
-    pacing_controller_.Resume();
-    return;
-  }
+  RunOrPost([this, ready] {
+    transport_ready_ = ready;
+    if (ready) {
+      pacing_controller_.Resume();
+      return;
+    }
 
-  pacing_controller_.AbortProbing();
-  pacing_controller_.Pause();
-  next_process_time_ = webrtc::Timestamp::MinusInfinity();
+    pacing_controller_.AbortProbing("transport_not_ready");
+    pacing_controller_.Pause();
+    next_process_time_ = webrtc::Timestamp::MinusInfinity();
+  });
 }
 
 void PacedSender::EnsureStarted() {
-  is_started_ = true;
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  RunOrPost([this] {
+    is_started_ = true;
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
 }
 
 void PacedSender::CreateProbeClusters(
     std::vector<webrtc::ProbeClusterConfig> probe_cluster_configs) {
-  if (!transport_ready_) {
-    LOG_INFO("Discarding {} probe cluster(s): transport is not ready",
-             probe_cluster_configs.size());
-    return;
-  }
-  pacing_controller_.CreateProbeClusters(probe_cluster_configs);
-  MaybeScheduleProcessPackets();
+  RunOrPost([this, probe_cluster_configs = std::move(probe_cluster_configs)]()
+                mutable {
+    if (!transport_ready_) {
+      for (const auto& config : probe_cluster_configs) {
+        LOG_WARN(
+            "Probe cluster discarded: id={} reason=transport_not_ready "
+            "target_bitrate_bps={} target_bytes={} target_packets={}",
+            config.id, config.target_data_rate.bps(),
+            (config.target_data_rate * config.target_duration).bytes(),
+            config.target_probe_count);
+      }
+      return;
+    }
+    pacing_controller_.CreateProbeClusters(probe_cluster_configs);
+    MaybeScheduleProcessPackets();
+  });
 }
 
-void PacedSender::Pause() { pacing_controller_.Pause(); }
+void PacedSender::Pause() {
+  RunOrPost([this] { pacing_controller_.Pause(); });
+}
 
 void PacedSender::Resume() {
-  pacing_controller_.Resume();
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  RunOrPost([this] {
+    pacing_controller_.Resume();
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
 }
 
 void PacedSender::SetCongested(bool congested) {
-  pacing_controller_.SetCongested(congested);
-  MaybeScheduleProcessPackets();
+  RunOrPost([this, congested] {
+    pacing_controller_.SetCongested(congested);
+    MaybeScheduleProcessPackets();
+  });
 }
 
 void PacedSender::SetPacingRates(webrtc::DataRate pacing_rate,
                                  webrtc::DataRate padding_rate) {
-  pacing_controller_.SetPacingRates(pacing_rate, padding_rate);
-  MaybeScheduleProcessPackets();
+  RunOrPost([this, pacing_rate, padding_rate] {
+    pacing_controller_.SetPacingRates(pacing_rate, padding_rate);
+    MaybeScheduleProcessPackets();
+  });
 }
 
 void PacedSender::EnqueuePackets(
     std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> packets) {
-  task_queue_pacer_->PostTask([this, packets = std::move(packets)]() mutable {
-    for (auto &packet : packets) {
-      size_t packet_size = packet->payload_size() + packet->padding_size();
-      if (include_overhead_) {
-        packet_size += packet->headers_size();
-      }
-      packet_size_.Apply(1, packet_size);
-      pacing_controller_.EnqueuePacket(std::move(packet));
-    }
-    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  RunOrPost([this, packets = std::move(packets)]() mutable {
+    EnqueuePacketsOnQueue(std::move(packets));
   });
 }
 
 void PacedSender::EnqueuePacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
-  task_queue_pacer_->PostTask([this, packet = std::move(packet)]() mutable {
-    size_t packet_size = packet->payload_size() + packet->padding_size();
-    if (include_overhead_) {
-      packet_size += packet->headers_size();
-    }
-    packet_size_.Apply(1, packet_size);
-    pacing_controller_.EnqueuePacket(std::move(packet));
-
+  RunOrPost([this, packet = std::move(packet)]() mutable {
+    EnqueuePacketOnQueue(std::move(packet));
     MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
   });
 }
 
+void PacedSender::EnqueuePacketsOnQueue(
+    std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> packets) {
+  for (auto& packet : packets) {
+    EnqueuePacketOnQueue(std::move(packet));
+  }
+  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+}
+
+void PacedSender::EnqueuePacketOnQueue(
+    std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+  packet->set_transport_sequence_number(transport_seq_++);
+  size_t packet_size = packet->payload_size() + packet->padding_size();
+  if (include_overhead_) {
+    packet_size += packet->headers_size();
+  }
+  packet_size_.Apply(1, packet_size);
+  pacing_controller_.EnqueuePacket(std::move(packet));
+}
+
 void PacedSender::RemovePacketsForSsrc(uint32_t ssrc) {
-  task_queue_pacer_->PostTask([this, ssrc] {
+  RunOrPost([this, ssrc] {
     pacing_controller_.RemovePacketsForSsrc(ssrc);
     MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
   });
 }
 
 void PacedSender::SetAccountForAudioPackets(bool account_for_audio) {
-  pacing_controller_.SetAccountForAudioPackets(account_for_audio);
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  RunOrPost([this, account_for_audio] {
+    pacing_controller_.SetAccountForAudioPackets(account_for_audio);
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
 }
 
 void PacedSender::SetIncludeOverhead() {
-  include_overhead_ = true;
-  pacing_controller_.SetIncludeOverhead();
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  RunOrPost([this] {
+    include_overhead_ = true;
+    pacing_controller_.SetIncludeOverhead();
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
 }
 
-void PacedSender::SetTransportOverhead(webrtc::DataSize overhead_per_packet) {
-  pacing_controller_.SetTransportOverhead(overhead_per_packet);
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+void PacedSender::SetTransportOverhead(
+    webrtc::DataSize overhead_per_packet) {
+  RunOrPost([this, overhead_per_packet] {
+    pacing_controller_.SetTransportOverhead(overhead_per_packet);
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
 }
 
 void PacedSender::SetQueueTimeLimit(webrtc::TimeDelta limit) {
-  pacing_controller_.SetQueueTimeLimit(limit);
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  RunOrPost([this, limit] {
+    pacing_controller_.SetQueueTimeLimit(limit);
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
 }
 
 webrtc::TimeDelta PacedSender::ExpectedQueueTime() const {
@@ -186,7 +254,10 @@ webrtc::TimeDelta PacedSender::OldestPacketWaitTime() const {
   return current - oldest_packet;
 }
 
-void PacedSender::OnStatsUpdated(const Stats &stats) { current_stats_ = stats; }
+void PacedSender::OnStatsUpdated(const Stats& stats) {
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  current_stats_ = stats;
+}
 
 void PacedSender::MaybeScheduleProcessPackets() {
   if (!processing_packets_) {
@@ -210,8 +281,9 @@ void PacedSender::MaybeProcessPackets(
   // Protects against re-entry from transport feedback calling into the task
   // queue pacer.
   processing_packets_ = true;
-  auto cleanup = std::unique_ptr<void, std::function<void(void *)>>(
-      nullptr, [this](void *) { processing_packets_ = false; });
+  auto cleanup = std::unique_ptr<PacedSender,
+                                 std::function<void(PacedSender*)>>(
+      this, [](PacedSender* sender) { sender->processing_packets_ = false; });
 
   webrtc::Timestamp next_send_time = pacing_controller_.NextSendTime();
   const webrtc::Timestamp now = clock_->CurrentTime();
@@ -259,11 +331,16 @@ void PacedSender::MaybeProcessPackets(
   // schedule a new one. Previous in flight task will be retired.
   if (next_process_time_.IsMinusInfinity() ||
       next_process_time_ > next_send_time) {
-    task_queue_pacer_->PostDelayedHighPrecisionTask(
-        [this, next_send_time]() { MaybeProcessPackets(next_send_time); },
-        std::chrono::microseconds(
-            time_to_next_process.RoundUpTo(webrtc::TimeDelta::Millis(1)).us()));
-    next_process_time_ = next_send_time;
+    if (task_queue_pacer_->PostDelayedHighPrecisionTask(
+            [this, next_send_time]() { MaybeProcessPackets(next_send_time); },
+            std::chrono::microseconds(time_to_next_process
+                                          .RoundUpTo(
+                                              webrtc::TimeDelta::Millis(1))
+                                          .us()))) {
+      next_process_time_ = next_send_time;
+    } else {
+      LOG_WARN("Pacer process task rejected: task queue is stopped");
+    }
   }
 }
 
@@ -277,7 +354,10 @@ void PacedSender::UpdateStats() {
   OnStatsUpdated(new_stats);
 }
 
-PacedSender::Stats PacedSender::GetStats() const { return current_stats_; }
+PacedSender::Stats PacedSender::GetStats() const {
+  std::lock_guard<std::mutex> lock(stats_mutex_);
+  return current_stats_;
+}
 
 /*----------------------------------------------------------------------------*/
 
@@ -289,7 +369,6 @@ int PacedSender::EnqueueRtpPackets(
     std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet_to_send(
         static_cast<webrtc::RtpPacketToSend *>(rtp_packet.release()));
     rtp_packet_to_send->set_capture_time(clock_->CurrentTime());
-    rtp_packet_to_send->set_transport_sequence_number(transport_seq_++);
     rtp_packet_to_send->set_stream_name(stream_name);
 
     switch (rtp_packet_to_send->PayloadType()) {

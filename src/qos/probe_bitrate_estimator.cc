@@ -64,9 +64,13 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     const PacketResult& packet_feedback) {
   int cluster_id = packet_feedback.sent_packet.pacing_info.probe_cluster_id;
 
-  EraseOldClusters(packet_feedback.receive_time);
+  RemoveExpiredClusters(packet_feedback.receive_time);
 
   AggregatedCluster* cluster = &clusters_[cluster_id];
+  cluster->target_probes =
+      packet_feedback.sent_packet.pacing_info.probe_cluster_min_probes;
+  cluster->target_size = DataSize::Bytes(
+      packet_feedback.sent_packet.pacing_info.probe_cluster_min_bytes);
 
   if (packet_feedback.sent_packet.send_time < cluster->first_send) {
     cluster->first_send = packet_feedback.sent_packet.send_time;
@@ -102,9 +106,12 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
       receive_interval <= TimeDelta::Zero() ||
       receive_interval > kMaxProbeInterval) {
     LOG_INFO(
-        "Probing unsuccessful, invalid send/receive interval [cluster id: {}] "
-        "[send interval: {}] [receive interval: {}]",
-        cluster_id, ToString(send_interval), ToString(receive_interval));
+        "Probe feedback rejected: id={} reason=invalid_interval "
+        "actual_packets={} target_packets={} actual_bytes={} "
+        "target_bytes={} send_interval_ms={} receive_interval_ms={}",
+        cluster_id, cluster->num_probes, cluster->target_probes,
+        cluster->size_total.bytes(), cluster->target_size.bytes(),
+        send_interval.ms(), receive_interval.ms());
 
     return std::nullopt;
   }
@@ -123,21 +130,24 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   double ratio = receive_rate / send_rate;
   if (ratio > kMaxValidRatio) {
     LOG_INFO(
-        "Probing unsuccessful, receive/send ratio too high [cluster id: {}] "
-        "[send: {} / {} = {}] [receive: {} / {} = {} ] [ratio: {} / {} = {}> "
-        "kMaxValidRatio ({})]",
-        cluster_id, ToString(send_size), ToString(send_interval),
-        ToString(send_rate), ToString(receive_size), ToString(receive_interval),
-        ToString(receive_rate), ToString(receive_rate), ToString(send_rate),
-        ratio, kMaxValidRatio);
+        "Probe feedback rejected: id={} reason=receive_send_ratio "
+        "actual_packets={} target_packets={} actual_bytes={} "
+        "target_bytes={} send_bitrate_bps={} receive_bitrate_bps={} ratio={}",
+        cluster_id, cluster->num_probes, cluster->target_probes,
+        cluster->size_total.bytes(), cluster->target_size.bytes(),
+        send_rate.bps(), receive_rate.bps(), ratio);
     return std::nullopt;
   }
-  LOG_INFO(
-      "Probing successful [cluster id: {}] [send: {} / {} = {} ] [receive: {} "
-      "/ {} = {}]",
-      cluster_id, ToString(send_size), ToString(send_interval),
-      ToString(send_rate), ToString(receive_size), ToString(receive_interval),
-      ToString(receive_rate));
+  if (!cluster->result_reported) {
+    LOG_INFO(
+        "Probe feedback accepted: id={} actual_packets={} target_packets={} "
+        "actual_bytes={} target_bytes={} send_bitrate_bps={} "
+        "receive_bitrate_bps={}",
+        cluster_id, cluster->num_probes, cluster->target_probes,
+        cluster->size_total.bytes(), cluster->target_size.bytes(),
+        send_rate.bps(), receive_rate.bps());
+    cluster->result_reported = true;
+  }
 
   DataRate res = std::min(send_rate, receive_rate);
   // If we're receiving at significantly lower bitrate than we were sending at,
@@ -158,9 +168,17 @@ ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate() {
   return estimated_data_rate;
 }
 
-void ProbeBitrateEstimator::EraseOldClusters(Timestamp timestamp) {
+void ProbeBitrateEstimator::RemoveExpiredClusters(Timestamp timestamp) {
   for (auto it = clusters_.begin(); it != clusters_.end();) {
     if (it->second.last_receive + kMaxClusterHistory < timestamp) {
+      if (!it->second.result_reported) {
+        LOG_WARN(
+            "Probe feedback expired: id={} reason=insufficient_feedback "
+            "actual_packets={} target_packets={} actual_bytes={} "
+            "target_bytes={}",
+            it->first, it->second.num_probes, it->second.target_probes,
+            it->second.size_total.bytes(), it->second.target_size.bytes());
+      }
       it = clusters_.erase(it);
     } else {
       ++it;

@@ -1673,9 +1673,6 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
       }
       update.context->applied_target_bitrate = update.target_bitrate;
     }
-
-    LOG_INFO("Applied video target bitrate: channel={} bitrate={}",
-             update.channel_name, update.target_bitrate);
   }
 }
 

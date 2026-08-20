@@ -96,6 +96,9 @@ void PacingController::CreateProbeClusters(
   for (const ProbeClusterConfig probe_cluster_config : probe_cluster_configs) {
     prober_.CreateProbeCluster(probe_cluster_config);
   }
+  if (!probe_cluster_configs.empty()) {
+    ClearProbingSendFailure("new_probe_cluster");
+  }
 }
 
 void PacingController::Pause() {
@@ -117,10 +120,14 @@ void PacingController::Resume() {
 bool PacingController::IsPaused() const { return paused_; }
 
 void PacingController::SetCongested(bool congested) {
-  if (congested_ && !congested) {
+  const bool congestion_cleared = congested_ && !congested;
+  if (congestion_cleared) {
     UpdateBudgetWithElapsedTime(UpdateTimeAndGetElapsed(CurrentTime()));
   }
   congested_ = congested;
+  if (congestion_cleared) {
+    ClearProbingSendFailure("congestion_cleared");
+  }
 }
 
 void PacingController::SetCircuitBreakerThreshold(int num_iterations) {
@@ -150,8 +157,8 @@ void PacingController::SetProbingEnabled(bool enabled) {
   prober_.SetEnabled(enabled);
 }
 
-void PacingController::AbortProbing() {
-  prober_.AbortProbing();
+void PacingController::AbortProbing(const char* reason) {
+  prober_.AbortProbing(reason);
   probing_send_failure_ = false;
 }
 
@@ -191,6 +198,9 @@ void PacingController::EnqueuePacket(std::unique_ptr<RtpPacketToSend> packet) {
   }
 
   prober_.OnIncomingPacket(DataSize::Bytes(packet->payload_size()));
+  if (prober_.is_probing()) {
+    ClearProbingSendFailure("media_packet_available");
+  }
 
   const Timestamp now = CurrentTime();
   if (packet_queue_.Empty()) {
@@ -231,6 +241,17 @@ void PacingController::SetSendBurstInterval(TimeDelta burst_interval) {
 
 void PacingController::SetAllowProbeWithoutMediaPacket(bool allow) {
   prober_.SetAllowProbeWithoutMediaPacket(allow);
+  if (allow && prober_.is_probing()) {
+    ClearProbingSendFailure("padding_available");
+  }
+}
+
+void PacingController::ClearProbingSendFailure(const char* trigger) {
+  if (!probing_send_failure_) {
+    return;
+  }
+  probing_send_failure_ = false;
+  LOG_INFO("Probe send unblocked: trigger={}", trigger);
 }
 
 TimeDelta PacingController::ExpectedQueueTime() const {
@@ -296,17 +317,23 @@ bool PacingController::ShouldSendKeepalive(Timestamp now) const {
 
 Timestamp PacingController::NextSendTime() const {
   const Timestamp now = CurrentTime();
+  const Timestamp cluster_expiration = prober_.NextClusterExpiration();
+  const auto apply_cluster_expiration =
+      [cluster_expiration](Timestamp send_time) {
+        return std::min(send_time, cluster_expiration);
+      };
   Timestamp next_send_time = Timestamp::PlusInfinity();
 
   if (paused_) {
-    return last_send_time_ + kPausedProcessInterval;
+    return apply_cluster_expiration(last_send_time_ + kPausedProcessInterval);
   }
 
   // If probing is active, that always takes priority.
   if (prober_.is_probing() && !probing_send_failure_) {
     Timestamp probe_time = prober_.NextProbeTime(now);
     if (!probe_time.IsPlusInfinity()) {
-      return probe_time.IsMinusInfinity() ? now : probe_time;
+      return apply_cluster_expiration(probe_time.IsMinusInfinity() ? now
+                                                                   : probe_time);
     }
   }
 
@@ -314,12 +341,13 @@ Timestamp PacingController::NextSendTime() const {
   // is the time at which it was enqueued.
   Timestamp unpaced_send_time = NextUnpacedSendTime();
   if (unpaced_send_time.IsFinite()) {
-    return unpaced_send_time;
+    return apply_cluster_expiration(unpaced_send_time);
   }
 
   if (congested_ || !seen_first_packet_) {
     // We need to at least send keep-alive packets with some interval.
-    return last_send_time_ + kCongestedPacketInterval;
+    return apply_cluster_expiration(last_send_time_ +
+                                    kCongestedPacketInterval);
   }
 
   if (adjusted_media_rate_ > DataRate::Zero() && !packet_queue_.Empty()) {
@@ -358,7 +386,7 @@ Timestamp PacingController::NextSendTime() const {
         std::min(next_send_time, last_send_time_ + kPausedProcessInterval);
   }
 
-  return next_send_time;
+  return apply_cluster_expiration(next_send_time);
 }
 
 void PacingController::ProcessPackets() {
@@ -367,6 +395,9 @@ void PacingController::ProcessPackets() {
         packet_sender->OnBatchComplete();
       });
   const Timestamp now = CurrentTime();
+  if (prober_.RemoveExpiredClusters(now)) {
+    probing_send_failure_ = false;
+  }
   Timestamp target_send_time = now;
   if (ShouldSendKeepalive(now)) {
     DataSize keepalive_data_sent = DataSize::Zero();
@@ -426,6 +457,7 @@ void PacingController::ProcessPackets() {
   int iteration = 0;
   int packets_sent = 0;
   int padding_packets_generated = 0;
+  bool padding_generation_failed = false;
   for (; iteration < circuit_breaker_threshold_; ++iteration) {
     // Fetch packet, so long as queue is not empty or budget is not
     // exhausted.
@@ -453,6 +485,9 @@ void PacingController::ProcessPackets() {
           // Continue loop to send the padding that was just added.
           continue;
         } else {
+          if (is_probing) {
+            padding_generation_failed = true;
+          }
           // Can't generate padding, still update padding budget for next send
           // time.
           UpdatePaddingBudgetWithSentData(padding_to_add);
@@ -529,9 +564,24 @@ void PacingController::ProcessPackets() {
   }
 
   if (is_probing) {
-    probing_send_failure_ = data_sent == DataSize::Zero();
-    if (!probing_send_failure_) {
-      prober_.ProbeSent(CurrentTime(), data_sent);
+    const bool send_failure = data_sent == DataSize::Zero();
+    if (send_failure && !probing_send_failure_) {
+      const char* reason = congested_ ? "congested"
+                           : padding_generation_failed
+                               ? "padding_unavailable"
+                               : "no_media_or_padding";
+      LOG_WARN(
+          "Probe cluster send blocked: id={} reason={} target_bitrate_bps={} "
+          "target_bytes={} target_probe_batches={} actual_bytes=0 "
+          "actual_packets=0",
+          pacing_info.probe_cluster_id, reason,
+          pacing_info.send_bitrate.bps(),
+          pacing_info.probe_cluster_min_bytes,
+          pacing_info.probe_cluster_min_probes);
+    }
+    probing_send_failure_ = send_failure;
+    if (!send_failure) {
+      prober_.ProbeSent(CurrentTime(), data_sent, packets_sent);
     }
   }
 

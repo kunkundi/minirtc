@@ -115,6 +115,7 @@ NetworkControlUpdate CongestionControl::OnNetworkAvailability(
 
 NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
   NetworkControlUpdate update;
+  probe_bitrate_estimator_->RemoveExpiredClusters(msg.at_time);
   if (initial_config_) {
     update.probe_cluster_configs =
         ResetConstraints(initial_config_->constraints);

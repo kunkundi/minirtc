@@ -35,6 +35,9 @@ class ProbeBitrateEstimator {
 
   std::optional<DataRate> FetchAndResetLastEstimatedBitrate();
 
+  // Removes incomplete probe feedback even if no further feedback arrives.
+  void RemoveExpiredClusters(Timestamp timestamp);
+
  private:
   struct AggregatedCluster {
     int num_probes = 0;
@@ -45,10 +48,10 @@ class ProbeBitrateEstimator {
     DataSize size_last_send = DataSize::Zero();
     DataSize size_first_receive = DataSize::Zero();
     DataSize size_total = DataSize::Zero();
+    int target_probes = 0;
+    DataSize target_size = DataSize::Zero();
+    bool result_reported = false;
   };
-
-  // Erases old cluster data that was seen before `timestamp`.
-  void EraseOldClusters(Timestamp timestamp);
 
   std::map<int, AggregatedCluster> clusters_;
   std::optional<DataRate> estimated_data_rate_;

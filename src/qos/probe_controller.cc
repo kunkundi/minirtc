@@ -421,7 +421,9 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
   if (at_time - time_last_probing_initiated_ >
       kMaxWaitingTimeForProbingResult) {
     if (state_ == State::kWaitingForProbingResult) {
-      LOG_INFO("kWaitingForProbingResult: timeout");
+      LOG_WARN(
+          "Probe result timed out: reason=no_valid_feedback elapsed_ms={}",
+          (at_time - time_last_probing_initiated_).ms());
       UpdateState(State::kProbingComplete);
     }
   }
@@ -462,6 +464,13 @@ ProbeClusterConfig ProbeController::CreateProbeClusterConfig(Timestamp at_time,
   config.target_probe_count = config_.min_probe_packets_sent;
   config.id = next_probe_cluster_id_;
   next_probe_cluster_id_++;
+  LOG_INFO(
+      "Probe cluster created: id={} target_bitrate_bps={} target_bytes={} "
+      "target_probe_batches={} duration_ms={} min_probe_delta_ms={}",
+      config.id, config.target_data_rate.bps(),
+      (config.target_data_rate * config.target_duration).bytes(),
+      config.target_probe_count, config.target_duration.ms(),
+      config.min_probe_delta.ms());
   return config;
 }
 
