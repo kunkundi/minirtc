@@ -122,6 +122,8 @@ void IceTransport::OnIceStateChange(NiceAgent* agent, guint stream_id,
       if (ice_transport_controller_) {
         ice_transport_controller_->UpdateNetworkAvaliablity(true);
       }
+    } else if (ice_transport_controller_) {
+      ice_transport_controller_->UpdateNetworkAvaliablity(false);
     }
 
     on_ice_status_change_(nice_component_state_to_string(state),

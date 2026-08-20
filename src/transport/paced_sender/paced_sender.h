@@ -99,6 +99,10 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // A probe may be sent without first waing for a media packet.
   void SetAllowProbeWithoutMediaPacket(bool allow);
 
+  // Stops all sending and discards pending probes while the media transport
+  // is unavailable. Must be called on the pacer task queue.
+  void SetTransportReady(bool ready);
+
   // Ensure that necessary delayed tasks are scheduled.
   void EnsureStarted();
 
@@ -208,6 +212,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // Indicates if this task queue is started. If not, don't allow
   // posting delayed tasks yet.
   bool is_started_;
+
+  bool transport_ready_;
 
   // Indicates if this task queue is shutting down. If so, don't allow
   // posting any more delayed tasks as that can cause the task queue to

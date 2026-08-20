@@ -900,6 +900,7 @@ void IceTransportController::UpdateMediaTransportState() {
          was_transport_ready]() mutable {
           paced_sender->SetAllowProbeWithoutMediaPacket(
               allow_probe_without_media);
+          paced_sender->SetTransportReady(transport_ready);
           if (transport_ready && !was_transport_ready) {
             paced_sender->EnsureStarted();
           }

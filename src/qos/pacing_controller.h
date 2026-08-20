@@ -186,6 +186,7 @@ class PacingController {
   // testing. Must be called before any packets are being sent to have an
   // effect.
   void SetProbingEnabled(bool enabled);
+  void AbortProbing();
 
   // Returns the next time we expect ProcessPackets() to be called.
   Timestamp NextSendTime() const;

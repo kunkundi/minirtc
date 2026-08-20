@@ -150,6 +150,11 @@ void PacingController::SetProbingEnabled(bool enabled) {
   prober_.SetEnabled(enabled);
 }
 
+void PacingController::AbortProbing() {
+  prober_.AbortProbing();
+  probing_send_failure_ = false;
+}
+
 void PacingController::SetPacingRates(DataRate pacing_rate,
                                       DataRate padding_rate) {
   if (padding_rate > pacing_rate) {

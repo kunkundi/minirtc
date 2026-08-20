@@ -51,6 +51,7 @@ class BitrateProber {
 
   void SetEnabled(bool enable);
   void SetAllowProbeWithoutMediaPacket(bool allow);
+  void AbortProbing();
 
   // Returns true if the prober is in a probing session, i.e., it currently
   // wants packets to be sent out according to the time returned by

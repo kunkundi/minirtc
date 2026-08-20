@@ -19,6 +19,7 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
       max_hold_back_window_in_packets_(3),
       next_process_time_(webrtc::Timestamp::MinusInfinity()),
       is_started_(false),
+      transport_ready_(false),
       is_shutdown_(false),
       packet_size_(/*alpha=*/0.95),
       include_overhead_(false),
@@ -55,6 +56,18 @@ void PacedSender::SetAllowProbeWithoutMediaPacket(bool allow) {
   pacing_controller_.SetAllowProbeWithoutMediaPacket(allow);
 }
 
+void PacedSender::SetTransportReady(bool ready) {
+  transport_ready_ = ready;
+  if (ready) {
+    pacing_controller_.Resume();
+    return;
+  }
+
+  pacing_controller_.AbortProbing();
+  pacing_controller_.Pause();
+  next_process_time_ = webrtc::Timestamp::MinusInfinity();
+}
+
 void PacedSender::EnsureStarted() {
   is_started_ = true;
   MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
@@ -62,6 +75,11 @@ void PacedSender::EnsureStarted() {
 
 void PacedSender::CreateProbeClusters(
     std::vector<webrtc::ProbeClusterConfig> probe_cluster_configs) {
+  if (!transport_ready_) {
+    LOG_INFO("Discarding {} probe cluster(s): transport is not ready",
+             probe_cluster_configs.size());
+    return;
+  }
   pacing_controller_.CreateProbeClusters(probe_cluster_configs);
   MaybeScheduleProcessPackets();
 }
@@ -178,12 +196,20 @@ void PacedSender::MaybeScheduleProcessPackets() {
 
 void PacedSender::MaybeProcessPackets(
     webrtc::Timestamp scheduled_process_time) {
-  if (is_shutdown_ || !is_started_) {
+  if (is_shutdown_ || !is_started_ || !transport_ready_) {
     return;
+  }
+
+  if (scheduled_process_time.IsFinite()) {
+    if (scheduled_process_time != next_process_time_) {
+      return;
+    }
+    next_process_time_ = webrtc::Timestamp::MinusInfinity();
   }
 
   // Protects against re-entry from transport feedback calling into the task
   // queue pacer.
+  processing_packets_ = true;
   auto cleanup = std::unique_ptr<void, std::function<void(void *)>>(
       nullptr, [this](void *) { processing_packets_ = false; });
 
@@ -207,14 +233,6 @@ void PacedSender::MaybeProcessPackets(
   }
 
   UpdateStats();
-
-  // Ignore retired scheduled task, otherwise reset `next_process_time_`.
-  if (scheduled_process_time.IsFinite()) {
-    if (scheduled_process_time != next_process_time_) {
-      return;
-    }
-    next_process_time_ = webrtc::Timestamp::MinusInfinity();
-  }
 
   // Do not hold back in probing.
   webrtc::TimeDelta hold_back_window = webrtc::TimeDelta::Zero();

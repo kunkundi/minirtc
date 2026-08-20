@@ -191,15 +191,20 @@ std::vector<ProbeClusterConfig> ProbeController::OnMaxTotalAllocatedBitrate(
 
 std::vector<ProbeClusterConfig> ProbeController::OnNetworkAvailability(
     NetworkAvailability msg) {
+  const bool was_network_available = network_available_;
   network_available_ = msg.network_available;
 
-  if (!network_available_ && state_ == State::kWaitingForProbingResult) {
-    state_ = State::kProbingComplete;
+  if (!network_available_) {
+    state_ = State::kInit;
     min_bitrate_to_probe_further_ = DataRate::PlusInfinity();
+    last_allowed_repeated_initial_probe_ = Timestamp::Zero();
+    return {};
   }
 
-  if (network_available_ && state_ == State::kInit && !start_bitrate_.IsZero())
+  if (!was_network_available && state_ == State::kInit &&
+      !start_bitrate_.IsZero()) {
     return InitiateExponentialProbing(msg.at_time);
+  }
   return std::vector<ProbeClusterConfig>();
 }
 

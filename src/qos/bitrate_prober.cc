@@ -57,6 +57,19 @@ void BitrateProber::SetAllowProbeWithoutMediaPacket(bool allow) {
   MaybeSetActiveState(/*packet_size=*/DataSize::Zero());
 }
 
+void BitrateProber::AbortProbing() {
+  if (!clusters_.empty()) {
+    LOG_INFO("Aborting {} pending probe cluster(s)", clusters_.size());
+  }
+  while (!clusters_.empty()) {
+    clusters_.pop();
+  }
+  next_probe_time_ = Timestamp::PlusInfinity();
+  if (probing_state_ != ProbingState::kDisabled) {
+    probing_state_ = ProbingState::kInactive;
+  }
+}
+
 void BitrateProber::MaybeSetActiveState(DataSize packet_size) {
   if (ReadyToSetActiveState(packet_size)) {
     next_probe_time_ = Timestamp::MinusInfinity();
