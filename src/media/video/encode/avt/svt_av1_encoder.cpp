@@ -182,15 +182,20 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   // enc_config_.screen_content_mode = 1;
   // enc_config_.sframe_dist = key_frame_interval_;
 
-  svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
+  ret = svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
   if (ret != EB_ErrorNone) {
-    LOG_ERROR("svt_av1_enc_set_parameter failed");
+    LOG_ERROR("svt_av1_enc_set_parameter failed, return {}",
+              static_cast<int>(ret));
+    svt_av1_enc_deinit_handle(svt_av1_encoder_);
+    svt_av1_encoder_ = nullptr;
     return -1;
   }
 
   ret = svt_av1_enc_init(svt_av1_encoder_);
   if (ret != EB_ErrorNone) {
-    LOG_ERROR("svt_av1_enc_init failed");
+    LOG_ERROR("svt_av1_enc_init failed, return {}", static_cast<int>(ret));
+    svt_av1_enc_deinit_handle(svt_av1_encoder_);
+    svt_av1_encoder_ = nullptr;
     return -1;
   }
 
@@ -335,15 +340,27 @@ int SvtAv1Encoder::SetTargetBitrate(int bitrate) {
   if (!svt_av1_encoder_ || bitrate <= 0) {
     return -1;
   }
-  target_bitrate_ = ClampEncoderTargetBitrate(bitrate, max_bitrate_);
-  if (target_bitrate_ != bitrate) {
+  const int target_bitrate =
+      ClampEncoderTargetBitrate(bitrate, max_bitrate_);
+  if (target_bitrate != bitrate) {
     LOG_WARN("SVT-AV1 target bitrate clamped: requested={} max={}", bitrate,
              max_bitrate_);
   }
-  enc_config_.target_bit_rate = target_bitrate_;
-  enc_config_.over_shoot_pct =
-      EncoderOvershootPercent(target_bitrate_, max_bitrate_);
-  svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
+
+  EbSvtAv1EncConfiguration updated_config = enc_config_;
+  updated_config.target_bit_rate = target_bitrate;
+  updated_config.over_shoot_pct =
+      EncoderOvershootPercent(target_bitrate, max_bitrate_);
+  const EbErrorType ret =
+      svt_av1_enc_set_parameter(svt_av1_encoder_, &updated_config);
+  if (ret != EB_ErrorNone) {
+    LOG_ERROR("Failed to set SVT-AV1 target bitrate: bitrate={} return={}",
+              target_bitrate, static_cast<int>(ret));
+    return -1;
+  }
+
+  target_bitrate_ = target_bitrate;
+  enc_config_ = updated_config;
   return 0;
 }
 

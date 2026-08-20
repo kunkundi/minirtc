@@ -405,15 +405,20 @@ int AomAv1Encoder::SetTargetBitrate(int bitrate) {
     LOG_WARN("AOM AV1 target bitrate clamped: requested={} max={}", bitrate,
              max_bitrate_);
   }
-  target_bitrate_ = clamped_bitrate / 1000;
-  aom_av1_encoder_config_.rc_target_bitrate = target_bitrate_;
-  aom_av1_encoder_config_.rc_overshoot_pct =
+  const int target_bitrate_kbps = clamped_bitrate / 1000;
+  aom_codec_enc_cfg_t updated_config = aom_av1_encoder_config_;
+  updated_config.rc_target_bitrate = target_bitrate_kbps;
+  updated_config.rc_overshoot_pct =
       EncoderOvershootPercent(clamped_bitrate, max_bitrate_);
   aom_codec_err_t error_code =
-      aom_codec_enc_config_set(&aom_av1_encoder_ctx_, &aom_av1_encoder_config_);
+      aom_codec_enc_config_set(&aom_av1_encoder_ctx_, &updated_config);
   if (error_code != AOM_CODEC_OK) {
     LOG_ERROR("Set bitrate failed, return {}", (int)error_code);
+    return -1;
   }
+
+  target_bitrate_ = target_bitrate_kbps;
+  aom_av1_encoder_config_ = updated_config;
   return 0;
 }
 
