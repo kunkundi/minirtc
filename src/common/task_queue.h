@@ -54,10 +54,12 @@ class TaskQueue {
   }
 
   void ClearTasks() {
-    std::unique_lock<std::mutex> lock(mutex_);
-    while (!taskQueue_.empty()) {
-      taskQueue_.pop();
+    decltype(taskQueue_) cleared_tasks;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      taskQueue_.swap(cleared_tasks);
     }
+    cond_var_.notify_all();
   }
 
   void Stop() {
@@ -111,11 +113,7 @@ class TaskQueue {
           auto execute_time = top.execute_time;
 
           if (execute_time > now) {
-            cond_var_.wait_until(lock, execute_time, [this, now]() {
-              return stop_ || (!taskQueue_.empty() &&
-                               taskQueue_.top().execute_time <=
-                                   std::chrono::steady_clock::now());
-            });
+            cond_var_.wait_until(lock, execute_time);
             if (stop_) return;
             continue;
           }
