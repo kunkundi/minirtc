@@ -41,7 +41,8 @@ class VideoToolboxEncoder::Impl {
   int width_ = 2880;
   int height_ = 1800;
   int max_fps_ = 60;
-  int average_bitrate_ = 5000000;
+  int average_bitrate_ = MINIRTC_AVERAGE_BITRATE;
+  int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int keyframe_interval_ = 30;
   int seq_ = 0;
   int ref_buffer_count_ = 3;
@@ -94,7 +95,9 @@ VideoToolboxEncoder::Impl::~Impl() {
 int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   lock_guard<mutex> guard(lock_);
   max_fps_ = config.max_frame_rate;
-  average_bitrate_ = config.average_bitrate;
+  max_bitrate_ = config.max_bitrate;
+  average_bitrate_ =
+      ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_);
   keyframe_interval_ = config.key_frame_interval;
 
   if (ResetEncodeResolution(config.init_width, config.init_height) != 0) {
@@ -244,7 +247,8 @@ int VideoToolboxEncoder::Impl::ApplyBitrateProperties(VTCompressionSessionRef se
       VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, bit_rate_ref);
   CFRelease(bit_rate_ref);
 
-  int data_rate_limit[2] = {std::max(1, bitrate / 8), 1};
+  const int peak_bitrate = EncoderPeakBitrate(bitrate, max_bitrate_);
+  int data_rate_limit[2] = {std::max(1, peak_bitrate / 8), 1};
   CFNumberRef data_rate_limit_numbers[2] = {
       CFNumberCreate(nullptr, kCFNumberIntType, &data_rate_limit[0]),
       CFNumberCreate(nullptr, kCFNumberIntType, &data_rate_limit[1])};
@@ -383,7 +387,11 @@ int VideoToolboxEncoder::Impl::SetTargetBitrate(int bitrate) {
   lock_guard<mutex> guard(lock_);
   if (bitrate <= 0) return -1;
 
-  average_bitrate_ = bitrate;
+  average_bitrate_ = ClampEncoderTargetBitrate(bitrate, max_bitrate_);
+  if (average_bitrate_ != bitrate) {
+    LOG_WARN("VideoToolbox target bitrate clamped: requested={} max={}",
+             bitrate, max_bitrate_);
+  }
   if (!session_) return -1;
   if (ApplyBitrateProperties(session_, average_bitrate_) != 0) {
     return -1;

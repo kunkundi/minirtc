@@ -22,6 +22,7 @@
 #include "api/units/data_size.h"
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
+#include "bitrate_limits.h"
 #include "log.h"
 
 namespace minirtc {
@@ -34,7 +35,8 @@ constexpr TimeDelta kMaxWaitingTimeForProbingResult = TimeDelta::Seconds(1);
 
 // Default probing bitrate limit. Applied only when the application didn't
 // specify max bitrate.
-constexpr DataRate kDefaultMaxProbingBitrate = DataRate::KilobitsPerSec(5000);
+constexpr DataRate kDefaultMaxProbingBitrate =
+    DataRate::BitsPerSec(kDefaultMaxNetworkBitrateBps);
 
 // If the bitrate drops to a factor `kBitrateDropThreshold` or lower
 // and we recover within `kBitrateDropTimeoutMs`, then we'll send

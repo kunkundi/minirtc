@@ -100,8 +100,9 @@ void SvtAv1Encoder::Release() {
 int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
   frame_width_ = config.init_width;
   frame_height_ = config.init_height;
-  target_bitrate_ = config.average_bitrate / 1000;
-  max_bitrate_ = config.max_bitrate / 1000;
+  max_bitrate_ = config.max_bitrate;
+  target_bitrate_ =
+      ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_);
   max_fps_ = config.max_frame_rate;
   key_frame_interval_ = config.key_frame_interval;
   max_payload_size_ = config.max_payload_size;
@@ -169,7 +170,9 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.enc_mode = 10;
   enc_config_.rate_control_mode = SVT_AV1_RC_MODE_CBR;
   enc_config_.pred_structure = SVT_AV1_PRED_LOW_DELAY_B;
-  enc_config_.target_bit_rate = max_bitrate_;
+  enc_config_.target_bit_rate = target_bitrate_;
+  enc_config_.over_shoot_pct =
+      EncoderOvershootPercent(target_bitrate_, max_bitrate_);
   enc_config_.max_qp_allowed = 60;
   enc_config_.min_qp_allowed = 10;
   enc_config_.intra_period_length = key_frame_interval_;
@@ -329,7 +332,17 @@ int SvtAv1Encoder::ForceIdr() {
 }
 
 int SvtAv1Encoder::SetTargetBitrate(int bitrate) {
-  enc_config_.target_bit_rate = bitrate / 1000;
+  if (!svt_av1_encoder_ || bitrate <= 0) {
+    return -1;
+  }
+  target_bitrate_ = ClampEncoderTargetBitrate(bitrate, max_bitrate_);
+  if (target_bitrate_ != bitrate) {
+    LOG_WARN("SVT-AV1 target bitrate clamped: requested={} max={}", bitrate,
+             max_bitrate_);
+  }
+  enc_config_.target_bit_rate = target_bitrate_;
+  enc_config_.over_shoot_pct =
+      EncoderOvershootPercent(target_bitrate_, max_bitrate_);
   svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);
   return 0;
 }

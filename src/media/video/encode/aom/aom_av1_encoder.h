@@ -74,8 +74,8 @@ class AomAv1Encoder : public MediaCodec {
   uint32_t frame_width_ = 1280;
   uint32_t frame_height_ = 720;
   int key_frame_interval_ = 3000;
-  int target_bitrate_ = 1000;
-  int max_bitrate_ = 2500000;
+  int target_bitrate_ = MINIRTC_AVERAGE_BITRATE / 1000;
+  int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int max_payload_size_ = 1150;
   int max_fps_ = 30;
   int number_of_cores_ = 4;

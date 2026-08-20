@@ -64,8 +64,8 @@ class NvidiaVideoEncoder : public MediaCodec {
   uint32_t frame_width_ = 1280;
   uint32_t frame_height_ = 720;
   uint32_t key_frame_interval_ = 3000;
-  uint32_t average_bitrate_ = 2000000;
-  uint32_t max_bitrate_ = 10000000;
+  uint32_t average_bitrate_ = MINIRTC_AVERAGE_BITRATE;
+  uint32_t max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   uint32_t max_fps_ = 60;
   int max_payload_size_ = 1150;
   NvEncoder* encoder_ = nullptr;

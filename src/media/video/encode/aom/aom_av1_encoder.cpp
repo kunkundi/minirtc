@@ -134,8 +134,9 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   frame_width_ = config.init_width;
   frame_height_ = config.init_height;
   key_frame_interval_ = config.key_frame_interval;
-  target_bitrate_ = config.average_bitrate;
   max_bitrate_ = config.max_bitrate;
+  target_bitrate_ =
+      ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_) / 1000;
   max_payload_size_ = config.max_payload_size;
   max_fps_ = config.max_frame_rate;
 
@@ -153,8 +154,7 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   aom_av1_encoder_config_.g_threads = 8;
   aom_av1_encoder_config_.g_timebase.num = 1;
   aom_av1_encoder_config_.g_timebase.den = kRtpTicksPerSecond;
-  aom_av1_encoder_config_.rc_target_bitrate =
-      max_bitrate_ / 1000;  // kilobits/sec.
+  aom_av1_encoder_config_.rc_target_bitrate = target_bitrate_;
   aom_av1_encoder_config_.rc_dropframe_thresh =
       (!disable_frame_dropping_) ? 30 : 0;
   aom_av1_encoder_config_.g_input_bit_depth = kBitDepth;
@@ -163,8 +163,7 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   aom_av1_encoder_config_.rc_max_quantizer = kQpMax;
   aom_av1_encoder_config_.g_usage = kUsageProfile;
   aom_av1_encoder_config_.g_error_resilient = 0;
-  // aom_av1_encoder_config_.rc_undershoot_pct = 50;
-  // aom_av1_encoder_config_.rc_overshoot_pct = 50;
+  aom_av1_encoder_config_.rc_undershoot_pct = 50;
   // aom_av1_encoder_config_.rc_buf_initial_sz = 600;
   // aom_av1_encoder_config_.rc_buf_optimal_sz = 600;
   // aom_av1_encoder_config_.rc_buf_sz = 1000;
@@ -172,6 +171,8 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   aom_av1_encoder_config_.rc_end_usage = AOM_VBR;    // cbr mode
   aom_av1_encoder_config_.g_pass = AOM_RC_ONE_PASS;  // One-pass rate control
   aom_av1_encoder_config_.g_lag_in_frames = kLagInFrames;  // No look ahead
+  aom_av1_encoder_config_.rc_overshoot_pct =
+      EncoderOvershootPercent(target_bitrate_ * 1000, max_bitrate_);
 
   if (frame_for_encode_ != nullptr) {
     aom_img_free(frame_for_encode_);
@@ -395,8 +396,19 @@ int AomAv1Encoder::ForceIdr() {
 }
 
 int AomAv1Encoder::SetTargetBitrate(int bitrate) {
-  target_bitrate_ = bitrate / 1000;
+  if (bitrate <= 0) {
+    return -1;
+  }
+  const int clamped_bitrate =
+      ClampEncoderTargetBitrate(bitrate, max_bitrate_);
+  if (clamped_bitrate != bitrate) {
+    LOG_WARN("AOM AV1 target bitrate clamped: requested={} max={}", bitrate,
+             max_bitrate_);
+  }
+  target_bitrate_ = clamped_bitrate / 1000;
   aom_av1_encoder_config_.rc_target_bitrate = target_bitrate_;
+  aom_av1_encoder_config_.rc_overshoot_pct =
+      EncoderOvershootPercent(clamped_bitrate, max_bitrate_);
   aom_codec_err_t error_code =
       aom_codec_enc_config_set(&aom_av1_encoder_ctx_, &aom_av1_encoder_config_);
   if (error_code != AOM_CODEC_OK) {

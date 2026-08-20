@@ -57,8 +57,8 @@ class OpenH264Encoder : public MediaCodec {
   uint32_t frame_width_ = 3840;
   uint32_t frame_height_ = 2160;
   int key_frame_interval_ = 3000;
-  int target_bitrate_ = 10000000;
-  int max_bitrate_ = 10000000;
+  int target_bitrate_ = MINIRTC_INIT_BITRATE;
+  int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int max_payload_size_ = 1150;
   int max_fps_ = 30;
   std::vector<std::vector<uint8_t>> encoded_packets_;

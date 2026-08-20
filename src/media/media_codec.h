@@ -29,13 +29,13 @@
 #include "minirtc.h"
 #include "raw_frame.h"
 #include "received_frame.h"
+#include "bitrate_limits.h"
 
 #define MINIRTC_INIT_WIDTH 1920
 #define MINIRTC_INIT_HEIGHT 1080
 #define MINIRTC_INIT_BITRATE 1'000'000
 #define MINIRTC_MIN_BITRATE 1'000'000
 #define MINIRTC_AVERAGE_BITRATE 2'500'000
-#define MINIRTC_MAX_BITRATE 5'000'000
 #define MINIRTC_MIN_FRAME_RATE 15
 #define MINIRTC_MAX_FRAME_RATE 60
 #define MINIRTC_KEY_FRAME_INTERVAL 3000
@@ -51,7 +51,7 @@ class MediaCodecConfig {
         init_bitrate(MINIRTC_INIT_BITRATE),
         min_bitrate(MINIRTC_MIN_BITRATE),
         average_bitrate(MINIRTC_AVERAGE_BITRATE),
-        max_bitrate(MINIRTC_MAX_BITRATE),
+        max_bitrate(kDefaultMaxEncoderBitrateBps),
         min_frame_rate(MINIRTC_MIN_FRAME_RATE),
         max_frame_rate(MINIRTC_MAX_FRAME_RATE),
         key_frame_interval(MINIRTC_KEY_FRAME_INTERVAL),

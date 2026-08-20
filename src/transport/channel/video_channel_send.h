@@ -30,14 +30,16 @@ class VideoChannelSend : public MediaChannel {
                    std::shared_ptr<SystemClock> clock,
                    std::shared_ptr<IceAgent> ice_agent,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
-  virtual ~VideoChannelSend();
+  ~VideoChannelSend() override;
 
-  void OnSentRtpPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet);
+  void OnSentRtpPacket(
+      std::unique_ptr<webrtc::RtpPacketToSend> packet) override;
 
-  void OnReceiveNack(const std::vector<uint16_t>& nack_sequence_numbers);
+  void OnReceiveNack(
+      const std::vector<uint16_t>& nack_sequence_numbers) override;
 
   std::vector<std::unique_ptr<RtpPacket>> GeneratePadding(
-      uint32_t payload_size, int64_t captured_timestamp_us);
+      uint32_t payload_size, int64_t captured_timestamp_us) override;
 
   bool CanGeneratePadding() const override {
     return rtp_packetizer_ != nullptr;
@@ -45,16 +47,16 @@ class VideoChannelSend : public MediaChannel {
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
-                  std::shared_ptr<PacedSender> packet_sender);
-  void Destroy();
+                  std::shared_ptr<PacedSender> packet_sender) override;
+  void Destroy() override;
 
-  uint32_t GetSsrc() { return ssrc_; }
+  uint32_t GetSsrc() override { return ssrc_; }
 
-  uint32_t GetRtxSsrc() { return rtx_ssrc_; }
+  uint32_t GetRtxSsrc() override { return rtx_ssrc_; }
 
-  int SendVideo(const EncodedFrame& encoded_frame);
+  int SendVideo(const EncodedFrame& encoded_frame) override;
 
-  void OnReceiverReport(const ReceiverReport& receiver_report) {
+  void OnReceiverReport(const ReceiverReport& receiver_report) override {
     std::vector<RtcpReportBlock> reports = receiver_report.GetReportBlocks();
     for (auto r : reports) {
       LOG_WARN(

@@ -4,6 +4,7 @@
 #include <numeric>
 #include <vector>
 
+#include "bitrate_limits.h"
 #include "log.h"
 
 namespace minirtc {
@@ -82,7 +83,8 @@ CongestionControl::CongestionControl()
 
   config.constraints.at_time = Timestamp::PlusInfinity();
   config.constraints.min_data_rate = DataRate::BitsPerSec(300000);
-  config.constraints.max_data_rate = DataRate::BitsPerSec(5000000);
+  config.constraints.max_data_rate =
+      DataRate::BitsPerSec(kDefaultMaxNetworkBitrateBps);
   config.constraints.starting_rate = DataRate::BitsPerSec(2500000);
 
   config.stream_based_config.at_time = Timestamp::PlusInfinity();

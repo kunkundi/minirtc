@@ -49,8 +49,9 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   frame_width_ = config.init_width;
   frame_height_ = config.init_height;
   key_frame_interval_ = config.key_frame_interval;
-  average_bitrate_ = config.average_bitrate;
   max_bitrate_ = config.max_bitrate;
+  average_bitrate_ = ClampEncoderTargetBitrate(
+      config.average_bitrate, static_cast<int>(max_bitrate_));
   max_fps_ = config.max_frame_rate;
   max_payload_size_ = config.max_payload_size;
 
@@ -125,7 +126,8 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   encodeConfig.rcParams.averageBitRate = average_bitrate_;
   // use the default VBV buffer size
   encodeConfig.rcParams.vbvBufferSize = 0;
-  encodeConfig.rcParams.maxBitRate = max_bitrate_;
+  encodeConfig.rcParams.maxBitRate = EncoderPeakBitrate(
+      static_cast<int>(average_bitrate_), static_cast<int>(max_bitrate_));
   // use the default VBV initial delay
   encodeConfig.rcParams.vbvInitialDelay = 0;
   // enable adaptive quantization (Spatial)
@@ -261,9 +263,19 @@ int NvidiaVideoEncoder::ForceIdr() {
 }
 
 int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
-  if (!encoder_) {
+  if (!encoder_ || bitrate <= 0) {
     return -1;
   }
+
+  const int target_bitrate =
+      ClampEncoderTargetBitrate(bitrate, static_cast<int>(max_bitrate_));
+  if (target_bitrate != bitrate) {
+    LOG_WARN("NVENC target bitrate clamped: requested={} max={}", bitrate,
+             max_bitrate_);
+  }
+  average_bitrate_ = target_bitrate;
+  const int peak_bitrate =
+      EncoderPeakBitrate(target_bitrate, static_cast<int>(max_bitrate_));
 
   NV_ENC_RECONFIGURE_PARAMS reconfig_params;
   memset(&reconfig_params, 0, sizeof(reconfig_params));
@@ -274,8 +286,8 @@ int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
   encoder_->GetInitializeParams(&init_params);
   init_params.frameRateDen = 1;
   init_params.frameRateNum = init_params.frameRateDen * max_fps_;
-  init_params.encodeConfig->rcParams.averageBitRate = bitrate;
-  init_params.encodeConfig->rcParams.maxBitRate = bitrate;
+  init_params.encodeConfig->rcParams.averageBitRate = target_bitrate;
+  init_params.encodeConfig->rcParams.maxBitRate = peak_bitrate;
   reconfig_params.reInitEncodeParams = init_params;
   reconfig_params.forceIDR = 0;
   return encoder_->Reconfigure(&reconfig_params) ? 0 : -1;
