@@ -1,6 +1,8 @@
 
 #include "paced_sender.h"
 
+#include <chrono>
+
 #include "log.h"
 
 namespace minirtc {
@@ -239,10 +241,10 @@ void PacedSender::MaybeProcessPackets(
   // schedule a new one. Previous in flight task will be retired.
   if (next_process_time_.IsMinusInfinity() ||
       next_process_time_ > next_send_time) {
-    // Prefer low precision if allowed and not probing.
-    task_queue_pacer_->PostDelayedTask(
+    task_queue_pacer_->PostDelayedHighPrecisionTask(
         [this, next_send_time]() { MaybeProcessPackets(next_send_time); },
-        time_to_next_process.RoundUpTo(webrtc::TimeDelta::Millis(1)).ms());
+        std::chrono::microseconds(
+            time_to_next_process.RoundUpTo(webrtc::TimeDelta::Millis(1)).us()));
     next_process_time_ = next_send_time;
   }
 }

@@ -37,20 +37,17 @@ class TaskQueue {
   }
 
   void PostDelayedTask(AnyInvocable<void()> task, int delay_ms) {
-    auto execute_time =
-        std::chrono::steady_clock::now() + std::chrono::milliseconds(delay_ms);
+    auto delay = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+        std::chrono::milliseconds(delay_ms));
+    PostDelayedTaskAt(std::move(task), std::chrono::steady_clock::now() + delay);
+  }
 
-    bool notify = false;
-    {
-      std::unique_lock<std::mutex> lock(mutex_);
-      if (taskQueue_.empty() || execute_time < taskQueue_.top().execute_time) {
-        notify = true;
-      }
-      taskQueue_.emplace(execute_time, std::move(task));
-    }
-    if (notify) {
-      cond_var_.notify_one();
-    }
+  void PostDelayedHighPrecisionTask(AnyInvocable<void()> task,
+                                    std::chrono::microseconds delay) {
+    auto precise_delay =
+        std::chrono::duration_cast<std::chrono::steady_clock::duration>(delay);
+    PostDelayedTaskAt(std::move(task),
+                      std::chrono::steady_clock::now() + precise_delay);
   }
 
   void ClearTasks() {
@@ -77,6 +74,22 @@ class TaskQueue {
   }
 
  private:
+  void PostDelayedTaskAt(
+      AnyInvocable<void()> task,
+      std::chrono::steady_clock::time_point execute_time) {
+    bool notify = false;
+    {
+      std::unique_lock<std::mutex> lock(mutex_);
+      if (taskQueue_.empty() || execute_time < taskQueue_.top().execute_time) {
+        notify = true;
+      }
+      taskQueue_.emplace(execute_time, std::move(task));
+    }
+    if (notify) {
+      cond_var_.notify_one();
+    }
+  }
+
   struct TaskItem {
     std::chrono::steady_clock::time_point enqueue_time;
     std::chrono::steady_clock::time_point execute_time;
