@@ -99,6 +99,8 @@ void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
     return;
   }
 
+  PruneRecentlyAcknowledgedPackets(creation_time);
+
   PacketFeedback feedback;
 
   feedback.creation_time = creation_time;
@@ -129,6 +131,10 @@ void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
   }
   // Note that it can happen that the same SSRC and sequence number is sent
   // again. e.g, audio retransmission.
+  // A new send reusing the same RTP key must not be classified as duplicate
+  // feedback for the previous send.
+  recently_acknowledged_packets_.erase(
+      {feedback.ssrc, feedback.rtp_sequence_number});
   rtp_to_transport_sequence_number_.emplace(
       SsrcAndRtpSequencenumber({feedback.ssrc, feedback.rtp_sequence_number}),
       feedback.sent.sequence_number);
@@ -179,6 +185,7 @@ std::optional<TransportPacketsFeedback>
 TransportFeedbackAdapter::ProcessCongestionControlFeedback(
     const rtcp::CongestionControlFeedback& feedback,
     Timestamp feedback_receive_time) {
+  PruneRecentlyAcknowledgedPackets(feedback_receive_time);
   if (feedback.packets().empty()) {
     LOG_INFO("Empty congestion control feedback packet received.");
     return std::nullopt;
@@ -201,16 +208,26 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
 
   int ignored_packets = 0;
   int failed_lookups = 0;
+  int duplicate_feedbacks = 0;
   bool supports_ecn = true;
   std::vector<PacketResult> packet_result_vector;
   for (const rtcp::CongestionControlFeedback::PacketInfo& packet_info :
        feedback.packets()) {
-    std::optional<PacketFeedback> packet_feedback = RetrievePacketFeedback(
-        {packet_info.ssrc, packet_info.sequence_number},
-        /*received=*/packet_info.arrival_time_offset.IsFinite());
+    const SsrcAndRtpSequencenumber key = {packet_info.ssrc,
+                                         packet_info.sequence_number};
+    const bool received = packet_info.arrival_time_offset.IsFinite();
+    std::optional<PacketFeedback> packet_feedback =
+        RetrievePacketFeedback(key, received);
     if (!packet_feedback) {
-      ++failed_lookups;
+      if (received && WasRecentlyAcknowledged(key)) {
+        ++duplicate_feedbacks;
+      } else {
+        ++failed_lookups;
+      }
       continue;
+    }
+    if (received) {
+      RememberAcknowledgedPacket(key, feedback_receive_time);
     }
     if (packet_feedback->network_route != network_route_) {
       ++ignored_packets;
@@ -231,6 +248,10 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
         "Failed to lookup send time for {} packet{}. Packets reordered or "
         "send time history too small?",
         failed_lookups, (failed_lookups > 1 ? "s" : ""));
+  }
+  if (duplicate_feedbacks > 0) {
+    LOG_INFO("Ignoring {} duplicate packet feedback{}.", duplicate_feedbacks,
+             (duplicate_feedbacks > 1 ? "s" : ""));
   }
   if (ignored_packets > 0) {
     LOG_INFO("Ignoring {} packets because they were sent on a different route.",
@@ -270,6 +291,37 @@ void TransportFeedbackAdapter::SetNetworkRoute(
 
 DataSize TransportFeedbackAdapter::GetOutstandingData() const {
   return in_flight_.GetOutstandingData(network_route_);
+}
+
+void TransportFeedbackAdapter::PruneRecentlyAcknowledgedPackets(
+    Timestamp now) {
+  while (!recently_acknowledged_packets_in_order_.empty() &&
+         now - recently_acknowledged_packets_in_order_.front()
+                   .acknowledgment_time >
+             kSendTimeHistoryWindow) {
+    const RecentlyAcknowledgedPacket& acknowledged_packet =
+        recently_acknowledged_packets_in_order_.front();
+    auto it = recently_acknowledged_packets_.find(acknowledged_packet.key);
+    if (it != recently_acknowledged_packets_.end() &&
+        it->second == acknowledged_packet.generation) {
+      recently_acknowledged_packets_.erase(it);
+    }
+    recently_acknowledged_packets_in_order_.pop_front();
+  }
+}
+
+void TransportFeedbackAdapter::RememberAcknowledgedPacket(
+    const SsrcAndRtpSequencenumber& key, Timestamp acknowledgment_time) {
+  const uint64_t generation = ++acknowledgment_generation_;
+  recently_acknowledged_packets_[key] = generation;
+  recently_acknowledged_packets_in_order_.push_back(
+      {key, acknowledgment_time, generation});
+}
+
+bool TransportFeedbackAdapter::WasRecentlyAcknowledged(
+    const SsrcAndRtpSequencenumber& key) const {
+  return recently_acknowledged_packets_.find(key) !=
+         recently_acknowledged_packets_.end();
 }
 
 std::optional<PacketFeedback> TransportFeedbackAdapter::RetrievePacketFeedback(

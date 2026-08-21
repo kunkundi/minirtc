@@ -13,6 +13,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <deque>
 #include <map>
 #include <optional>
 #include <tuple>
@@ -86,8 +87,6 @@ class TransportFeedbackAdapter {
   DataSize GetOutstandingData() const;
 
  private:
-  enum class SendTimeHistoryStatus { kNotAdded, kOk, kDuplicate };
-
   struct SsrcAndRtpSequencenumber {
     uint32_t ssrc;
     uint16_t rtp_sequence_number;
@@ -98,6 +97,12 @@ class TransportFeedbackAdapter {
     }
   };
 
+  struct RecentlyAcknowledgedPacket {
+    SsrcAndRtpSequencenumber key;
+    Timestamp acknowledgment_time = Timestamp::MinusInfinity();
+    uint64_t generation = 0;
+  };
+
   std::optional<PacketFeedback> RetrievePacketFeedback(
       int64_t transport_seq_num, bool received);
   std::optional<PacketFeedback> RetrievePacketFeedback(
@@ -105,6 +110,11 @@ class TransportFeedbackAdapter {
   std::optional<TransportPacketsFeedback> ToTransportFeedback(
       std::vector<PacketResult> packet_results, Timestamp feedback_receive_time,
       bool supports_ecn);
+  void PruneRecentlyAcknowledgedPackets(Timestamp now);
+  void RememberAcknowledgedPacket(const SsrcAndRtpSequencenumber& key,
+                                  Timestamp acknowledgment_time);
+  bool WasRecentlyAcknowledged(
+      const SsrcAndRtpSequencenumber& key) const;
 
   DataSize pending_untracked_size_ = DataSize::Zero();
   Timestamp last_send_time_ = Timestamp::MinusInfinity();
@@ -129,6 +139,15 @@ class TransportFeedbackAdapter {
   std::map<SsrcAndRtpSequencenumber, int64_t /*transport_sequence_number*/>
       rtp_to_transport_sequence_number_;
   std::map<int64_t, PacketFeedback> history_;
+
+  // RFC 8888 feedback can overlap when packets are reordered. Keep a bounded
+  // record of packets already acknowledged so repeated feedback is not
+  // mistaken for an expired or missing send-time history entry.
+  std::map<SsrcAndRtpSequencenumber, uint64_t /*generation*/>
+      recently_acknowledged_packets_;
+  std::deque<RecentlyAcknowledgedPacket>
+      recently_acknowledged_packets_in_order_;
+  uint64_t acknowledgment_generation_ = 0;
 };
 
 }  // namespace webrtc
