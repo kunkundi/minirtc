@@ -69,7 +69,9 @@ int VideoChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
       return -1;
     }
     RtpPacket rtp_packet;
-    rtp_packet.Build((uint8_t*)data, (uint32_t)size);
+    if (!rtp_packet.Build((uint8_t*)data, (uint32_t)size)) {
+      return -1;
+    }
     rtp_video_receiver_->InsertRtpPacket(rtp_packet);
   }
 

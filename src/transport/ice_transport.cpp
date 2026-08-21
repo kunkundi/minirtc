@@ -31,7 +31,9 @@ IceTransport::~IceTransport() {}
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
-    TurnMode turn_mode, bool enable_srtp, VideoQuality video_quality,
+    TurnMode turn_mode, bool enable_srtp,
+    VideoContentType video_content_type, VideoQuality video_quality,
+    int video_frame_rate,
     rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
@@ -40,7 +42,9 @@ int IceTransport::SetLocalCapabilities(
   use_reliable_ice_ = use_reliable_ice;
   turn_mode_ = turn_mode;
   enable_srtp_ = enable_srtp;
+  video_content_type_ = video_content_type;
   video_quality_ = video_quality;
+  video_frame_rate_ = video_frame_rate == 30 ? 30 : 60;
   prefered_video_payload_type_ = prefered_video_payload_type;
   support_video_payload_types_ = video_payload_types;
   support_audio_payload_types_ = audio_payload_types;
@@ -101,7 +105,8 @@ int IceTransport::InitIceTransmission(std::string& stun_ip, int stun_port,
       this);
 
   ice_transport_controller_ = std::make_shared<IceTransportController>(
-      clock_, ice_agent_, ice_io_statistics_, enable_srtp_, video_quality_);
+      clock_, ice_agent_, ice_io_statistics_, enable_srtp_, video_quality_,
+      video_frame_rate_, video_content_type_);
 
   return 0;
 }

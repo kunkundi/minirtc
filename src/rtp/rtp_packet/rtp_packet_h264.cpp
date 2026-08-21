@@ -14,8 +14,15 @@ bool RtpPacketH264::GetFrameHeaderInfo() {
   size_t offset = 0;
 
   if (rtp::PAYLOAD_TYPE::RTX == PayloadType()) {
+    if (PayloadSize() < 2) {
+      return false;
+    }
     osn_ = frame_buffer[0] << 8 | frame_buffer[0 + 1];
     offset = 2;
+  }
+
+  if (PayloadSize() <= offset) {
+    return false;
   }
 
   fu_indicator_.forbidden_bit = (frame_buffer[0 + offset] >> 7) & 0x01;
@@ -25,6 +32,9 @@ bool RtpPacketH264::GetFrameHeaderInfo() {
   if (rtp::NAL_UNIT_TYPE::NALU == fu_indicator_.nal_unit_type) {
     add_offset_to_payload(1 + offset);
   } else if (rtp::NAL_UNIT_TYPE::FU_A == fu_indicator_.nal_unit_type) {
+    if (PayloadSize() <= offset + 1) {
+      return false;
+    }
     fu_header_.start = (frame_buffer[1 + offset] >> 7) & 0x01;
     fu_header_.end = (frame_buffer[1 + offset] >> 6) & 0x01;
     fu_header_.remain_bit = (frame_buffer[1 + offset] >> 5) & 0x01;

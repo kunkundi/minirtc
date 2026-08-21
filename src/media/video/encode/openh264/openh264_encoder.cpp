@@ -82,11 +82,10 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   }
 
   ret = openh264_encoder_->GetDefaultParams(&encoder_params_);
-  // if (codec_.mode == VideoCodecMode::kRealtimeVideo) {  //
-  encoder_params_.iUsageType = CAMERA_VIDEO_REAL_TIME;
-  // } else if (codec_.mode == VideoCodecMode::kScreensharing) {
-  // encoder_params_.iUsageType = SCREEN_CONTENT_REAL_TIME;
-  // }
+  encoder_params_.iUsageType =
+      video_content_type_ == VideoContentType::ScreenContent
+          ? SCREEN_CONTENT_REAL_TIME
+          : CAMERA_VIDEO_REAL_TIME;
 
   encoder_params_.iPicWidth = width;
   encoder_params_.iPicHeight = height;
@@ -161,6 +160,7 @@ int OpenH264Encoder::Init(const MediaCodecConfig& config) {
       ClampEncoderTargetBitrate(config.init_bitrate, max_bitrate_);
   max_payload_size_ = config.max_payload_size;
   max_fps_ = config.max_frame_rate;
+  video_content_type_ = config.video_content_type;
 
   // Create encoder.
   if (WelsCreateSVCEncoder(&openh264_encoder_) != 0) {

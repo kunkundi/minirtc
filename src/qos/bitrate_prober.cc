@@ -44,11 +44,11 @@ void BitrateProber::SetEnabled(bool enable) {
   if (enable) {
     if (probing_state_ == ProbingState::kDisabled) {
       probing_state_ = ProbingState::kInactive;
-      LOG_INFO("Bandwidth probing enabled, set to inactive");
+      LOG_DEBUG("Bandwidth probing enabled, set to inactive");
     }
   } else {
     probing_state_ = ProbingState::kDisabled;
-    LOG_INFO("Bandwidth probing disabled");
+    LOG_DEBUG("Bandwidth probing disabled");
   }
 }
 
@@ -60,7 +60,7 @@ void BitrateProber::SetAllowProbeWithoutMediaPacket(bool allow) {
 void BitrateProber::AbortProbing(const char* reason) {
   while (!clusters_.empty()) {
     const ProbeCluster& cluster = clusters_.front();
-    LOG_INFO(
+    LOG_DEBUG(
         "Probe cluster aborted: id={} reason={} actual_bytes={} "
         "actual_packets={} actual_probe_batches={} target_bytes={} "
         "target_probe_batches={}",
@@ -138,7 +138,7 @@ void BitrateProber::CreateProbeCluster(
   cluster.pace_info.probe_cluster_id = cluster_config.id;
   clusters_.push(cluster);
 
-  LOG_INFO(
+  LOG_DEBUG(
       "Probe cluster queued: id={} target_bitrate_bps={} target_bytes={} "
       "target_probe_batches={} min_probe_delta_ms={} "
       "allow_without_media={}",
@@ -252,7 +252,7 @@ void BitrateProber::ProbeSent(Timestamp now, DataSize size, int packet_count) {
     next_probe_time_ = CalculateNextProbeTime(*cluster);
     if (cluster->sent_bytes >= cluster->pace_info.probe_cluster_min_bytes &&
         cluster->sent_probes >= cluster->pace_info.probe_cluster_min_probes) {
-      LOG_INFO(
+      LOG_DEBUG(
           "Probe cluster sent: id={} actual_bitrate_bps={} actual_bytes={} "
           "actual_packets={} actual_probe_batches={} target_bitrate_bps={} "
           "target_bytes={} target_probe_batches={} duration_ms={}",

@@ -49,6 +49,7 @@ class SvtAv1Encoder : public MediaCodec {
   int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int max_payload_size_ = 1150;
   int max_fps_ = 60;
+  VideoContentType video_content_type_ = VideoContentType::ScreenContent;
   bool force_idr_ = false;
   unsigned int seq_ = 0;
 

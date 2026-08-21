@@ -33,6 +33,11 @@ class VideoToolboxEncoder : public MediaCodec {
 
   int SetTargetBitrate(int bitrate) override;
 
+  bool SupportsDynamicEncodingSpeedPriority() const override { return true; }
+
+  int SetPrioritizeEncodingSpeedOverQuality(
+      bool prioritize_speed) override;
+
   int GetResolution(int* width, int* height) const override;
 
   std::string GetEncoderName() const override;

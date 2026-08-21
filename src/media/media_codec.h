@@ -55,7 +55,8 @@ class MediaCodecConfig {
         min_frame_rate(MINIRTC_MIN_FRAME_RATE),
         max_frame_rate(MINIRTC_MAX_FRAME_RATE),
         key_frame_interval(MINIRTC_KEY_FRAME_INTERVAL),
-        max_payload_size(MINIRTC_MAX_PAYLOAD_SIZE) {}
+        max_payload_size(MINIRTC_MAX_PAYLOAD_SIZE),
+        video_content_type(VideoContentType::ScreenContent) {}
   ~MediaCodecConfig() {}
 
   int init_width;
@@ -68,6 +69,7 @@ class MediaCodecConfig {
   int max_frame_rate;
   int key_frame_interval;
   int max_payload_size;
+  VideoContentType video_content_type;
 };
 
 class MediaCodec {
@@ -117,6 +119,12 @@ class MediaCodec {
   virtual int ForceIdr() { return 0; }
 
   virtual int SetTargetBitrate(int bitrate) { return 0; }
+
+  virtual bool SupportsDynamicEncodingSpeedPriority() const { return false; }
+
+  virtual int SetPrioritizeEncodingSpeedOverQuality(bool prioritize_speed) {
+    return -1;
+  }
 
   virtual int GetResolution(int* width, int* height) const { return 0; }
 

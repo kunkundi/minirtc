@@ -135,7 +135,7 @@ std::vector<ProbeClusterConfig> ProbeController::SetBitrates(
       // estimate then initiate probing.
       if (!estimated_bitrate_.IsZero() && old_max_bitrate < max_bitrate_ &&
           estimated_bitrate_ < max_bitrate_) {
-        LOG_WARN("probing complete");
+        LOG_DEBUG("Probing complete; max bitrate increased, probe new limit");
         return InitiateProbing(at_time, {max_bitrate_}, false);
       }
       break;
@@ -180,7 +180,8 @@ std::vector<ProbeClusterConfig> ProbeController::OnMaxTotalAllocatedBitrate(
         probes.push_back(second_probe_rate);
     }
     bool allow_further_probing = limited_by_current_bwe;
-    LOG_WARN("allow_further_probing {}", allow_further_probing);
+    LOG_DEBUG("Allocation probe allow_further_probing={}",
+              allow_further_probing);
     return InitiateProbing(at_time, probes, allow_further_probing);
   }
   if (!max_total_allocated_bitrate.IsZero()) {
@@ -239,8 +240,9 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateExponentialProbing(
       max_total_allocated_bitrate_.IsZero()) {
     last_allowed_repeated_initial_probe_ =
         at_time + config_.repeated_initial_probing_time_period;
-    LOG_INFO("Repeated initial probing enabled, last allowed probe: {} now: {}",
-             last_allowed_repeated_initial_probe_.ms(), at_time.ms());
+    LOG_DEBUG(
+        "Repeated initial probing enabled, last allowed probe: {} now: {}",
+        last_allowed_repeated_initial_probe_.ms(), at_time.ms());
   }
 
   return InitiateProbing(at_time, probes, true);
@@ -272,14 +274,13 @@ std::vector<ProbeClusterConfig> ProbeController::SetEstimatedBitrate(
             ? network_estimate_->link_capacity_upper *
                   config_.further_probe_threshold
             : DataRate::PlusInfinity();
-    LOG_INFO(
-        "Measured bitrate: {} Minimum to probe further: {} upper limit: {}",
-        bitrate.bps(), min_bitrate_to_probe_further_.bps(),
-        network_state_estimate_probe_further_limit.bps());
-
     if (bitrate > min_bitrate_to_probe_further_ &&
         bitrate <= network_state_estimate_probe_further_limit) {
-      LOG_WARN("InitiateProbing SetEstimatedBitrate");
+      LOG_DEBUG(
+          "Probe estimate qualified for further probing: measured_bps={} "
+          "minimum_bps={} upper_limit_bps={}",
+          bitrate.bps(), min_bitrate_to_probe_further_.bps(),
+          network_state_estimate_probe_further_limit.bps());
       return InitiateProbing(
           at_time, {config_.further_exponential_probe_scale * bitrate}, true);
     }
@@ -333,9 +334,9 @@ std::vector<ProbeClusterConfig> ProbeController::RequestProbe(
       if (min_expected_probe_result > estimated_bitrate_ &&
           time_since_drop < kBitrateDropTimeout &&
           time_since_probe > kMinTimeBetweenAlrProbes) {
-        LOG_INFO("Detected big bandwidth drop, start probing");
+        LOG_DEBUG("Detected big bandwidth drop, start probing");
         last_bwe_drop_probing_time_ = at_time;
-        LOG_WARN("InitiateProbing RequestProbe");
+        LOG_DEBUG("Initiate probing after bandwidth drop");
         return InitiateProbing(at_time, {suggested_probe}, false);
       }
     }
@@ -423,8 +424,10 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
   if (at_time - time_last_probing_initiated_ >
       kMaxWaitingTimeForProbingResult) {
     if (state_ == State::kWaitingForProbingResult) {
-      LOG_WARN(
-          "Probe result timed out: reason=no_valid_feedback elapsed_ms={}",
+      LOG_DEBUG(
+          "Probe did not qualify for further probing: measured_bps={} "
+          "minimum_bps={} elapsed_ms={}",
+          estimated_bitrate_.bps(), min_bitrate_to_probe_further_.bps(),
           (at_time - time_last_probing_initiated_).ms());
       UpdateState(State::kProbingComplete);
     }
@@ -466,7 +469,7 @@ ProbeClusterConfig ProbeController::CreateProbeClusterConfig(Timestamp at_time,
   config.target_probe_count = config_.min_probe_packets_sent;
   config.id = next_probe_cluster_id_;
   next_probe_cluster_id_++;
-  LOG_INFO(
+  LOG_DEBUG(
       "Probe cluster created: id={} target_bitrate_bps={} target_bytes={} "
       "target_probe_batches={} duration_ms={} min_probe_delta_ms={}",
       config.id, config.target_data_rate.bps(),
@@ -512,8 +515,8 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
     case BandwidthLimitedCause::kRttBasedBackOffHighRtt:
     case BandwidthLimitedCause::kDelayBasedLimitedDelayIncreased:
     case BandwidthLimitedCause::kLossLimitedBwe:
-      LOG_INFO("Not sending probe in bandwidth limited state {}",
-               static_cast<int>(bandwidth_limited_cause_));
+      LOG_DEBUG("Not sending probe in bandwidth limited state {}",
+                static_cast<int>(bandwidth_limited_cause_));
       return {};
     case BandwidthLimitedCause::kLossLimitedBweIncreasing:
       max_probe_bitrate =

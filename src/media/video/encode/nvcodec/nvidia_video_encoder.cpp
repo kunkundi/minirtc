@@ -54,6 +54,10 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
       config.average_bitrate, static_cast<int>(max_bitrate_));
   max_fps_ = config.max_frame_rate;
   max_payload_size_ = config.max_payload_size;
+  tuning_info_ =
+      config.video_content_type == VideoContentType::ScreenContent
+          ? NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY
+          : NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
 
   CudaInitializer::Init();
   int num_of_gpu = 0;

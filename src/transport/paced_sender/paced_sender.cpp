@@ -27,9 +27,14 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
       last_call_time_(webrtc::Timestamp::Millis(0)),
       task_queue_pacer_(task_queue) {}
 
-PacedSender::~PacedSender() { is_shutdown_ = true; }
+PacedSender::~PacedSender() { Shutdown(); }
+
+void PacedSender::Shutdown() { is_shutdown_.store(true); }
 
 void PacedSender::RunOrPost(AnyInvocable<void()> task) {
+  if (is_shutdown_.load()) {
+    return;
+  }
   if (task_queue_pacer_->IsCurrent()) {
     task();
     return;
@@ -40,7 +45,8 @@ void PacedSender::RunOrPost(AnyInvocable<void()> task) {
 }
 
 void PacedSender::SetOnSentPacketFunc(
-    std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>)>
+    std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>,
+                       const webrtc::PacedPacketInfo&)>
         on_sent_packet_func) {
   RunOrPost([this, on_sent_packet_func = std::move(on_sent_packet_func)]()
                 mutable {
@@ -60,6 +66,9 @@ void PacedSender::SetGeneratePaddingFunc(
 std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
 PacedSender::GeneratePadding(webrtc::DataSize size) {
   std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> to_send_rtp_packets;
+  if (is_shutdown_.load()) {
+    return to_send_rtp_packets;
+  }
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
       generat_padding_func_(size.bytes(), clock_->CurrentTime().ms());
   for (auto &packet : rtp_packets) {
@@ -267,7 +276,7 @@ void PacedSender::MaybeScheduleProcessPackets() {
 
 void PacedSender::MaybeProcessPackets(
     webrtc::Timestamp scheduled_process_time) {
-  if (is_shutdown_ || !is_started_ || !transport_ready_) {
+  if (is_shutdown_.load() || !is_started_ || !transport_ready_) {
     return;
   }
 
@@ -293,7 +302,8 @@ void PacedSender::MaybeProcessPackets(
           : webrtc::TimeDelta::Zero();
 
   // Process packets and update stats.
-  while (next_send_time <= now + early_execute_margin) {
+  while (!is_shutdown_.load() &&
+         next_send_time <= now + early_execute_margin) {
     pacing_controller_.ProcessPackets();
     next_send_time = pacing_controller_.NextSendTime();
 
@@ -302,6 +312,10 @@ void PacedSender::MaybeProcessPackets(
         pacing_controller_.IsProbing()
             ? webrtc::PacingController::kMaxEarlyProbeProcessing
             : webrtc::TimeDelta::Zero();
+  }
+
+  if (is_shutdown_.load()) {
+    return;
   }
 
   UpdateStats();

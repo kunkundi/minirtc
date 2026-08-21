@@ -23,6 +23,7 @@ class VideoToolboxEncoder::Impl {
   int Encode(const RawFrame& raw_frame, function<int(const EncodedFrame&)> on_encoded_image);
   int ForceIdr();
   int SetTargetBitrate(int bitrate);
+  int SetPrioritizeEncodingSpeedOverQuality(bool prioritize_speed);
   int GetResolution(int* width, int* height);
   std::string GetEncoderName() { return "VideoToolboxH264"; }
 
@@ -30,6 +31,8 @@ class VideoToolboxEncoder::Impl {
   int CreateCompressionSession(int width, int height, VTCompressionSessionRef* session_out);
   int ResetEncodeResolution(int width, int height);
   int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate);
+  int ApplyEncodingSpeedPriority(VTCompressionSessionRef session,
+                                 bool prioritize_speed);
   void ResetCodecState();
 
   static void CompressionOutputCallback(void* outputCallbackRefCon, void* sourceFrameRefCon,
@@ -46,6 +49,7 @@ class VideoToolboxEncoder::Impl {
   int keyframe_interval_ = 30;
   int seq_ = 0;
   int ref_buffer_count_ = 3;
+  bool prioritize_encoding_speed_ = false;
   std::atomic<bool> force_idr_ = false;
 
   VTCompressionSessionRef session_ = nullptr;
@@ -96,6 +100,8 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   lock_guard<mutex> guard(lock_);
   max_fps_ = config.max_frame_rate;
   max_bitrate_ = config.max_bitrate;
+  prioritize_encoding_speed_ =
+      config.video_content_type != VideoContentType::ScreenContent;
   average_bitrate_ =
       ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_);
   keyframe_interval_ = config.key_frame_interval;
@@ -160,8 +166,7 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
 
   // kVTCompressionPropertyKey_MinAllowedFrameQP/kVTCompressionPropertyKey_MaxAllowedFrameQP
 
-  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
-                       kCFBooleanTrue);
+  ApplyEncodingSpeedPriority(new_session, prioritize_encoding_speed_);
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MoreFramesBeforeStart,
                        kCFBooleanFalse);
@@ -268,6 +273,24 @@ int VideoToolboxEncoder::Impl::ApplyBitrateProperties(VTCompressionSessionRef se
     return -1;
   }
 
+  return 0;
+}
+
+int VideoToolboxEncoder::Impl::ApplyEncodingSpeedPriority(
+    VTCompressionSessionRef session, bool prioritize_speed) {
+  if (!session) {
+    return -1;
+  }
+
+  OSStatus status = VTSessionSetProperty(
+      session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
+      prioritize_speed ? kCFBooleanTrue : kCFBooleanFalse);
+  if (status != noErr) {
+    LOG_WARN(
+        "Failed to set VideoToolbox encoding speed priority: enabled={} status={}",
+        prioritize_speed, status);
+    return -1;
+  }
   return 0;
 }
 
@@ -396,6 +419,25 @@ int VideoToolboxEncoder::Impl::SetTargetBitrate(int bitrate) {
   if (ApplyBitrateProperties(session_, average_bitrate_) != 0) {
     return -1;
   }
+  return 0;
+}
+
+int VideoToolboxEncoder::Impl::SetPrioritizeEncodingSpeedOverQuality(
+    bool prioritize_speed) {
+  lock_guard<mutex> guard(lock_);
+  if (!session_) {
+    return -1;
+  }
+  if (prioritize_encoding_speed_ == prioritize_speed) {
+    return 0;
+  }
+  if (ApplyEncodingSpeedPriority(session_, prioritize_speed) != 0) {
+    return -1;
+  }
+
+  prioritize_encoding_speed_ = prioritize_speed;
+  LOG_INFO("VideoToolbox encoding speed priority [{}]",
+           prioritize_speed ? "ON" : "OFF");
   return 0;
 }
 
@@ -531,6 +573,11 @@ int VideoToolboxEncoder::Encode(const RawFrame& raw_frame,
 int VideoToolboxEncoder::ForceIdr() { return impl_->ForceIdr(); }
 
 int VideoToolboxEncoder::SetTargetBitrate(int bitrate) { return impl_->SetTargetBitrate(bitrate); }
+
+int VideoToolboxEncoder::SetPrioritizeEncodingSpeedOverQuality(
+    bool prioritize_speed) {
+  return impl_->SetPrioritizeEncodingSpeedOverQuality(prioritize_speed);
+}
 
 int VideoToolboxEncoder::GetResolution(int* width, int* height) const {
   return impl_->GetResolution(width, height);

@@ -21,7 +21,8 @@ namespace minirtc {
 IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp,
-    VideoQuality video_quality)
+    VideoQuality video_quality, int video_frame_rate,
+    VideoContentType video_content_type)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
@@ -37,11 +38,16 @@ IceTransportController::IceTransportController(
       hardware_acceleration_(false),
       is_running_(true),
       congestion_window_size_(DataSize::PlusInfinity()) {
+  media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
+  media_config_.video_content_type = video_content_type;
   SetPeriod(std::chrono::milliseconds(25));
   SetThreadName("IceTransportController");
 }
 
 IceTransportController::~IceTransportController() {
+  if (paced_sender_) {
+    paced_sender_->Shutdown();
+  }
   if (task_queue_cc_) {
     task_queue_cc_->Stop();
   }
@@ -107,7 +113,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   paced_sender_->SetAllowProbeWithoutMediaPacket(false);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
   paced_sender_->SetOnSentPacketFunc(
-      [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+      [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet,
+                  const webrtc::PacedPacketInfo& pacing_info) {
         if (auto self = weak_this.lock()) {
           if (self->ice_agent_) {
             webrtc::Timestamp now = self->webrtc_clock_->CurrentTime();
@@ -135,7 +142,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                      packet->Size());
             }
 
-            self->OnSentPacket(*packet);
+            self->OnSentPacket(*packet, pacing_info);
 
             if (packet->packet_type().has_value()) {
               switch (packet->packet_type().value()) {
@@ -191,7 +198,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
         }
       });
 
-  resolution_adapter_ = std::make_unique<ResolutionAdapter>(video_quality_);
+  resolution_adapter_ = std::make_unique<ResolutionAdapter>(
+      video_quality_, media_config_.max_frame_rate,
+      media_config_.video_content_type);
 
   {
     std::shared_lock lock(stream_senders_mutex_);
@@ -236,6 +245,10 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 
 void IceTransportController::Destroy() {
   is_running_.store(false);
+
+  if (paced_sender_) {
+    paced_sender_->Shutdown();
+  }
 
   if (task_queue_cc_) {
     task_queue_cc_->Stop();
@@ -651,6 +664,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   constexpr int kUpgradeStreak = 15;
   constexpr int kUpgradeCooldownMs = 5000;
   constexpr int kDowngradeCooldownMs = 3000;
+  const int restore_quality_streak =
+      std::max(30, media_config_.max_frame_rate * 3);
 
   if (!is_running_.load()) return;
 
@@ -658,50 +673,114 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   if (!is_running_.load()) return;
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) return;
-  auto& ctx = it->second;
+  std::shared_ptr<StreamContext> context = it->second;
 
   if (queue_delay_ms >= kDelayThresholdMs) {
-    ++ctx->encode_exceed_count;
-    ctx->encode_below_threshold_count = 0;
+    ++context->encode_exceed_count;
+    context->encode_below_threshold_count = 0;
   } else {
-    ctx->encode_exceed_count = 0;
-    ++ctx->encode_below_threshold_count;
+    context->encode_exceed_count = 0;
+    ++context->encode_below_threshold_count;
+  }
+
+  auto set_encoding_speed_priority =
+      [&](bool prioritize_speed) -> std::optional<bool> {
+    std::shared_ptr<MediaCodec> codec = context->codec;
+    lock.unlock();
+    const int result =
+        codec ? codec->SetPrioritizeEncodingSpeedOverQuality(prioritize_speed)
+              : -1;
+    lock.lock();
+
+    auto current = stream_senders_.find(channel_name);
+    if (!is_running_.load() || current == stream_senders_.end() ||
+        current->second != context || context->codec != codec) {
+      return std::nullopt;
+    }
+    if (result != 0) {
+      return false;
+    }
+
+    context->encoding_speed_priority_enabled = prioritize_speed;
+    context->encode_exceed_count = 0;
+    context->encode_below_threshold_count = 0;
+    return true;
+  };
+
+  if (context->encoding_speed_priority_enabled &&
+      context->encode_below_threshold_count >= restore_quality_streak) {
+    const std::optional<bool> changed = set_encoding_speed_priority(false);
+    if (!changed.has_value()) {
+      return;
+    }
+    if (changed.value()) {
+      LOG_INFO(
+          "Encoding queue recovered; restore quality priority: channel={}",
+          channel_name);
+    } else {
+      // Avoid retrying an unsupported runtime property on every frame.
+      context->encode_below_threshold_count = 0;
+    }
+    return;
+  }
+
+  if (!context->encoding_speed_priority_enabled &&
+      context->encode_exceed_count >= kDowngradeStreak && context->codec &&
+      media_config_.video_content_type == VideoContentType::ScreenContent &&
+      context->codec->SupportsDynamicEncodingSpeedPriority()) {
+    const std::optional<bool> changed = set_encoding_speed_priority(true);
+    if (!changed.has_value()) {
+      return;
+    }
+    if (changed.value()) {
+      LOG_INFO(
+          "Encoding queue backlog; enable speed priority: channel={} delay_ms={}",
+          channel_name, queue_delay_ms);
+      return;
+    }
+    // If the encoder rejects the property, fall through to the existing
+    // resolution downgrade instead of repeatedly delaying adaptation.
   }
 
   auto base = [&]() -> std::pair<int, int> {
-    if (ctx->target_width && ctx->target_height)
-      return {*ctx->target_width, *ctx->target_height};
+    if (context->target_width && context->target_height)
+      return {*context->target_width, *context->target_height};
     return {(int)encoded_w, (int)encoded_h};
   };
 
   // Upgrade
-  if (ctx->encode_exceed_count < kDowngradeStreak) {
-    if (ctx->freeze_resolution || !ctx->target_width || !ctx->target_height ||
-        ctx->encode_below_threshold_count < kUpgradeStreak)
+  if (context->encode_exceed_count < kDowngradeStreak) {
+    // Restore the normal quality mode before attempting a resolution upgrade.
+    if (context->encoding_speed_priority_enabled ||
+        context->freeze_resolution || !context->target_width ||
+        !context->target_height ||
+        context->encode_below_threshold_count < kUpgradeStreak)
       return;
     auto [bw, bh] = base();
     int64_t now = clock_->CurrentTimeMs();
-    if (now - ctx->last_resolution_change_ms < kUpgradeCooldownMs) return;
+    if (now - context->last_resolution_change_ms < kUpgradeCooldownMs) return;
 
     auto [nw, nh] = resolution_adapter_
                         ? resolution_adapter_->GetNextHigherResolution(
-                              bw, bh, ctx->source_width, ctx->source_height)
+                              bw, bh, context->source_width,
+                              context->source_height)
                         : std::pair<int, int>{-1, -1};
     if (nw <= 0 || nh <= 0) return;
 
-    if (ctx->mapped_target_width && ctx->mapped_target_height &&
-        nw * nh > *ctx->mapped_target_width * *ctx->mapped_target_height) {
-      nw = *ctx->mapped_target_width;
-      nh = *ctx->mapped_target_height;
+    if (context->mapped_target_width && context->mapped_target_height &&
+        nw * nh > *context->mapped_target_width *
+                      *context->mapped_target_height) {
+      nw = *context->mapped_target_width;
+      nh = *context->mapped_target_height;
     }
     if (nw * nh <= bw * bh) return;
 
     LOG_INFO("Resolution upgrade: channel={} {}x{} -> {}x{}", channel_name, bw,
              bh, nw, nh);
-    ctx->target_width = nw;
-    ctx->target_height = nh;
-    ctx->encode_below_threshold_count = 0;
-    ctx->last_resolution_change_ms = now;
+    context->target_width = nw;
+    context->target_height = nh;
+    context->encode_below_threshold_count = 0;
+    context->last_resolution_change_ms = now;
     FullIntraRequest(channel_name);
     return;
   }
@@ -709,27 +788,28 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   // Downgrade
   auto [bw, bh] = base();
   int64_t now = clock_->CurrentTimeMs();
-  if (ctx->last_resolution_change_ms > 0 &&
-      now - ctx->last_resolution_change_ms < kDowngradeCooldownMs) {
-    ctx->encode_exceed_count = 0;
+  if (context->last_resolution_change_ms > 0 &&
+      now - context->last_resolution_change_ms < kDowngradeCooldownMs) {
+    context->encode_exceed_count = 0;
     return;
   }
 
   auto [nw, nh] = resolution_adapter_
                       ? resolution_adapter_->GetNextLowerResolution(
-                            bw, bh, ctx->source_width, ctx->source_height)
+                            bw, bh, context->source_width,
+                            context->source_height)
                       : std::pair<int, int>{-1, -1};
   if (nw <= 0 || nh <= 0) {
-    ctx->encode_exceed_count = 0;
+    context->encode_exceed_count = 0;
     return;
   }
 
   LOG_INFO("Resolution downgrade: channel={} {}x{} -> {}x{}", channel_name, bw,
            bh, nw, nh);
-  ctx->target_width = nw;
-  ctx->target_height = nh;
-  ctx->last_resolution_change_ms = now;
-  ctx->encode_exceed_count = 0;
+  context->target_width = nw;
+  context->target_height = nh;
+  context->last_resolution_change_ms = now;
+  context->encode_exceed_count = 0;
   FullIntraRequest(channel_name);
 }
 
@@ -1407,9 +1487,9 @@ void IceTransportController::OnReceiveNack(
 }
 
 void IceTransportController::OnSentPacket(
-    const webrtc::RtpPacketToSend& packet) {
-  task_queue_trans_fb_->PostTask([this, packet]() mutable {
-    webrtc::PacedPacketInfo pacing_info;
+    const webrtc::RtpPacketToSend& packet,
+    const webrtc::PacedPacketInfo& pacing_info) {
+  task_queue_trans_fb_->PostTask([this, packet, pacing_info]() mutable {
     size_t transport_overhead_bytes_per_packet_ = 0;
     int64_t send_time_ms = clock_->CurrentTimeMs();
     webrtc::Timestamp creation_time = webrtc::Timestamp::Millis(send_time_ms);
@@ -1483,12 +1563,10 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                    ? target_bitrate_
                    : update.target_rate->target_rate.bps())
             : target_bitrate_;
-    const bool target_bitrate_changed =
-        available_transport_bitrate_ != target_bitrate_;
     target_bitrate_ = available_transport_bitrate_;
 
-    std::shared_lock lock(stream_senders_mutex_);
-    if (target_bitrate_changed && !stream_senders_.empty()) {
+    std::unique_lock lock(stream_senders_mutex_);
+    if (!stream_senders_.empty()) {
       // Count active video and data channels separately
       int video_count = 0;
       int data_count = 0;
@@ -1507,81 +1585,193 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
 
       // Allocate bandwidth: reserve 10% for all data channels
       // The rest goes to video channels
-      int64_t data_bitrate_total = 0;
       int64_t video_bitrate_total = available_transport_bitrate_;
 
       if (data_count > 0) {
         // All data channels together use 10% of total bandwidth
-        data_bitrate_total =
-            static_cast<int64_t>(available_transport_bitrate_ * 0.1);
-        video_bitrate_total = available_transport_bitrate_ - data_bitrate_total;
+        video_bitrate_total =
+            static_cast<int64_t>(available_transport_bitrate_ * 0.9);
       }
 
       // Allocate bandwidth to video channels
       if (video_count > 0) {
         int sub_target_bitrate = video_bitrate_total / video_count;
-        bool freeze_resolution = false;
-        if (update.target_rate.has_value()) {
-          auto& ne = update.target_rate->network_estimate;
-          freeze_resolution =
-              ne.in_alr && ne.loss_rate_ratio <= 0.01f &&
-              ne.round_trip_time <= webrtc::TimeDelta::Millis(40);
-        }
-        if (freeze_resolution) {
-          LOG_INFO(
-              "Freeze resolution due to ALR: target_bps={} rtt_ms={} loss={}",
-              available_transport_bitrate_,
-              update.target_rate->network_estimate.round_trip_time.ms(),
-              update.target_rate->network_estimate.loss_rate_ratio);
-        }
+        const auto& network_estimate = update.target_rate->network_estimate;
+        const bool is_screen_content =
+            media_config_.video_content_type ==
+            VideoContentType::ScreenContent;
+        const bool static_content_network_healthy =
+            network_estimate.loss_rate_ratio <= 0.01f &&
+            network_estimate.round_trip_time <=
+                webrtc::TimeDelta::Millis(40);
+        const bool static_content_candidate =
+            is_screen_content && network_estimate.in_alr &&
+            static_content_network_healthy;
+        constexpr int64_t kStaticContentEnterHoldMs = 1000;
+        constexpr int64_t kStaticContentExitHoldMs = 3000;
         for (auto& [channel_name, context] : stream_senders_) {
-          if (context->codec && context->type == StreamType::kVideo) {
-            if (freeze_resolution) {
-              context->freeze_resolution = true;
-              if (context->target_width.has_value() &&
-                  context->target_height.has_value()) {
-                LOG_INFO("Channel [{}] freeze: clear res_map {}x{}",
-                         channel_name, context->target_width.value(),
-                         context->target_height.value());
+          if (!context->codec || context->type != StreamType::kVideo) {
+            continue;
+          }
+
+          int source_width = context->source_width;
+          int source_height = context->source_height;
+          if ((source_width <= 0 || source_height <= 0) &&
+              context->codec->GetResolution(&source_width, &source_height) !=
+                  0) {
+            continue;
+          }
+
+          const int64_t now_ms = clock_->CurrentTimeMs();
+          const bool was_frozen = context->freeze_resolution;
+          if (!context->static_content_candidate_initialized ||
+              context->static_content_candidate != static_content_candidate) {
+            context->static_content_candidate = static_content_candidate;
+            context->static_content_candidate_initialized = true;
+            context->static_content_candidate_since_ms = now_ms;
+          }
+
+          const int64_t candidate_duration_ms =
+              now_ms - context->static_content_candidate_since_ms;
+          if (!context->freeze_resolution && static_content_candidate &&
+              candidate_duration_ms >= kStaticContentEnterHoldMs) {
+            context->freeze_resolution = true;
+          } else if (context->freeze_resolution &&
+                     (!is_screen_content ||
+                      !static_content_network_healthy)) {
+            // Loss or RTT deterioration must override the ALR exit hold so
+            // congestion adaptation is never delayed by the quality policy.
+            context->freeze_resolution = false;
+          } else if (context->freeze_resolution &&
+                     !static_content_candidate &&
+                     candidate_duration_ms >= kStaticContentExitHoldMs) {
+            context->freeze_resolution = false;
+          }
+
+          // Do not apply a bandwidth downgrade while static-content entry is
+          // being confirmed. This avoids a downgrade immediately followed by
+          // a quality restoration and a forced key frame.
+          if (!context->freeze_resolution && static_content_candidate) {
+            continue;
+          }
+
+          if (context->freeze_resolution) {
+            // Static desktop content can use the selected quality ceiling even
+            // when its instantaneous bitrate is low. Still respect Low/Medium
+            // caps instead of unconditionally restoring the native resolution.
+            int quality_width = -1;
+            int quality_height = -1;
+            if (resolution_adapter_->GetResolution(
+                    std::numeric_limits<int>::max(), source_width,
+                    source_height, &quality_width, &quality_height) != 0) {
+              continue;
+            }
+
+            context->mapped_target_width = quality_width;
+            context->mapped_target_height = quality_height;
+            context->pending_mapped_width.reset();
+            context->pending_mapped_height.reset();
+            context->mapping_stability_count = 0;
+
+            const bool use_native =
+                static_cast<int64_t>(quality_width) * quality_height >=
+                static_cast<int64_t>(source_width) * source_height;
+            const bool target_changed =
+                use_native
+                    ? context->target_width.has_value()
+                    : (!context->target_width.has_value() ||
+                       !context->target_height.has_value() ||
+                       context->target_width.value() != quality_width ||
+                       context->target_height.value() != quality_height);
+            if (target_changed) {
+              if (use_native) {
                 context->target_width.reset();
                 context->target_height.reset();
+              } else {
+                context->target_width = quality_width;
+                context->target_height = quality_height;
               }
-            } else {
-              context->freeze_resolution = false;
-              int width, height, target_width, target_height;
-              if (!context->codec->GetResolution(&width, &height)) {
-                if (0 == resolution_adapter_->GetResolution(
-                             sub_target_bitrate, width, height, &target_width,
-                             &target_height)) {
-                  // Bitrate mapping must be stable for 5 ticks
-                  const int kStableThreshold = 5;
-                  if (!context->pending_mapped_width.has_value() ||
-                      !context->pending_mapped_height.has_value() ||
-                      context->pending_mapped_width.value() != target_width ||
-                      context->pending_mapped_height.value() != target_height) {
-                    context->pending_mapped_width = target_width;
-                    context->pending_mapped_height = target_height;
-                    context->mapping_stability_count = 1;
-                  } else {
-                    context->mapping_stability_count += 1;
-                  }
-                  int64_t now_ms = clock_->CurrentTimeMs();
-                  // 5s cooldown for bitrate-mapped resolution
-                  const int kMinIntervalMs = 5000;
-                  if (context->mapping_stability_count >= kStableThreshold &&
-                      (now_ms - context->last_resolution_change_ms >=
-                       kMinIntervalMs)) {
-                    context->mapped_target_width = target_width;
-                    context->mapped_target_height = target_height;
-                    context->mapping_stability_count = 0;
-                  }
-                } else if (context->target_width.has_value() &&
-                           context->target_height.has_value()) {
-                  context->target_width.reset();
-                  context->target_height.reset();
-                }
-              }
+              context->last_resolution_change_ms = now_ms;
+              LOG_INFO(
+                  "Static-content resolution: channel={} target={}x{} native={}x{}",
+                  channel_name, use_native ? source_width : quality_width,
+                  use_native ? source_height : quality_height, source_width,
+                  source_height);
+              FullIntraRequest(channel_name);
+            } else if (!was_frozen) {
+              LOG_INFO("Freeze resolution for static content: channel={}",
+                       channel_name);
             }
+            continue;
+          }
+
+          if (was_frozen) {
+            LOG_INFO(
+                "Leave static-content resolution hold: channel={} reason={}",
+                channel_name,
+                !is_screen_content
+                    ? "content_type"
+                    : (!static_content_network_healthy
+                           ? "network_conditions"
+                           : "alr_exit_hysteresis"));
+            context->pending_mapped_width.reset();
+            context->pending_mapped_height.reset();
+            context->mapping_stability_count = 0;
+          }
+
+          int target_width = -1;
+          int target_height = -1;
+          if (resolution_adapter_->GetResolution(
+                  sub_target_bitrate, source_width, source_height,
+                  &target_width, &target_height) != 0) {
+            continue;
+          }
+
+          // Require a short stable streak before accepting a new bandwidth
+          // ceiling. Bandwidth-driven downgrades are then applied directly;
+          // upgrades remain gradual through the encode-time adaptation path.
+          constexpr int kStableThreshold = 5;
+          if (!context->pending_mapped_width.has_value() ||
+              !context->pending_mapped_height.has_value() ||
+              context->pending_mapped_width.value() != target_width ||
+              context->pending_mapped_height.value() != target_height) {
+            context->pending_mapped_width = target_width;
+            context->pending_mapped_height = target_height;
+            context->mapping_stability_count = 1;
+            continue;
+          }
+
+          ++context->mapping_stability_count;
+          if (context->mapping_stability_count < kStableThreshold) {
+            continue;
+          }
+
+          context->mapped_target_width = target_width;
+          context->mapped_target_height = target_height;
+          context->mapping_stability_count = 0;
+
+          const int current_width =
+              context->target_width.value_or(source_width);
+          const int current_height =
+              context->target_height.value_or(source_height);
+          const int64_t current_area =
+              static_cast<int64_t>(current_width) * current_height;
+          const int64_t target_area =
+              static_cast<int64_t>(target_width) * target_height;
+          constexpr int kNetworkDowngradeCooldownMs = 1000;
+          if (target_area < current_area &&
+              now_ms - context->last_resolution_change_ms >=
+                  kNetworkDowngradeCooldownMs) {
+            LOG_INFO(
+                "Bandwidth resolution downgrade: channel={} bitrate={} {}x{} -> {}x{}",
+                channel_name, sub_target_bitrate, current_width,
+                current_height, target_width, target_height);
+            context->target_width = target_width;
+            context->target_height = target_height;
+            context->last_resolution_change_ms = now_ms;
+            context->encode_exceed_count = 0;
+            context->encode_below_threshold_count = 0;
+            FullIntraRequest(channel_name);
           }
         }
       }

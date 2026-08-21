@@ -18,7 +18,9 @@ namespace minirtc {
 
 class ResolutionAdapter {
  public:
-  ResolutionAdapter(VideoQuality video_quality);
+  ResolutionAdapter(VideoQuality video_quality, int video_frame_rate,
+                    VideoContentType video_content_type =
+                        VideoContentType::ScreenContent);
   ~ResolutionAdapter();
 
  public:
@@ -50,9 +52,15 @@ class ResolutionAdapter {
 
   int GetMaxPixelsForQuality() const;
 
+  float GetBitrateCoefficient() const;
+
+  float GetBitrateAlpha() const;
+
  private:
   std::vector<uint8_t> tmp_buffer_;
   VideoQuality video_quality_;
+  int video_frame_rate_;
+  VideoContentType video_content_type_;
 };
 }  // namespace minirtc
 

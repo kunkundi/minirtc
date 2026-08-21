@@ -212,13 +212,14 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MODE_COST_UPD_FREQ, 2);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_MV_COST_UPD_FREQ, 3);
 
-  // if (codec_settings->mode == VideoCodecMode::kScreensharing) {
-  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_TUNE_CONTENT,
-  //                                     AOM_CONTENT_SCREEN);
-  //   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PALETTE, 1);
-  // } else {
-  // SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_PALETTE, 0);
-  // }
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(
+      AV1E_SET_TUNE_CONTENT,
+      config.video_content_type == VideoContentType::ScreenContent
+          ? AOM_CONTENT_SCREEN
+          : AOM_CONTENT_DEFAULT);
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(
+      AV1E_SET_ENABLE_PALETTE,
+      config.video_content_type == VideoContentType::ScreenContent ? 1 : 0);
 
   // if (aom_av1_encoder_config_.g_threads == 8) {
   //   // Values passed to AV1E_SET_TILE_ROWS and AV1E_SET_TILE_COLUMNS are

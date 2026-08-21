@@ -7,6 +7,7 @@
 #ifndef _PACED_SENDER__H_
 #define _PACED_SENDER__H_
 
+#include <atomic>
 #include <memory>
 #include <mutex>
 
@@ -49,16 +50,22 @@ class PacedSender : public webrtc::RtpPacketPacer,
 
  public:
   void SetOnSentPacketFunc(
-      std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>)>
+      std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>,
+                         const webrtc::PacedPacketInfo&)>
           on_sent_packet_func);
 
   void SetGeneratePaddingFunc(
       std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
           generat_padding_func);
 
+  void Shutdown();
+
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
                   const webrtc::PacedPacketInfo& cluster_info) override {
+    if (is_shutdown_.load()) {
+      return;
+    }
     if (on_sent_packet_func_) {
       if (ssrc_seq_.find(packet->Ssrc()) == ssrc_seq_.end()) {
         ssrc_seq_[packet->Ssrc()] = 1;
@@ -66,7 +73,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
 
       packet->UpdateSequenceNumber(ssrc_seq_[packet->Ssrc()]++);
 
-      on_sent_packet_func_(std::move(packet));
+      on_sent_packet_func_(std::move(packet), cluster_info);
     }
   }
   // Should be called after each call to SendPacket().
@@ -193,7 +200,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
  private:
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   webrtc::PacingController pacing_controller_;
-  std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>)>
+  std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>,
+                     const webrtc::PacedPacketInfo&)>
       on_sent_packet_func_ = nullptr;
 
   std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
@@ -221,7 +229,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // Indicates if this task queue is shutting down. If so, don't allow
   // posting any more delayed tasks as that can cause the task queue to
   // never drain.
-  bool is_shutdown_;
+  std::atomic<bool> is_shutdown_;
 
   // Filtered size of enqueued packets, in bytes.
   rtc::ExpFilter packet_size_;

@@ -106,6 +106,7 @@ int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
   max_fps_ = config.max_frame_rate;
   key_frame_interval_ = config.key_frame_interval;
   max_payload_size_ = config.max_payload_size;
+  video_content_type_ = config.video_content_type;
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +
@@ -176,10 +177,11 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.max_qp_allowed = 60;
   enc_config_.min_qp_allowed = 10;
   enc_config_.intra_period_length = key_frame_interval_;
+  enc_config_.screen_content_mode =
+      video_content_type_ == VideoContentType::ScreenContent ? 1 : 0;
   // enc_config_.intra_refresh_type = SVT_AV1_KF_REFRESH;
   enc_config_.level = 52;
   // enc_config_.qp = 63;
-  // enc_config_.screen_content_mode = 1;
   // enc_config_.sframe_dist = key_frame_interval_;
 
   ret = svt_av1_enc_set_parameter(svt_av1_encoder_, &enc_config_);

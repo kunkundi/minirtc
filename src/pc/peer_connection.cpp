@@ -64,6 +64,30 @@ bool IsValidTurnMode(TurnMode mode) {
   return mode >= TurnMode::TurnDisabled && mode <= TurnMode::TurnForceTcp;
 }
 
+int NormalizeVideoFrameRate(int frame_rate) {
+  return frame_rate == 30 ? 30 : 60;
+}
+
+VideoContentType ParseVideoContentType(const std::string& value) {
+  if (value == "realtime_video") {
+    return VideoContentType::RealtimeVideo;
+  }
+  if (value != "screen_content") {
+    LOG_WARN("Invalid video content type [{}], using screen_content", value);
+  }
+  return VideoContentType::ScreenContent;
+}
+
+VideoContentType NormalizeVideoContentType(VideoContentType value) {
+  if (value == VideoContentType::RealtimeVideo ||
+      value == VideoContentType::ScreenContent) {
+    return value;
+  }
+  LOG_WARN("Invalid video content type [{}], using screen_content",
+           static_cast<int>(value));
+  return VideoContentType::ScreenContent;
+}
+
 const char* TurnModeToString(TurnMode mode) {
   switch (mode) {
     case TurnMode::TurnDisabled:
@@ -138,7 +162,10 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_turn_mode_ = reader.Get("turn mode", "mode", "");
     cfg_enable_turn_ = reader.Get("enable turn", "turn_on", "false");
     cfg_enable_srtp_ = reader.Get("enable srtp", "turn_on", "true");
+    cfg_video_content_type_ =
+        reader.Get("video content type", "type", "screen_content");
     cfg_video_quality_ = reader.Get("video quality", "quality", "high");
+    cfg_video_frame_rate_ = reader.Get("video frame rate", "fps", "60");
 
     std::regex regex("\n");
 
@@ -151,6 +178,9 @@ int PeerConnection::Init(PeerConnectionParams params) {
     av1_encoding_ = cfg_av1_encoding_ == "true" ? true : false;
     turn_mode_ = ParseTurnMode(cfg_turn_mode_, cfg_enable_turn_ == "true");
     enable_srtp_ = cfg_enable_srtp_ == "true" ? true : false;
+    video_content_type_ = ParseVideoContentType(cfg_video_content_type_);
+    video_frame_rate_ =
+        NormalizeVideoFrameRate(std::stoi(cfg_video_frame_rate_));
     if (cfg_video_quality_ == "low") {
       video_quality_ = VideoQuality::QualityLow;
     } else if (cfg_video_quality_ == "medium") {
@@ -177,7 +207,9 @@ int PeerConnection::Init(PeerConnectionParams params) {
       turn_mode_ = TurnMode::TurnDisabled;
     }
     enable_srtp_ = params.enable_srtp;
+    video_content_type_ = NormalizeVideoContentType(params.video_content_type);
     video_quality_ = params.video_quality;
+    video_frame_rate_ = NormalizeVideoFrameRate(params.video_frame_rate);
 
     cfg_signal_server_port_ = std::to_string(signal_server_port_);
     cfg_stun_server_port_ = std::to_string(stun_server_port_);
@@ -195,8 +227,10 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_info_.reliable_ice = reliable_ice_;
   connection_info_.turn_mode = turn_mode_;
   connection_info_.enable_srtp = enable_srtp_;
+  connection_info_.video_content_type = video_content_type_;
   connection_info_.av1_encoding = av1_encoding_;
   connection_info_.video_quality = video_quality_;
+  connection_info_.video_frame_rate = video_frame_rate_;
 
   LOG_INFO("Read config success, use configure file [{}]", params.use_cfg_file);
 
@@ -216,6 +250,11 @@ int PeerConnection::Init(PeerConnectionParams params) {
   LOG_INFO("Hardware accelerated codec [{}]",
            hardware_acceleration_ ? "ON" : "OFF");
   LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
+  LOG_INFO("Video frame rate [{} fps]", video_frame_rate_);
+  LOG_INFO("Video content type [{}]",
+           video_content_type_ == VideoContentType::ScreenContent
+               ? "screen_content"
+               : "realtime_video");
   LOG_INFO("TURN mode [{}]", TurnModeToString(turn_mode_));
 
   on_receive_video_buffer_ = params.on_receive_video_buffer;

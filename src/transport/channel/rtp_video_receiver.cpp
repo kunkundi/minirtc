@@ -103,7 +103,10 @@ RtpVideoReceiver::~RtpVideoReceiver() {
 
 void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
   webrtc::RtpPacketReceived rtp_packet_received;
-  rtp_packet_received.Build(rtp_packet.Buffer().data(), rtp_packet.Size());
+  if (!rtp_packet_received.Build(rtp_packet.Buffer().data(),
+                                 rtp_packet.Size())) {
+    return;
+  }
   rtp_packet_received.set_arrival_time(clock_->CurrentTime());
   rtp_packet_received.set_ecn(EcnMarking::kEct0);
   rtp_packet_received.set_recovered(false);
@@ -206,12 +209,17 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
            rtp_packet_av1.PayloadSize(), file_rtp_recv_);
 #endif
     ProcessAv1RtpPacket(rtp_packet_av1);
+  } else if (rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::H264 - 1) {
+    receive_side_congestion_controller_.OnReceivedPacket(
+        rtp_packet_received, MediaType::VIDEO);
+    nack_->OnReceivedPacket(rtp_packet.SequenceNumber(), false);
   } else if (rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::H264 ||
-             rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::H264 - 1 ||
              rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX) {
     RtpPacketH264 rtp_packet_h264;
     if (rtp_packet_h264.Build(rtp_packet.Buffer().data(), rtp_packet.Size())) {
-      rtp_packet_h264.GetFrameHeaderInfo();
+      if (!rtp_packet_h264.GetFrameHeaderInfo()) {
+        return;
+      }
 #ifdef SAVE_RTP_RECV_STREAM
       fwrite((unsigned char*)rtp_packet_h264.Payload(), 1,
              rtp_packet_h264.PayloadSize(), file_rtp_recv_);
@@ -223,8 +231,8 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
       } else {
         nack_->OnReceivedPacket(rtp_packet_h264.GetOsn(), true);
       }
+      ProcessH264RtpPacket(rtp_packet_h264);
     }
-    ProcessH264RtpPacket(rtp_packet_h264);
   }
 }
 

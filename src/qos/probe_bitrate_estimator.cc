@@ -69,8 +69,8 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   auto cluster_it = clusters_.find(cluster_id);
   if (cluster_it == clusters_.end()) {
     if (max_expired_cluster_id_ && cluster_id <= *max_expired_cluster_id_) {
-      LOG_INFO("Probe feedback ignored: id={} reason=expired_cluster",
-               cluster_id);
+      LOG_DEBUG("Probe feedback ignored: id={} reason=expired_cluster",
+                cluster_id);
       return std::nullopt;
     }
     cluster_it = clusters_.try_emplace(cluster_id).first;
@@ -114,7 +114,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   if (send_interval <= TimeDelta::Zero() || send_interval > kMaxProbeInterval ||
       receive_interval <= TimeDelta::Zero() ||
       receive_interval > kMaxProbeInterval) {
-    LOG_INFO(
+    LOG_DEBUG(
         "Probe feedback rejected: id={} reason=invalid_interval "
         "actual_packets={} target_packets={} actual_bytes={} "
         "target_bytes={} send_interval_ms={} receive_interval_ms={}",
@@ -138,7 +138,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
 
   double ratio = receive_rate / send_rate;
   if (ratio > kMaxValidRatio) {
-    LOG_INFO(
+    LOG_DEBUG(
         "Probe feedback rejected: id={} reason=receive_send_ratio "
         "actual_packets={} target_packets={} actual_bytes={} "
         "target_bytes={} send_bitrate_bps={} receive_bitrate_bps={} ratio={}",
@@ -148,7 +148,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     return std::nullopt;
   }
   if (!cluster->result_reported) {
-    LOG_INFO(
+    LOG_DEBUG(
         "Probe feedback accepted: id={} actual_packets={} target_packets={} "
         "actual_bytes={} target_bytes={} send_bitrate_bps={} "
         "receive_bitrate_bps={}",

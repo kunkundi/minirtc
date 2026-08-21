@@ -39,6 +39,11 @@ enum TraversalMode { P2P = 0, Relay, UnknownMode };
 
 enum VideoQuality { QualityLow = 0, QualityMedium, QualityHigh };
 
+enum class VideoContentType : uint8_t {
+  RealtimeVideo = 0,
+  ScreenContent = 1,
+};
+
 enum TurnMode : uint8_t {
   TurnDisabled = 0,  // Direct/STUN candidates only.
   TurnAutoUdpTcp,    // Direct candidates plus TURN/UDP and TURN/TCP fallback.
@@ -133,8 +138,10 @@ typedef struct {
   bool av1_encoding;
   TurnMode turn_mode;
   bool enable_srtp;
+  VideoContentType video_content_type;
 
   VideoQuality video_quality;
+  uint32_t video_frame_rate;
 
   OnReceiveBuffer on_receive_video_buffer;
   OnReceiveBuffer on_receive_audio_buffer;

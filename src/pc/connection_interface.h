@@ -38,8 +38,10 @@ struct ConnectionInfo {
   bool reliable_ice;
   TurnMode turn_mode;
   bool enable_srtp;
+  VideoContentType video_content_type;
   bool av1_encoding;
   VideoQuality video_quality;
+  int video_frame_rate;
 };
 
 struct ConnectionCallbacks {

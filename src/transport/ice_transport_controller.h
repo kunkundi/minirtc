@@ -53,7 +53,9 @@ class IceTransportController
   IceTransportController(std::shared_ptr<SystemClock> clock,
                          std::shared_ptr<IceAgent> ice_agent,
                          std::shared_ptr<IOStatistics> ice_io_statistics,
-                         bool enable_srtp, VideoQuality video_quality);
+                         bool enable_srtp, VideoQuality video_quality,
+                         int video_frame_rate,
+                         VideoContentType video_content_type);
   ~IceTransportController();
 
  public:
@@ -131,7 +133,8 @@ class IceTransportController
                          bool hardware_acceleration, bool av1_encoding);
 
  private:
-  void OnSentPacket(const webrtc::RtpPacketToSend& packet);
+  void OnSentPacket(const webrtc::RtpPacketToSend& packet,
+                    const webrtc::PacedPacketInfo& pacing_info);
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateVideoBitrateAllocation();
   void UpdateControlState();
@@ -166,9 +169,13 @@ class IceTransportController
     std::optional<int> applied_target_bitrate;
     int encode_exceed_count = 0;
     int encode_below_threshold_count = 0;
+    bool encoding_speed_priority_enabled = false;
     std::optional<int> mapped_target_width;
     std::optional<int> mapped_target_height;
     bool freeze_resolution = false;
+    bool static_content_candidate = false;
+    bool static_content_candidate_initialized = false;
+    int64_t static_content_candidate_since_ms = 0;
     std::optional<int> pending_mapped_width;
     std::optional<int> pending_mapped_height;
     int mapping_stability_count = 0;

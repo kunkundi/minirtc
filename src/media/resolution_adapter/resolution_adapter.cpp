@@ -24,16 +24,19 @@ constexpr std::pair<int, int> kResolutionSteps[] = {
     {3840, 2160},  // 4K
 };
 
-// Power-law model:  bitrate = kBitrateCoeff * pixels^kBitrateAlpha
+// Screen-content model: bitrate = coefficient * pixels.
 //
-// Empirically fitted to screen-share H.264 content using the reference points:
-//   720p  -> ~800 kbps  (min)
-//   1440p -> ~2500 kbps (min)
-// Results across the full ladder:
-//   180p  ~80 k | 270p ~125 k | 360p ~200 k | 540p ~385 k
-//   720p ~800 k | 1080p ~1400 k | 1440p ~2500 k | 4K ~5800 k
-constexpr float kBitrateAlpha = 0.822f;
-constexpr float kBitrateCoeff = 10.025f;
+// At 30 fps the coefficient is calibrated for sharp H.264 desktop text:
+//   720p  -> ~2.5 Mbps | 1080p -> ~5.6 Mbps
+//   1440p -> ~10 Mbps  | 4K    -> ~22 Mbps
+// Frame-rate scaling uses sqrt(fps / 30): temporal prediction means 60 fps
+// does not require exactly twice the bitrate, while still giving it enough
+// headroom to avoid spending the extra frames on coarse quantization.
+constexpr float kBitrateAlpha = 1.0f;
+constexpr float kBitrateCoeff30Fps = 2.70f;
+constexpr float kReferenceFrameRate = 30.0f;
+constexpr float kLegacyBitrateAlpha = 0.822f;
+constexpr float kLegacyBitrateCoeff = 10.025f;
 
 // Fraction of min_bitrate used as the minimum-start threshold.
 // Lower values allow the encoder to attempt a resolution sooner.
@@ -150,8 +153,12 @@ bool BuildStrictAspectResolution(int src_w, int src_h, int64_t target_area,
 }
 }  // namespace
 
-ResolutionAdapter::ResolutionAdapter(VideoQuality video_quality)
-    : video_quality_(video_quality) {}
+ResolutionAdapter::ResolutionAdapter(VideoQuality video_quality,
+                                     int video_frame_rate,
+                                     VideoContentType video_content_type)
+    : video_quality_(video_quality),
+      video_frame_rate_(std::clamp(video_frame_rate, 15, 60)),
+      video_content_type_(video_content_type) {}
 
 ResolutionAdapter::~ResolutionAdapter() {}
 
@@ -166,12 +173,28 @@ int ResolutionAdapter::GetMaxPixelsForQuality() const {
   }
 }
 
+float ResolutionAdapter::GetBitrateCoefficient() const {
+  if (video_content_type_ != VideoContentType::ScreenContent) {
+    return kLegacyBitrateCoeff;
+  }
+  const float frame_rate_scale =
+      std::sqrt(static_cast<float>(video_frame_rate_) / kReferenceFrameRate);
+  return kBitrateCoeff30Fps * frame_rate_scale;
+}
+
+float ResolutionAdapter::GetBitrateAlpha() const {
+  return video_content_type_ == VideoContentType::ScreenContent
+             ? kBitrateAlpha
+             : kLegacyBitrateAlpha;
+}
+
 ResolutionBitrateLimits ResolutionAdapter::ComputeBitrateLimitsForResolution(
     int w, int h, bool is_highest) const {
   const float pixels = static_cast<float>(w * h);
-  const float pow_pixels = std::pow(pixels, kBitrateAlpha);
+  const float pow_pixels = std::pow(pixels, GetBitrateAlpha());
+  const float bitrate_coefficient = GetBitrateCoefficient();
 
-  const int min_bps = static_cast<int>(kBitrateCoeff * pow_pixels);
+  const int min_bps = static_cast<int>(bitrate_coefficient * pow_pixels);
   const int start_bps = static_cast<int>(min_bps * kStartRatio);
   // The top tier has no upper cap so the encoder is never forced above it.
   const int max_bps = is_highest ? std::numeric_limits<int>::max()
@@ -220,8 +243,9 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
   const int min_pixels = limits.front().width * limits.front().height;
   const int max_pixels = GetMaxPixelsForQuality();
 
-  const float estimated_pixels_f = std::pow(
-      static_cast<float>(target_bitrate) / kBitrateCoeff, 1.0f / kBitrateAlpha);
+  const float estimated_pixels_f =
+      std::pow(static_cast<float>(target_bitrate) / GetBitrateCoefficient(),
+               1.0f / GetBitrateAlpha());
   const int64_t estimated_pixels = static_cast<int64_t>(std::llround(
       std::max(static_cast<float>(min_pixels),
                std::min(estimated_pixels_f, static_cast<float>(max_pixels)))));
@@ -256,7 +280,10 @@ int ResolutionAdapter::ResolutionDowngrade(const XVideoFrame* video_frame,
       video_frame->width, video_frame->width, video_frame->height,
       (uint8_t*)(scaled_frame->data), target_width,
       (uint8_t*)(scaled_frame->data + target_width * target_height),
-      target_width, target_width, target_height, libyuv::kFilterLinear);
+      target_width, target_width, target_height,
+      video_content_type_ == VideoContentType::ScreenContent
+          ? libyuv::kFilterBox
+          : libyuv::kFilterLinear);
 
   return 0;
 }
@@ -283,7 +310,10 @@ int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
 
   libyuv::NV12Scale(y_plane, src_width, uv_plane, src_width, src_width,
                     src_height, dst_y, target_width, dst_uv, target_width,
-                    target_width, target_height, libyuv::kFilterLinear);
+                    target_width, target_height,
+                    video_content_type_ == VideoContentType::ScreenContent
+                        ? libyuv::kFilterBox
+                        : libyuv::kFilterLinear);
 
   scaled_frame.UpdateBuffer(tmp_buffer_.data(), scaled_resolution);
   scaled_frame.SetWidth(target_width);

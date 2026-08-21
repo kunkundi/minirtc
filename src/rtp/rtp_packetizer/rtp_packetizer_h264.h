@@ -7,6 +7,8 @@
 #ifndef _RTP_PACKETIZER_H264_H_
 #define _RTP_PACKETIZER_H264_H_
 
+#include <mutex>
+
 #include "rtp_packetizer.h"
 
 namespace minirtc {
@@ -40,6 +42,7 @@ class RtpPacketizerH264 : public RtpPacketizer {
   void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
 
  private:
+  std::mutex packetizer_mutex_;
   uint8_t version_;
   bool has_padding_;
   bool has_extension_;
