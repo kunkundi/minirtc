@@ -1786,8 +1786,6 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
 }
 
 void IceTransportController::UpdateVideoBitrateAllocation() {
-  constexpr int64_t kActiveStreamTimeoutMs = 100;
-
   if (target_bitrate_ <= 0 || !is_running_.load()) {
     return;
   }
@@ -1805,6 +1803,7 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
     std::shared_lock lock(stream_senders_mutex_);
 
     auto is_active = [now_ms](const std::shared_ptr<StreamContext>& context) {
+      constexpr int64_t kActiveStreamTimeoutMs = 100;
       return context && context->last_active_time.has_value() &&
              now_ms - context->last_active_time.value() <
                  kActiveStreamTimeoutMs;
