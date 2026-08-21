@@ -164,11 +164,11 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   aom_av1_encoder_config_.g_usage = kUsageProfile;
   aom_av1_encoder_config_.g_error_resilient = 0;
   aom_av1_encoder_config_.rc_undershoot_pct = 50;
-  // aom_av1_encoder_config_.rc_buf_initial_sz = 600;
-  // aom_av1_encoder_config_.rc_buf_optimal_sz = 600;
-  // aom_av1_encoder_config_.rc_buf_sz = 1000;
+  aom_av1_encoder_config_.rc_buf_initial_sz = 600;
+  aom_av1_encoder_config_.rc_buf_optimal_sz = 600;
+  aom_av1_encoder_config_.rc_buf_sz = 1000;
   // Low-latency settings.
-  aom_av1_encoder_config_.rc_end_usage = AOM_VBR;    // cbr mode
+  aom_av1_encoder_config_.rc_end_usage = AOM_CBR;
   aom_av1_encoder_config_.g_pass = AOM_RC_ONE_PASS;  // One-pass rate control
   aom_av1_encoder_config_.g_lag_in_frames = kLagInFrames;  // No look ahead
   aom_av1_encoder_config_.rc_overshoot_pct =

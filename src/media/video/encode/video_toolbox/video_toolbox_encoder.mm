@@ -247,13 +247,29 @@ int VideoToolboxEncoder::Impl::ApplyBitrateProperties(VTCompressionSessionRef se
     return -1;
   }
 
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000
+  if (@available(macOS 13.0, *)) {
+    CFNumberRef bit_rate_ref =
+        CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate);
+    OSStatus cbr_status = VTSessionSetProperty(
+        session, kVTCompressionPropertyKey_ConstantBitRate, bit_rate_ref);
+    CFRelease(bit_rate_ref);
+    if (cbr_status == noErr) {
+      return 0;
+    }
+    LOG_WARN(
+        "VideoToolbox CBR is unavailable; falling back to a constrained "
+        "bitrate: status={}",
+        cbr_status);
+  }
+#endif
+
   CFNumberRef bit_rate_ref = CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate);
   OSStatus average_status =
       VTSessionSetProperty(session, kVTCompressionPropertyKey_AverageBitRate, bit_rate_ref);
   CFRelease(bit_rate_ref);
 
-  const int peak_bitrate = EncoderPeakBitrate(bitrate, max_bitrate_);
-  int data_rate_limit[2] = {std::max(1, peak_bitrate / 8), 1};
+  int data_rate_limit[2] = {std::max(1, bitrate / 8), 1};
   CFNumberRef data_rate_limit_numbers[2] = {
       CFNumberCreate(nullptr, kCFNumberIntType, &data_rate_limit[0]),
       CFNumberCreate(nullptr, kCFNumberIntType, &data_rate_limit[1])};

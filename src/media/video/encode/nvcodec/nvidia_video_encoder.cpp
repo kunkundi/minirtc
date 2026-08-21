@@ -111,7 +111,7 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   encodeConfig.gopLength = key_frame_interval_;
   encodeConfig.frameIntervalP = 1;
   encodeConfig.encodeCodecConfig.h264Config.idrPeriod = key_frame_interval_;
-  encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+  encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
   // encodeConfig.rcParams.constQP.qpIntra = 20;
   // encodeConfig.rcParams.constQP.qpInterP = 23;
   // encodeConfig.rcParams.constQP.qpInterB = 25;
@@ -130,8 +130,7 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   encodeConfig.rcParams.averageBitRate = average_bitrate_;
   // use the default VBV buffer size
   encodeConfig.rcParams.vbvBufferSize = 0;
-  encodeConfig.rcParams.maxBitRate = EncoderPeakBitrate(
-      static_cast<int>(average_bitrate_), static_cast<int>(max_bitrate_));
+  encodeConfig.rcParams.maxBitRate = average_bitrate_;
   // use the default VBV initial delay
   encodeConfig.rcParams.vbvInitialDelay = 0;
   // enable adaptive quantization (Spatial)
@@ -278,8 +277,6 @@ int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
              max_bitrate_);
   }
   average_bitrate_ = target_bitrate;
-  const int peak_bitrate =
-      EncoderPeakBitrate(target_bitrate, static_cast<int>(max_bitrate_));
 
   NV_ENC_RECONFIGURE_PARAMS reconfig_params;
   memset(&reconfig_params, 0, sizeof(reconfig_params));
@@ -291,7 +288,7 @@ int NvidiaVideoEncoder::SetTargetBitrate(int bitrate) {
   init_params.frameRateDen = 1;
   init_params.frameRateNum = init_params.frameRateDen * max_fps_;
   init_params.encodeConfig->rcParams.averageBitRate = target_bitrate;
-  init_params.encodeConfig->rcParams.maxBitRate = peak_bitrate;
+  init_params.encodeConfig->rcParams.maxBitRate = target_bitrate;
   reconfig_params.reInitEncodeParams = init_params;
   reconfig_params.forceIDR = 0;
   return encoder_->Reconfigure(&reconfig_params) ? 0 : -1;
