@@ -22,6 +22,10 @@ namespace rtcp {
 // Full intra request (FIR) (RFC 5104).
 class Fir : public RtpFeedback {
  public:
+  // FIR is payload-specific feedback (PSFB), RFC 5104 section 4.3.1.
+  // RtpFeedback is retained for the common sender/media SSRC serializer, but
+  // the wire packet type must be 206 rather than RTPFB's 205.
+  static constexpr uint8_t kPacketType = 206;
   static constexpr uint8_t kFeedbackMessageType = 4;
   struct Request {
     Request() : ssrc(0), seq_nr(0) {}

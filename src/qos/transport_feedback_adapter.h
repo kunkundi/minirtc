@@ -75,6 +75,10 @@ class TransportFeedbackAdapter {
                  const PacedPacketInfo& pacing_info, size_t overhead_bytes,
                  Timestamp creation_time);
 
+  // Removes a packet registered before the transport reported a send failure.
+  // Returns true when a matching history entry was removed.
+  bool RemovePacket(const RtpPacketToSend& packet);
+
   std::optional<SentPacket> ProcessSentPacket(
       const rtc::SentPacket& sent_packet);
 

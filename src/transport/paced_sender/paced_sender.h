@@ -67,11 +67,12 @@ class PacedSender : public webrtc::RtpPacketPacer,
       return;
     }
     if (on_sent_packet_func_) {
-      if (ssrc_seq_.find(packet->Ssrc()) == ssrc_seq_.end()) {
-        ssrc_seq_[packet->Ssrc()] = 1;
-      }
-
-      packet->UpdateSequenceNumber(ssrc_seq_[packet->Ssrc()]++);
+      // Assign the sequence number at the final serialized send point so all
+      // packets sharing an SSRC (including RTX and padding) use one sequence
+      // space in their actual transmission order.
+      auto sequence_it =
+          ssrc_seq_.try_emplace(packet->Ssrc(), uint16_t{1}).first;
+      packet->UpdateSequenceNumber(sequence_it->second++);
 
       on_sent_packet_func_(std::move(packet), cluster_info);
     }
@@ -242,7 +243,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
 
   std::shared_ptr<TaskQueue> task_queue_pacer_;
   int64_t transport_seq_ = 0;
-  std::map<int32_t, int16_t> ssrc_seq_;
+  std::map<uint32_t, uint16_t> ssrc_seq_;
 
   webrtc::Timestamp last_send_time_;
   webrtc::Timestamp last_call_time_;

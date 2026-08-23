@@ -18,6 +18,7 @@ class VideoChannelReceive : public MediaChannel {
  public:
   VideoChannelReceive();
   VideoChannelReceive(const std::string &channel_name, uint32_t ssrc,
+                      uint32_t rtx_ssrc,
                       std::shared_ptr<SystemClock> clock,
                       std::shared_ptr<IceAgent> ice_agent,
                       std::shared_ptr<IOStatistics> ice_io_statistics,
@@ -27,12 +28,16 @@ class VideoChannelReceive : public MediaChannel {
   virtual ~VideoChannelReceive();
 
  public:
-  void Initialize(rtp::PAYLOAD_TYPE payload_type);
-  void Destroy();
+  void Initialize(rtp::PAYLOAD_TYPE payload_type) override;
+  void Destroy() override;
 
-  int OnReceiveRtpPacket(const char *data, size_t size);
+  int OnReceiveRtpPacket(const char *data, size_t size) override;
 
-  void OnSenderReport(const SenderReport &sender_report) {
+  void RequestKeyFrame() override;
+
+  void OnRttUpdate(int64_t rtt_ms) override;
+
+  void OnSenderReport(const SenderReport &sender_report) override {
     if (rtp_video_receiver_) {
       rtp_video_receiver_->OnSenderReport(sender_report);
     }
@@ -41,6 +46,7 @@ class VideoChannelReceive : public MediaChannel {
  private:
   std::string channel_name_;
   uint32_t ssrc_ = 0;
+  uint32_t rtx_ssrc_ = 0;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpVideoReceiver> rtp_video_receiver_ = nullptr;

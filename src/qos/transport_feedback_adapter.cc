@@ -141,6 +141,26 @@ void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
   history_.emplace(feedback.sent.sequence_number, feedback);
 }
 
+bool TransportFeedbackAdapter::RemovePacket(
+    const RtpPacketToSend& packet_to_send) {
+  const SsrcAndRtpSequencenumber key = {packet_to_send.Ssrc(),
+                                        packet_to_send.SequenceNumber()};
+  auto mapping_it = rtp_to_transport_sequence_number_.find(key);
+  if (mapping_it == rtp_to_transport_sequence_number_.end()) {
+    return false;
+  }
+
+  auto history_it = history_.find(mapping_it->second);
+  if (history_it != history_.end()) {
+    if (history_it->second.sent.send_time.IsFinite()) {
+      in_flight_.RemoveInFlightPacketBytes(history_it->second);
+    }
+    history_.erase(history_it);
+  }
+  rtp_to_transport_sequence_number_.erase(mapping_it);
+  return true;
+}
+
 std::optional<SentPacket> TransportFeedbackAdapter::ProcessSentPacket(
     const rtc::SentPacket& sent_packet) {
   auto send_time = Timestamp::Millis(sent_packet.send_time_ms);

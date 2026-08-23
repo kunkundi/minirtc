@@ -12,6 +12,11 @@ bool RtcpPacket::OnBufferFull(uint8_t* packet, size_t* index,
     return false;
   }
   callback(packet, *index);
+  // The callback consumed the current datagram. Continue serializing the
+  // remaining RTCP blocks at the beginning of a fresh buffer. Leaving the
+  // write position unchanged makes fragmented feedback packets repeatedly
+  // report a full buffer and spins forever.
+  *index = 0;
   return true;
 }
 

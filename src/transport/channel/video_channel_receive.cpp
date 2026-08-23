@@ -8,13 +8,14 @@ namespace minirtc {
 VideoChannelReceive::VideoChannelReceive() {}
 
 VideoChannelReceive::VideoChannelReceive(
-    const std::string& channel_name, uint32_t ssrc,
+    const std::string& channel_name, uint32_t ssrc, uint32_t rtx_ssrc,
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics,
     std::function<void(std::unique_ptr<ReceivedFrame>)>
         on_receive_complete_frame)
     : channel_name_(channel_name),
       ssrc_(ssrc),
+      rtx_ssrc_(rtx_ssrc),
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
       on_receive_complete_frame_(on_receive_complete_frame),
@@ -25,6 +26,7 @@ VideoChannelReceive::~VideoChannelReceive() {}
 void VideoChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
   rtp_video_receiver_ =
       std::make_unique<RtpVideoReceiver>(clock_, ice_io_statistics_);
+  rtp_video_receiver_->SetMediaConfig(ssrc_, rtx_ssrc_, payload_type);
   rtp_video_receiver_->SetOnReceiveCompleteFrame(
       [this](std::unique_ptr<ReceivedFrame> received_frame) -> void {
         on_receive_complete_frame_(std::move(received_frame));
@@ -76,5 +78,17 @@ int VideoChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
   }
 
   return 0;
+}
+
+void VideoChannelReceive::RequestKeyFrame() {
+  if (rtp_video_receiver_) {
+    rtp_video_receiver_->RequestKeyFrame();
+  }
+}
+
+void VideoChannelReceive::OnRttUpdate(int64_t rtt_ms) {
+  if (rtp_video_receiver_) {
+    rtp_video_receiver_->OnRttUpdate(rtt_ms);
+  }
 }
 }  // namespace minirtc

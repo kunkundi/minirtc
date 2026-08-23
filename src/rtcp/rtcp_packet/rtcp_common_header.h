@@ -23,7 +23,8 @@ class RtcpCommonHeader {
   RtcpCommonHeader& operator=(const RtcpCommonHeader&) = default;
 
   int Create(uint8_t version, uint8_t has_padding, uint8_t count_or_format,
-             uint8_t payload_type, uint16_t length, uint8_t* buffer);
+             uint8_t payload_type, uint16_t length_in_words_minus_one,
+             uint8_t* buffer);
   bool Parse(const uint8_t* buffer, size_t size_bytes);
 
   uint8_t type() const { return packet_type_; }

@@ -17,7 +17,10 @@
 namespace minirtc {
 class RtpPacketHistory {
  public:
-  static constexpr size_t kMaxCapacity = 600;
+  // Keep enough packets for large assembled frames and match both ends of the
+  // receiver's 10,000-sequence-number age interval. This prevents the receiver
+  // from requesting an OSN discarded only because of a smaller sender window.
+  static constexpr size_t kMaxCapacity = 10001;
   // Maximum number of entries in prioritized queue of padding packets.
   static constexpr size_t kMaxPaddingHistory = 63;
   // Don't remove packets within max(1 second, 3x RTT).
@@ -36,6 +39,7 @@ class RtpPacketHistory {
   void PutRtpPacket(std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet,
                     int64_t send_time);
   void MarkPacketAsSent(uint16_t sequence_number);
+  void MarkPacketAsAborted(uint16_t sequence_number);
 
   std::unique_ptr<webrtc::RtpPacketToSend> GetPacketAndMarkAsPending(
       uint16_t sequence_number);
@@ -55,12 +59,11 @@ class RtpPacketHistory {
    public:
     StoredPacket() = default;
     StoredPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
-                 webrtc::Timestamp send_time, uint64_t insert_order);
+                 webrtc::Timestamp send_time);
     StoredPacket(StoredPacket&&);
     StoredPacket& operator=(StoredPacket&&);
     ~StoredPacket();
 
-    uint64_t insert_order() const { return insert_order_; }
     size_t times_retransmitted() const { return times_retransmitted_; }
     void IncrementTimesRetransmitted();
 
@@ -77,10 +80,6 @@ class RtpPacketHistory {
    private:
     webrtc::Timestamp send_time_ = webrtc::Timestamp::Zero();
 
-    // Unique number per StoredPacket, incremented by one for each added
-    // packet. Used to sort on insert order.
-    uint64_t insert_order_;
-
     // Number of times RE-transmitted, ie excluding the first transmission.
     size_t times_retransmitted_;
   };
@@ -92,7 +91,6 @@ class RtpPacketHistory {
  private:
   std::shared_ptr<webrtc::Clock> clock_;
   std::deque<StoredPacket> packet_history_;
-  uint64_t packets_inserted_;
   webrtc::TimeDelta rtt_;
   size_t number_to_store_;
 };

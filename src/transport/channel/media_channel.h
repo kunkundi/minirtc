@@ -69,6 +69,8 @@ class MediaChannel {
     LOG_INFO("OnReceiverReport() default implementation");
   }
 
+  virtual void OnRttUpdate(int64_t rtt_ms) {}
+
   virtual int OnReceiveRtpPacket(const char* data, size_t size) {
     LOG_INFO("OnReceiveRtpPacket() default implementation");
     return 0;
@@ -83,9 +85,16 @@ class MediaChannel {
     LOG_INFO("OnSentRtpPacket() default implementation");
   }
 
+  virtual void OnRtpPacketSendFailed(
+      const webrtc::RtpPacketToSend& packet) {}
+
   virtual void OnReceiveNack(
       const std::vector<uint16_t>& nack_sequence_numbers) {
     LOG_INFO("OnReceiveNack() default implementation");
+  }
+
+  virtual void RequestKeyFrame() {
+    LOG_INFO("RequestKeyFrame() default implementation");
   }
 
   virtual std::vector<std::unique_ptr<RtpPacket>> GeneratePadding(

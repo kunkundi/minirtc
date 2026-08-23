@@ -16,10 +16,10 @@ VideoChannelSend::VideoChannelSend(
       ice_io_statistics_(ice_io_statistics),
       ssrc_(GenerateUniqueSsrc()),
       rtx_ssrc_(GenerateUniqueSsrc()),
-      delta_ntp_internal_ms_(clock->CurrentNtpInMilliseconds() -
-                             clock->CurrentTimeMs()),
+      clock_(clock),
       rtp_packet_history_(clock),
-      clock_(clock) {
+      delta_ntp_internal_ms_(clock->CurrentNtpInMilliseconds() -
+                             clock->CurrentTimeMs()) {
 #ifdef SAVE_RTP_SENT_STREAM
   file_rtp_sent_ = fopen("rtp_sent_stream.h264", "w+b");
   if (!file_rtp_sent_) {
@@ -29,6 +29,9 @@ VideoChannelSend::VideoChannelSend(
 };
 
 VideoChannelSend::~VideoChannelSend() {
+  Destroy();
+  SSRCManager::Instance().DeleteSsrc(ssrc_);
+  SSRCManager::Instance().DeleteSsrc(rtx_ssrc_);
 #ifdef SAVE_RTP_SENT_STREAM
   if (file_rtp_sent_) {
     fflush(file_rtp_sent_);
@@ -40,13 +43,25 @@ VideoChannelSend::~VideoChannelSend() {
 
 void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
                                   std::shared_ptr<PacedSender> packet_sender) {
+  Initialize(payload_type, std::move(packet_sender), false);
+}
+
+void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
+                                  std::shared_ptr<PacedSender> packet_sender,
+                                  bool rtx_enabled) {
+  rtx_enabled_ = rtx_enabled;
   paced_sender_ = packet_sender;
   rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
+  padding_packetizer_ = RtpPacketizer::Create(
+      payload_type, rtx_enabled_ ? rtx_ssrc_ : ssrc_);
   task_queue_history_ = std::make_shared<TaskQueue>("rtp pakcet history");
 }
 
 void VideoChannelSend::OnSentRtpPacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+  if (!task_queue_history_ || history_shutdown_.load()) {
+    return;
+  }
   task_queue_history_->PostTask([this, packet = std::move(packet)]() mutable {
     if (packet->retransmitted_sequence_number()) {
       rtp_packet_history_.MarkPacketAsSent(
@@ -56,6 +71,34 @@ void VideoChannelSend::OnSentRtpPacket(
                                        clock_->CurrentTime());
     }
   });
+}
+
+void VideoChannelSend::OnRtpPacketSendFailed(
+    const webrtc::RtpPacketToSend& packet) {
+  if (!task_queue_history_ || history_shutdown_.load()) {
+    return;
+  }
+
+  if (packet.retransmitted_sequence_number().has_value()) {
+    const uint16_t original_sequence_number =
+        *packet.retransmitted_sequence_number();
+    task_queue_history_->PostTask([this, original_sequence_number] {
+      rtp_packet_history_.MarkPacketAsAborted(original_sequence_number);
+    });
+    return;
+  }
+
+  // A failed original media packet still owns a valid media sequence number.
+  // Retain it so a gap observed after transport recovery can be repaired.
+  if (packet.packet_type() == webrtc::RtpPacketMediaType::kVideo) {
+    auto packet_copy =
+        std::make_unique<webrtc::RtpPacketToSend>(packet);
+    task_queue_history_->PostTask(
+        [this, packet = std::move(packet_copy)]() mutable {
+          rtp_packet_history_.PutRtpPacket(std::move(packet),
+                                           clock_->CurrentTime());
+        });
+  }
 }
 
 void VideoChannelSend::OnReceiveNack(
@@ -68,36 +111,128 @@ void VideoChannelSend::OnReceiveNack(
   //   }
   // }
 
-  int64_t avg_rtt = 10;
+  if (!rtx_enabled_ || !task_queue_history_ ||
+      nack_sequence_numbers.empty()) {
+    return;
+  }
 
-  task_queue_history_->PostTask([this, avg_rtt]() {
-    rtp_packet_history_.SetRtt(TimeDelta::Millis(5 + avg_rtt));
+  bool schedule_task = false;
+  {
+    std::lock_guard<std::mutex> lock(pending_nacks_mtx_);
+    if (history_shutdown_.load()) {
+      return;
+    }
+
+    for (uint16_t sequence_number : nack_sequence_numbers) {
+      if (pending_nack_sequence_numbers_.size() >=
+          RtpPacketHistory::kMaxCapacity) {
+        break;
+      }
+      pending_nack_sequence_numbers_.insert(sequence_number);
+    }
+    if (!nack_task_scheduled_ && !pending_nack_sequence_numbers_.empty()) {
+      nack_task_scheduled_ = true;
+      schedule_task = true;
+    }
+  }
+
+  if (schedule_task &&
+      !task_queue_history_->PostTask([this] { ProcessPendingNacks(); })) {
+    std::lock_guard<std::mutex> lock(pending_nacks_mtx_);
+    nack_task_scheduled_ = false;
+  }
+}
+
+void VideoChannelSend::OnRttUpdate(int64_t rtt_ms) {
+  if (rtt_ms <= 0 || rtt_ms > 2000 || !task_queue_history_ ||
+      history_shutdown_.load()) {
+    return;
+  }
+
+  task_queue_history_->PostTask([this, rtt_ms] {
+    if (!history_shutdown_.load()) {
+      rtp_packet_history_.SetRtt(webrtc::TimeDelta::Millis(rtt_ms));
+    }
   });
+}
 
-  for (uint16_t seq_no : nack_sequence_numbers) {
-    const int32_t bytes_sent = ReSendPacket(seq_no);
-    if (bytes_sent < 0) {
-      // Failed to send one Sequence number. Give up the rest in this nack.
-      LOG_WARN("Failed resending RTP packet {}, Discard rest of packets",
-               seq_no);
+void VideoChannelSend::ProcessPendingNacks() {
+  constexpr size_t kMaxNacksPerTask = 512;
+  std::vector<uint16_t> packet_ids;
+  packet_ids.reserve(kMaxNacksPerTask);
+
+  {
+    std::lock_guard<std::mutex> lock(pending_nacks_mtx_);
+    if (history_shutdown_.load()) {
+      pending_nack_sequence_numbers_.clear();
+      nack_task_scheduled_ = false;
+      return;
+    }
+
+    auto it = pending_nack_sequence_numbers_.begin();
+    while (it != pending_nack_sequence_numbers_.end() &&
+           packet_ids.size() < kMaxNacksPerTask) {
+      packet_ids.push_back(*it);
+      it = pending_nack_sequence_numbers_.erase(it);
+    }
+  }
+
+  for (uint16_t seq_no : packet_ids) {
+    if (history_shutdown_.load()) {
       break;
     }
+    if (ReSendPacket(seq_no) < 0) {
+      LOG_WARN("Failed resending RTP packet {}", seq_no);
+    }
+  }
+
+  bool reschedule = false;
+  {
+    std::lock_guard<std::mutex> lock(pending_nacks_mtx_);
+    if (history_shutdown_.load() || pending_nack_sequence_numbers_.empty()) {
+      pending_nack_sequence_numbers_.clear();
+      nack_task_scheduled_ = false;
+    } else {
+      reschedule = true;
+    }
+  }
+
+  if (reschedule &&
+      !task_queue_history_->PostTask([this] { ProcessPendingNacks(); })) {
+    std::lock_guard<std::mutex> lock(pending_nacks_mtx_);
+    nack_task_scheduled_ = false;
   }
 }
 
 std::vector<std::unique_ptr<RtpPacket>> VideoChannelSend::GeneratePadding(
     uint32_t payload_size, int64_t captured_timestamp_us) {
-  if (rtp_packetizer_) {
-    return rtp_packetizer_->BuildPadding(payload_size, captured_timestamp_us,
-                                         true);
+  if (padding_packetizer_) {
+    return padding_packetizer_->BuildPadding(
+        payload_size, captured_timestamp_us, true);
   }
   return std::vector<std::unique_ptr<RtpPacket>>{};
 }
 
-void VideoChannelSend::Destroy() {}
+void VideoChannelSend::Destroy() {
+  if (task_queue_history_) {
+    history_shutdown_.store(true);
+    {
+      std::lock_guard<std::mutex> lock(pending_nacks_mtx_);
+      pending_nack_sequence_numbers_.clear();
+      nack_task_scheduled_ = false;
+    }
+    // At teardown retransmissions are no longer useful. Drop queued work and
+    // wait only for the currently executing history operation to finish.
+    task_queue_history_->ClearTasks();
+    task_queue_history_->Stop();
+  }
+}
 
 int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
   if (rtp_packetizer_ && paced_sender_) {
+    const bool is_key_frame =
+        encoded_frame.FrameType() == VideoFrameType::kVideoFrameKey;
+    rtp_packetizer_->SetIsKeyFrame(is_key_frame);
     uint32_t rtp_timestamp =
         delta_ntp_internal_ms_ +
         static_cast<uint32_t>(encoded_frame.CapturedTimestamp() / 1000);
@@ -105,6 +240,12 @@ int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
         rtp_packetizer_->Build((uint8_t*)encoded_frame.Buffer(),
                                (uint32_t)encoded_frame.Size(), rtp_timestamp,
                                true);
+    for (size_t index = 0; index < rtp_packets.size(); ++index) {
+      auto* packet_to_send =
+          static_cast<webrtc::RtpPacketToSend*>(rtp_packets[index].get());
+      packet_to_send->set_is_key_frame(is_key_frame);
+      packet_to_send->set_first_packet_of_frame(index == 0);
+    }
 
 #ifdef SAVE_RTP_SENT_STREAM
     fwrite((unsigned char*)encoded_frame.Buffer(), 1, encoded_frame.Size(),
@@ -117,49 +258,46 @@ int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
 }
 
 int32_t VideoChannelSend::ReSendPacket(uint16_t packet_id) {
-  task_queue_history_->PostTask([this, packet_id]() {
-    int32_t packet_size = 0;
-    std::unique_ptr<webrtc::RtpPacketToSend> packet =
-        rtp_packet_history_.GetPacketAndMarkAsPending(
-            packet_id, [&](const webrtc::RtpPacketToSend& stored_packet) {
-              // Check if we're overusing retransmission bitrate.
-              // TODO(sprang): Add histograms for nack success or failure
-              // reasons.
-              packet_size = stored_packet.size();
-              std::unique_ptr<webrtc::RtpPacketToSend> retransmit_packet;
+  if (!rtx_enabled_ || !paced_sender_) {
+    return -1;
+  }
 
-              retransmit_packet =
-                  std::make_unique<webrtc::RtpPacketToSend>(stored_packet);
+  int32_t packet_size = 0;
+  std::unique_ptr<webrtc::RtpPacketToSend> packet =
+      rtp_packet_history_.GetPacketAndMarkAsPending(
+          packet_id, [&](const webrtc::RtpPacketToSend& stored_packet) {
+            packet_size = stored_packet.size();
+            auto retransmit_packet =
+                std::make_unique<webrtc::RtpPacketToSend>(stored_packet);
 
-              retransmit_packet->SetSsrc(rtx_ssrc_);
-              retransmit_packet->SetPayloadType(rtp::PAYLOAD_TYPE::RTX);
+            const uint16_t original_sequence_number =
+                stored_packet.SequenceNumber();
+            retransmit_packet->SetSsrc(rtx_ssrc_);
+            retransmit_packet->SetPayloadType(rtp::PAYLOAD_TYPE::RTX);
+            retransmit_packet->set_retransmitted_sequence_number(
+                original_sequence_number);
+            retransmit_packet->set_original_ssrc(stored_packet.Ssrc());
+            if (!retransmit_packet->BuildRtxPacket()) {
+              return std::unique_ptr<webrtc::RtpPacketToSend>();
+            }
+            return retransmit_packet;
+          });
+  if (packet_size == 0) {
+    // Packet was not found, is already pending, or was sent too recently.
+    return 0;
+  }
+  if (!packet) {
+    LOG_WARN("Failed building RTX packet for OSN {}", packet_id);
+    return -1;
+  }
 
-              retransmit_packet->set_retransmitted_sequence_number(
-                  stored_packet.SequenceNumber());
-              retransmit_packet->set_original_ssrc(stored_packet.Ssrc());
-              retransmit_packet->BuildRtxPacket();
-
-              return retransmit_packet;
-            });
-    if (packet_size == 0) {
-      // Packet not found or already queued for retransmission, ignore.
-      return;
-    }
-    if (!packet) {
-      // Packet was found, but lambda helper above chose not to create
-      // `retransmit_packet` out of it.
-      LOG_WARN("packet not found");
-      return;
-    }
-
-    packet->set_packet_type(webrtc::RtpPacketMediaType::kRetransmission);
-    packet->set_fec_protect_packet(false);
-
-    if (paced_sender_) {
+  packet->set_packet_type(webrtc::RtpPacketMediaType::kRetransmission);
+  packet->set_fec_protect_packet(false);
+  const int enqueue_result =
       paced_sender_->EnqueueRtpPacket(std::move(packet));
-    }
-  });
-
-  return 0;
+  if (enqueue_result < 0) {
+    rtp_packet_history_.MarkPacketAsAborted(packet_id);
+  }
+  return enqueue_result;
 }
 }  // namespace minirtc

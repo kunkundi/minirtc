@@ -76,21 +76,35 @@ size_t RtcpReportBlock::Create(uint8_t* buffer) const {
 }
 
 size_t RtcpReportBlock::Parse(const uint8_t* buffer) {
-  source_ssrc_ =
-      (buffer[0] << 24) | (buffer[1] << 16) | (buffer[2] << 8) | buffer[3];
+  source_ssrc_ = (static_cast<uint32_t>(buffer[0]) << 24) |
+                 (static_cast<uint32_t>(buffer[1]) << 16) |
+                 (static_cast<uint32_t>(buffer[2]) << 8) |
+                 static_cast<uint32_t>(buffer[3]);
   fraction_lost_ = buffer[4];
-  cumulative_lost_ = (buffer[5] << 16) | (buffer[6] << 8) | buffer[7];
+  cumulative_lost_ = (static_cast<uint32_t>(buffer[5]) << 16) |
+                     (static_cast<uint32_t>(buffer[6]) << 8) |
+                     static_cast<uint32_t>(buffer[7]);
   if (cumulative_lost_ & 0x800000) {  // Check if the sign bit is set
     cumulative_lost_ |= 0xFF000000;   // Sign extend to 32 bits
   }
   extended_high_seq_num_ =
-      (buffer[8] << 24) | (buffer[9] << 16) | (buffer[10] << 8) | buffer[11];
-  jitter_ =
-      (buffer[12] << 24) | (buffer[13] << 16) | (buffer[14] << 8) | buffer[15];
-  last_sr_ =
-      (buffer[16] << 24) | (buffer[17] << 16) | (buffer[18] << 8) | buffer[19];
+      (static_cast<uint32_t>(buffer[8]) << 24) |
+      (static_cast<uint32_t>(buffer[9]) << 16) |
+      (static_cast<uint32_t>(buffer[10]) << 8) |
+      static_cast<uint32_t>(buffer[11]);
+  jitter_ = (static_cast<uint32_t>(buffer[12]) << 24) |
+            (static_cast<uint32_t>(buffer[13]) << 16) |
+            (static_cast<uint32_t>(buffer[14]) << 8) |
+            static_cast<uint32_t>(buffer[15]);
+  last_sr_ = (static_cast<uint32_t>(buffer[16]) << 24) |
+             (static_cast<uint32_t>(buffer[17]) << 16) |
+             (static_cast<uint32_t>(buffer[18]) << 8) |
+             static_cast<uint32_t>(buffer[19]);
   delay_since_last_sr_ =
-      (buffer[20] << 24) | (buffer[21] << 16) | (buffer[22] << 8) | buffer[23];
+      (static_cast<uint32_t>(buffer[20]) << 24) |
+      (static_cast<uint32_t>(buffer[21]) << 16) |
+      (static_cast<uint32_t>(buffer[22]) << 8) |
+      static_cast<uint32_t>(buffer[23]);
   return RtcpReportBlock::kLength;
 }
 

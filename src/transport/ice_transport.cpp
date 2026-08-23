@@ -1,16 +1,182 @@
 #include "ice_transport.h"
 
+#include <algorithm>
+#include <cctype>
+#include <charconv>
 #include <chrono>
+#include <cstring>
 #include <map>
 #include <nlohmann/json.hpp>
+#include <set>
+#include <sstream>
+#include <string_view>
 #include <thread>
 
 #include "common.h"
 #include "log.h"
+#include "rtx_ssrc_mapping.h"
 
 using nlohmann::json;
 
 namespace minirtc {
+namespace {
+
+std::string Trim(std::string value) {
+  const auto is_space = [](unsigned char c) { return std::isspace(c); };
+  value.erase(value.begin(),
+              std::find_if_not(value.begin(), value.end(), is_space));
+  value.erase(std::find_if_not(value.rbegin(), value.rend(), is_space).base(),
+              value.end());
+  return value;
+}
+
+std::optional<uint32_t> ParseUint32(std::string_view value) {
+  if (value.empty()) {
+    return std::nullopt;
+  }
+  uint32_t parsed = 0;
+  const auto result =
+      std::from_chars(value.data(), value.data() + value.size(), parsed);
+  if (result.ec != std::errc() ||
+      result.ptr != value.data() + value.size()) {
+    return std::nullopt;
+  }
+  return parsed;
+}
+
+std::string GetMediaSection(const std::string& sdp,
+                            const std::string& media_tag) {
+  const size_t start = sdp.find("m=" + media_tag);
+  if (start == std::string::npos) {
+    return {};
+  }
+  const size_t end = sdp.find("\nm=", start + 1);
+  return sdp.substr(start, end == std::string::npos ? std::string::npos
+                                                    : end - start);
+}
+
+struct VideoTransportCapabilities {
+  bool rtx = false;
+  bool nack = false;
+  bool fir = false;
+  bool reduced_size_rtcp = false;
+};
+
+VideoTransportCapabilities ParseVideoTransportCapabilities(
+    const std::string& video_section, int media_payload_type) {
+  VideoTransportCapabilities capabilities;
+  if (video_section.empty()) {
+    return capabilities;
+  }
+
+  const std::string rtx_payload_type =
+      std::to_string(rtp::PAYLOAD_TYPE::RTX);
+  const std::string media_payload = std::to_string(media_payload_type);
+  const std::string rtpmap_prefix =
+      "a=rtpmap:" + rtx_payload_type + " ";
+  const std::string fmtp_prefix = "a=fmtp:" + rtx_payload_type + " ";
+  const std::string nack_feedback =
+      "a=rtcp-fb:" + media_payload + " nack";
+  const std::string fir_feedback =
+      "a=rtcp-fb:" + media_payload + " ccm fir";
+  bool payload_on_media_line = false;
+  bool has_rtx_mapping = false;
+  bool has_matching_apt = false;
+  bool has_nack_feedback = false;
+
+  std::istringstream lines(video_section);
+  std::string line;
+  while (std::getline(lines, line)) {
+    line = Trim(line);
+    if (line.rfind("m=video ", 0) == 0) {
+      std::istringstream fields(line);
+      std::string field;
+      while (fields >> field) {
+        payload_on_media_line |= field == rtx_payload_type;
+      }
+    }
+
+    if (line.rfind(rtpmap_prefix, 0) == 0) {
+      std::string codec = Trim(line.substr(rtpmap_prefix.size()));
+      std::transform(codec.begin(), codec.end(), codec.begin(),
+                     [](unsigned char c) { return std::tolower(c); });
+      has_rtx_mapping = codec == "rtx/90000";
+    }
+
+    if (line.rfind(fmtp_prefix, 0) == 0) {
+      std::istringstream parameters(line.substr(fmtp_prefix.size()));
+      std::string parameter;
+      while (std::getline(parameters, parameter, ';')) {
+        parameter = Trim(parameter);
+        const size_t separator = parameter.find('=');
+        if (separator != std::string::npos &&
+            Trim(parameter.substr(0, separator)) == "apt" &&
+            Trim(parameter.substr(separator + 1)) == media_payload) {
+          has_matching_apt = true;
+        }
+      }
+    }
+
+    has_nack_feedback |= line == nack_feedback || line == "a=rtcp-fb:* nack";
+    capabilities.fir |=
+        line == fir_feedback || line == "a=rtcp-fb:* ccm fir";
+    capabilities.reduced_size_rtcp |= line == "a=rtcp-rsize";
+  }
+
+  capabilities.rtx =
+      payload_on_media_line && has_rtx_mapping && has_matching_apt;
+  capabilities.nack = capabilities.rtx && has_nack_feedback;
+  return capabilities;
+}
+
+std::string BuildVideoTransportAttributes(const std::string& media_payload,
+                                          bool include_rtx, bool include_nack,
+                                          bool include_fir,
+                                          bool include_reduced_size_rtcp) {
+  std::string attributes;
+  if (include_rtx) {
+    const std::string rtx_payload =
+        std::to_string(rtp::PAYLOAD_TYPE::RTX);
+    attributes += "a=rtpmap:" + rtx_payload + " rtx/90000\n";
+    attributes +=
+        "a=fmtp:" + rtx_payload + " apt=" + media_payload + "\n";
+  }
+  if (include_nack) {
+    attributes += "a=rtcp-fb:" + media_payload + " nack\n";
+  }
+  if (include_fir) {
+    attributes += "a=rtcp-fb:" + media_payload + " ccm fir\n";
+  }
+  if (include_reduced_size_rtcp) {
+    attributes += "a=rtcp-rsize\n";
+  }
+  return attributes;
+}
+
+void ConfigureMediaSection(std::string& sdp, const std::string& media_tag,
+                           const std::string& capability,
+                           const std::string& attributes) {
+  const size_t section_start = sdp.find("m=" + media_tag);
+  if (section_start == std::string::npos) {
+    return;
+  }
+
+  size_t media_line_end = sdp.find('\n', section_start);
+  if (media_line_end == std::string::npos) {
+    media_line_end = sdp.size();
+  }
+  const size_t replace_pos = sdp.find("ICE/SDP", section_start);
+  if (replace_pos != std::string::npos && replace_pos < media_line_end) {
+    sdp.replace(replace_pos, strlen("ICE/SDP"), capability);
+  }
+
+  const size_t next_section = sdp.find("\nm=", section_start + 1);
+  const size_t insert_pos =
+      next_section == std::string::npos ? sdp.size() : next_section + 1;
+  sdp.insert(insert_pos, attributes);
+}
+
+}  // namespace
 
 IceTransport::IceTransport(
     std::shared_ptr<SystemClock> clock, bool offer_peer,
@@ -287,97 +453,62 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
 
 bool IceTransport::ParseRtcpPacket(const uint8_t* buffer, size_t size,
                                    RtcpPacketInfo* rtcp_packet_info) {
-  RtcpCommonHeader rtcp_block;
-  // If a sender report is received but no DLRR, we need to reset the
-  // roundTripTime stat according to the standard, see
-  // https://www.w3.org/TR/webrtc-stats/#dom-rtcremoteoutboundrtpstreamstats-roundtriptime
-  struct RtcpReceivedBlock {
-    bool sender_report = false;
-    bool dlrr = false;
-  };
-  // For each remote SSRC we store if we've received a sender report or a DLRR
-  // block.
+  if (!buffer || !rtcp_packet_info || size == 0) {
+    return false;
+  }
+
+  const uint8_t* next_block = buffer;
+  size_t remaining = size;
   bool valid = true;
-  if (!rtcp_block.Parse(buffer, size)) {
-    valid = false;
-    return valid;
+  while (remaining > 0) {
+    RtcpCommonHeader rtcp_block;
+    if (!rtcp_block.Parse(next_block, remaining)) {
+      return false;
+    }
+    const size_t block_size = rtcp_block.packet_size();
+    if (block_size == 0 || block_size > remaining) {
+      return false;
+    }
+    bool block_valid = true;
+    switch (rtcp_block.type()) {
+      case RtcpPacket::RtcpPayloadType::SR:
+        block_valid = HandleSenderReport(rtcp_block, rtcp_packet_info);
+        break;
+      case RtcpPacket::RtcpPayloadType::RR:
+        block_valid = HandleReceiverReport(rtcp_block, rtcp_packet_info);
+        break;
+      case RtpFeedback::kPacketType:
+        switch (rtcp_block.fmt()) {
+          case webrtc::rtcp::CongestionControlFeedback::kFeedbackMessageType:
+            block_valid =
+                HandleCongestionControlFeedback(rtcp_block, rtcp_packet_info);
+            break;
+          case webrtc::rtcp::Nack::kFeedbackMessageType:
+            block_valid = HandleNack(rtcp_block, rtcp_packet_info);
+            break;
+          default:
+            break;
+        }
+        break;
+      case webrtc::rtcp::Fir::kPacketType:
+        if (rtcp_block.fmt() ==
+            webrtc::rtcp::Fir::kFeedbackMessageType) {
+          block_valid = HandleFir(rtcp_block, rtcp_packet_info);
+        }
+        break;
+      default:
+        break;
+    }
+    valid = valid && block_valid;
+    next_block = rtcp_block.NextPacket();
+    remaining -= block_size;
   }
 
-  switch (rtcp_block.type()) {
-    case RtcpPacket::RtcpPayloadType::SR:
-      valid = HandleSenderReport(rtcp_block, rtcp_packet_info);
-      // received_blocks[rtcp_packet_info->remote_ssrc].sender_report = true;
-      break;
-    case RtcpPacket::RtcpPayloadType::RR:
-      valid = HandleReceiverReport(rtcp_block, rtcp_packet_info);
-      break;
-    case RtpFeedback::kPacketType:
-      switch (rtcp_block.fmt()) {
-        case webrtc::rtcp::CongestionControlFeedback::kFeedbackMessageType:
-          valid = HandleCongestionControlFeedback(rtcp_block, rtcp_packet_info);
-          break;
-        case webrtc::rtcp::Nack::kFeedbackMessageType:
-          valid = HandleNack(rtcp_block, rtcp_packet_info);
-          break;
-        case webrtc::rtcp::Fir::kFeedbackMessageType:
-          valid = HandleFir(rtcp_block, rtcp_packet_info);
-          break;
-        default:
-          break;
-      }
-      break;
-
-    // case rtcp::Psfb::kPacketType:
-    //   switch (rtcp_block.fmt()) {
-    //     case rtcp::Pli::kFeedbackMessageType:
-    //       valid = HandlePli(rtcp_block, rtcp_packet_info);
-    //       break;
-    //     case rtcp::Fir::kFeedbackMessageType:
-    //       valid = HandleFir(rtcp_block, rtcp_packet_info);
-    //       break;
-    //     case rtcp::Psfb::kAfbMessageType:
-    //       HandlePsfbApp(rtcp_block, rtcp_packet_info);
-    //       break;
-    //     default:
-    //       ++num_skipped_packets_;
-    //       break;
-    //   }
-    //   break;
-    default:
-      break;
+  if (valid && ice_transport_controller_ &&
+      !rtcp_packet_info->report_block_datas.empty()) {
+    ice_transport_controller_->OnReceiverReport(
+        rtcp_packet_info->report_block_datas);
   }
-
-  // if (num_skipped_packets_ > 0) {
-  //   const Timestamp now = env_.clock().CurrentTime();
-  //   if (now - last_skipped_packets_warning_ >= kMaxWarningLogInterval) {
-  //     last_skipped_packets_warning_ = now;
-  //     RTC_LOG(LS_WARNING)
-  //         << num_skipped_packets_
-  //         << " RTCP blocks were skipped due to being malformed or of "
-  //            "unrecognized/unsupported type, during the past "
-  //         << kMaxWarningLogInterval << " period.";
-  //   }
-  // }
-
-  // if (!valid) {
-  //   ++num_skipped_packets_;
-  //   return false;
-  // }
-
-  // for (const auto &rb : received_blocks) {
-  //   if (rb.second.sender_report && !rb.second.dlrr) {
-  //     auto rtt_stats = non_sender_rtts_.find(rb.first);
-  //     if (rtt_stats != non_sender_rtts_.end()) {
-  //       rtt_stats->second.Invalidate();
-  //     }
-  //   }
-  // }
-
-  // if (packet_type_counter_observer_) {
-  //   packet_type_counter_observer_->RtcpPacketTypesCounterUpdated(
-  //       local_media_ssrc(), packet_type_counter_);
-  // }
-
   return valid;
 }
 
@@ -441,10 +572,6 @@ bool IceTransport::HandleReceiverReport(const RtcpCommonHeader& rtcp_block,
     HandleReportBlock(rtcp_report_block, rtcp_packet_info, remote_ssrc);
   }
 
-  if (ice_transport_controller_) {
-    ice_transport_controller_->OnReceiverReport(
-        rtcp_packet_info->report_block_datas);
-  }
   return true;
 }
 
@@ -474,7 +601,8 @@ bool IceTransport::HandleNack(const RtcpCommonHeader& rtcp_block,
   }
 
   if (ice_transport_controller_) {
-    ice_transport_controller_->OnReceiveNack(nack.packet_ids());
+    ice_transport_controller_->OnReceiveNack(nack.media_ssrc(),
+                                             nack.packet_ids());
     return true;
   }
 
@@ -489,7 +617,9 @@ bool IceTransport::HandleFir(const RtcpCommonHeader& rtcp_block,
   }
 
   if (ice_transport_controller_) {
-    ice_transport_controller_->FullIntraRequest();
+    for (const auto& request : fir.requests()) {
+      ice_transport_controller_->FullIntraRequest(request.ssrc);
+    }
     return true;
   }
 
@@ -506,6 +636,13 @@ int IceTransport::DestroyIceTransmission() {
 
   if (ice_io_statistics_) {
     ice_io_statistics_->Stop();
+  }
+
+  // Reject new RTP/RTCP writes before joining media workers. IceAgent::Send is
+  // explicitly non-blocking, so any in-flight writer leaves promptly and the
+  // controller can stop without waiting on libnice backpressure.
+  if (ice_agent_) {
+    ice_agent_->StopSending();
   }
 
   if (ice_transport_controller_) {
@@ -541,6 +678,7 @@ int IceTransport::GatherCandidates() {
 }
 
 int IceTransport::SetRemoteSdp(const std::string& remote_sdp) {
+  remote_sdp_ = remote_sdp;
   std::string media_stream_sdp = GetRemoteCapabilities(remote_sdp);
   if (media_stream_sdp.empty()) {
     LOG_ERROR("Set remote sdp failed due to negotiation failed");
@@ -556,7 +694,7 @@ int IceTransport::SetRemoteSdp(const std::string& remote_sdp) {
 
 int IceTransport::SendOffer() {
   local_sdp_ = ice_agent_->GenerateLocalSdp();
-  AppendLocalCapabilitiesToOffer(local_sdp_);
+  AppendLocalCapabilitiesToOffer();
 
   if (enable_srtp_) {
     local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
@@ -577,7 +715,7 @@ int IceTransport::SendOffer() {
 
 int IceTransport::SendAnswer() {
   local_sdp_ = ice_agent_->GenerateLocalSdp();
-  AppendLocalCapabilitiesToAnswer(local_sdp_);
+  AppendLocalCapabilitiesToAnswer();
 
   if (enable_srtp_) {
     local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
@@ -612,13 +750,47 @@ int IceTransport::AddDataStream(const std::string& stream_id, bool reliable) {
   return 0;
 }
 
-int IceTransport::AppendLocalCapabilitiesToOffer(
-    const std::string& remote_sdp) {
+void IceTransport::AppendLocalSenderSsrcAttributes(
+    bool include_video_rtx, std::string& video_attributes,
+    std::string& audio_attributes, std::string& data_attributes) {
+  for (const auto& stream_id : video_stream_ids_) {
+    const uint32_t ssrc =
+        ice_transport_controller_->AddVideoSendChannel(stream_id);
+    video_senders_ssrc_[stream_id] = ssrc;
+    if (include_video_rtx) {
+      const uint32_t rtx_ssrc =
+          ice_transport_controller_->GetVideoRtxSsrc(stream_id);
+      video_attributes += BuildRtxSsrcAttributes(stream_id, ssrc, rtx_ssrc);
+    } else {
+      video_attributes +=
+          "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+    }
+  }
+
+  for (const auto& stream_id : audio_stream_ids_) {
+    const uint32_t ssrc =
+        ice_transport_controller_->AddAudioSendChannel(stream_id);
+    audio_senders_ssrc_[stream_id] = ssrc;
+    audio_attributes +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+  }
+
+  for (const auto& [stream_id, reliable] : data_stream_ids_) {
+    const uint32_t ssrc =
+        ice_transport_controller_->AddDataSendChannel(stream_id, reliable);
+    data_senders_ssrc_[stream_id] = ssrc;
+    data_attributes +=
+        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
+    data_attributes += "a=x-reliable-data:" + std::to_string(ssrc) + " " +
+                       (reliable ? "1" : "0") + "\n";
+  }
+}
+
+int IceTransport::AppendLocalCapabilitiesToOffer() {
   std::string preferred_video_pt;
-  std::string to_replace = "ICE/SDP";
   std::string video_capabilities = "UDP/TLS/RTP/SAVPF ";
-  std::string audio_capabilities = "UDP/TLS/RTP/SAVPF 111";
-  std::string data_capabilities = "UDP/TLS/RTP/SAVPF 120 121";
+  const std::string audio_capabilities = "UDP/TLS/RTP/SAVPF 111";
+  const std::string data_capabilities = "UDP/TLS/RTP/SAVPF 120 121";
 
   switch (prefered_video_payload_type_) {
     case rtp::PAYLOAD_TYPE::H264: {
@@ -637,221 +809,159 @@ int IceTransport::AppendLocalCapabilitiesToOffer(
       break;
     }
   }
+  video_capabilities += " " + std::to_string(rtp::PAYLOAD_TYPE::RTX);
 
-  std::size_t video_start = remote_sdp.find("m=video");
-  std::size_t video_end = remote_sdp.find("\n", video_start);
-  std::size_t audio_start = remote_sdp.find("m=audio");
-  std::size_t audio_end = remote_sdp.find("\n", audio_start);
-  std::size_t data_start = remote_sdp.find("m=data");
-  std::size_t data_end = remote_sdp.find("\n", data_start);
-
-  size_t pos = 0;
-  if (video_start != std::string::npos && video_end != std::string::npos) {
-    if ((pos = local_sdp_.find(to_replace, video_start)) != std::string::npos) {
-      local_sdp_.replace(pos, to_replace.length(), video_capabilities);
-      pos += video_capabilities.length();
-    }
-  }
-
-  if (audio_start != std::string::npos && audio_end != std::string::npos) {
-    if ((pos = local_sdp_.find(to_replace, audio_start)) != std::string::npos) {
-      local_sdp_.replace(pos, to_replace.length(), audio_capabilities);
-      pos += audio_capabilities.length();
-    }
-  }
-
-  if (data_start != std::string::npos && data_end != std::string::npos) {
-    if ((pos = local_sdp_.find(to_replace, data_start)) != std::string::npos) {
-      local_sdp_.replace(pos, to_replace.length(), data_capabilities);
-      pos += data_capabilities.length();
-    }
-  }
-
-  std::string video_ssrc_lines;
+  std::string video_ssrc_lines = BuildVideoTransportAttributes(
+      preferred_video_pt, true, true, true, true);
   std::string audio_ssrc_lines;
   std::string data_ssrc_lines;
+  AppendLocalSenderSsrcAttributes(true, video_ssrc_lines, audio_ssrc_lines,
+                                  data_ssrc_lines);
 
-  for (auto& stream_id : video_stream_ids_) {
-    uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
-    video_senders_ssrc_[stream_id] = ssrc;
-    video_ssrc_lines +=
-        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
-  }
-
-  for (auto& stream_id : audio_stream_ids_) {
-    uint32_t ssrc = ice_transport_controller_->AddAudioSendChannel(stream_id);
-    audio_senders_ssrc_[stream_id] = ssrc;
-    audio_ssrc_lines +=
-        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
-  }
-
-  for (const auto& kv : data_stream_ids_) {
-    const std::string& stream_id = kv.first;
-    bool reliable = kv.second;
-    uint32_t ssrc =
-        ice_transport_controller_->AddDataSendChannel(stream_id, reliable);
-    data_senders_ssrc_[stream_id] = ssrc;
-    data_ssrc_lines +=
-        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
-    data_ssrc_lines += "a=x-reliable-data:" + std::to_string(ssrc) + " " +
-                       (reliable ? "1" : "0") + "\n";
-  }
-
-  auto insert_ssrc = [&](const std::string& media_tag,
-                         const std::string& ssrc_lines) {
-    size_t m_line_start = local_sdp_.find("m=" + media_tag);
-    if (m_line_start == std::string::npos) return;
-
-    size_t m_line_end = local_sdp_.find("\n", m_line_start);
-    if (m_line_end == std::string::npos) m_line_end = local_sdp_.length();
-
-    size_t next_m_line = local_sdp_.find("\nm=", m_line_end);
-    if (next_m_line == std::string::npos) {
-      next_m_line = local_sdp_.length();
-    } else {
-      next_m_line += 1;  // skip '\n'
-    }
-
-    local_sdp_.insert(next_m_line, ssrc_lines);
-  };
-
-  insert_ssrc("video", video_ssrc_lines);
-  insert_ssrc("audio", audio_ssrc_lines);
-  insert_ssrc("data", data_ssrc_lines);
+  ConfigureMediaSection(local_sdp_, "video", video_capabilities,
+                        video_ssrc_lines);
+  ConfigureMediaSection(local_sdp_, "audio", audio_capabilities,
+                        audio_ssrc_lines);
+  ConfigureMediaSection(local_sdp_, "data", data_capabilities,
+                        data_ssrc_lines);
 
   return 0;
 }
 
-int IceTransport::AppendLocalCapabilitiesToAnswer(
-    const std::string& local_sdp) {
-  local_sdp_ = local_sdp;
+int IceTransport::AppendLocalCapabilitiesToAnswer() {
+  const std::string protocol = "UDP/TLS/RTP/SAVPF ";
+  const VideoTransportCapabilities remote_video_capabilities =
+      ParseVideoTransportCapabilities(GetMediaSection(remote_sdp_, "video"),
+                                      negotiated_video_pt_);
 
-  std::string to_replace = "ICE/SDP";
-  std::string protocol = "UDP/TLS/RTP/SAVPF ";
-
-  std::string negotiated_video_pt =
+  std::string negotiated_video_capability =
       protocol + std::to_string(negotiated_video_pt_);
-  std::string negotiated_audio_pt =
+  if (remote_video_capabilities.rtx) {
+    negotiated_video_capability +=
+        " " + std::to_string(rtp::PAYLOAD_TYPE::RTX);
+  }
+  const std::string negotiated_audio_pt =
       protocol + std::to_string(negotiated_audio_pt_);
-  std::string negotiated_data_pt =
+  const std::string negotiated_data_pt =
       protocol + std::to_string(negotiated_data_pt_);
 
-  std::string video_ssrc_lines;
+  const std::string negotiated_video_pt =
+      std::to_string(negotiated_video_pt_);
+
+  std::string video_ssrc_lines = BuildVideoTransportAttributes(
+      negotiated_video_pt, remote_video_capabilities.rtx,
+      remote_video_capabilities.nack, remote_video_capabilities.fir,
+      remote_video_capabilities.reduced_size_rtcp);
   std::string audio_ssrc_lines;
   std::string data_ssrc_lines;
-
-  for (auto& stream_id : video_stream_ids_) {
-    uint32_t ssrc = ice_transport_controller_->AddVideoSendChannel(stream_id);
-    video_senders_ssrc_[stream_id] = ssrc;
-    video_ssrc_lines +=
-        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
-  }
-
-  for (auto& stream_id : audio_stream_ids_) {
-    uint32_t ssrc = ice_transport_controller_->AddAudioSendChannel(stream_id);
-    audio_senders_ssrc_[stream_id] = ssrc;
-    audio_ssrc_lines +=
-        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
-  }
-
-  for (const auto& kv : data_stream_ids_) {
-    const std::string& stream_id = kv.first;
-    bool reliable = kv.second;
-    uint32_t ssrc =
-        ice_transport_controller_->AddDataSendChannel(stream_id, reliable);
-    data_senders_ssrc_[stream_id] = ssrc;
-    data_ssrc_lines +=
-        "a=ssrc:" + std::to_string(ssrc) + " name:" + stream_id + "\n";
-    data_ssrc_lines += "a=x-reliable-data:" + std::to_string(ssrc) + " " +
-                       (reliable ? "1" : "0") + "\n";
-  }
+  AppendLocalSenderSsrcAttributes(remote_video_capabilities.rtx,
+                                  video_ssrc_lines, audio_ssrc_lines,
+                                  data_ssrc_lines);
 
   if (ice_transport_controller_) {
     ice_transport_controller_->Create(
         offer_peer_, remote_user_id_, negotiated_video_pt_,
-        hardware_acceleration_, on_receive_video_, on_receive_audio_,
-        on_receive_data_, user_data_);
+        remote_video_capabilities.rtx, hardware_acceleration_,
+        on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
     ice_transport_controller_->Start();
   }
 
-  auto replace_capability_and_insert_ssrc = [&](const std::string& media_tag,
-                                                const std::string& capability,
-                                                const std::string& ssrc_lines) {
-    size_t m_line_start = local_sdp_.find("m=" + media_tag);
-    if (m_line_start == std::string::npos) return;
-
-    size_t m_line_end = local_sdp_.find("\n", m_line_start);
-    if (m_line_end == std::string::npos) m_line_end = local_sdp_.length();
-
-    size_t replace_pos = local_sdp_.find(to_replace, m_line_start);
-    if (replace_pos != std::string::npos && replace_pos < m_line_end) {
-      local_sdp_.replace(replace_pos, to_replace.length(), capability);
-    }
-
-    size_t next_m_line = local_sdp_.find("\nm=", m_line_end);
-    if (next_m_line == std::string::npos) {
-      next_m_line = local_sdp_.length();
-    } else {
-      next_m_line += 1;  // skip '\n'
-    }
-
-    local_sdp_.insert(next_m_line, ssrc_lines);
-  };
-
-  replace_capability_and_insert_ssrc("video", negotiated_video_pt,
-                                     video_ssrc_lines);
-  replace_capability_and_insert_ssrc("audio", negotiated_audio_pt,
-                                     audio_ssrc_lines);
-  replace_capability_and_insert_ssrc("data", negotiated_data_pt,
-                                     data_ssrc_lines);
+  ConfigureMediaSection(local_sdp_, "video", negotiated_video_capability,
+                        video_ssrc_lines);
+  ConfigureMediaSection(local_sdp_, "audio", negotiated_audio_pt,
+                        audio_ssrc_lines);
+  ConfigureMediaSection(local_sdp_, "data", negotiated_data_pt,
+                        data_ssrc_lines);
 
   return 0;
 }
 
 void IceTransport::ParseSsrcFromSdpAndRemove(
     std::string& sdp_block, std::map<std::string, uint32_t>& ssrc_map,
-    const std::string& media_type) {
+    const std::string& media_type,
+    std::map<std::string, uint32_t>* rtx_ssrc_map) {
   std::istringstream sdp_stream(sdp_block);
   std::string line;
   std::ostringstream new_sdp_block;
 
   std::map<uint32_t, std::string> ssrc_to_sender_id;
   std::map<uint32_t, bool> ssrc_to_reliable;
+  std::map<uint32_t, uint32_t> media_to_rtx_ssrc;
 
   while (std::getline(sdp_stream, line)) {
-    if (line.find("a=ssrc:") == 0) {
+    if (line.find("a=ssrc-group:") == 0 && media_type == "video") {
+      std::optional<RtxSsrcPair> pair = ParseRtxSsrcGroup(line);
+      if (pair.has_value()) {
+        media_to_rtx_ssrc[pair->media_ssrc] = pair->rtx_ssrc;
+      }
+    } else if (line.find("a=ssrc:") == 0) {
       size_t ssrc_pos = strlen("a=ssrc:");
       size_t space_pos = line.find(" ", ssrc_pos);
       if (space_pos == std::string::npos) continue;
 
       std::string ssrc_str = line.substr(ssrc_pos, space_pos - ssrc_pos);
-      uint32_t ssrc = std::stoul(ssrc_str);
+      const std::optional<uint32_t> parsed_ssrc = ParseUint32(ssrc_str);
+      if (!parsed_ssrc.has_value()) {
+        LOG_WARN("Ignoring invalid {} SSRC [{}]", media_type, ssrc_str);
+        continue;
+      }
+      const uint32_t ssrc = *parsed_ssrc;
 
       std::string attribute = line.substr(space_pos + 1);
       if (attribute.find("name:") == 0) {
         std::string sender_id = attribute.substr(strlen("name:"));
-        ssrc_map[sender_id] = ssrc;
-        ssrc_to_sender_id[ssrc] = sender_id;
-        if (media_type == "video") {
-          remote_video_stream_ids_.push_back(sender_id);
-        } else if (media_type == "audio") {
-          remote_audio_stream_ids_.push_back(sender_id);
-        } else if (media_type == "data") {
-          remote_data_stream_ids_.push_back(sender_id);
+        if (!sender_id.empty() && sender_id.back() == '\r') {
+          sender_id.pop_back();
         }
+        ssrc_to_sender_id[ssrc] = sender_id;
       }
     } else if (line.find("a=x-reliable-data:") == 0 && media_type == "data") {
       size_t prefix_len = strlen("a=x-reliable-data:");
       size_t space_pos = line.find(" ", prefix_len);
       if (space_pos != std::string::npos) {
         std::string ssrc_str = line.substr(prefix_len, space_pos - prefix_len);
-        std::string value_str = line.substr(space_pos + 1);
-        uint32_t ssrc = std::stoul(ssrc_str);
-        bool reliable = (value_str == "1");
-        ssrc_to_reliable[ssrc] = reliable;
+        const std::optional<uint32_t> parsed_ssrc = ParseUint32(ssrc_str);
+        if (!parsed_ssrc.has_value()) {
+          LOG_WARN("Ignoring invalid data SSRC [{}]", ssrc_str);
+          continue;
+        }
+        const std::string value_str = Trim(line.substr(space_pos + 1));
+        ssrc_to_reliable[*parsed_ssrc] = value_str == "1";
       }
     } else {
       new_sdp_block << line << "\n";
+    }
+  }
+
+  std::set<uint32_t> rtx_ssrcs;
+  for (const auto& mapping : media_to_rtx_ssrc) {
+    rtx_ssrcs.insert(mapping.second);
+  }
+
+  for (const auto& [ssrc, sender_id] : ssrc_to_sender_id) {
+    if (media_type == "video" && rtx_ssrcs.find(ssrc) != rtx_ssrcs.end()) {
+      continue;
+    }
+    if (sender_id.empty()) {
+      continue;
+    }
+    ssrc_map[sender_id] = ssrc;
+    if (media_type == "video") {
+      remote_video_stream_ids_.push_back(sender_id);
+    } else if (media_type == "audio") {
+      remote_audio_stream_ids_.push_back(sender_id);
+    } else if (media_type == "data") {
+      remote_data_stream_ids_.push_back(sender_id);
+    }
+  }
+
+  if (media_type == "video" && rtx_ssrc_map) {
+    for (const auto& [media_ssrc, rtx_ssrc] : media_to_rtx_ssrc) {
+      auto sender_it = ssrc_to_sender_id.find(media_ssrc);
+      if (sender_it != ssrc_to_sender_id.end() &&
+          !sender_it->second.empty()) {
+        (*rtx_ssrc_map)[sender_it->second] = rtx_ssrc;
+      }
     }
   }
 
@@ -880,6 +990,7 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   std::size_t end_of_sdp = remote_sdp.length();
 
   std::map<std::string, uint32_t> video_ssrc_map;
+  std::map<std::string, uint32_t> video_rtx_ssrc_map;
   std::map<std::string, uint32_t> audio_ssrc_map;
   std::map<std::string, uint32_t> data_ssrc_map;
 
@@ -892,8 +1003,10 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
          candidate_start != std::string::npos ? candidate_start : end_of_sdp});
     std::string video_sdp =
         remote_sdp.substr(video_start, video_end - video_start);
-    ParseSsrcFromSdpAndRemove(video_sdp, video_ssrc_map, "video");
+    ParseSsrcFromSdpAndRemove(video_sdp, video_ssrc_map, "video",
+                              &video_rtx_ssrc_map);
     video_receivers_ssrc_ = video_ssrc_map;
+    video_receivers_rtx_ssrc_ = video_rtx_ssrc_map;
     media_stream_sdp += video_sdp;
   }
 
@@ -944,8 +1057,13 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
     }
 
     for (const auto& entry : video_receivers_ssrc_) {
-      ice_transport_controller_->AddVideoReceiveChannel(entry.first,
-                                                        entry.second);
+      uint32_t rtx_ssrc = 0;
+      auto rtx_it = video_receivers_rtx_ssrc_.find(entry.first);
+      if (rtx_it != video_receivers_rtx_ssrc_.end()) {
+        rtx_ssrc = rtx_it->second;
+      }
+      ice_transport_controller_->AddVideoReceiveChannel(
+          entry.first, entry.second, rtx_ssrc);
     }
     for (const auto& entry : audio_receivers_ssrc_) {
       ice_transport_controller_->AddAudioReceiveChannel(entry.first,
@@ -966,10 +1084,13 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
     if (!NegotiateDataPayloadType(remote_sdp)) return std::string();
 
     if (ice_transport_controller_ && offer_peer_) {
+      const VideoTransportCapabilities remote_video_capabilities =
+          ParseVideoTransportCapabilities(
+              GetMediaSection(remote_sdp, "video"), negotiated_video_pt_);
       ice_transport_controller_->Create(
           offer_peer_, remote_user_id_, negotiated_video_pt_,
-          hardware_acceleration_, on_receive_video_, on_receive_audio_,
-          on_receive_data_, user_data_);
+          remote_video_capabilities.rtx, hardware_acceleration_,
+          on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
       ice_transport_controller_->Start();
     }
 

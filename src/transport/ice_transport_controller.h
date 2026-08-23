@@ -61,9 +61,9 @@ class IceTransportController
  public:
   void Create(bool offer_peer, std::string remote_user_id,
               rtp::PAYLOAD_TYPE video_codec_payload_type,
-              bool hardware_acceleration, OnReceiveVideo on_receive_video,
-              OnReceiveAudio on_receive_audio, OnReceiveData on_receive_data,
-              void* user_data);
+              bool video_rtx_enabled, bool hardware_acceleration,
+              OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
+              OnReceiveData on_receive_data, void* user_data);
   void Destroy();
 
   // SRTP is negotiated from the local setting and the remote SDP before
@@ -72,11 +72,12 @@ class IceTransportController
   void SetSrtpEnabled(bool enable_srtp) { enable_srtp_ = enable_srtp; }
 
   uint32_t AddVideoSendChannel(const std::string& channel_name);
+  uint32_t GetVideoRtxSsrc(const std::string& channel_name);
   uint32_t AddAudioSendChannel(const std::string& channel_name);
   uint32_t AddDataSendChannel(const std::string& channel_name, bool reliable);
 
   uint32_t AddVideoReceiveChannel(const std::string& channel_name,
-                                  uint32_t ssrc);
+                                  uint32_t ssrc, uint32_t rtx_ssrc = 0);
   uint32_t AddAudioReceiveChannel(const std::string& channel_name,
                                   uint32_t ssrc);
   uint32_t AddDataReceiveChannel(const std::string& channel_name, uint32_t ssrc,
@@ -89,7 +90,7 @@ class IceTransportController
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);
 
-  void FullIntraRequest() { b_force_i_frame_ = true; }
+  void FullIntraRequest();
   void FullIntraRequest(const std::string& channel_name) {
     if (channel_name.empty()) {
       FullIntraRequest();
@@ -98,6 +99,7 @@ class IceTransportController
     std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
     force_i_frame_streams_.insert(channel_name);
   }
+  void FullIntraRequest(uint32_t media_ssrc);
   void FullIntraRequestAllVideoStreams();
 
   void UpdateNetworkAvaliablity(bool network_available);
@@ -124,7 +126,8 @@ class IceTransportController
   void OnReceiverReport(const std::vector<RtcpReportBlock>& report_block_datas);
   void OnCongestionControlFeedback(
       const webrtc::rtcp::CongestionControlFeedback& feedback);
-  void OnReceiveNack(const std::vector<uint16_t>& nack_sequence_numbers);
+  void OnReceiveNack(uint32_t media_ssrc,
+                     const std::vector<uint16_t>& nack_sequence_numbers);
 
  private:
   int CreateCodecs(std::shared_ptr<SystemClock> clock,
@@ -133,8 +136,19 @@ class IceTransportController
                          bool hardware_acceleration, bool av1_encoding);
 
  private:
+  struct PacketFeedbackRegistration {
+    int64_t send_time_ms = 0;
+    bool tracked = false;
+  };
+
+  PacketFeedbackRegistration RegisterPacketForFeedback(
+      const webrtc::RtpPacketToSend& packet,
+      const webrtc::PacedPacketInfo& pacing_info);
+  void RollbackPacketFeedback(
+      const webrtc::RtpPacketToSend& packet,
+      const PacketFeedbackRegistration& registration);
   void OnSentPacket(const webrtc::RtpPacketToSend& packet,
-                    const webrtc::PacedPacketInfo& pacing_info);
+                    const PacketFeedbackRegistration& registration);
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateVideoBitrateAllocation();
   void UpdateControlState();
@@ -158,6 +172,7 @@ class IceTransportController
    public:
     std::string name;
     std::optional<uint32_t> ssrc;
+    std::optional<uint32_t> rtx_ssrc;
     StreamType type;
     StreamDirection direction;
 
@@ -223,6 +238,7 @@ class IceTransportController
   std::atomic<bool> is_running_;
 
   bool enable_srtp_;
+  bool video_rtx_enabled_ = false;
   std::atomic<bool> ice_ready_{false};
   std::atomic<bool> dtls_ready_{false};
   std::atomic<bool> media_transport_ready_{false};
@@ -237,6 +253,7 @@ class IceTransportController
   std::shared_ptr<SystemClock> clock_;
   std::shared_ptr<webrtc::Clock> webrtc_clock_ = nullptr;
   webrtc::TransportFeedbackAdapter transport_feedback_adapter_;
+  mutable std::mutex transport_feedback_adapter_mutex_;
   std::unique_ptr<CongestionControl> controller_;
   BitrateProber prober_;
   std::shared_ptr<TaskQueue> task_queue_cc_;

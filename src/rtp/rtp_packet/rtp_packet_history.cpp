@@ -7,11 +7,10 @@ namespace minirtc {
 
 RtpPacketHistory::StoredPacket::StoredPacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet,
-    webrtc::Timestamp send_time, uint64_t insert_order)
+    webrtc::Timestamp send_time)
     : packet_(std::move(packet)),
       pending_transmission_(false),
       send_time_(send_time),
-      insert_order_(insert_order),
       times_retransmitted_(0) {}
 
 RtpPacketHistory::StoredPacket::StoredPacket(StoredPacket&&) = default;
@@ -25,9 +24,8 @@ void RtpPacketHistory::StoredPacket::IncrementTimesRetransmitted() {
 
 RtpPacketHistory::RtpPacketHistory(std::shared_ptr<SystemClock> clock)
     : clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
-      rtt_(webrtc::TimeDelta::MinusInfinity()),
-      number_to_store_(kMaxCapacity),
-      packets_inserted_(0) {}
+      rtt_(webrtc::TimeDelta::Millis(100)),
+      number_to_store_(kMaxCapacity) {}
 
 RtpPacketHistory::~RtpPacketHistory() {}
 
@@ -59,9 +57,12 @@ void RtpPacketHistory::PutRtpPacket(
     packet_history_.emplace_back();
   }
 
-  packet_history_[packet_index] = {std::move(rtp_packet),
-                                   webrtc::Timestamp::Micros(send_time),
-                                   packets_inserted_++};
+  packet_history_[packet_index] = {
+      std::move(rtp_packet), webrtc::Timestamp::Micros(send_time)};
+  // A discontinuous sequence jump can expand the deque by more than one slot
+  // in this insertion. Cull again so the hard capacity also holds for that
+  // case, not only for the normal contiguous path.
+  RemoveDeadPackets();
 }
 
 void RtpPacketHistory::RemoveDeadPackets() {
@@ -71,14 +72,16 @@ void RtpPacketHistory::RemoveDeadPackets() {
           ? (std::max)(kMinPacketDurationRtt * rtt_, kMinPacketDuration)
           : kMinPacketDuration;
   while (!packet_history_.empty()) {
-    if (packet_history_.size() >= kMaxCapacity) {
-      // We have reached the absolute max capacity, remove one packet
-      // unconditionally.
+    const StoredPacket& stored_packet = packet_history_.front();
+    if (packet_history_.size() > kMaxCapacity) {
+      // The pacer owns a complete RTX copy, so even a pending oldest entry can
+      // be evicted without invalidating the queued datagram. Keeping it instead
+      // would let one lost completion callback disable the capacity limit
+      // forever.
       RemovePacket(0);
       continue;
     }
 
-    const StoredPacket& stored_packet = packet_history_.front();
     if (stored_packet.pending_transmission_) {
       // Don't remove packets in the pacer queue, pending tranmission.
       return;
@@ -153,6 +156,18 @@ void RtpPacketHistory::MarkPacketAsSent(uint16_t sequence_number) {
   packet->set_send_time(clock_->CurrentTime());
   packet->pending_transmission_ = false;
   packet->IncrementTimesRetransmitted();
+}
+
+void RtpPacketHistory::MarkPacketAsAborted(uint16_t sequence_number) {
+  StoredPacket* packet = GetStoredPacket(sequence_number);
+  if (packet == nullptr) {
+    return;
+  }
+
+  // The retransmission never reached the transport. Allow a later NACK to
+  // create a fresh RTX packet without counting this attempt or delaying it by
+  // an RTT.
+  packet->pending_transmission_ = false;
 }
 
 bool RtpPacketHistory::VerifyRtt(

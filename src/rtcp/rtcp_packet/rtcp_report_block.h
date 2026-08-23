@@ -60,6 +60,8 @@ class RtcpReportBlock {
   uint32_t Jitter() const { return jitter_; }
   uint32_t LastSr() const { return last_sr_; }
   uint32_t DelaySinceLastSr() const { return delay_since_last_sr_; }
+  bool HasRtt() const { return num_rtts_ != 0; }
+  int64_t LastRtt() const { return last_rtt_; }
 
  private:
   uint32_t sender_ssrc_;

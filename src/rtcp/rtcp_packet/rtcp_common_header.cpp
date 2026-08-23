@@ -29,17 +29,21 @@ namespace minirtc {
 
 int RtcpCommonHeader::Create(uint8_t version, uint8_t has_padding,
                              uint8_t count_or_format, uint8_t payload_type,
-                             uint16_t length, uint8_t* buffer) {
+                             uint16_t length_in_words_minus_one,
+                             uint8_t* buffer) {
   if (!buffer) {
     return 0;
   }
 
-  uint16_t payload_size = length - kHeaderSizeBytes;
   buffer[0] = (version << 6) | (has_padding << 5) |
               static_cast<uint8_t>(count_or_format);
   buffer[1] = payload_type;
-  buffer[2] = payload_size >> 8 & 0xFF;
-  buffer[3] = payload_size & 0xFF;
+  // RFC 3550 encodes the packet size as the number of 32-bit words in the
+  // complete RTCP packet minus one. SenderReport and ReceiverReport already
+  // pass that wire value; subtracting the four-byte header again truncates the
+  // declared packet and makes the report body look like another RTCP block.
+  buffer[2] = length_in_words_minus_one >> 8 & 0xFF;
+  buffer[3] = length_in_words_minus_one & 0xFF;
   return 4;
 }
 

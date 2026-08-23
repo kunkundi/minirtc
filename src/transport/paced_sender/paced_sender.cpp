@@ -425,6 +425,9 @@ int PacedSender::EnqueueRtpPackets(
 
 int PacedSender::EnqueueRtpPacket(
     std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet) {
+  if (is_shutdown_.load()) {
+    return -1;
+  }
   EnqueuePacket(std::move(rtp_packet));
   return 0;
 }

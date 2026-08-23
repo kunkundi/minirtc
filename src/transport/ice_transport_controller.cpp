@@ -1,5 +1,6 @@
 #include "ice_transport_controller.h"
 
+#include <algorithm>
 #include <memory>
 #include <vector>
 
@@ -79,6 +80,7 @@ IceTransportController::~IceTransportController() {
 
 void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     rtp::PAYLOAD_TYPE video_codec_payload_type,
+                                    bool video_rtx_enabled,
                                     bool hardware_acceleration,
                                     OnReceiveVideo on_receive_video,
                                     OnReceiveAudio on_receive_audio,
@@ -86,6 +88,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     void* user_data) {
   offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
+  video_rtx_enabled_ = video_rtx_enabled;
   on_receive_video_ = on_receive_video;
   on_receive_audio_ = on_receive_audio;
   on_receive_data_ = on_receive_data;
@@ -116,49 +119,91 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
       [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet,
                   const webrtc::PacedPacketInfo& pacing_info) {
         if (auto self = weak_this.lock()) {
-          if (self->ice_agent_) {
-            webrtc::Timestamp now = self->webrtc_clock_->CurrentTime();
+          auto notify_send_failure = [&]() {
+            if (!packet || !packet->packet_type().has_value() ||
+                (packet->packet_type() != webrtc::RtpPacketMediaType::kVideo &&
+                 packet->packet_type() !=
+                     webrtc::RtpPacketMediaType::kRetransmission)) {
+              return;
+            }
+            std::shared_lock lock(self->stream_senders_mutex_);
+            auto sender_it =
+                self->stream_senders_.find(packet->get_stream_name());
+            if (sender_it != self->stream_senders_.end() &&
+                sender_it->second && sender_it->second->transceiver) {
+              sender_it->second->transceiver->OnRtpPacketSendFailed(*packet);
+            }
+          };
 
-            if (self->enable_srtp_) {
-              int len = packet->Size();
+          if (!self->ice_agent_) {
+            notify_send_failure();
+            return;
+          }
 
-              std::vector<uint8_t> srtp_packet_buf(len + 16);
-              memcpy(srtp_packet_buf.data(), packet->Buffer().data(), len);
+          std::vector<uint8_t> protected_packet;
+          const char* send_buffer = nullptr;
+          size_t send_size = 0;
 
-              auto srtp_session = self->ssrc_to_srtp_sender_[packet->Ssrc()];
-              if (srtp_session && srtp_session->valid()) {
-                if (srtp_session->protectRtp(srtp_packet_buf.data(), &len) <
-                    0) {
-                  LOG_ERROR("SRTP protect failed for stream [{}]",
-                            packet->Ssrc());
-                  return;
-                }
-              }
+          if (self->enable_srtp_) {
+            int len = packet->Size();
 
-              self->ice_agent_->Send(
-                  reinterpret_cast<const char*>(srtp_packet_buf.data()), len);
-            } else {
-              self->ice_agent_->Send((const char*)packet->Buffer().data(),
-                                     packet->Size());
+            protected_packet.resize(len + 16);
+            memcpy(protected_packet.data(), packet->Buffer().data(), len);
+
+            auto srtp_it =
+                self->ssrc_to_srtp_sender_.find(packet->Ssrc());
+            if (srtp_it == self->ssrc_to_srtp_sender_.end() ||
+                !srtp_it->second || !srtp_it->second->valid()) {
+              LOG_ERROR("No SRTP sender session for SSRC {}", packet->Ssrc());
+              notify_send_failure();
+              return;
+            }
+            if (srtp_it->second->protectRtp(protected_packet.data(), &len) < 0) {
+              LOG_ERROR("SRTP protect failed for stream [{}]", packet->Ssrc());
+              notify_send_failure();
+              return;
             }
 
-            self->OnSentPacket(*packet, pacing_info);
+            send_buffer =
+                reinterpret_cast<const char*>(protected_packet.data());
+            send_size = static_cast<size_t>(len);
+          } else {
+            send_buffer =
+                reinterpret_cast<const char*>(packet->Buffer().data());
+            send_size = packet->Size();
+          }
 
-            if (packet->packet_type().has_value()) {
-              switch (packet->packet_type().value()) {
-                case webrtc::RtpPacketMediaType::kVideo:
-                case webrtc::RtpPacketMediaType::kRetransmission: {
-                  self->last_active_stream_ = packet->get_stream_name();
-                  std::shared_lock lock(self->stream_senders_mutex_);
-                  if (self->stream_senders_.find(self->last_active_stream_) !=
-                      self->stream_senders_.end()) {
-                    self->stream_senders_[self->last_active_stream_]
-                        ->transceiver->OnSentRtpPacket(std::move(packet));
-                  }
-                } break;
-                default:
-                  break;
-              }
+          // Register synchronously before the packet can generate remote
+          // feedback. The previous asynchronous registration allowed a fast
+          // loopback peer to report the packet before it existed in history.
+          const PacketFeedbackRegistration feedback_registration =
+              self->RegisterPacketForFeedback(*packet, pacing_info);
+          const int send_result =
+              self->ice_agent_->Send(send_buffer, send_size);
+          if (send_result < 0) {
+            self->RollbackPacketFeedback(*packet, feedback_registration);
+            notify_send_failure();
+            return;
+          }
+
+          self->OnSentPacket(*packet, feedback_registration);
+
+          if (packet->packet_type().has_value()) {
+            switch (packet->packet_type().value()) {
+              case webrtc::RtpPacketMediaType::kVideo:
+              case webrtc::RtpPacketMediaType::kRetransmission: {
+                self->last_active_stream_ = packet->get_stream_name();
+                std::shared_lock lock(self->stream_senders_mutex_);
+                auto sender_it =
+                    self->stream_senders_.find(self->last_active_stream_);
+                if (sender_it != self->stream_senders_.end() &&
+                    sender_it->second && sender_it->second->transceiver) {
+                  sender_it->second->transceiver->OnSentRtpPacket(
+                      std::move(packet));
+                }
+              } break;
+              default:
+                break;
             }
           }
         }
@@ -207,8 +252,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
     for (auto& [channel_name, context] : stream_senders_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
-          context->transceiver->Initialize(video_codec_payload_type,
-                                           paced_sender_);
+          std::static_pointer_cast<VideoChannelSend>(context->transceiver)
+              ->Initialize(video_codec_payload_type, paced_sender_,
+                           video_rtx_enabled_);
         } else if (context->type == StreamType::kAudio) {
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS,
                                            paced_sender_);
@@ -333,8 +379,20 @@ uint32_t IceTransportController::AddVideoSendChannel(
       return -1;
     }
     context->ssrc = context->transceiver->GetSsrc();
+    context->rtx_ssrc = context->transceiver->GetRtxSsrc();
   }
   return context->transceiver ? context->transceiver->GetSsrc() : 0;
+}
+
+uint32_t IceTransportController::GetVideoRtxSsrc(
+    const std::string& channel_name) {
+  std::shared_lock lock(stream_senders_mutex_);
+  auto it = stream_senders_.find(channel_name);
+  if (it == stream_senders_.end() || !it->second ||
+      it->second->type != StreamType::kVideo || !it->second->transceiver) {
+    return 0;
+  }
+  return it->second->transceiver->GetRtxSsrc();
 }
 
 uint32_t IceTransportController::AddAudioSendChannel(
@@ -401,7 +459,7 @@ uint32_t IceTransportController::AddDataSendChannel(
 }
 
 uint32_t IceTransportController::AddVideoReceiveChannel(
-    const std::string& channel_name, uint32_t ssrc) {
+    const std::string& channel_name, uint32_t ssrc, uint32_t rtx_ssrc) {
   std::unique_lock lock(stream_receivers_mutex_);
   auto it = stream_receivers_.find(channel_name);
   if (it != stream_receivers_.end() && it->second) {
@@ -416,13 +474,20 @@ uint32_t IceTransportController::AddVideoReceiveChannel(
     context->type = StreamType::kVideo;
     context->direction = StreamDirection::kReceive;
     context->ssrc = ssrc;
+    if (rtx_ssrc != 0 && rtx_ssrc != ssrc) {
+      context->rtx_ssrc = rtx_ssrc;
+    }
     ssrc_to_name_[ssrc] = channel_name;
+    if (context->rtx_ssrc.has_value()) {
+      ssrc_to_name_[*context->rtx_ssrc] = channel_name;
+    }
   }
 
   if (!context->transceiver) {
     std::weak_ptr<IceTransportController> weak_self = shared_from_this();
     context->transceiver = std::make_shared<VideoChannelReceive>(
-        channel_name, ssrc, clock_, ice_agent_, ice_io_statistics_,
+        channel_name, ssrc, context->rtx_ssrc.value_or(0), clock_, ice_agent_,
+        ice_io_statistics_,
         [this, weak_self,
          channel_name](std::unique_ptr<ReceivedFrame> received_frame) {
           if (auto self = weak_self.lock()) {
@@ -559,19 +624,6 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
     return -1;
   }
 
-  bool force_i_frame = false;
-  if (b_force_i_frame_.exchange(false)) {
-    force_i_frame = true;
-  }
-  {
-    std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
-    auto it_force = force_i_frame_streams_.find(channel_name);
-    if (it_force != force_i_frame_streams_.end()) {
-      force_i_frame = true;
-      force_i_frame_streams_.erase(it_force);
-    }
-  }
-
   if (task_queue_encode_) {
     RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                        video_frame->width, video_frame->height);
@@ -588,6 +640,22 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 
     if (task_queue_encode_->PendingTasks() > 0) {
       return 0;
+    }
+
+    // Consume a key-frame request only after this frame is known to be
+    // accepted by the encode queue. Otherwise a busy queue would drop both
+    // the captured frame and the one-shot FIR request.
+    bool force_i_frame = false;
+    if (b_force_i_frame_.exchange(false)) {
+      force_i_frame = true;
+    }
+    {
+      std::lock_guard<std::mutex> lock(force_i_frame_streams_mutex_);
+      auto it_force = force_i_frame_streams_.find(channel_name);
+      if (it_force != force_i_frame_streams_.end()) {
+        force_i_frame = true;
+        force_i_frame_streams_.erase(it_force);
+      }
     }
 
     std::weak_ptr<IceTransportController> weak_self = shared_from_this();
@@ -609,8 +677,16 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
         }
         int64_t queue_delay_ms = encode_queue->CurrentTaskQueueDelayMs();
         if (force_i_frame) {
-          context->codec->ForceIdr();
-          LOG_INFO("Force I frame");
+          if (context->codec->ForceIdr() != 0) {
+            // Keep the request pending so a transient encoder failure cannot
+            // turn a recoverable loss into a long wait for the periodic IDR.
+            std::lock_guard<std::mutex> lock(
+                self->force_i_frame_streams_mutex_);
+            self->force_i_frame_streams_.insert(channel_name);
+            LOG_ERROR("Failed to force I frame for stream [{}]", channel_name);
+          } else {
+            LOG_INFO("Force I frame for stream [{}]", channel_name);
+          }
         }
         context->codec->Encode(
             std::move(frame),
@@ -813,6 +889,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   FullIntraRequest(channel_name);
 }
 
+void IceTransportController::FullIntraRequest() {
+  FullIntraRequestAllVideoStreams();
+}
+
 void IceTransportController::FullIntraRequestAllVideoStreams() {
   std::vector<std::string> channel_names;
   {
@@ -826,7 +906,8 @@ void IceTransportController::FullIntraRequestAllVideoStreams() {
   }
 
   if (channel_names.empty()) {
-    FullIntraRequest();
+    // Preserve an early request until the first video sender is available.
+    b_force_i_frame_ = true;
     return;
   }
 
@@ -834,6 +915,31 @@ void IceTransportController::FullIntraRequestAllVideoStreams() {
   for (const auto& channel_name : channel_names) {
     force_i_frame_streams_.insert(channel_name);
   }
+}
+
+void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
+  if (media_ssrc == 0) {
+    FullIntraRequestAllVideoStreams();
+    return;
+  }
+
+  std::string channel_name;
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+    for (const auto& [name, context] : stream_senders_) {
+      if (context && context->type == StreamType::kVideo &&
+          context->ssrc.value_or(0) == media_ssrc) {
+        channel_name = name;
+        break;
+      }
+    }
+  }
+
+  if (channel_name.empty()) {
+    LOG_WARN("Ignoring FIR for unknown media SSRC {}", media_ssrc);
+    return;
+  }
+  FullIntraRequest(channel_name);
 }
 
 int IceTransportController::OnVideoEncoded(
@@ -1117,6 +1223,7 @@ void IceTransportController::OnReceiveCompleteFrame(
     }
 
     std::shared_ptr<MediaCodec> codec;
+    std::shared_ptr<MediaChannel> transceiver;
     OnReceiveVideo on_receive_video = nullptr;
     std::string remote_user_id;
     void* user_data = nullptr;
@@ -1135,6 +1242,7 @@ void IceTransportController::OnReceiveCompleteFrame(
       }
 
       codec = context->codec;
+      transceiver = context->transceiver;
       on_receive_video = self->on_receive_video_;
       remote_user_id = self->remote_user_id_;
       user_data = self->user_data_;
@@ -1161,6 +1269,11 @@ void IceTransportController::OnReceiveCompleteFrame(
                            remote_user_id.size(), channel_name.data(),
                            channel_name.size(), user_data);
         });
+    if (num_frame_returned < 0 && transceiver) {
+      LOG_WARN("Decoder failed for stream [{}], requesting key frame",
+               channel_name);
+      transceiver->RequestKeyFrame();
+    }
   });
 }
 
@@ -1220,12 +1333,21 @@ void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
   SrtpEngine::Params sender_params;
   memcpy(sender_params.key, local_key_.data(), 16);
   memcpy(sender_params.salt, local_salt_.data(), 12);
+  auto add_sender_session = [&](uint32_t ssrc) {
+    if (ssrc == 0) {
+      return;
+    }
+    sender_params.ssrc = ssrc;
+    sender_params.receiver_any_inbound = false;
+    ssrc_to_srtp_sender_[ssrc] =
+        SrtpEngine::CreateSenderPtr(sender_params);
+  };
   for (auto& [channel_name, context] : stream_senders_) {
     if (context) {
-      sender_params.ssrc = context->ssrc.value_or(0);
-      sender_params.receiver_any_inbound = false;
-      ssrc_to_srtp_sender_[sender_params.ssrc] =
-          SrtpEngine::CreateSenderPtr(sender_params);
+      add_sender_session(context->ssrc.value_or(0));
+      if (context->type == StreamType::kVideo && video_rtx_enabled_) {
+        add_sender_session(context->rtx_ssrc.value_or(0));
+      }
     }
   }
 
@@ -1233,12 +1355,21 @@ void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
   SrtpEngine::Params receiver_params;
   memcpy(receiver_params.key, remote_key_.data(), 16);
   memcpy(receiver_params.salt, remote_salt_.data(), 12);
+  auto add_receiver_session = [&](uint32_t ssrc) {
+    if (ssrc == 0) {
+      return;
+    }
+    receiver_params.ssrc = ssrc;
+    receiver_params.receiver_any_inbound = false;
+    ssrc_to_srtp_receiver_[ssrc] =
+        SrtpEngine::CreateReceiverPtr(receiver_params);
+  };
   for (auto& [channel_name, context] : stream_receivers_) {
     if (context) {
-      receiver_params.ssrc = context->ssrc.value_or(0);
-      receiver_params.receiver_any_inbound = false;
-      ssrc_to_srtp_receiver_[receiver_params.ssrc] =
-          SrtpEngine::CreateReceiverPtr(receiver_params);
+      add_receiver_session(context->ssrc.value_or(0));
+      if (context->type == StreamType::kVideo) {
+        add_receiver_session(context->rtx_ssrc.value_or(0));
+      }
     }
   }
 
@@ -1397,10 +1528,16 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
 
 void IceTransportController::OnSenderReport(const SenderReport& sender_report) {
   std::shared_lock lock(stream_receivers_mutex_);
-  for (auto& [_, context] : stream_receivers_) {
-    if (context && context->transceiver) {
-      context->transceiver->OnSenderReport(sender_report);
-    }
+  auto name_it = ssrc_to_name_.find(sender_report.SenderSsrc());
+  if (name_it == ssrc_to_name_.end()) {
+    LOG_WARN("Ignoring sender report for unknown SSRC {}",
+             sender_report.SenderSsrc());
+    return;
+  }
+  auto receiver_it = stream_receivers_.find(name_it->second);
+  if (receiver_it != stream_receivers_.end() && receiver_it->second &&
+      receiver_it->second->transceiver) {
+    receiver_it->second->transceiver->OnSenderReport(sender_report);
   }
 }
 
@@ -1408,6 +1545,44 @@ void IceTransportController::OnReceiverReport(
     const std::vector<RtcpReportBlock>& report_block_datas) {
   webrtc::Timestamp now = webrtc_clock_->CurrentTime();
   if (report_block_datas.empty()) return;
+
+  // The report block source SSRC identifies the local media sender whose SR
+  // produced this RTT sample. Update its RTX history directly, then share the
+  // lowest valid sample with video receivers because all streams use this ICE
+  // path. This gives NACK a transport RTT before it has to bootstrap from RTX.
+  std::optional<int64_t> transport_rtt_ms;
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+    for (const RtcpReportBlock& report_block : report_block_datas) {
+      if (!report_block.HasRtt() || report_block.LastRtt() <= 0 ||
+          report_block.LastRtt() > 2000) {
+        continue;
+      }
+
+      transport_rtt_ms =
+          transport_rtt_ms.has_value()
+              ? std::min(*transport_rtt_ms, report_block.LastRtt())
+              : report_block.LastRtt();
+      for (const auto& [_, context] : stream_senders_) {
+        if (context && context->type == StreamType::kVideo &&
+            context->transceiver &&
+            context->ssrc.value_or(0) == report_block.SourceSsrc()) {
+          context->transceiver->OnRttUpdate(report_block.LastRtt());
+          break;
+        }
+      }
+    }
+  }
+
+  if (transport_rtt_ms.has_value()) {
+    std::shared_lock lock(stream_receivers_mutex_);
+    for (const auto& [_, context] : stream_receivers_) {
+      if (context && context->type == StreamType::kVideo &&
+          context->transceiver) {
+        context->transceiver->OnRttUpdate(*transport_rtt_ms);
+      }
+    }
+  }
 
   int total_packets_lost_delta = 0;
   int total_packets_delta = 0;
@@ -1459,9 +1634,13 @@ void IceTransportController::OnReceiverReport(
 void IceTransportController::OnCongestionControlFeedback(
     const webrtc::rtcp::CongestionControlFeedback& feedback) {
   task_queue_trans_fb_->PostTask([this, feedback]() mutable {
-    std::optional<webrtc::TransportPacketsFeedback> feedback_msg =
-        transport_feedback_adapter_.ProcessCongestionControlFeedback(
-            feedback, Timestamp::Micros(clock_->CurrentTimeUs()));
+    std::optional<webrtc::TransportPacketsFeedback> feedback_msg;
+    {
+      std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+      feedback_msg =
+          transport_feedback_adapter_.ProcessCongestionControlFeedback(
+              feedback, Timestamp::Micros(clock_->CurrentTimeUs()));
+    }
     if (feedback_msg.has_value() && task_queue_cc_) {
       task_queue_cc_->PostTask([this, feedback_msg]() mutable {
         if (controller_) {
@@ -1476,61 +1655,91 @@ void IceTransportController::OnCongestionControlFeedback(
 }
 
 void IceTransportController::OnReceiveNack(
+    uint32_t media_ssrc,
     const std::vector<uint16_t>& nack_sequence_numbers) {
   std::shared_lock lock(stream_senders_mutex_);
-  for (auto& [_, context] : stream_senders_) {
+  for (auto& [channel_name, context] : stream_senders_) {
     if (context && context->type == StreamType::kVideo &&
-        context->transceiver) {
+        context->transceiver && context->ssrc.value_or(0) == media_ssrc) {
       context->transceiver->OnReceiveNack(nack_sequence_numbers);
+      return;
     }
   }
+  LOG_WARN("Ignoring NACK for unknown media SSRC {}", media_ssrc);
+}
+
+IceTransportController::PacketFeedbackRegistration
+IceTransportController::RegisterPacketForFeedback(
+    const webrtc::RtpPacketToSend& packet,
+    const webrtc::PacedPacketInfo& pacing_info) {
+  PacketFeedbackRegistration registration;
+  registration.send_time_ms = clock_->CurrentTimeMs();
+  const std::optional<int64_t> transport_seq =
+      packet.transport_sequence_number();
+  registration.tracked = transport_seq.has_value();
+  if (!registration.tracked) {
+    return registration;
+  }
+
+  rtc::SentPacket sent_packet;
+  sent_packet.packet_id = static_cast<int>(*transport_seq);
+  sent_packet.send_time_ms = registration.send_time_ms;
+  sent_packet.info.included_in_feedback = true;
+  sent_packet.info.included_in_allocation = true;
+  sent_packet.info.packet_size_bytes = packet.size();
+  sent_packet.info.packet_type = rtc::PacketType::kData;
+
+  {
+    std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+    transport_feedback_adapter_.AddPacket(
+        packet, pacing_info, /*overhead_bytes=*/0,
+        webrtc::Timestamp::Millis(registration.send_time_ms));
+    transport_feedback_adapter_.ProcessSentPacket(sent_packet);
+  }
+  return registration;
+}
+
+void IceTransportController::RollbackPacketFeedback(
+    const webrtc::RtpPacketToSend& packet,
+    const PacketFeedbackRegistration& registration) {
+  if (!registration.tracked) {
+    return;
+  }
+  std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+  transport_feedback_adapter_.RemovePacket(packet);
 }
 
 void IceTransportController::OnSentPacket(
     const webrtc::RtpPacketToSend& packet,
-    const webrtc::PacedPacketInfo& pacing_info) {
-  task_queue_trans_fb_->PostTask([this, packet, pacing_info]() mutable {
-    size_t transport_overhead_bytes_per_packet_ = 0;
-    int64_t send_time_ms = clock_->CurrentTimeMs();
-    webrtc::Timestamp creation_time = webrtc::Timestamp::Millis(send_time_ms);
+    const PacketFeedbackRegistration& registration) {
+  if (!registration.tracked) {
+    LOG_WARN(
+        "Sent packet without transport_sequence_number (ssrc={}, "
+        "rtp_seq={}), falling back to untracked allocation.",
+        packet.Ssrc(), packet.SequenceNumber());
+
     rtc::SentPacket sent_packet;
-    const std::optional<int64_t> transport_seq =
-        packet.transport_sequence_number();
-    if (transport_seq.has_value()) {
-      transport_feedback_adapter_.AddPacket(
-          packet, pacing_info, transport_overhead_bytes_per_packet_,
-          creation_time);
-      sent_packet.packet_id = static_cast<int>(*transport_seq);
-      sent_packet.info.included_in_feedback = true;
-    } else {
-      // Some packets (e.g. padding/FEC or other non-media packets) may not be
-      // assigned a transport sequence number. Avoid crashing and avoid
-      // polluting send history with a fake sequence number.
-      LOG_WARN(
-          "Sent packet without transport_sequence_number (ssrc={}, "
-          "rtp_seq={}), "
-          "falling back to untracked allocation.",
-          packet.Ssrc(), packet.SequenceNumber());
-      sent_packet.packet_id = -1;
-      sent_packet.info.included_in_feedback = false;
-    }
-    sent_packet.send_time_ms = send_time_ms;
+    sent_packet.packet_id = -1;
+    sent_packet.send_time_ms = registration.send_time_ms;
+    sent_packet.info.included_in_feedback = false;
     sent_packet.info.included_in_allocation = true;
     sent_packet.info.packet_size_bytes = packet.size();
     sent_packet.info.packet_type = rtc::PacketType::kData;
 
-    if (task_queue_cc_) {
-      size_t packet_size = packet.size();
-      webrtc::Timestamp sent_time = webrtc::Timestamp::Millis(send_time_ms);
-      task_queue_cc_->PostTask([this, packet_size, sent_time]() mutable {
-        if (controller_) {
-          controller_->OnSentPacket(packet_size, sent_time);
-        }
-      });
-    }
-
+    std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
     transport_feedback_adapter_.ProcessSentPacket(sent_packet);
-  });
+  }
+
+  if (task_queue_cc_) {
+    const size_t packet_size = packet.size();
+    const webrtc::Timestamp sent_time =
+        webrtc::Timestamp::Millis(registration.send_time_ms);
+    task_queue_cc_->PostTask([this, packet_size, sent_time]() mutable {
+      if (controller_) {
+        controller_->OnSentPacket(packet_size, sent_time);
+      }
+    });
+  }
 }
 
 void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
@@ -1882,8 +2091,12 @@ void IceTransportController::UpdateCongestedState() {
 }
 
 std::optional<bool> IceTransportController::GetCongestedStateUpdate() const {
-  bool congested = transport_feedback_adapter_.GetOutstandingData() >=
-                   congestion_window_size_;
+  webrtc::DataSize outstanding_data;
+  {
+    std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+    outstanding_data = transport_feedback_adapter_.GetOutstandingData();
+  }
+  bool congested = outstanding_data >= congestion_window_size_;
   if (congested != is_congested_) return congested;
   return std::nullopt;
 }
