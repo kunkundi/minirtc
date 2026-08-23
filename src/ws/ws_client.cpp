@@ -324,6 +324,11 @@ WsClient::~WsClient() { Shutdown(); }
 
 void WsClient::Shutdown() {
   std::lock_guard<std::mutex> shutdown_lock(shutdown_mtx_);
+  if (shutdown_.load() && !m_endpoint_ && !m_thread_.joinable() &&
+      !ping_thread_.joinable() && !reconnect_thread_.joinable()) {
+    return;
+  }
+  LOG_INFO("WebSocket shutdown started");
 
   // Shutdown is terminal. In particular, wake and invalidate a delayed
   // reconnect before waiting for any worker so an obsolete client cannot be
@@ -350,20 +355,24 @@ void WsClient::Shutdown() {
   for (auto& thread : reconnect_threads) {
     JoinThread(thread);
   }
+  LOG_INFO("WebSocket reconnect workers stopped");
 
   // A reconnect that was already running may have restarted the heartbeat.
   running_ = false;
   cond_var_.notify_all();
   JoinThread(ping_thread_);
+  LOG_INFO("WebSocket heartbeat worker stopped");
 
   if (m_endpoint_) {
     m_endpoint_->stop_perpetual();
     m_endpoint_->stop();
   }
   JoinThread(m_thread_);
+  LOG_INFO("WebSocket I/O worker stopped");
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
+  LOG_INFO("WebSocket shutdown completed");
 }
 
 void WsClient::StopThreads() {

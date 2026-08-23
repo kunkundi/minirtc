@@ -196,6 +196,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   nice_inited_.store(false);
   init_failed_.store(false);
   agent_closed_.store(false);
+  send_disabled_.store(false);
   stream_id_ = 0;
   agent_.store(nullptr);
   gcontext_.store(nullptr);
@@ -447,6 +448,7 @@ void IceAgent::OnNiceAgentClosedStatic(
 int IceAgent::DestroyIceAgent() {
   std::lock_guard<std::mutex> destroy_lock(destroy_mutex_);
 
+  StopSending();
   if (destroyed_.exchange(true)) {
     return 0;
   }
@@ -467,9 +469,12 @@ int IceAgent::DestroyIceAgent() {
 
   // Destroy the agent while its private context is still alive so any
   // remaining libnice sources are detached before the context is released.
-  if (agent != nullptr) {
-    g_object_unref(agent);
-    agent_.store(nullptr);
+  {
+    std::lock_guard<std::mutex> send_lock(send_mutex_);
+    if (agent != nullptr) {
+      g_object_unref(agent);
+      agent_.store(nullptr);
+    }
   }
 
   if (loop != nullptr) {
@@ -626,6 +631,9 @@ int IceAgent::GatherCandidates() {
 }
 
 ICE_STATE IceAgent::GetIceState() {
+  if (send_disabled_) {
+    return ICE_STATE_DESTROYED;
+  }
   if (!nice_inited_) {
     return ICE_STATE_NOT_INITIALIZED;
   }
@@ -640,12 +648,22 @@ ICE_STATE IceAgent::GetIceState() {
 }
 
 int IceAgent::Send(const char* data, size_t size) {
+  if (!data || size == 0 || size > static_cast<size_t>(G_MAXUINT) ||
+      send_disabled_) {
+    return -1;
+  }
+
+  std::lock_guard<std::mutex> send_lock(send_mutex_);
+  if (send_disabled_) {
+    return -1;
+  }
   if (!nice_inited_) {
     LOG_ERROR("Nice agent has not been initialized");
     return -1;
   }
 
-  if (nullptr == agent_) {
+  NiceAgent* agent = agent_.load();
+  if (nullptr == agent) {
     LOG_ERROR("Nice agent is nullptr");
     return -1;
   }
@@ -659,14 +677,17 @@ int IceAgent::Send(const char* data, size_t size) {
     return -1;
   }
 
-  gint ret = nice_agent_send(agent_, stream_id_, 1, (guint)size, data);
+  const gint ret = nice_agent_send(
+      agent, stream_id_, 1, static_cast<guint>(size), data);
 
 #ifdef SAVE_IO_STREAM
   if (file_out_) fwrite(data, 1, size, file_out_);
 #endif
 
-  return (ret >= 0) ? 0 : -1;
+  return ret == static_cast<gint>(size) ? 0 : -1;
 }
+
+void IceAgent::StopSending() { send_disabled_.store(true); }
 
 void IceAgent::CleanupDtls() {
   if (ssl_) {

@@ -82,6 +82,7 @@ class IceAgent {
                      nice_cb_dtls_done_t on_cb_dtls_done, void* user_ptr);
 
   int DestroyIceAgent();
+  void StopSending();
 
   std::string GenerateLocalSdp();
   std::string AppendFingerprintLine(const std::string& sdp);
@@ -147,6 +148,7 @@ class IceAgent {
   ICE_STATE state_ = ICE_STATE_LAST;
   std::atomic<bool> destroyed_{false};
   std::atomic<bool> agent_closed_{false};
+  std::atomic<bool> send_disabled_{false};
 
   nice_cb_state_changed_t on_state_changed_{};
   nice_cb_new_selected_pair_t on_new_selected_pair_{};
@@ -202,6 +204,7 @@ class IceAgent {
 
   std::mutex dtls_mutex_;
   std::mutex destroy_mutex_;
+  std::mutex send_mutex_;
   std::queue<std::vector<uint8_t>> dtls_incoming_;
 
   void CleanupDtls();
