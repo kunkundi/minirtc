@@ -120,7 +120,6 @@ class DataChannelTransport
   std::unordered_set<std::string> force_i_frame_streams_;
   bool video_codec_inited_;
   bool audio_codec_inited_;
-  bool load_nvcodec_dll_success_;
   bool hardware_acceleration_;
 
   uint32_t rtpStartTimestamp = 0;

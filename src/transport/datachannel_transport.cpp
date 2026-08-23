@@ -35,7 +35,6 @@ DataChannelTransport::DataChannelTransport(
       b_force_i_frame_(true),
       video_codec_inited_(false),
       audio_codec_inited_(false),
-      load_nvcodec_dll_success_(false),
       hardware_acceleration_(false) {
   task_queue_encode_ = std::make_shared<TaskQueueLockFree>("encode");
   task_queue_decode_ = std::make_shared<TaskQueueLockFree>("decode");
@@ -61,14 +60,6 @@ DataChannelTransport::~DataChannelTransport() {
 
   video_codec_inited_ = false;
   audio_codec_inited_ = false;
-
-#if USE_CUDA && !defined(__aarch64__) && !defined(__arm__) && \
-    !defined(__APPLE__)
-  if (hardware_acceleration_ && load_nvcodec_dll_success_) {
-    ReleaseNvCodecDll();
-  }
-#endif
-  load_nvcodec_dll_success_ = false;
 }
 
 void DataChannelTransport::Shutdown() {
@@ -338,7 +329,6 @@ int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
     bool use_hardware = false;
     if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
-      load_nvcodec_dll_success_ = true;
       use_hardware = true;
     } else if (hardware_acceleration_) {
       LOG_WARN(

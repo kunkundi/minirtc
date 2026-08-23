@@ -123,7 +123,5 @@ extern TNvEncodeAPIGetMaxSupportedVersion NvEncodeAPIGetMaxSupportedVersion_ld;
 
 int LoadNvCodecDll();
 
-int ReleaseNvCodecDll();
-
 }  // namespace minirtc
 #endif

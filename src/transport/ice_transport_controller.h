@@ -271,7 +271,6 @@ class IceTransportController
   std::mutex force_i_frame_streams_mutex_;
   std::unordered_set<std::string> force_i_frame_streams_;
   bool video_codec_inited_;
-  bool load_nvcodec_dll_success_;
   bool hardware_acceleration_;
 
  private:
