@@ -6,6 +6,9 @@ RtpPacketAv1::RtpPacketAv1() {}
 RtpPacketAv1::~RtpPacketAv1() {}
 
 bool RtpPacketAv1::GetFrameHeaderInfo() {
+  if (PayloadSize() < 1) {
+    return false;
+  }
   const uint8_t* frame_buffer = Payload();
   av1_aggr_header_ = frame_buffer[0];
   z_ = av1_aggr_header_ >> 7;

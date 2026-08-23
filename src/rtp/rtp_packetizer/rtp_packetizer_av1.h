@@ -27,6 +27,10 @@ class RtpPacketizerAv1 : public RtpPacketizer {
     return std::vector<std::unique_ptr<RtpPacket>>{};
   };
 
+  void SetIsKeyFrame(bool is_key_frame) override {
+    current_frame_is_key_frame_ = is_key_frame;
+  }
+
  private:
   void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
   void SetAv1AggrHeader(int z, int y, int w, int n) {
@@ -54,6 +58,7 @@ class RtpPacketizerAv1 : public RtpPacketizer {
   uint8_t* extension_data_;
 
   uint8_t av1_aggr_header_ = 0;
+  bool current_frame_is_key_frame_ = false;
 
  private:
   std::vector<uint8_t> rtp_packet_frame_;

@@ -7,6 +7,7 @@
 #ifndef _AOM_AV1_ENCODER_H_
 #define _AOM_AV1_ENCODER_H_
 
+#include <atomic>
 #include <functional>
 #include <vector>
 
@@ -100,7 +101,7 @@ class AomAv1Encoder : public MediaCodec {
   uint8_t* encoded_frame_ = nullptr;
   size_t encoded_frame_capacity_ = 0;
   size_t encoded_frame_size_ = 0;
-  bool force_i_frame_ = false;
+  std::atomic<bool> force_i_frame_{false};
 };
 }  // namespace minirtc
 

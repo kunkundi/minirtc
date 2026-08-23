@@ -40,6 +40,8 @@ class RtpPacketAv1 : public RtpPacket {
     }
   }
 
+  bool IsKeyFrame() const { return n_ == 1; }
+
  private:
   uint8_t av1_aggr_header_ = 0;
   uint8_t z_ = 0;

@@ -5,7 +5,6 @@
 namespace minirtc {
 namespace {
 using namespace obu;
-constexpr int kObuTypeSequenceHeader = 1;
 }  // namespace
 
 RtpPacketizerAv1::RtpPacketizerAv1(uint32_t ssrc)
@@ -84,7 +83,10 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
       int z = (i > 0) ? 1 : 0;
       int y = (!is_last) ? 1 : 0;
       int w = 1;
-      int n = (ObuType(obu.header) == kObuTypeSequenceHeader) ? 1 : 0;
+      // The receiver needs an explicit recovery point. A sequence-header OBU
+      // alone is not a reliable keyframe signal, so mark the first packet from
+      // the encoder-declared keyframe instead.
+      int n = (current_frame_is_key_frame_ && i == 0) ? 1 : 0;
       SetAv1AggrHeader(z, y, w, n);
 
       BuildRtpHeader(is_last);
@@ -108,7 +110,8 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
         int z = (i > 0 || j > 0) ? 1 : 0;
         int y = (!is_last) ? 1 : 0;
         int w = 1;
-        int n = (ObuType(obu.header) == kObuTypeSequenceHeader) ? 1 : 0;
+        int n =
+            (current_frame_is_key_frame_ && i == 0 && j == 0) ? 1 : 0;
         SetAv1AggrHeader(z, y, w, n);
 
         BuildRtpHeader(is_last);

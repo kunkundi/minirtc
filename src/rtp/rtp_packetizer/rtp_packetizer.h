@@ -30,6 +30,8 @@ class RtpPacketizer {
   virtual std::vector<std::unique_ptr<RtpPacket>> BuildPadding(
       uint32_t payload_size, uint32_t rtp_timestamp,
       bool use_rtp_packet_to_send) = 0;
+
+  virtual void SetIsKeyFrame(bool is_key_frame) {}
 };
 }  // namespace minirtc
 

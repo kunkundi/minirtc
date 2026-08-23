@@ -338,13 +338,11 @@ int AomAv1Encoder::Encode(
   frame_for_encode_->stride[AOM_PLANE_U] = raw_frame.Width();
   frame_for_encode_->stride[AOM_PLANE_V] = 0;
 
-  VideoFrameType frame_type;
-  if (0 == seq_++ % key_frame_interval_ || force_i_frame_) {
+  const bool force_key_frame = force_i_frame_.exchange(false);
+  if (0 == seq_++ % key_frame_interval_ || force_key_frame) {
     force_i_frame_flags_ = AOM_EFLAG_FORCE_KF;
-    frame_type = VideoFrameType::kVideoFrameKey;
   } else {
     force_i_frame_flags_ = 0;
-    frame_type = VideoFrameType::kVideoFrameDelta;
   }
 
   // Encode a frame. The presentation timestamp `pts` should not use real
@@ -353,6 +351,9 @@ int AomAv1Encoder::Encode(
   ret = aom_codec_encode(&aom_av1_encoder_ctx_, frame_for_encode_, timestamp_,
                          duration, force_i_frame_flags_);
   if (ret != AOM_CODEC_OK) {
+    if (force_key_frame) {
+      force_i_frame_.store(true);
+    }
     LOG_ERROR("Encode failed: {}, {}",
               aom_codec_error_detail(&aom_av1_encoder_ctx_),
               aom_codec_build_config());
@@ -375,7 +376,10 @@ int AomAv1Encoder::Encode(
       if (on_encoded_image) {
         EncodedFrame encoded_frame(encoded_frame_, encoded_frame_size_,
                                    raw_frame.Width(), raw_frame.Height());
-        encoded_frame.SetFrameType(frame_type);
+        encoded_frame.SetFrameType(
+            (pkt->data.frame.flags & AOM_FRAME_IS_KEY)
+                ? VideoFrameType::kVideoFrameKey
+                : VideoFrameType::kVideoFrameDelta);
         encoded_frame.SetEncodedWidth(raw_frame.Width());
         encoded_frame.SetEncodedHeight(raw_frame.Height());
         encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
