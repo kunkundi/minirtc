@@ -4,7 +4,11 @@
 #import <VideoToolbox/VideoToolbox.h>
 #include <algorithm>
 #include <atomic>
+#include <condition_variable>
+#include <cstdint>
 #include <mutex>
+#include <unordered_map>
+#include <vector>
 #include "log.h"
 
 // #define SAVE_RECEIVED_NV12_STREAM
@@ -28,6 +32,11 @@ class VideoToolboxEncoder::Impl {
   std::string GetEncoderName() { return "VideoToolboxH264"; }
 
  private:
+  struct FrameCallbackContext {
+    function<int(const EncodedFrame&)> callback;
+    uint64_t generation = 0;
+  };
+
   int CreateCompressionSession(int width, int height, VTCompressionSessionRef* session_out);
   int ResetEncodeResolution(int width, int height);
   int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate);
@@ -38,6 +47,14 @@ class VideoToolboxEncoder::Impl {
   static void CompressionOutputCallback(void* outputCallbackRefCon, void* sourceFrameRefCon,
                                         OSStatus status, VTEncodeInfoFlags infoFlags,
                                         CMSampleBufferRef sampleBuffer);
+  void* RegisterFrameCallback(
+      function<int(const EncodedFrame&)> callback);
+  bool TakeFrameCallback(void* source_frame_ref_con,
+                         FrameCallbackContext* context);
+  void CancelFrameCallback(void* context);
+  void CancelPendingFrameCallbacks();
+  void FinishActiveCallback();
+  void WaitForActiveCallbacks();
 
  private:
   std::shared_ptr<SystemClock> clock_;
@@ -48,15 +65,19 @@ class VideoToolboxEncoder::Impl {
   int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int keyframe_interval_ = 30;
   int seq_ = 0;
-  int ref_buffer_count_ = 3;
   bool prioritize_encoding_speed_ = false;
   std::atomic<bool> force_idr_ = false;
 
   VTCompressionSessionRef session_ = nullptr;
   mutex lock_;
-  atomic<int> frame_count_{0};
+  atomic<uint64_t> session_generation_{0};
 
-  function<int(const EncodedFrame&)> callback_;
+  mutex callback_lock_;
+  condition_variable callback_cv_;
+  unordered_map<uintptr_t, FrameCallbackContext> pending_frame_callbacks_;
+  uintptr_t next_frame_callback_token_ = 1;
+  size_t active_callbacks_ = 0;
+  bool shutting_down_ = false;
 
   FILE* file_h264_ = nullptr;
   FILE* file_nv12_ = nullptr;
@@ -64,7 +85,8 @@ class VideoToolboxEncoder::Impl {
   std::string h264_file_name_;
   std::string nv12_file_name_;
 
-  void HandleEncodedSampleBuffer(CMSampleBufferRef sampleBuffer);
+  void HandleEncodedSampleBuffer(CMSampleBufferRef sampleBuffer,
+                                 FrameCallbackContext context);
 };
 
 #pragma mark - Impl 实现
@@ -87,13 +109,23 @@ VideoToolboxEncoder::Impl::~Impl() {
     file_h264_ = nullptr;
   }
 #endif
-  lock_guard<mutex> guard(lock_);
-  if (session_) {
-    VTCompressionSessionCompleteFrames(session_, kCMTimeInvalid);
-    VTCompressionSessionInvalidate(session_);
-    CFRelease(session_);
-    session_ = nullptr;
+  {
+    lock_guard<mutex> callback_guard(callback_lock_);
+    shutting_down_ = true;
+    session_generation_.fetch_add(1);
   }
+
+  {
+    lock_guard<mutex> guard(lock_);
+    if (session_) {
+      VTCompressionSessionInvalidate(session_);
+      CFRelease(session_);
+      session_ = nullptr;
+    }
+  }
+
+  CancelPendingFrameCallbacks();
+  WaitForActiveCallbacks();
 }
 
 int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
@@ -109,8 +141,6 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   if (ResetEncodeResolution(config.init_width, config.init_height) != 0) {
     return -1;
   }
-
-  frame_count_ = 0;
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ =
@@ -190,12 +220,6 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
     return -1;
   }
 
-  // CFNumberRef refBufferCount =
-  //     CFNumberCreate(nullptr, kCFNumberSInt32Type, &ref_buffer_count_);
-  // VTSessionSetProperty(session_,
-  // kVTCompressionPropertyKey_ReferenceBufferCount, refBufferCount);
-  // CFRelease(refBufferCount);
-
   int maxFrameDelayCount = 1;
   CFNumberRef maxFrameDelayCountRef =
       CFNumberCreate(nullptr, kCFNumberIntType, &maxFrameDelayCount);
@@ -226,6 +250,8 @@ int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
   if (session_) {
     // Pending frames belong to the old resolution. Drop them so an old
     // callback cannot race with output from the newly selected session.
+    session_generation_.fetch_add(1);
+    CancelPendingFrameCallbacks();
     VTCompressionSessionInvalidate(session_);
     CFRelease(session_);
   }
@@ -371,8 +397,6 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
     }
   }
 
-  callback_ = on_encoded_image;
-
 #ifdef SAVE_RECEIVED_NV12_STREAM
   fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
 #endif
@@ -386,7 +410,14 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
 
   CMTime pts = CMTimeMake(raw_frame.CapturedTimestamp(), 1000000);
   const int keyframe_interval = std::max(1, keyframe_interval_);
-  const bool force_keyframe = (seq_++ % keyframe_interval == 0) || force_idr_.load();
+  const bool periodic_keyframe = seq_++ % keyframe_interval == 0;
+  const bool force_idr_requested = force_idr_.exchange(false);
+  const bool force_keyframe = periodic_keyframe || force_idr_requested;
+  const auto restore_force_idr_request = [this, force_idr_requested] {
+    if (force_idr_requested) {
+      force_idr_.store(true);
+    }
+  };
   CFDictionaryRef frame_options = nullptr;
   if (force_keyframe) {
     const void* keys[] = {kVTEncodeFrameOptionKey_ForceKeyFrame};
@@ -395,26 +426,112 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
                                        &kCFTypeDictionaryValueCallBacks);
     if (!frame_options) {
       CFRelease(pixel_buffer);
+      restore_force_idr_request();
       LOG_ERROR("Failed to create VideoToolbox keyframe options");
       return -1;
     }
   }
 
+  void* frame_callback =
+      RegisterFrameCallback(std::move(on_encoded_image));
+  if (!frame_callback) {
+    CFRelease(pixel_buffer);
+    if (frame_options) {
+      CFRelease(frame_options);
+    }
+    restore_force_idr_request();
+    return -1;
+  }
+
   OSStatus status = VTCompressionSessionEncodeFrame(session_, pixel_buffer, pts, kCMTimeInvalid,
-                                                    frame_options, nullptr, nullptr);
+                                                    frame_options, frame_callback, nullptr);
   CFRelease(pixel_buffer);
   if (frame_options) {
     CFRelease(frame_options);
   }
   if (status != noErr) {
+    CancelFrameCallback(frame_callback);
+    restore_force_idr_request();
     LOG_ERROR("VTCompressionSessionEncodeFrame failed: {}", status);
     return -2;
   }
-  if (force_keyframe) {
-    force_idr_ = false;
-  }
 
   return 0;
+}
+
+void* VideoToolboxEncoder::Impl::RegisterFrameCallback(
+    function<int(const EncodedFrame&)> callback) {
+  if (!callback) {
+    return nullptr;
+  }
+
+  FrameCallbackContext context{std::move(callback),
+                               session_generation_.load()};
+
+  lock_guard<mutex> guard(callback_lock_);
+  if (shutting_down_) {
+    return nullptr;
+  }
+
+  uintptr_t token = 0;
+  do {
+    token = next_frame_callback_token_++;
+  } while (token == 0 ||
+           pending_frame_callbacks_.find(token) !=
+               pending_frame_callbacks_.end());
+  pending_frame_callbacks_.emplace(token, std::move(context));
+  return reinterpret_cast<void*>(token);
+}
+
+bool VideoToolboxEncoder::Impl::TakeFrameCallback(
+    void* source_frame_ref_con, FrameCallbackContext* context) {
+  if (!source_frame_ref_con || !context) {
+    return false;
+  }
+
+  lock_guard<mutex> guard(callback_lock_);
+  const uintptr_t token = reinterpret_cast<uintptr_t>(source_frame_ref_con);
+  auto it = pending_frame_callbacks_.find(token);
+  if (it == pending_frame_callbacks_.end()) {
+    return false;
+  }
+
+  *context = std::move(it->second);
+  pending_frame_callbacks_.erase(it);
+  if (shutting_down_) {
+    return false;
+  }
+  ++active_callbacks_;
+  return true;
+}
+
+void VideoToolboxEncoder::Impl::CancelFrameCallback(void* context) {
+  if (!context) {
+    return;
+  }
+  lock_guard<mutex> guard(callback_lock_);
+  const uintptr_t token = reinterpret_cast<uintptr_t>(context);
+  pending_frame_callbacks_.erase(token);
+}
+
+void VideoToolboxEncoder::Impl::CancelPendingFrameCallbacks() {
+  lock_guard<mutex> guard(callback_lock_);
+  pending_frame_callbacks_.clear();
+}
+
+void VideoToolboxEncoder::Impl::FinishActiveCallback() {
+  lock_guard<mutex> guard(callback_lock_);
+  if (active_callbacks_ > 0) {
+    --active_callbacks_;
+  }
+  if (active_callbacks_ == 0) {
+    callback_cv_.notify_all();
+  }
+}
+
+void VideoToolboxEncoder::Impl::WaitForActiveCallbacks() {
+  unique_lock<mutex> lock(callback_lock_);
+  callback_cv_.wait(lock, [this] { return active_callbacks_ == 0; });
 }
 
 int VideoToolboxEncoder::Impl::ForceIdr() {
@@ -468,14 +585,31 @@ void VideoToolboxEncoder::Impl::CompressionOutputCallback(void* outputCallbackRe
                                                           void* sourceFrameRefCon, OSStatus status,
                                                           VTEncodeInfoFlags infoFlags,
                                                           CMSampleBufferRef sampleBuffer) {
-  if (status != noErr || !sampleBuffer || !CMSampleBufferDataIsReady(sampleBuffer)) return;
-
   VideoToolboxEncoder::Impl* encoder =
       static_cast<VideoToolboxEncoder::Impl*>(outputCallbackRefCon);
-  encoder->HandleEncodedSampleBuffer(sampleBuffer);
+  if (!encoder) {
+    return;
+  }
+
+  FrameCallbackContext context;
+  if (!encoder->TakeFrameCallback(sourceFrameRefCon, &context)) {
+    return;
+  }
+
+  struct ActiveCallbackGuard {
+    VideoToolboxEncoder::Impl* encoder;
+    ~ActiveCallbackGuard() { encoder->FinishActiveCallback(); }
+  } callback_guard{encoder};
+
+  if (status != noErr || !sampleBuffer ||
+      !CMSampleBufferDataIsReady(sampleBuffer)) {
+    return;
+  }
+  encoder->HandleEncodedSampleBuffer(sampleBuffer, std::move(context));
 }
 
-void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(CMSampleBufferRef sampleBuffer) {
+void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(
+    CMSampleBufferRef sampleBuffer, FrameCallbackContext context) {
   CMFormatDescriptionRef formatDesc = CMSampleBufferGetFormatDescription(sampleBuffer);
   if (!formatDesc) {
     LOG_ERROR("VideoToolbox sample has no format description");
@@ -567,8 +701,9 @@ void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(CMSampleBufferRef samp
   frame.SetCapturedTimestamp(CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer).value);
   frame.SetEncodedTimestamp(clock_->CurrentTime());
 
-  if (callback_) {
-    callback_(frame);
+  if (context.callback &&
+      context.generation == session_generation_.load()) {
+    context.callback(frame);
   }
 }
 

@@ -60,7 +60,6 @@ class VideoToolboxEncoder : public MediaCodec {
   int key_frame_interval_ = 3000;
 
   bool force_idr_ = false;
-  int64_t frame_count_ = 0;
   unsigned int seq_ = 0;
 
  private:
