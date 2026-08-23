@@ -208,8 +208,11 @@ std::optional<PacedPacketInfo> BitrateProber::CurrentCluster(Timestamp now) {
     return std::nullopt;
   }
 
+  const TimeDelta allowed_probe_delay =
+      std::max(config_.max_probe_delay,
+               clusters_.front().min_probe_delta * 2);
   if (next_probe_time_.IsFinite() &&
-      now - next_probe_time_ > config_.max_probe_delay) {
+      now - next_probe_time_ > allowed_probe_delay) {
     const ProbeCluster& cluster = clusters_.front();
     LOG_WARN(
         "Probe cluster aborted: id={} reason=schedule_delay delay_ms={} "
@@ -249,7 +252,12 @@ void BitrateProber::ProbeSent(Timestamp now, DataSize size, int packet_count) {
     cluster->sent_bytes += size.bytes<int>();
     cluster->sent_packets += packet_count;
     cluster->sent_probes += 1;
-    next_probe_time_ = CalculateNextProbeTime(*cluster);
+    // Keep the target-rate schedule when the task runs on time. If the task
+    // wakes late, rebase by one probe interval instead of immediately sending
+    // catch-up batches; catch-up bursts distort the receive-rate sample and
+    // can make the following task miss its deadline again.
+    next_probe_time_ =
+        std::max(CalculateNextProbeTime(*cluster), now + cluster->min_probe_delta);
     if (cluster->sent_bytes >= cluster->pace_info.probe_cluster_min_bytes &&
         cluster->sent_probes >= cluster->pace_info.probe_cluster_min_probes) {
       LOG_DEBUG(
