@@ -183,7 +183,9 @@ class IceTransportController
     int source_width = 0;   // original capture width  (aspect-ratio anchor)
     int source_height = 0;  // original capture height (aspect-ratio anchor)
     std::optional<int64_t> last_active_time;
+    std::optional<int> desired_target_bitrate;
     std::optional<int> applied_target_bitrate;
+    bool bitrate_update_queued = false;
     int encode_exceed_count = 0;
     int encode_below_threshold_count = 0;
     bool encoding_speed_priority_enabled = false;
@@ -203,6 +205,15 @@ class IceTransportController
 
     bool reliable;
   };
+
+  void PostVideoBitrateUpdate(
+      const std::string& channel_name,
+      const std::shared_ptr<StreamContext>& context,
+      const std::shared_ptr<MediaCodec>& codec);
+  void ApplyVideoBitrateUpdateOnEncodeQueue(
+      const std::string& channel_name,
+      const std::shared_ptr<StreamContext>& context,
+      const std::shared_ptr<MediaCodec>& codec);
 
   bool CheckSteamContext(const std::string& channel_name,
                          const std::shared_ptr<StreamContext>& context);

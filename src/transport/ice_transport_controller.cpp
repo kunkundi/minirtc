@@ -1447,7 +1447,9 @@ int IceTransportController::CreateStreamCodecs(
                   0) {
             context->encoding_speed_priority_enabled = true;
           }
+          context->desired_target_bitrate.reset();
           context->applied_target_bitrate.reset();
+          context->bitrate_update_queued = false;
           if (video_sender_init_first_time) {
             if (!stream_senders_.empty()) {
               LOG_INFO("Use video encoder [{}]",
@@ -2048,27 +2050,26 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   }
 
   // Stream activity can change while the network estimate stays constant.
-  // Re-evaluate the per-stream allocation on every controller update, and
-  // only touch encoders whose successfully applied target is stale.
+  // Publish the latest desired per-stream allocation on every controller
+  // update; the encode queue coalesces stale targets and applies the newest.
   UpdateVideoBitrateAllocation();
 }
 
 void IceTransportController::UpdateVideoBitrateAllocation() {
-  if (target_bitrate_ <= 0 || !is_running_.load()) {
+  if (target_bitrate_ <= 0 || !is_running_.load() || !task_queue_encode_) {
     return;
   }
 
-  struct PendingBitrateUpdate {
+  struct PendingBitrateTask {
     std::string channel_name;
     std::shared_ptr<StreamContext> context;
     std::shared_ptr<MediaCodec> codec;
-    int target_bitrate;
   };
 
-  std::vector<PendingBitrateUpdate> pending_updates;
+  std::vector<PendingBitrateTask> pending_tasks;
   const int64_t now_ms = clock_->CurrentTimeMs();
   {
-    std::shared_lock lock(stream_senders_mutex_);
+    std::unique_lock lock(stream_senders_mutex_);
 
     auto is_active = [now_ms](const std::shared_ptr<StreamContext>& context) {
       constexpr int64_t kActiveStreamTimeoutMs = 100;
@@ -2103,33 +2104,111 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
 
     for (const auto& [channel_name, context] : stream_senders_) {
       if (!is_active(context) || context->type != StreamType::kVideo ||
-          !context->codec ||
-          context->applied_target_bitrate == per_video_bitrate) {
+          !context->codec) {
         continue;
       }
-      pending_updates.push_back(
-          {channel_name, context, context->codec, per_video_bitrate});
+
+      context->desired_target_bitrate = per_video_bitrate;
+      if (context->bitrate_update_queued) {
+        continue;
+      }
+      if (context->applied_target_bitrate == per_video_bitrate) {
+        continue;
+      }
+
+      context->bitrate_update_queued = true;
+      pending_tasks.push_back({channel_name, context, context->codec});
     }
   }
 
-  // Do not hold stream_senders_mutex_ while entering an encoder. An encoder
-  // callback can re-enter the controller and take the same mutex.
-  for (const auto& update : pending_updates) {
-    if (update.codec->SetTargetBitrate(update.target_bitrate) != 0) {
-      LOG_WARN("Failed to apply video target bitrate: channel={} bitrate={}",
-               update.channel_name, update.target_bitrate);
-      continue;
+  for (const auto& task : pending_tasks) {
+    PostVideoBitrateUpdate(task.channel_name, task.context, task.codec);
+  }
+}
+
+void IceTransportController::PostVideoBitrateUpdate(
+    const std::string& channel_name,
+    const std::shared_ptr<StreamContext>& context,
+    const std::shared_ptr<MediaCodec>& codec) {
+  if (!task_queue_encode_) {
+    return;
+  }
+
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  std::weak_ptr<StreamContext> weak_context = context;
+  std::weak_ptr<MediaCodec> weak_codec = codec;
+  task_queue_encode_->PostTask(
+      [weak_self, weak_context, weak_codec, channel_name]() mutable {
+        auto self = weak_self.lock();
+        auto context = weak_context.lock();
+        auto codec = weak_codec.lock();
+        if (!self || !context || !codec) {
+          return;
+        }
+
+        self->ApplyVideoBitrateUpdateOnEncodeQueue(channel_name, context,
+                                                    codec);
+      });
+}
+
+void IceTransportController::ApplyVideoBitrateUpdateOnEncodeQueue(
+    const std::string& channel_name,
+    const std::shared_ptr<StreamContext>& context,
+    const std::shared_ptr<MediaCodec>& codec) {
+  int target_bitrate = 0;
+  {
+    std::unique_lock lock(stream_senders_mutex_);
+    auto it = stream_senders_.find(channel_name);
+    if (!is_running_.load() || it == stream_senders_.end() ||
+        it->second != context || context->codec != codec) {
+      return;
     }
 
-    {
-      std::unique_lock lock(stream_senders_mutex_);
-      auto it = stream_senders_.find(update.channel_name);
-      if (it == stream_senders_.end() || it->second != update.context ||
-          update.context->codec != update.codec) {
-        continue;
-      }
-      update.context->applied_target_bitrate = update.target_bitrate;
+    if (!context->desired_target_bitrate.has_value()) {
+      context->bitrate_update_queued = false;
+      return;
     }
+
+    target_bitrate = context->desired_target_bitrate.value();
+    if (context->applied_target_bitrate == target_bitrate) {
+      context->bitrate_update_queued = false;
+      return;
+    }
+  }
+
+  // This runs on the same queue as ForceIdr(), resolution resets, and Encode(),
+  // so OpenH264 is never reconfigured concurrently with frame processing.
+  const int result = codec->SetTargetBitrate(target_bitrate);
+  bool post_followup = false;
+  {
+    std::unique_lock lock(stream_senders_mutex_);
+    auto it = stream_senders_.find(channel_name);
+    if (!is_running_.load() || it == stream_senders_.end() ||
+        it->second != context || context->codec != codec) {
+      return;
+    }
+
+    if (result == 0) {
+      context->applied_target_bitrate = target_bitrate;
+    }
+
+    if (context->desired_target_bitrate.has_value() &&
+        context->desired_target_bitrate.value() != target_bitrate) {
+      // Keep the in-flight flag set. Reposting at the tail gives frame tasks a
+      // chance to run while still converging to the newest desired bitrate.
+      post_followup = true;
+    } else {
+      context->bitrate_update_queued = false;
+    }
+  }
+
+  if (result != 0) {
+    LOG_WARN("Failed to apply video target bitrate: channel={} bitrate={}",
+             channel_name, target_bitrate);
+  }
+
+  if (post_followup) {
+    PostVideoBitrateUpdate(channel_name, context, codec);
   }
 }
 
