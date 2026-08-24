@@ -286,17 +286,31 @@ void IceTransport::OnIceStateChange(NiceAgent* agent, guint stream_id,
   if (!is_closed_) {
     LOG_INFO("[{}->{}] state_change: {}", user_id_, remote_user_id_,
              nice_component_state_to_string(state));
-    state_ = state;
+    state_.store(state);
+    const IcePathAvailabilityChange availability_change =
+        component_state_tracker_.Update(state);
 
     if (state == NICE_COMPONENT_STATE_READY) {
-      ice_io_statistics_->Start();
       ice_agent_->StartDtls(offer_peer_);
+    }
 
+    if (availability_change ==
+        IcePathAvailabilityChange::BecameAvailable) {
+      ice_io_statistics_->Start();
       if (ice_transport_controller_) {
         ice_transport_controller_->UpdateNetworkAvaliablity(true);
       }
-    } else if (ice_transport_controller_) {
-      ice_transport_controller_->UpdateNetworkAvaliablity(false);
+    } else if (availability_change ==
+               IcePathAvailabilityChange::BecameUnavailable) {
+      if (ice_transport_controller_) {
+        ice_transport_controller_->UpdateNetworkAvaliablity(false);
+      }
+    } else if (component_state_tracker_.IsUsable() &&
+               state != NICE_COMPONENT_STATE_READY) {
+      LOG_INFO(
+          "[{}->{}] ICE recheck entered [{}]; retaining established media "
+          "path",
+          user_id_, remote_user_id_, nice_component_state_to_string(state));
     }
 
     on_ice_status_change_(nice_component_state_to_string(state),
@@ -1300,10 +1314,10 @@ std::vector<rtp::PAYLOAD_TYPE> IceTransport::GetNegotiatedCapabilities() {
 
 int IceTransport::SendVideoFrame(const XVideoFrame* video_frame,
                                  const std::string& stream_name) {
-  if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
-      state_ != NICE_COMPONENT_STATE_READY) {
+  if (!component_state_tracker_.IsUsable()) {
+    const NiceComponentState state = state_.load();
     LOG_ERROR("Ice is not connected, state = [{}]",
-              nice_component_state_to_string(state_));
+              nice_component_state_to_string(state));
     return -2;
   }
 
@@ -1334,10 +1348,10 @@ int IceTransport::RequestAllVideoKeyFrames() {
 
 int IceTransport::SendAudioFrame(const char* data, size_t size,
                                  const std::string& stream_name) {
-  if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
-      state_ != NICE_COMPONENT_STATE_READY) {
+  if (!component_state_tracker_.IsUsable()) {
+    const NiceComponentState state = state_.load();
     LOG_ERROR("Ice is not connected, state = [{}]",
-              nice_component_state_to_string(state_));
+              nice_component_state_to_string(state));
     return -2;
   }
 
@@ -1350,10 +1364,10 @@ int IceTransport::SendAudioFrame(const char* data, size_t size,
 
 int IceTransport::SendDataFrame(const char* data, size_t size,
                                 const std::string& stream_name) {
-  if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
-      state_ != NICE_COMPONENT_STATE_READY) {
+  if (!component_state_tracker_.IsUsable()) {
+    const NiceComponentState state = state_.load();
     LOG_ERROR("Ice is not connected, state = [{}]",
-              nice_component_state_to_string(state_));
+              nice_component_state_to_string(state));
     return -2;
   }
 
@@ -1366,10 +1380,10 @@ int IceTransport::SendDataFrame(const char* data, size_t size,
 
 int IceTransport::SendReliableDataFrame(const char* data, size_t size,
                                         const std::string& stream_name) {
-  if (state_ != NICE_COMPONENT_STATE_CONNECTED &&
-      state_ != NICE_COMPONENT_STATE_READY) {
+  if (!component_state_tracker_.IsUsable()) {
+    const NiceComponentState state = state_.load();
     LOG_ERROR("Ice is not connected, state = [{}]",
-              nice_component_state_to_string(state_));
+              nice_component_state_to_string(state));
     return -2;
   }
 

@@ -7,10 +7,12 @@
 #ifndef _ICE_TRANSPORT_H_
 #define _ICE_TRANSPORT_H_
 
+#include <atomic>
 #include <iostream>
 
 #include "clock/system_clock.h"
 #include "ice_agent.h"
+#include "ice_component_state.h"
 #include "ice_transport_controller.h"
 #include "io_statistics.h"
 #include "ringbuffer.h"
@@ -224,7 +226,8 @@ class IceTransport {
   std::string user_id_;
   std::string remote_user_id_;
   std::string remote_ice_username_ = "";
-  NiceComponentState state_ = NICE_COMPONENT_STATE_DISCONNECTED;
+  std::atomic<NiceComponentState> state_{NICE_COMPONENT_STATE_DISCONNECTED};
+  IceComponentStateTracker component_state_tracker_;
   TraversalType traversal_type_ = TraversalType::TP2P;
   void* user_data_ = nullptr;
 
