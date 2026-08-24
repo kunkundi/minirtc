@@ -107,6 +107,7 @@ int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
   key_frame_interval_ = config.key_frame_interval;
   max_payload_size_ = config.max_payload_size;
   video_content_type_ = config.video_content_type;
+  video_degradation_preference_ = config.video_degradation_preference;
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +
@@ -168,7 +169,11 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.encoder_bit_depth = 8;
   enc_config_.frame_rate_numerator = max_fps_;
   enc_config_.frame_rate_denominator = 1;
-  enc_config_.enc_mode = 10;
+  enc_config_.enc_mode =
+      video_degradation_preference_ ==
+              VideoDegradationPreference::MaintainFrameRate
+          ? 10
+          : 8;
   enc_config_.rate_control_mode = SVT_AV1_RC_MODE_CBR;
   enc_config_.pred_structure = SVT_AV1_PRED_LOW_DELAY_B;
   enc_config_.target_bit_rate = target_bitrate_;

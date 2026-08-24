@@ -47,6 +47,8 @@ PeerPtr* CreatePeer(const Params* params) {
     peer_ptr->pc_params.video_content_type = params->video_content_type;
     peer_ptr->pc_params.video_quality = params->video_quality;
     peer_ptr->pc_params.video_frame_rate = params->video_frame_rate;
+    peer_ptr->pc_params.video_degradation_preference =
+        params->video_degradation_preference;
   }
   peer_ptr->pc_params.on_receive_video_buffer = params->on_receive_video_buffer;
   peer_ptr->pc_params.on_receive_audio_buffer = params->on_receive_audio_buffer;

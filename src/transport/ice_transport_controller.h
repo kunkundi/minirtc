@@ -55,7 +55,9 @@ class IceTransportController
                          std::shared_ptr<IOStatistics> ice_io_statistics,
                          bool enable_srtp, VideoQuality video_quality,
                          int video_frame_rate,
-                         VideoContentType video_content_type);
+                         VideoContentType video_content_type,
+                         VideoDegradationPreference
+                             video_degradation_preference);
   ~IceTransportController();
 
  public:

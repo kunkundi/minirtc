@@ -23,7 +23,8 @@ IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp,
     VideoQuality video_quality, int video_frame_rate,
-    VideoContentType video_content_type)
+    VideoContentType video_content_type,
+    VideoDegradationPreference video_degradation_preference)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
@@ -40,6 +41,8 @@ IceTransportController::IceTransportController(
       congestion_window_size_(DataSize::PlusInfinity()) {
   media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
   media_config_.video_content_type = video_content_type;
+  media_config_.video_degradation_preference =
+      video_degradation_preference;
   SetPeriod(std::chrono::milliseconds(25));
   SetThreadName("IceTransportController");
 }
@@ -236,7 +239,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 
   resolution_adapter_ = std::make_unique<ResolutionAdapter>(
       video_quality_, media_config_.max_frame_rate,
-      media_config_.video_content_type);
+      media_config_.video_content_type,
+      media_config_.video_degradation_preference);
 
   {
     std::shared_lock lock(stream_senders_mutex_);
@@ -616,6 +620,13 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
   }
 
   if (task_queue_encode_) {
+    // Reject coalesced frames before copying the full desktop buffer. At 4K,
+    // copying frames that are known to be dropped can consume hundreds of MB/s
+    // and slow the capture callback itself below its configured frame rate.
+    if (task_queue_encode_->PendingTasks() > 0) {
+      return 0;
+    }
+
     RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                        video_frame->width, video_frame->height);
     raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
@@ -627,10 +638,6 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
         context->source_height != raw_frame.Height()) {
       context->source_width = raw_frame.Width();
       context->source_height = raw_frame.Height();
-    }
-
-    if (task_queue_encode_->PendingTasks() > 0) {
-      return 0;
     }
 
     // Consume a key-frame request only after this frame is known to be
@@ -726,13 +733,17 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     const std::string& channel_name, int queue_delay_ms, uint32_t encoded_w,
     uint32_t encoded_h) {
-  constexpr int kDelayThresholdMs = 8;
-  constexpr int kDowngradeStreak = 8;
+  const bool maintain_frame_rate =
+      media_config_.video_degradation_preference ==
+      VideoDegradationPreference::MaintainFrameRate;
+  const int frame_budget_ms =
+      std::max(1, 1000 / std::max(1, media_config_.max_frame_rate));
+  const int delay_threshold_ms =
+      maintain_frame_rate ? std::max(2, frame_budget_ms / 3) : 8;
+  const int downgrade_streak = maintain_frame_rate ? 3 : 8;
   constexpr int kUpgradeStreak = 15;
-  constexpr int kUpgradeCooldownMs = 5000;
-  constexpr int kDowngradeCooldownMs = 3000;
-  const int restore_quality_streak =
-      std::max(30, media_config_.max_frame_rate * 3);
+  const int upgrade_cooldown_ms = maintain_frame_rate ? 8000 : 5000;
+  const int downgrade_cooldown_ms = maintain_frame_rate ? 750 : 3000;
 
   if (!is_running_.load()) return;
 
@@ -742,12 +753,19 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   if (it == stream_senders_.end() || !it->second) return;
   std::shared_ptr<StreamContext> context = it->second;
 
-  if (queue_delay_ms >= kDelayThresholdMs) {
+  if (queue_delay_ms >= delay_threshold_ms) {
     ++context->encode_exceed_count;
     context->encode_below_threshold_count = 0;
   } else {
     context->encode_exceed_count = 0;
     ++context->encode_below_threshold_count;
+  }
+
+  // Resolution-priority mode intentionally accepts a lower temporal rate.
+  // The bounded encode queue already coalesces excess input frames, so do not
+  // undo that choice by reducing spatial detail here.
+  if (!maintain_frame_rate) {
+    return;
   }
 
   auto set_encoding_speed_priority =
@@ -774,25 +792,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     return true;
   };
 
-  if (context->encoding_speed_priority_enabled &&
-      context->encode_below_threshold_count >= restore_quality_streak) {
-    const std::optional<bool> changed = set_encoding_speed_priority(false);
-    if (!changed.has_value()) {
-      return;
-    }
-    if (changed.value()) {
-      LOG_INFO(
-          "Encoding queue recovered; restore quality priority: channel={}",
-          channel_name);
-    } else {
-      // Avoid retrying an unsupported runtime property on every frame.
-      context->encode_below_threshold_count = 0;
-    }
-    return;
-  }
-
   if (!context->encoding_speed_priority_enabled &&
-      context->encode_exceed_count >= kDowngradeStreak && context->codec &&
+      context->encode_exceed_count >= downgrade_streak && context->codec &&
       media_config_.video_content_type == VideoContentType::ScreenContent &&
       context->codec->SupportsDynamicEncodingSpeedPriority()) {
     const std::optional<bool> changed = set_encoding_speed_priority(true);
@@ -816,16 +817,14 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   };
 
   // Upgrade
-  if (context->encode_exceed_count < kDowngradeStreak) {
-    // Restore the normal quality mode before attempting a resolution upgrade.
-    if (context->encoding_speed_priority_enabled ||
-        context->freeze_resolution || !context->target_width ||
+  if (context->encode_exceed_count < downgrade_streak) {
+    if (context->freeze_resolution || !context->target_width ||
         !context->target_height ||
         context->encode_below_threshold_count < kUpgradeStreak)
       return;
     auto [bw, bh] = base();
     int64_t now = clock_->CurrentTimeMs();
-    if (now - context->last_resolution_change_ms < kUpgradeCooldownMs) return;
+    if (now - context->last_resolution_change_ms < upgrade_cooldown_ms) return;
 
     auto [nw, nh] = resolution_adapter_
                         ? resolution_adapter_->GetNextHigherResolution(
@@ -856,23 +855,41 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   auto [bw, bh] = base();
   int64_t now = clock_->CurrentTimeMs();
   if (context->last_resolution_change_ms > 0 &&
-      now - context->last_resolution_change_ms < kDowngradeCooldownMs) {
+      now - context->last_resolution_change_ms < downgrade_cooldown_ms) {
     context->encode_exceed_count = 0;
     return;
   }
 
-  auto [nw, nh] = resolution_adapter_
-                      ? resolution_adapter_->GetNextLowerResolution(
-                            bw, bh, context->source_width,
-                            context->source_height)
-                      : std::pair<int, int>{-1, -1};
-  if (nw <= 0 || nh <= 0) {
+  int downgrade_steps = 1;
+  if (queue_delay_ms >= frame_budget_ms * 2) {
+    downgrade_steps = 3;
+  } else if (queue_delay_ms >= frame_budget_ms) {
+    downgrade_steps = 2;
+  }
+
+  int nw = bw;
+  int nh = bh;
+  for (int step = 0; step < downgrade_steps; ++step) {
+    const auto next = resolution_adapter_
+                          ? resolution_adapter_->GetNextLowerResolution(
+                                nw, nh, context->source_width,
+                                context->source_height)
+                          : std::pair<int, int>{-1, -1};
+    if (next.first <= 0 || next.second <= 0) {
+      break;
+    }
+    nw = next.first;
+    nh = next.second;
+  }
+  if (nw <= 0 || nh <= 0 || nw >= bw || nh >= bh) {
     context->encode_exceed_count = 0;
     return;
   }
 
-  LOG_INFO("Resolution downgrade: channel={} {}x{} -> {}x{}", channel_name, bw,
-           bh, nw, nh);
+  LOG_INFO(
+      "Frame-rate-priority resolution downgrade: channel={} delay_ms={} "
+      "budget_ms={} {}x{} -> {}x{}",
+      channel_name, queue_delay_ms, frame_budget_ms, bw, bh, nw, nh);
   context->target_width = nw;
   context->target_height = nh;
   context->last_resolution_change_ms = now;
@@ -1400,6 +1417,13 @@ int IceTransportController::CreateStreamCodecs(
             LOG_ERROR("Encoder [{}] init failed", channel_name);
             return -1;
           }
+          if (media_config_.video_degradation_preference ==
+                  VideoDegradationPreference::MaintainFrameRate &&
+              context->codec->SupportsDynamicEncodingSpeedPriority() &&
+              context->codec->SetPrioritizeEncodingSpeedOverQuality(true) ==
+                  0) {
+            context->encoding_speed_priority_enabled = true;
+          }
           context->applied_target_bitrate.reset();
           if (video_sender_init_first_time) {
             if (!stream_senders_.empty()) {
@@ -1796,6 +1820,9 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
       if (video_count > 0) {
         int sub_target_bitrate = video_bitrate_total / video_count;
         const auto& network_estimate = update.target_rate->network_estimate;
+        const bool maintain_frame_rate =
+            media_config_.video_degradation_preference ==
+            VideoDegradationPreference::MaintainFrameRate;
         const bool is_screen_content =
             media_config_.video_content_type ==
             VideoContentType::ScreenContent;
@@ -1807,7 +1834,8 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             is_screen_content && network_estimate.in_alr &&
             static_content_network_healthy;
         constexpr int64_t kStaticContentEnterHoldMs = 1000;
-        constexpr int64_t kStaticContentExitHoldMs = 3000;
+        const int64_t static_content_exit_hold_ms =
+            maintain_frame_rate ? 0 : 3000;
         for (auto& [channel_name, context] : stream_senders_) {
           if (!context->codec || context->type != StreamType::kVideo) {
             continue;
@@ -1843,7 +1871,8 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->freeze_resolution = false;
           } else if (context->freeze_resolution &&
                      !static_content_candidate &&
-                     candidate_duration_ms >= kStaticContentExitHoldMs) {
+                     candidate_duration_ms >=
+                         static_content_exit_hold_ms) {
             context->freeze_resolution = false;
           }
 
@@ -1855,6 +1884,23 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
           }
 
           if (context->freeze_resolution) {
+            if (maintain_frame_rate) {
+              // Static desktops produce too little traffic for bandwidth
+              // estimation. Hold the last sustainable resolution instead of
+              // mistaking application-limited traffic for congestion. Resume
+              // adaptation immediately when motion leaves ALR.
+              context->pending_mapped_width.reset();
+              context->pending_mapped_height.reset();
+              context->mapping_stability_count = 0;
+              if (!was_frozen) {
+                LOG_INFO(
+                    "Hold frame-rate-priority resolution for static content: "
+                    "channel={}",
+                    channel_name);
+              }
+              continue;
+            }
+
             // Static desktop content can use the selected quality ceiling even
             // when its instantaneous bitrate is low. Still respect Low/Medium
             // caps instead of unconditionally restoring the native resolution.

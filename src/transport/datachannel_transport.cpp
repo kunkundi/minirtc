@@ -114,6 +114,9 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
     LOG_ERROR("Encoder task queue not init");
     return -1;
   }
+  if (task_queue_encode_->PendingTasks() > 0) {
+    return 0;
+  }
 
   RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                      video_frame->width, video_frame->height);

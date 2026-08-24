@@ -35,6 +35,10 @@ constexpr std::pair<int, int> kResolutionSteps[] = {
 constexpr float kBitrateAlpha = 1.0f;
 constexpr float kBitrateCoeff30Fps = 2.70f;
 constexpr float kReferenceFrameRate = 30.0f;
+// Reserve media-pipeline headroom when every captured frame matters. Without
+// this margin, normal throughput variance keeps the pipeline on the edge of
+// its budget and the input queue has to discard frames to stay bounded.
+constexpr float kMaintainFrameRateHeadroom = 1.25f;
 constexpr float kLegacyBitrateAlpha = 0.822f;
 constexpr float kLegacyBitrateCoeff = 10.025f;
 
@@ -155,10 +159,13 @@ bool BuildStrictAspectResolution(int src_w, int src_h, int64_t target_area,
 
 ResolutionAdapter::ResolutionAdapter(VideoQuality video_quality,
                                      int video_frame_rate,
-                                     VideoContentType video_content_type)
+                                     VideoContentType video_content_type,
+                                     VideoDegradationPreference
+                                         video_degradation_preference)
     : video_quality_(video_quality),
       video_frame_rate_(std::clamp(video_frame_rate, 15, 60)),
-      video_content_type_(video_content_type) {}
+      video_content_type_(video_content_type),
+      video_degradation_preference_(video_degradation_preference) {}
 
 ResolutionAdapter::~ResolutionAdapter() {}
 
@@ -179,7 +186,12 @@ float ResolutionAdapter::GetBitrateCoefficient() const {
   }
   const float frame_rate_scale =
       std::sqrt(static_cast<float>(video_frame_rate_) / kReferenceFrameRate);
-  return kBitrateCoeff30Fps * frame_rate_scale;
+  const float headroom =
+      video_degradation_preference_ ==
+              VideoDegradationPreference::MaintainFrameRate
+          ? kMaintainFrameRateHeadroom
+          : 1.0f;
+  return kBitrateCoeff30Fps * frame_rate_scale * headroom;
 }
 
 float ResolutionAdapter::GetBitrateAlpha() const {
@@ -244,8 +256,12 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
   const int max_pixels = GetMaxPixelsForQuality();
 
   const float estimated_pixels_f =
-      std::pow(static_cast<float>(target_bitrate) / GetBitrateCoefficient(),
-               1.0f / GetBitrateAlpha());
+      video_degradation_preference_ ==
+              VideoDegradationPreference::MaintainResolution
+          ? static_cast<float>(max_pixels)
+          : std::pow(
+                static_cast<float>(target_bitrate) / GetBitrateCoefficient(),
+                1.0f / GetBitrateAlpha());
   const int64_t estimated_pixels = static_cast<int64_t>(std::llround(
       std::max(static_cast<float>(min_pixels),
                std::min(estimated_pixels_f, static_cast<float>(max_pixels)))));

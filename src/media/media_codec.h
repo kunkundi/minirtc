@@ -56,7 +56,9 @@ class MediaCodecConfig {
         max_frame_rate(MINIRTC_MAX_FRAME_RATE),
         key_frame_interval(MINIRTC_KEY_FRAME_INTERVAL),
         max_payload_size(MINIRTC_MAX_PAYLOAD_SIZE),
-        video_content_type(VideoContentType::ScreenContent) {}
+        video_content_type(VideoContentType::ScreenContent),
+        video_degradation_preference(
+            VideoDegradationPreference::MaintainFrameRate) {}
   ~MediaCodecConfig() {}
 
   int init_width;
@@ -70,6 +72,7 @@ class MediaCodecConfig {
   int key_frame_interval;
   int max_payload_size;
   VideoContentType video_content_type;
+  VideoDegradationPreference video_degradation_preference;
 };
 
 class MediaCodec {

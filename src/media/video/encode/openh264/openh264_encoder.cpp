@@ -95,7 +95,17 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   encoder_params_.iMaxBitrate = UNSPECIFIED_BIT_RATE;
   encoder_params_.iRCMode = RC_BITRATE_MODE;
   encoder_params_.fMaxFrameRate = max_fps_;
-  encoder_params_.bEnableFrameSkip = false;
+  encoder_params_.iComplexityMode =
+      video_degradation_preference_ ==
+              VideoDegradationPreference::MaintainFrameRate
+          ? LOW_COMPLEXITY
+          : MEDIUM_COMPLEXITY;
+  // Frame-rate priority lowers resolution before the encoder is allowed to
+  // skip. Resolution priority does the inverse and lets rate control reduce
+  // temporal output when it cannot preserve per-frame quality.
+  encoder_params_.bEnableFrameSkip =
+      video_degradation_preference_ ==
+      VideoDegradationPreference::MaintainResolution;
   encoder_params_.uiIntraPeriod = key_frame_interval_;
   encoder_params_.eSpsPpsIdStrategy = SPS_LISTING;
   encoder_params_.uiMaxNalSize = max_payload_size_;
@@ -162,6 +172,7 @@ int OpenH264Encoder::Init(const MediaCodecConfig& config) {
   max_payload_size_ = config.max_payload_size;
   max_fps_ = config.max_frame_rate;
   video_content_type_ = config.video_content_type;
+  video_degradation_preference_ = config.video_degradation_preference;
 
   // Create encoder.
   if (WelsCreateSVCEncoder(&openh264_encoder_) != 0) {

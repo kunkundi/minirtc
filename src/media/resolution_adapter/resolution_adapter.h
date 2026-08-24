@@ -20,7 +20,9 @@ class ResolutionAdapter {
  public:
   ResolutionAdapter(VideoQuality video_quality, int video_frame_rate,
                     VideoContentType video_content_type =
-                        VideoContentType::ScreenContent);
+                        VideoContentType::ScreenContent,
+                    VideoDegradationPreference video_degradation_preference =
+                        VideoDegradationPreference::MaintainFrameRate);
   ~ResolutionAdapter();
 
  public:
@@ -61,6 +63,7 @@ class ResolutionAdapter {
   VideoQuality video_quality_;
   int video_frame_rate_;
   VideoContentType video_content_type_;
+  VideoDegradationPreference video_degradation_preference_;
 };
 }  // namespace minirtc
 

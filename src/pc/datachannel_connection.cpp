@@ -304,6 +304,9 @@ DataChannelConnection::CreateDataChannelConnection(
   auto peer_connection = std::make_shared<::rtc::PeerConnection>(config);
   auto dc_transport = std::make_shared<DataChannelTransport>(
       clock, peer_connection, info_.user_id, remote_user_id, offer_peer_);
+  dc_transport->SetVideoConfig(
+      info_.video_quality, info_.video_frame_rate, info_.video_content_type,
+      info_.video_degradation_preference);
 
   peer_connection->onLocalDescription([this, transmission_id, remote_user_id,
                                        wws](::rtc::Description description) {

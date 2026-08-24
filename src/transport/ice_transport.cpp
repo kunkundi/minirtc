@@ -200,6 +200,7 @@ int IceTransport::SetLocalCapabilities(
     TurnMode turn_mode, bool enable_srtp,
     VideoContentType video_content_type, VideoQuality video_quality,
     int video_frame_rate,
+    VideoDegradationPreference video_degradation_preference,
     rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
@@ -211,6 +212,7 @@ int IceTransport::SetLocalCapabilities(
   video_content_type_ = video_content_type;
   video_quality_ = video_quality;
   video_frame_rate_ = video_frame_rate == 30 ? 30 : 60;
+  video_degradation_preference_ = video_degradation_preference;
   prefered_video_payload_type_ = prefered_video_payload_type;
   support_video_payload_types_ = video_payload_types;
   support_audio_payload_types_ = audio_payload_types;
@@ -272,7 +274,7 @@ int IceTransport::InitIceTransmission(std::string& stun_ip, int stun_port,
 
   ice_transport_controller_ = std::make_shared<IceTransportController>(
       clock_, ice_agent_, ice_io_statistics_, enable_srtp_, video_quality_,
-      video_frame_rate_, video_content_type_);
+      video_frame_rate_, video_content_type_, video_degradation_preference_);
 
   return 0;
 }

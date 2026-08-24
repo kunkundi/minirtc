@@ -66,6 +66,7 @@ typedef struct {
 
   VideoQuality video_quality;
   uint32_t video_frame_rate;
+  VideoDegradationPreference video_degradation_preference;
 
   OnReceiveBuffer on_receive_video_buffer;
   OnReceiveBuffer on_receive_audio_buffer;
@@ -174,6 +175,7 @@ class PeerConnection {
   std::string cfg_video_content_type_;
   std::string cfg_video_quality_;
   std::string cfg_video_frame_rate_;
+  std::string cfg_video_degradation_preference_;
   int signal_server_port_ = 0;
   int stun_server_port_ = 0;
   int turn_server_port_ = 0;
@@ -184,6 +186,8 @@ class PeerConnection {
   VideoContentType video_content_type_ = VideoContentType::ScreenContent;
   VideoQuality video_quality_ = VideoQuality::QualityHigh;
   int video_frame_rate_ = 60;
+  VideoDegradationPreference video_degradation_preference_ =
+      VideoDegradationPreference::MaintainFrameRate;
   bool trickle_ice_ = true;
   bool reliable_ice_ = false;
   bool try_rejoin_with_turn_ = false;

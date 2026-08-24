@@ -139,6 +139,9 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
       ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_) / 1000;
   max_payload_size_ = config.max_payload_size;
   max_fps_ = config.max_frame_rate;
+  disable_frame_dropping_ =
+      config.video_degradation_preference ==
+      VideoDegradationPreference::MaintainFrameRate;
 
   // Initialize encoder configuration structure with default values
   aom_codec_err_t ret = aom_codec_enc_config_default(
@@ -193,7 +196,12 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   inited_ = true;
 
   // Set control parameters
-  SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_SET_CPUUSED, 11);  // 6 - 11
+  SET_ENCODER_PARAM_OR_RETURN_ERROR(
+      AOME_SET_CPUUSED,
+      config.video_degradation_preference ==
+              VideoDegradationPreference::MaintainFrameRate
+          ? 11
+          : 8);  // 6 - 11; larger values favor throughput.
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CDEF, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_TPL_MODEL, 0);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_OBMC, 0);

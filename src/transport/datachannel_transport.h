@@ -58,6 +58,19 @@ class DataChannelTransport
 
   void Shutdown();
 
+  void SetVideoConfig(
+      VideoQuality video_quality, int video_frame_rate,
+      VideoContentType video_content_type,
+      VideoDegradationPreference video_degradation_preference) {
+    media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
+    media_config_.video_content_type = video_content_type;
+    media_config_.video_degradation_preference =
+        video_degradation_preference;
+    resolution_adapter_ = std::make_unique<ResolutionAdapter>(
+        video_quality, media_config_.max_frame_rate, video_content_type,
+        video_degradation_preference);
+  }
+
  public:
   int SendVideoFrame(const XVideoFrame* video_frame,
                      const std::string& stream_id);

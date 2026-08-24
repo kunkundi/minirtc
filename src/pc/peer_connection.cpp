@@ -88,6 +88,33 @@ VideoContentType NormalizeVideoContentType(VideoContentType value) {
   return VideoContentType::ScreenContent;
 }
 
+VideoDegradationPreference ParseVideoDegradationPreference(
+    const std::string& value) {
+  if (value == "maintain_resolution" || value == "quality_priority") {
+    return VideoDegradationPreference::MaintainResolution;
+  }
+  if (value != "maintain_frame_rate" && value != "frame_rate_priority") {
+    LOG_WARN(
+        "Invalid video degradation preference [{}], using "
+        "maintain_frame_rate",
+        value);
+  }
+  return VideoDegradationPreference::MaintainFrameRate;
+}
+
+VideoDegradationPreference NormalizeVideoDegradationPreference(
+    VideoDegradationPreference value) {
+  if (value == VideoDegradationPreference::MaintainFrameRate ||
+      value == VideoDegradationPreference::MaintainResolution) {
+    return value;
+  }
+  LOG_WARN(
+      "Invalid video degradation preference [{}], using "
+      "maintain_frame_rate",
+      static_cast<int>(value));
+  return VideoDegradationPreference::MaintainFrameRate;
+}
+
 const char* TurnModeToString(TurnMode mode) {
   switch (mode) {
     case TurnMode::TurnDisabled:
@@ -166,6 +193,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
         reader.Get("video content type", "type", "screen_content");
     cfg_video_quality_ = reader.Get("video quality", "quality", "high");
     cfg_video_frame_rate_ = reader.Get("video frame rate", "fps", "60");
+    cfg_video_degradation_preference_ = reader.Get(
+        "video degradation preference", "preference", "maintain_frame_rate");
 
     std::regex regex("\n");
 
@@ -181,6 +210,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     video_content_type_ = ParseVideoContentType(cfg_video_content_type_);
     video_frame_rate_ =
         NormalizeVideoFrameRate(std::stoi(cfg_video_frame_rate_));
+    video_degradation_preference_ = ParseVideoDegradationPreference(
+        cfg_video_degradation_preference_);
     if (cfg_video_quality_ == "low") {
       video_quality_ = VideoQuality::QualityLow;
     } else if (cfg_video_quality_ == "medium") {
@@ -210,6 +241,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     video_content_type_ = NormalizeVideoContentType(params.video_content_type);
     video_quality_ = params.video_quality;
     video_frame_rate_ = NormalizeVideoFrameRate(params.video_frame_rate);
+    video_degradation_preference_ = NormalizeVideoDegradationPreference(
+        params.video_degradation_preference);
 
     cfg_signal_server_port_ = std::to_string(signal_server_port_);
     cfg_stun_server_port_ = std::to_string(stun_server_port_);
@@ -231,6 +264,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_info_.av1_encoding = av1_encoding_;
   connection_info_.video_quality = video_quality_;
   connection_info_.video_frame_rate = video_frame_rate_;
+  connection_info_.video_degradation_preference =
+      video_degradation_preference_;
 
   LOG_INFO("Read config success, use configure file [{}]", params.use_cfg_file);
 
@@ -251,6 +286,11 @@ int PeerConnection::Init(PeerConnectionParams params) {
            hardware_acceleration_ ? "ON" : "OFF");
   LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
   LOG_INFO("Video frame rate [{} fps]", video_frame_rate_);
+  LOG_INFO("Video degradation preference [{}]",
+           video_degradation_preference_ ==
+                   VideoDegradationPreference::MaintainFrameRate
+               ? "maintain_frame_rate"
+               : "maintain_resolution");
   LOG_INFO("Video content type [{}]",
            video_content_type_ == VideoContentType::ScreenContent
                ? "screen_content"

@@ -133,7 +133,8 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   max_fps_ = config.max_frame_rate;
   max_bitrate_ = config.max_bitrate;
   prioritize_encoding_speed_ =
-      config.video_content_type != VideoContentType::ScreenContent;
+      config.video_degradation_preference ==
+      VideoDegradationPreference::MaintainFrameRate;
   average_bitrate_ =
       ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_);
   keyframe_interval_ = config.key_frame_interval;

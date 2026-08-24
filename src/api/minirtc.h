@@ -44,6 +44,13 @@ enum class VideoContentType : uint8_t {
   ScreenContent = 1,
 };
 
+// Select which dimension should be preserved first when the active media
+// pipeline cannot sustain both the requested resolution and frame rate.
+enum class VideoDegradationPreference : uint8_t {
+  MaintainFrameRate = 0,
+  MaintainResolution = 1,
+};
+
 enum TurnMode : uint8_t {
   TurnDisabled = 0,  // Direct/STUN candidates only.
   TurnAutoUdpTcp,    // Direct candidates plus TURN/UDP and TURN/TCP fallback.
@@ -142,6 +149,7 @@ typedef struct {
 
   VideoQuality video_quality;
   uint32_t video_frame_rate;
+  VideoDegradationPreference video_degradation_preference;
 
   OnReceiveBuffer on_receive_video_buffer;
   OnReceiveBuffer on_receive_audio_buffer;

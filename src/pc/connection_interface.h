@@ -42,6 +42,7 @@ struct ConnectionInfo {
   bool av1_encoding;
   VideoQuality video_quality;
   int video_frame_rate;
+  VideoDegradationPreference video_degradation_preference;
 };
 
 struct ConnectionCallbacks {

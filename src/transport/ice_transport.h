@@ -47,6 +47,8 @@ class IceTransport {
                            bool enable_srtp,
                            VideoContentType video_content_type,
                            VideoQuality video_quality, int video_frame_rate,
+                           VideoDegradationPreference
+                               video_degradation_preference,
                            rtp::PAYLOAD_TYPE prefered_video_payload_type,
                            std::vector<int>& video_payload_types,
                            std::vector<int>& audio_payload_types);
@@ -186,6 +188,8 @@ class IceTransport {
   VideoContentType video_content_type_ = VideoContentType::ScreenContent;
   VideoQuality video_quality_ = QualityHigh;
   int video_frame_rate_ = 60;
+  VideoDegradationPreference video_degradation_preference_ =
+      VideoDegradationPreference::MaintainFrameRate;
 
   std::vector<std::string> video_stream_ids_;
   std::vector<std::string> audio_stream_ids_;
