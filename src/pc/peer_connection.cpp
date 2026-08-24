@@ -335,7 +335,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   on_ws_status_ = [this](WsStatus ws_status) {
     if (WsStatus::WsOpening == ws_status) {
       ws_status_ = WsStatus::WsOpening;
-      signal_status_ = SignalStatus::SignalConnecting;
+      SetSignalStatus(SignalStatus::SignalConnecting);
       on_signal_status_(SignalStatus::SignalConnecting, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsOpened == ws_status) {
@@ -344,30 +344,30 @@ int PeerConnection::Init(PeerConnectionParams params) {
       Login();
     } else if (WsStatus::WsFailed == ws_status) {
       ws_status_ = WsStatus::WsFailed;
-      signal_status_ = SignalStatus::SignalFailed;
+      SetSignalStatus(SignalStatus::SignalFailed);
       ClearPeerConnections("signal failed");
       on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsClosed == ws_status) {
       ws_status_ = WsStatus::WsClosed;
-      signal_status_ = SignalStatus::SignalClosed;
+      SetSignalStatus(SignalStatus::SignalClosed);
       ClearPeerConnections("signal closed");
       on_signal_status_(SignalStatus::SignalClosed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsReconnecting == ws_status) {
       ws_status_ = WsStatus::WsReconnecting;
-      signal_status_ = SignalStatus::SignalReconnecting;
+      SetSignalStatus(SignalStatus::SignalReconnecting);
       on_signal_status_(SignalStatus::SignalReconnecting, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsServerClosed == ws_status) {
       ws_status_ = WsStatus::WsServerClosed;
-      signal_status_ = SignalStatus::SignalServerClosed;
+      SetSignalStatus(SignalStatus::SignalServerClosed);
       ClearPeerConnections("signal server closed");
       on_signal_status_(SignalStatus::SignalServerClosed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsTlsCertError == ws_status) {
       ws_status_ = WsStatus::WsTlsCertError;
-      signal_status_ = SignalStatus::SignalTlsCertError;
+      SetSignalStatus(SignalStatus::SignalTlsCertError);
       ClearPeerConnections("signal TLS certificate error");
       on_signal_status_(SignalStatus::SignalTlsCertError, user_id_.data(),
                         user_id_.size(), user_data_);
@@ -409,22 +409,8 @@ int PeerConnection::Login() {
   return ret;
 }
 
-int PeerConnection::Join(const std::string& transmission_id) {
-  SignalStatus signal_status = GetSignalStatus();
-  if (SignalStatus::SignalConnected != signal_status) {
-    if (signal_status == SignalStatus::SignalConnecting ||
-        signal_status == SignalStatus::SignalReconnecting) {
-      LOG_WARN("Signal service not ready for join yet, status = [{}]",
-               SignalStatusToString(signal_status));
-    } else {
-      LOG_ERROR("Signal server not connected, status = [{}]",
-                SignalStatusToString(signal_status));
-    }
-    return -1;
-  }
-
-  int ret = 0;
-
+int PeerConnection::SendJoinRequestLocked(
+    const std::string& transmission_id) {
   offer_peer_ = false;
   leave_ = false;
 
@@ -435,18 +421,64 @@ int PeerConnection::Join(const std::string& transmission_id) {
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
-    // LOG_INFO(
-    //     "[{}] sends join transmission request to transmission "
-    //     "id [{}]",
-    //     user_id_, transmission_id);
+    LOG_INFO("[{}] sends join transmission [{}] request", user_id_,
+             transmission_id);
   }
 
-  return ret;
+  return 0;
+}
+
+void PeerConnection::SetSignalStatus(SignalStatus signal_status) {
+  std::lock_guard<std::mutex> lock(signal_status_mutex_);
+  signal_status_ = signal_status;
+}
+
+int PeerConnection::Join(const std::string& transmission_id) {
+  std::lock_guard<std::mutex> lock(signal_status_mutex_);
+  if (SignalStatus::SignalConnected == signal_status_) {
+    return SendJoinRequestLocked(transmission_id);
+  }
+
+  if (signal_status_ == SignalStatus::SignalConnecting ||
+      signal_status_ == SignalStatus::SignalReconnecting) {
+    pending_join_transmission_id_ = transmission_id;
+    leave_ = false;
+    LOG_INFO("Queue join transmission [{}] until signal login completes",
+             transmission_id);
+    return 0;
+  }
+
+  LOG_ERROR("Signal server not connected, status = [{}]",
+            SignalStatusToString(signal_status_));
+  return -1;
 }
 
 int PeerConnection::Leave(const std::string& transmission_id) {
-  SignalStatus signal_status = GetSignalStatus();
-  if (SignalStatus::SignalConnected != signal_status) {
+  bool cancelled_pending_join = false;
+  SignalStatus signal_status;
+  {
+    std::lock_guard<std::mutex> lock(signal_status_mutex_);
+    signal_status = signal_status_;
+    if (pending_join_transmission_id_) {
+      LOG_INFO("Cancel queued join transmission [{}]",
+               *pending_join_transmission_id_);
+      pending_join_transmission_id_.reset();
+      cancelled_pending_join = true;
+    } else if (SignalStatus::SignalConnected == signal_status_) {
+      json message = {{"type", "user_leave_transmission"},
+                      {"user_id", user_id_},
+                      {"transmission_id", transmission_id}};
+      if (ws_transport_) {
+        ws_transport_->Send(message.dump());
+        LOG_INFO("[{}] sends leave transmission [{}] notification ", user_id_,
+                 transmission_id);
+      }
+    }
+    leave_ = true;
+  }
+
+  if (!cancelled_pending_join &&
+      SignalStatus::SignalConnected != signal_status) {
     if (signal_status == SignalStatus::SignalConnecting ||
         signal_status == SignalStatus::SignalReconnecting) {
       LOG_WARN("Signal not ready for leave yet, status=[{}]",
@@ -457,17 +489,6 @@ int PeerConnection::Leave(const std::string& transmission_id) {
     }
     return -1;
   }
-
-  json message = {{"type", "user_leave_transmission"},
-                  {"user_id", user_id_},
-                  {"transmission_id", transmission_id}};
-  if (ws_transport_) {
-    ws_transport_->Send(message.dump());
-    LOG_INFO("[{}] sends leave transmission [{}] notification ", user_id_,
-             transmission_id);
-  }
-
-  leave_ = true;
 
   ClearPeerConnections("leave transmission");
 
@@ -493,6 +514,11 @@ int PeerConnection::AddDataStream(const char* stream_id, bool reliable) {
 }
 
 int PeerConnection::Destroy() {
+  {
+    std::lock_guard<std::mutex> lock(signal_status_mutex_);
+    pending_join_transmission_id_.reset();
+    leave_ = true;
+  }
   ClearPeerConnections("destroy peer connection");
   StopIceWorker();
   if (ws_transport_) {
@@ -902,7 +928,16 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
                               TraversalMode::UnknownMode, &net_traffic_stats,
                               user_id_.data(), user_id_.size(), user_data_);
         LOG_INFO("Login success with id [{}]", user_id_);
-        signal_status_ = SignalStatus::SignalConnected;
+        {
+          std::lock_guard<std::mutex> lock(signal_status_mutex_);
+          signal_status_ = SignalStatus::SignalConnected;
+          if (pending_join_transmission_id_) {
+            std::string transmission_id =
+                std::move(*pending_join_transmission_id_);
+            pending_join_transmission_id_.reset();
+            SendJoinRequestLocked(transmission_id);
+          }
+        }
         on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),
                           user_id_.size(), user_data_);
       } else if (j["status"].get<std::string>() == "fail") {
@@ -911,7 +946,11 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           reason = j["reason"].get<std::string>();
         }
         LOG_WARN("Login failed with id [{}], due to [{}]", user_id_, reason);
-        signal_status_ = SignalStatus::SignalFailed;
+        {
+          std::lock_guard<std::mutex> lock(signal_status_mutex_);
+          signal_status_ = SignalStatus::SignalFailed;
+          pending_join_transmission_id_.reset();
+        }
         on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
                           user_id_.size(), user_data_);
       }

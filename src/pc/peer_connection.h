@@ -10,6 +10,7 @@
 #include <iostream>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
@@ -133,6 +134,8 @@ class PeerConnection {
 
  private:
   int Login();
+  int SendJoinRequestLocked(const std::string& transmission_id);
+  void SetSignalStatus(SignalStatus signal_status);
 
   void ProcessSignal(const std::string& signal);
   bool ApplyTurnCredentials(const nlohmann::json& message);
@@ -214,6 +217,7 @@ class PeerConnection {
   WsStatus ws_status_ = WsStatus::WsClosed;
   SignalStatus signal_status_ = SignalStatus::SignalClosed;
   std::mutex signal_status_mutex_;
+  std::optional<std::string> pending_join_transmission_id_;
   std::atomic<bool> leave_{false};
   std::string sdp_without_cands_ = "";
 
