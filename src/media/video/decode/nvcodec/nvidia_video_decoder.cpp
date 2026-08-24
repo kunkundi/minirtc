@@ -131,7 +131,6 @@ int NvidiaVideoDecoder::Decode(
           on_receive_decoded_frame(decoded_frame_);
         }
       }
-      decoder_->UnlockFrame(&decoded_frame_buffer);
     }
   }
 

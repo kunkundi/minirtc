@@ -550,7 +550,7 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
       CUDA_DRVAPI_CALL(cuMemFree_ld((CUdeviceptr)pFrame));
       CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
     } else {
-      delete pFrame;
+      delete[] pFrame;
     }
   }
 
@@ -789,11 +789,19 @@ uint8_t *NvDecoder::GetLockedFrame(int64_t *pTimestamp) {
 }
 
 void NvDecoder::UnlockFrame(uint8_t **pFrame) {
+  if (!pFrame || !*pFrame) {
+    return;
+  }
+
   std::lock_guard<std::mutex> lock(m_mtxVPFrame);
-  m_vpFrame.insert(m_vpFrame.end(), &pFrame[0], &pFrame[1]);
+  if (std::find(m_vpFrame.begin(), m_vpFrame.end(), *pFrame) !=
+      m_vpFrame.end()) {
+    return;
+  }
+
+  m_vpFrame.push_back(*pFrame);
 
   // add a dummy entry for timestamp
-  uint64_t timestamp[2] = {0};
-  m_vTimestamp.insert(m_vTimestamp.end(), &timestamp[0], &timestamp[1]);
+  m_vTimestamp.push_back(0);
 }
 }  // namespace minirtc
