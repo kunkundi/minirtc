@@ -464,6 +464,15 @@ int NvDecoder::ReconfigureDecoder(CUVIDEOFORMAT *pVideoFormat) {
   reconfigParams.ulTargetWidth = m_nSurfaceWidth;
   reconfigParams.ulTargetHeight = m_nSurfaceHeight;
 
+  // A sequence-level resolution change must refresh the decoder's output
+  // dimensions as well. Otherwise NVDEC keeps scaling/copying into the old
+  // output surface and GetWidth()/GetHeight() continue to report the previous
+  // resolution. This is especially visible for non-macroblock-aligned display
+  // heights, where the coded padding becomes a black strip after scaling.
+  if (bDecodeResChange) {
+    setReconfigParams(&m_cropRect, &m_resizeDim);
+  }
+
   // If external reconfigure is called along with resolution change even if post
   // processing params is not changed, do full reconfigure params update
   if ((m_bReconfigExternal && bDecodeResChange) || m_bReconfigExtPPChange) {
