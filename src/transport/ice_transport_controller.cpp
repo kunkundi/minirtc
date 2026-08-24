@@ -18,6 +18,12 @@
 #include "api/transport/network_types.h"
 
 namespace minirtc {
+namespace {
+
+constexpr int64_t kDesktopPacerQueueLimitMs = 100;
+constexpr int64_t kDesktopFrameAdmissionQueueMs = 80;
+
+}  // namespace
 
 IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
@@ -106,7 +112,10 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                                 task_queue_pacer_);
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
-  paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(2000));
+  paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(
+      media_config_.video_content_type == VideoContentType::ScreenContent
+          ? kDesktopPacerQueueLimitMs
+          : 2000));
   paced_sender_->SetAllowProbeWithoutMediaPacket(false);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
   paced_sender_->SetOnSentPacketFunc(
@@ -620,6 +629,18 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
   }
 
   if (task_queue_encode_) {
+    if (media_config_.video_content_type == VideoContentType::ScreenContent &&
+        paced_sender_ &&
+        (paced_sender_->ExpectedQueueTime() >=
+             TimeDelta::Millis(kDesktopFrameAdmissionQueueMs) ||
+         paced_sender_->OldestPacketWaitTime() >=
+             TimeDelta::Millis(kDesktopPacerQueueLimitMs))) {
+      // Remote desktop frames expire quickly. Stop admitting new frames while
+      // the packet queue drains instead of extending end-to-end latency with
+      // content the viewer will only see long after it was captured.
+      return 0;
+    }
+
     // Reject coalesced frames before copying the full desktop buffer. At 4K,
     // copying frames that are known to be dropped can consume hundreds of MB/s
     // and slow the capture callback itself below its configured frame rate.
@@ -629,7 +650,10 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 
     RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                        video_frame->width, video_frame->height);
-    raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
+    raw_frame.SetCapturedTimestamp(
+        video_frame->captured_timestamp != 0
+            ? static_cast<int64_t>(video_frame->captured_timestamp)
+            : clock_->CurrentTimeUs());
 
     // Save the original capture resolution so later resolution changes keep the
     // same aspect ratio.
@@ -715,7 +739,7 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 
       scaled_frame.SetWidth(context->target_width.value());
       scaled_frame.SetHeight(context->target_height.value());
-      scaled_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
+      scaled_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
 
       resolution_adapter_->ResolutionDowngrade(
           raw_frame, context->target_width.value(),
@@ -1264,7 +1288,7 @@ void IceTransportController::OnReceiveCompleteFrame(
             return;
           }
 
-          XVideoFrame x_video_frame;
+          XVideoFrame x_video_frame{};
           x_video_frame.data = (const char*)decoded_frame->Buffer();
           x_video_frame.width = decoded_frame->DecodedWidth();
           x_video_frame.height = decoded_frame->DecodedHeight();
@@ -1272,7 +1296,6 @@ void IceTransportController::OnReceiveCompleteFrame(
           x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
           x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
           x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
-
           on_receive_video(&x_video_frame, remote_user_id.data(),
                            remote_user_id.size(), channel_name.data(),
                            channel_name.size(), user_data);

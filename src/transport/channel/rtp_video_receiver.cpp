@@ -829,20 +829,22 @@ RtpVideoReceiver::FrameRecoveryDeadlinesMs() {
   if (!RtxEnabled()) {
     // Without an RTX stream there is no repair path. Escalate promptly and
     // avoid holding complete newer frames behind an unrecoverable gap.
-    return {100, 300};
+    return {80, 200};
   }
   std::lock_guard<std::mutex> lock(nack_mtx_);
   if (!nack_ || !nack_->HasRttSample()) {
-    // Escalate early so one unrecoverable first loss cannot freeze the decode
-    // queue for the full high-RTT safety window. Keep the hard deadline at two
-    // seconds so a relayed path still has a chance to complete RTX recovery.
-    return {600, 2000};
+    // Remote desktop favors a fresh synchronization point over preserving an
+    // old damaged frame. The previous two-second recovery window released
+    // newer frames in large bursts, inflating decoded FPS while the viewer saw
+    // long freezes. Leave enough time for an initial RTX exchange, but request
+    // a key frame promptly when no RTT sample is available yet.
+    return {200, 600};
   }
   const int64_t rtt_ms = std::max<int64_t>(nack_->RttMs(), 1);
   const int64_t soft_deadline_ms =
-      std::clamp<int64_t>(2 * rtt_ms + 50, 300, 1000);
+      std::clamp<int64_t>(2 * rtt_ms + 30, 100, 500);
   const int64_t hard_deadline_ms =
-      std::clamp<int64_t>(4 * rtt_ms + 100, 800, 2000);
+      std::clamp<int64_t>(4 * rtt_ms + 80, 300, 1000);
   return {soft_deadline_ms, hard_deadline_ms};
 }
 

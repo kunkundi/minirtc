@@ -6,6 +6,19 @@
 #include "log.h"
 
 namespace minirtc {
+namespace {
+
+webrtc::PacingController::Configuration LowLatencyPacingConfiguration() {
+  auto configuration =
+      webrtc::PacingController::DefaultConfiguration();
+  // A fresh key frame supersedes queued desktop deltas. Flushing those older
+  // packets prevents a recovery frame from sitting behind content that can no
+  // longer be decoded usefully.
+  configuration.keyframe_flushing = true;
+  return configuration;
+}
+
+}  // namespace
 
 const int PacedSender::kNoPacketHoldback = -1;
 
@@ -14,7 +27,7 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
                          std::shared_ptr<TaskQueue> task_queue)
     : ice_agent_(ice_agent),
       clock_(clock),
-      pacing_controller_(clock.get(), this),
+      pacing_controller_(clock.get(), this, LowLatencyPacingConfiguration()),
       max_hold_back_window_(webrtc::TimeDelta::Millis(5)),
       max_hold_back_window_in_packets_(3),
       next_process_time_(webrtc::Timestamp::MinusInfinity()),

@@ -107,6 +107,8 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
 
   init_params.encodeWidth = frame_width_;
   init_params.encodeHeight = frame_height_;
+  init_params.frameRateNum = max_fps_;
+  init_params.frameRateDen = 1;
   // must set max encode width and height otherwise will get crash when try to
   // reconfigure the resolution
   init_params.maxEncodeWidth = frame_width_max_;

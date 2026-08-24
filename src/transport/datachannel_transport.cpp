@@ -120,7 +120,10 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
 
   RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
                      video_frame->width, video_frame->height);
-  raw_frame.SetCapturedTimestamp(clock_->CurrentTimeUs());
+  raw_frame.SetCapturedTimestamp(
+      video_frame->captured_timestamp != 0
+          ? static_cast<int64_t>(video_frame->captured_timestamp)
+          : clock_->CurrentTimeUs());
   const bool force_i_frame = b_force_i_frame_.exchange(false);
   bool force_stream_i_frame = false;
   {
