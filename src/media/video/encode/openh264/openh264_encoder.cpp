@@ -90,8 +90,9 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   encoder_params_.iPicWidth = width;
   encoder_params_.iPicHeight = height;
   encoder_params_.iTargetBitrate = target_bitrate_;
-  encoder_params_.iMaxBitrate =
-      EncoderPeakBitrate(target_bitrate_, max_bitrate_);
+  // OpenH264's iMaxBitrate is a short-term peak limit. Keep the OpenH264 limit
+  // unspecified and enforce the configured ceiling before SetTargetBitrate.
+  encoder_params_.iMaxBitrate = UNSPECIFIED_BIT_RATE;
   encoder_params_.iRCMode = RC_BITRATE_MODE;
   encoder_params_.fMaxFrameRate = max_fps_;
   encoder_params_.bEnableFrameSkip = false;
@@ -354,34 +355,27 @@ int OpenH264Encoder::SetTargetBitrate(int bitrate) {
     return -1;
   }
 
-  target_bitrate_ = ClampEncoderTargetBitrate(bitrate, max_bitrate_);
-  if (target_bitrate_ != bitrate) {
+  const int new_target_bitrate =
+      ClampEncoderTargetBitrate(bitrate, max_bitrate_);
+  if (new_target_bitrate != bitrate) {
     LOG_WARN("OpenH264 target bitrate clamped: requested={} max={}", bitrate,
              max_bitrate_);
   }
-  encoder_params_.iTargetBitrate = target_bitrate_;
-  encoder_params_.iMaxBitrate =
-      EncoderPeakBitrate(target_bitrate_, max_bitrate_);
-  encoder_params_.sSpatialLayers[0].iSpatialBitrate = target_bitrate_;
-  encoder_params_.sSpatialLayers[0].iMaxSpatialBitrate =
-      encoder_params_.iMaxBitrate;
-
-  SBitrateInfo max_bitrate;
-  memset(&max_bitrate, 0, sizeof(SBitrateInfo));
-  max_bitrate.iLayer = SPATIAL_LAYER_ALL;
-  max_bitrate.iBitrate = encoder_params_.iMaxBitrate;
-  const int max_bitrate_result = openh264_encoder_->SetOption(
-      ENCODER_OPTION_MAX_BITRATE, &max_bitrate);
-  if (max_bitrate_result != cmResultSuccess) {
-    LOG_ERROR("Failed to set OpenH264 max bitrate: {}", max_bitrate.iBitrate);
-    return max_bitrate_result;
+  SBitrateInfo target_bitrate{};
+  target_bitrate.iLayer = SPATIAL_LAYER_ALL;
+  target_bitrate.iBitrate = new_target_bitrate;
+  const int result = openh264_encoder_->SetOption(ENCODER_OPTION_BITRATE,
+                                                   &target_bitrate);
+  if (result != cmResultSuccess) {
+    LOG_ERROR("Failed to set OpenH264 target bitrate: {}",
+              new_target_bitrate);
+    return result;
   }
 
-  SBitrateInfo target_bitrate;
-  memset(&target_bitrate, 0, sizeof(SBitrateInfo));
-  target_bitrate.iLayer = SPATIAL_LAYER_ALL;
-  target_bitrate.iBitrate = target_bitrate_;
-  return openh264_encoder_->SetOption(ENCODER_OPTION_BITRATE, &target_bitrate);
+  target_bitrate_ = new_target_bitrate;
+  encoder_params_.iTargetBitrate = new_target_bitrate;
+  encoder_params_.sSpatialLayers[0].iSpatialBitrate = new_target_bitrate;
+  return 0;
 }
 
 int OpenH264Encoder::Release() {
