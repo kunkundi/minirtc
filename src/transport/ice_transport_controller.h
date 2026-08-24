@@ -280,7 +280,7 @@ class IceTransportController
   std::string last_active_stream_;
 
  private:
-  std::unique_ptr<ResolutionAdapter> resolution_adapter_ = nullptr;
+  std::unique_ptr<ResolutionAdapter> resolution_adapter_;
   std::atomic<bool> b_force_i_frame_;
   std::mutex force_i_frame_streams_mutex_;
   std::unordered_set<std::string> force_i_frame_streams_;
