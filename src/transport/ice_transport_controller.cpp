@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "data_channel_send.h"
+#include "resolution_adapter.h"
 #include "video_frame_wrapper.h"
 
 #if defined(__APPLE__)
@@ -741,9 +742,15 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
       scaled_frame.SetHeight(context->target_height.value());
       scaled_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
 
-      resolution_adapter_->ResolutionDowngrade(
-          raw_frame, context->target_width.value(),
-          context->target_height.value(), scaled_frame);
+      if (resolution_adapter_->ResolutionDowngrade(
+              raw_frame, context->target_width.value(),
+              context->target_height.value(), scaled_frame) != 0) {
+        LOG_ERROR("Failed to scale video frame from [{}x{}] to [{}x{}]",
+                  raw_frame.Width(), raw_frame.Height(),
+                  context->target_width.value(),
+                  context->target_height.value());
+        return -1;
+      }
 
       post_encode(std::move(scaled_frame));
     } else {

@@ -170,6 +170,7 @@ target("transport")
     add_files("src/transport/*.cpp",
     "src/transport/channel/*.cpp",
     "src/transport/paced_sender/*.cpp")
+    add_includedirs("src/media/resolution_adapter")
     add_includedirs("src/transport",
     "src/transport/channel",
     "src/transport/paced_sender", {public = true})
@@ -260,9 +261,9 @@ target("media")
         "src/media/audio/decode/*.cpp",
         "src/media/resolution_adapter/*.cpp",
         "src/media/video/assemble_frame/*.cpp")
+    add_includedirs("src/media/resolution_adapter")
     add_includedirs("src/media/audio/encode",
         "src/media/audio/decode",
-        "src/media/resolution_adapter",
         "src/media/video/assemble_frame",
         "src/api", "src/media", {public = true})
 

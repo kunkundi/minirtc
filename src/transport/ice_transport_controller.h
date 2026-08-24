@@ -28,7 +28,6 @@
 #include "media_channel.h"
 #include "media_codec.h"
 #include "paced_sender.h"
-#include "resolution_adapter.h"
 #include "srtp_engine.h"
 #include "task_queue.h"
 #include "task_queue_lock_free.h"
@@ -46,6 +45,8 @@ typedef void (*OnReceiveData)(const char*, size_t, const char*, const size_t,
                               const char*, const size_t, void*);
 
 namespace minirtc {
+class ResolutionAdapter;
+
 class IceTransportController
     : public std::enable_shared_from_this<IceTransportController>,
       public ThreadBase {

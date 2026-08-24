@@ -7,6 +7,7 @@
 
 #include "libyuv.h"
 #include "log.h"
+#include "nv12_scaler.h"
 
 namespace minirtc {
 namespace {
@@ -52,6 +53,12 @@ constexpr float kMaxRatio = 1.60f;
 
 constexpr float kDownscaleStep = 0.88f;
 constexpr float kUpscaleStep = 1.10f;
+
+libyuv::FilterMode ScaleFilterForContent(VideoContentType content_type) {
+  return content_type == VideoContentType::ScreenContent
+             ? libyuv::kFilterBox
+             : libyuv::kFilterLinear;
+}
 
 int64_t ClampI64(int64_t value, int64_t min_v, int64_t max_v) {
   if (value < min_v) {
@@ -280,26 +287,32 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
 int ResolutionAdapter::ResolutionDowngrade(const XVideoFrame* video_frame,
                                            int target_width, int target_height,
                                            XVideoFrame* scaled_frame) {
-  if (target_width <= 0 || target_height <= 0) {
+  if (!video_frame || !video_frame->data || !scaled_frame ||
+      target_width <= 0 || target_height <= 0) {
     return -1;
+  }
+
+  const size_t scaled_size =
+      static_cast<size_t>(target_width) * target_height * 3 / 2;
+  auto* scaled_data = new char[scaled_size];
+  const int result = ScaleNv12ViaI420(
+      reinterpret_cast<const uint8_t*>(video_frame->data), video_frame->width,
+      reinterpret_cast<const uint8_t*>(
+          video_frame->data + video_frame->width * video_frame->height),
+      video_frame->width, video_frame->width, video_frame->height,
+      reinterpret_cast<uint8_t*>(scaled_data), target_width,
+      reinterpret_cast<uint8_t*>(scaled_data + target_width * target_height),
+      target_width, target_width, target_height,
+      ScaleFilterForContent(video_content_type_), &scale_scratch_buffer_);
+  if (result != 0) {
+    delete[] scaled_data;
+    return result;
   }
 
   scaled_frame->width = target_width;
   scaled_frame->height = target_height;
-  scaled_frame->size = target_width * target_height * 3 / 2;
-  scaled_frame->data = new char[scaled_frame->size];
-
-  libyuv::NV12Scale(
-      (const uint8_t*)(video_frame->data), video_frame->width,
-      (const uint8_t*)(video_frame->data +
-                       video_frame->width * video_frame->height),
-      video_frame->width, video_frame->width, video_frame->height,
-      (uint8_t*)(scaled_frame->data), target_width,
-      (uint8_t*)(scaled_frame->data + target_width * target_height),
-      target_width, target_width, target_height,
-      video_content_type_ == VideoContentType::ScreenContent
-          ? libyuv::kFilterBox
-          : libyuv::kFilterLinear);
+  scaled_frame->size = scaled_size;
+  scaled_frame->data = scaled_data;
 
   return 0;
 }
@@ -311,7 +324,8 @@ int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
     return -1;
   }
 
-  int scaled_resolution = target_width * target_height * 3 / 2;
+  const size_t scaled_resolution =
+      static_cast<size_t>(target_width) * target_height * 3 / 2;
   if (scaled_resolution > tmp_buffer_.size()) {
     tmp_buffer_.resize(scaled_resolution);
   }
@@ -324,12 +338,13 @@ int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
   uint8_t* dst_y = tmp_buffer_.data();
   uint8_t* dst_uv = dst_y + target_width * target_height;
 
-  libyuv::NV12Scale(y_plane, src_width, uv_plane, src_width, src_width,
-                    src_height, dst_y, target_width, dst_uv, target_width,
-                    target_width, target_height,
-                    video_content_type_ == VideoContentType::ScreenContent
-                        ? libyuv::kFilterBox
-                        : libyuv::kFilterLinear);
+  const int result = ScaleNv12ViaI420(
+      y_plane, src_width, uv_plane, src_width, src_width, src_height, dst_y,
+      target_width, dst_uv, target_width, target_width, target_height,
+      ScaleFilterForContent(video_content_type_), &scale_scratch_buffer_);
+  if (result != 0) {
+    return result;
+  }
 
   scaled_frame.UpdateBuffer(tmp_buffer_.data(), scaled_resolution);
   scaled_frame.SetWidth(target_width);

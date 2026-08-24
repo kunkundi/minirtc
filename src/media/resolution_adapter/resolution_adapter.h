@@ -60,6 +60,7 @@ class ResolutionAdapter {
 
  private:
   std::vector<uint8_t> tmp_buffer_;
+  std::vector<uint8_t> scale_scratch_buffer_;
   VideoQuality video_quality_;
   int video_frame_rate_;
   VideoContentType video_content_type_;
