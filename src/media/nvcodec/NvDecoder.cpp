@@ -549,7 +549,16 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
     }
   }
 
-  // Clear existing output buffers of different size
+  // A sequence callback can arrive after the parser has already queued a
+  // displayable frame from the previous sequence. Discard its counters before
+  // freeing the backing buffers so Decode() cannot return a stale pointer from
+  // GetFrame() after the reconfiguration completes.
+  std::lock_guard<std::mutex> lock(m_mtxVPFrame);
+  m_nDecodedFrame = 0;
+  m_nDecodedFrameReturned = 0;
+  m_vTimestamp.clear();
+
+  // Clear existing output buffers of different size.
   uint8_t *pFrame = NULL;
   while (!m_vpFrame.empty()) {
     pFrame = m_vpFrame.back();
