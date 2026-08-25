@@ -128,7 +128,8 @@ class NvEncoder {
    *  GetNextInputFrame() function.
    */
   virtual void EncodeFrame(std::vector<std::vector<uint8_t>>& vPacket,
-                           NV_ENC_PIC_PARAMS* pPicParams = nullptr);
+                           NV_ENC_PIC_PARAMS* pPicParams = nullptr,
+                           std::vector<uint32_t>* vPacketQp = nullptr);
 
   /**
    *  @brief  This function to flush the encoder queue.
@@ -400,8 +401,9 @@ class NvEncoder {
    *  this may return without any output data.
    */
   void GetEncodedPacket(std::vector<NV_ENC_OUTPUT_PTR>& vOutputBuffer,
-                        std::vector<std::vector<uint8_t>>& vPacket,
-                        bool bOutputDelay);
+                         std::vector<std::vector<uint8_t>>& vPacket,
+                         bool bOutputDelay,
+                         std::vector<uint32_t>* vPacketQp = nullptr);
 
   /**
    *  @brief This is a private function which is used to initialize the

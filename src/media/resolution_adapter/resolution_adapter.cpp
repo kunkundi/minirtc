@@ -259,8 +259,10 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
     return -1;
   }
 
-  const int min_pixels = limits.front().width * limits.front().height;
-  const int max_pixels = GetMaxPixelsForQuality();
+  const int source_pixels = current_width * current_height;
+  const int max_pixels = std::min(GetMaxPixelsForQuality(), source_pixels);
+  const int min_pixels =
+      std::min(limits.front().width * limits.front().height, max_pixels);
 
   const float estimated_pixels_f =
       video_degradation_preference_ ==
@@ -366,8 +368,13 @@ std::pair<int, int> ResolutionAdapter::GetNextLowerResolution(int current_w,
     return {-1, -1};
   }
 
-  const int min_area = limits.front().width * limits.front().height;
+  const int source_area = source_w * source_h;
+  const int min_area = std::min(
+      limits.front().width * limits.front().height, source_area);
   const int64_t current_area = static_cast<int64_t>(current_w) * current_h;
+  if (current_area > source_area) {
+    return {source_w, source_h};
+  }
   if (current_area <= min_area) {
     return {-1, -1};
   }
@@ -377,9 +384,10 @@ std::pair<int, int> ResolutionAdapter::GetNextLowerResolution(int current_w,
   int next_w = -1;
   int next_h = -1;
   // Always use the original source resolution for aspect ratio.
+  const int max_area = static_cast<int>(
+      std::min<int64_t>(current_area, static_cast<int64_t>(source_area)));
   if (!BuildStrictAspectResolution(source_w, source_h, target_area, min_area,
-                                   static_cast<int>(current_area), &next_w,
-                                   &next_h)) {
+                                   max_area, &next_w, &next_h)) {
     return {-1, -1};
   }
   if (next_w >= current_w || next_h >= current_h) {
@@ -400,7 +408,9 @@ std::pair<int, int> ResolutionAdapter::GetNextHigherResolution(int current_w,
     return {-1, -1};
   }
 
-  const int max_area = limits.back().width * limits.back().height;
+  const int source_area = source_w * source_h;
+  const int max_area =
+      std::min(limits.back().width * limits.back().height, source_area);
   const int64_t current_area = static_cast<int64_t>(current_w) * current_h;
   if (current_area >= max_area) {
     return {-1, -1};

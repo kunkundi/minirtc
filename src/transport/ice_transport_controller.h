@@ -7,6 +7,7 @@
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
 #define _ICE_TRANSPORT_CONTROLLER_H_
 #include <atomic>
+#include <deque>
 #include <mutex>
 #include <shared_mutex>
 #include <unordered_set>
@@ -161,8 +162,7 @@ class IceTransportController
   std::optional<bool> GetCongestedStateUpdate() const;
   void MaybeDegradeResolutionOnEncodeTime(const std::string& channel_name,
                                           int queue_delay_ms,
-                                          uint32_t encoded_w,
-                                          uint32_t encoded_h);
+                                          const EncodedFrame& encoded_frame);
 
  private:
   bool Process() override;
@@ -200,6 +200,71 @@ class IceTransportController
     std::optional<int> pending_mapped_height;
     int mapping_stability_count = 0;
     int64_t last_resolution_change_ms = 0;
+    bool resolution_upgrade_probe_active = false;
+    int resolution_upgrade_probe_base_width = 0;
+    int resolution_upgrade_probe_base_height = 0;
+    int resolution_upgrade_probe_target_width = 0;
+    int resolution_upgrade_probe_target_height = 0;
+    int resolution_upgrade_probe_sample_count = 0;
+    int64_t resolution_upgrade_probe_started_ms = 0;
+    int resolution_upgrade_probe_failure_count = 0;
+    int64_t next_resolution_upgrade_probe_ms = 0;
+    int64_t encoded_frame_rate_window_started_ms = 0;
+    int encoded_frame_rate_window_frame_count = 0;
+    int measured_encoded_frame_rate = 0;
+    bool encoded_frame_rate_ready = false;
+    int64_t encoded_frame_rate_healthy_since_ms = 0;
+    EncoderQualityStats last_encoder_quality_stats;
+    float normalized_qp_ewma = -1.0f;
+    std::deque<std::pair<int64_t, int>> encode_queue_delay_samples;
+    int64_t encode_queue_delay_tracking_started_ms = 0;
+    bool encode_queue_delay_window_ready = false;
+    int average_encode_queue_delay_ms = 0;
+    int p95_encode_queue_delay_ms = 0;
+    int64_t encode_backlog_since_ms = 0;
+    int64_t severe_encode_backlog_since_ms = 0;
+    int64_t critical_encode_backlog_since_ms = 0;
+    int64_t post_upgrade_protection_until_ms = 0;
+
+    void ClearResolutionUpgradeProbe() {
+      resolution_upgrade_probe_active = false;
+      resolution_upgrade_probe_base_width = 0;
+      resolution_upgrade_probe_base_height = 0;
+      resolution_upgrade_probe_target_width = 0;
+      resolution_upgrade_probe_target_height = 0;
+      resolution_upgrade_probe_sample_count = 0;
+      resolution_upgrade_probe_started_ms = 0;
+    }
+
+    void ResetResolutionUpgradeProbe() {
+      ClearResolutionUpgradeProbe();
+      resolution_upgrade_probe_failure_count = 0;
+      next_resolution_upgrade_probe_ms = 0;
+    }
+
+    void ResetEncodedFrameRateTracking() {
+      encoded_frame_rate_window_started_ms = 0;
+      encoded_frame_rate_window_frame_count = 0;
+      measured_encoded_frame_rate = 0;
+      encoded_frame_rate_ready = false;
+      encoded_frame_rate_healthy_since_ms = 0;
+    }
+
+    void ResetEncoderQualityTracking() {
+      last_encoder_quality_stats = {};
+      normalized_qp_ewma = -1.0f;
+    }
+
+    void ResetEncodeQueueDelayTracking() {
+      encode_queue_delay_samples.clear();
+      encode_queue_delay_tracking_started_ms = 0;
+      encode_queue_delay_window_ready = false;
+      average_encode_queue_delay_ms = 0;
+      p95_encode_queue_delay_ms = 0;
+      encode_backlog_since_ms = 0;
+      severe_encode_backlog_since_ms = 0;
+      critical_encode_backlog_since_ms = 0;
+    }
 
     std::shared_ptr<MediaChannel> transceiver;
     std::shared_ptr<MediaCodec> codec;

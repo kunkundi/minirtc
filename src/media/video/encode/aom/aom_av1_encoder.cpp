@@ -100,8 +100,14 @@ int AomAv1Encoder::ResetEncodeResolution(unsigned int width,
                                      frame_height_, 1, nullptr);
   }
 
-  return aom_codec_enc_config_set(&aom_av1_encoder_ctx_,
-                                  &aom_av1_encoder_config_);
+  const int result = aom_codec_enc_config_set(&aom_av1_encoder_ctx_,
+                                              &aom_av1_encoder_config_);
+  if (result == AOM_CODEC_OK) {
+    // AOM updates the existing encoder context in place, so explicitly start
+    // the new resolution with a key frame.
+    force_i_frame_.store(true);
+  }
+  return result;
 }
 
 AomAv1Encoder::AomAv1Encoder(std::shared_ptr<SystemClock> clock)
@@ -375,11 +381,10 @@ int AomAv1Encoder::Encode(
       memcpy(encoded_frame_, pkt->data.frame.buf, pkt->data.frame.sz);
       encoded_frame_size_ = pkt->data.frame.sz;
 
-      if (pkt->data.frame.flags & AOM_FRAME_IS_KEY) {
-        int qp = -1;
-        SET_ENCODER_PARAM_OR_RETURN_ERROR(AOME_GET_LAST_QUANTIZER, &qp);
-        LOG_INFO("Encoded frame qp = {}", qp);
-      }
+      int qp = -1;
+      const bool has_qp =
+          aom_codec_control(&aom_av1_encoder_ctx_,
+                            AOME_GET_LAST_QUANTIZER_64, &qp) == AOM_CODEC_OK;
 
       if (on_encoded_image) {
         EncodedFrame encoded_frame(encoded_frame_, encoded_frame_size_,
@@ -392,6 +397,9 @@ int AomAv1Encoder::Encode(
         encoded_frame.SetEncodedHeight(raw_frame.Height());
         encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
         encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+        if (has_qp) {
+          encoded_frame.SetQp(qp, 0, 63, false);
+        }
         on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_AV1_STREAM
         fwrite(encoded_frame_, 1, encoded_frame_size_, file_av1_);

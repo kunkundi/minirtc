@@ -338,6 +338,8 @@ int VideoToolboxEncoder::Impl::ApplyEncodingSpeedPriority(
 }
 
 void VideoToolboxEncoder::Impl::ResetCodecState() {
+  // A newly created compression session must emit a key frame before any
+  // delta frame at the new resolution.
   seq_ = 0;
   force_idr_ = true;
 }

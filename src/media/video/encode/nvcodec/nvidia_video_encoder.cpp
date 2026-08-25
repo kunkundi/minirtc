@@ -194,13 +194,15 @@ int NvidiaVideoEncoder::Encode(
     }
   }
 
-  VideoFrameType frame_type;
   if (0 == seq_++ % key_frame_interval_) {
-    ForceIdr();
-    frame_type = VideoFrameType::kVideoFrameKey;
-  } else {
-    frame_type = VideoFrameType::kVideoFrameDelta;
+    if (ForceIdr() != 0) {
+      return -1;
+    }
   }
+  const VideoFrameType frame_type = next_frame_is_key_
+                                        ? VideoFrameType::kVideoFrameKey
+                                        : VideoFrameType::kVideoFrameDelta;
+  next_frame_is_key_ = false;
 
 #ifdef SHOW_SUBMODULE_TIME_COST
   auto start = std::chrono::steady_clock::now();
@@ -215,13 +217,15 @@ int NvidiaVideoEncoder::Encode(
       CU_MEMORYTYPE_HOST, encoder_inputframe->bufferFormat,
       encoder_inputframe->chromaOffsets, encoder_inputframe->numChromaPlanes);
 
-  encoder_->EncodeFrame(encoded_packets_);
+  encoder_->EncodeFrame(encoded_packets_, nullptr, &encoded_packet_qps_);
 
   if (encoded_packets_.size() < 1) {
     return -1;
   }
 
-  for (const auto& packet : encoded_packets_) {
+  for (size_t packet_index = 0; packet_index < encoded_packets_.size();
+       ++packet_index) {
+    const auto& packet = encoded_packets_[packet_index];
     if (on_encoded_image) {
       EncodedFrame encoded_frame(packet.data(), packet.size(),
                                  encoder_->GetEncodeWidth(),
@@ -232,6 +236,10 @@ int NvidiaVideoEncoder::Encode(
       encoded_frame.SetEncodedHeight(encoder_->GetEncodeHeight());
       encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
       encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+      if (packet_index < encoded_packet_qps_.size()) {
+        encoded_frame.SetQp(static_cast<int>(encoded_packet_qps_[packet_index]),
+                            0, 51, true);
+      }
       on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_H264_STREAM
       fwrite((unsigned char*)packet.data(), 1, packet.size(), file_h264_);
@@ -269,6 +277,8 @@ int NvidiaVideoEncoder::ForceIdr() {
     LOG_ERROR("Failed to force I frame");
     return -1;
   }
+
+  next_frame_is_key_ = true;
 
   return 0;
 }
@@ -340,6 +350,11 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
     LOG_ERROR("Failed to reset resolution");
     return -1;
   }
+
+  // The resolution reconfigure itself requests an IDR. Record that guarantee
+  // so the first packet at the new dimensions is labelled as a key frame.
+  next_frame_is_key_ = true;
+  seq_ = 1;
 
   return 0;
 }

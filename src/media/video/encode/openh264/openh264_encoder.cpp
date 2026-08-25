@@ -159,6 +159,10 @@ int OpenH264Encoder::ResetEncodeResolution(unsigned int width,
     return -1;
   }
 
+  // Restart the GOP so Encode() requests an IDR from the newly initialized
+  // encoder, rather than relying on a request made against the old instance.
+  seq_ = 0;
+
   return 0;
 }
 
@@ -264,12 +268,11 @@ int OpenH264Encoder::Encode(
   Nv12ToI420((unsigned char*)raw_frame.Buffer(), raw_frame.Width(),
              raw_frame.Height(), yuv420p_frame_);
 
-  VideoFrameType frame_type;
   if (0 == seq_++ % key_frame_interval_) {
-    ForceIdr();
-    frame_type = VideoFrameType::kVideoFrameKey;
-  } else {
-    frame_type = VideoFrameType::kVideoFrameDelta;
+    if (ForceIdr() != 0) {
+      LOG_ERROR("Failed to request OpenH264 IDR frame");
+      return -1;
+    }
   }
 
   raw_frame_ = {0};
@@ -297,6 +300,12 @@ int OpenH264Encoder::Encode(
               enc_ret);
     return -1;
   }
+
+  const VideoFrameType frame_type =
+      info.eFrameType == videoFrameTypeIDR ||
+              info.eFrameType == videoFrameTypeI
+          ? VideoFrameType::kVideoFrameKey
+          : VideoFrameType::kVideoFrameDelta;
 
   if (info.eFrameType == videoFrameTypeSkip) {
     return 0;
@@ -334,6 +343,11 @@ int OpenH264Encoder::Encode(
   }
   encoded_frame_size_ = encoded_frame_size;
 
+  SEncoderStatistics encoder_statistics{};
+  const bool has_qp =
+      openh264_encoder_->GetOption(ENCODER_OPTION_GET_STATISTICS,
+                                   &encoder_statistics) == cmResultSuccess;
+
   if (on_encoded_image && encoded_frame_size_ > 0) {
     EncodedFrame encoded_frame(encoded_frame_, encoded_frame_size_,
                                raw_frame_.iPicWidth, raw_frame_.iPicHeight);
@@ -342,6 +356,10 @@ int OpenH264Encoder::Encode(
     encoded_frame.SetEncodedHeight(raw_frame_.iPicHeight);
     encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
     encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+    if (has_qp) {
+      encoded_frame.SetQp(static_cast<int>(encoder_statistics.uiAverageFrameQP),
+                          0, 51, true);
+    }
     on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_H264_STREAM
     if (file_h264_) {

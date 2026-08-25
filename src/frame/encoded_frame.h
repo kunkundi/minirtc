@@ -11,6 +11,23 @@
 
 namespace minirtc {
 
+struct EncoderQualityStats {
+  int qp = -1;
+  int min_qp = 0;
+  int max_qp = 0;
+  bool is_average_qp = false;
+
+  bool HasQp() const { return qp >= 0 && max_qp > min_qp; }
+
+  float NormalizedQp() const {
+    if (!HasQp()) {
+      return -1.0f;
+    }
+    return static_cast<float>(qp - min_qp) /
+           static_cast<float>(max_qp - min_qp);
+  }
+};
+
 class EncodedFrame : public VideoFrame {
  public:
   EncodedFrame(const uint8_t *buffer, size_t size, uint32_t width,
@@ -50,12 +67,22 @@ class EncodedFrame : public VideoFrame {
     encoded_height_ = encoded_height;
   }
 
+  const EncoderQualityStats &QualityStats() const { return quality_stats_; }
+
+  void SetQp(int qp, int min_qp, int max_qp, bool is_average_qp) {
+    quality_stats_.qp = qp;
+    quality_stats_.min_qp = min_qp;
+    quality_stats_.max_qp = max_qp;
+    quality_stats_.is_average_qp = is_average_qp;
+  }
+
  private:
   int64_t captured_timestamp_us_ = 0;
   int64_t encoded_timestamp_us_ = 0;
   VideoFrameType frame_type_ = VideoFrameType::kVideoFrameDelta;
   uint32_t encoded_width_ = 0;
   uint32_t encoded_height_ = 0;
+  EncoderQualityStats quality_stats_;
 };
 }  // namespace minirtc
 

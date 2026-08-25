@@ -381,8 +381,12 @@ void NvEncoder::MapResources(uint32_t bfrIdx) {
 }
 
 void NvEncoder::EncodeFrame(std::vector<std::vector<uint8_t>> &vPacket,
-                            NV_ENC_PIC_PARAMS *pPicParams) {
+                            NV_ENC_PIC_PARAMS *pPicParams,
+                            std::vector<uint32_t> *vPacketQp) {
   vPacket.clear();
+  if (vPacketQp) {
+    vPacketQp->clear();
+  }
   if (!IsHWEncoderInitialized()) {
     NVENC_THROW_ERROR("Encoder device not found", NV_ENC_ERR_NO_ENCODE_DEVICE);
   }
@@ -396,7 +400,7 @@ void NvEncoder::EncodeFrame(std::vector<std::vector<uint8_t>> &vPacket,
 
   if (nvStatus == NV_ENC_SUCCESS || nvStatus == NV_ENC_ERR_NEED_MORE_INPUT) {
     m_iToSend++;
-    GetEncodedPacket(m_vBitstreamOutputBuffer, vPacket, true);
+    GetEncodedPacket(m_vBitstreamOutputBuffer, vPacket, true, vPacketQp);
   } else {
     NVENC_THROW_ERROR("nvEncEncodePicture API failed", nvStatus);
   }
@@ -486,8 +490,9 @@ void NvEncoder::EndEncode(std::vector<std::vector<uint8_t>> &vPacket) {
 }
 
 void NvEncoder::GetEncodedPacket(std::vector<NV_ENC_OUTPUT_PTR> &vOutputBuffer,
-                                 std::vector<std::vector<uint8_t>> &vPacket,
-                                 bool bOutputDelay) {
+                                  std::vector<std::vector<uint8_t>> &vPacket,
+                                  bool bOutputDelay,
+                                  std::vector<uint32_t> *vPacketQp) {
   unsigned i = 0;
   int iEnd = bOutputDelay ? m_iToSend - m_nOutputDelay : m_iToSend;
   for (; m_iGot < iEnd; m_iGot++) {
@@ -496,6 +501,7 @@ void NvEncoder::GetEncodedPacket(std::vector<NV_ENC_OUTPUT_PTR> &vOutputBuffer,
     lockBitstreamData.outputBitstream =
         vOutputBuffer[m_iGot % m_nEncoderBuffer];
     lockBitstreamData.doNotWait = false;
+    lockBitstreamData.getRCStats = 1;
     NVENC_API_CALL(m_nvenc.nvEncLockBitstream(m_hEncoder, &lockBitstreamData));
 
     uint8_t *pData = (uint8_t *)lockBitstreamData.bitstreamBufferPtr;
@@ -505,6 +511,9 @@ void NvEncoder::GetEncodedPacket(std::vector<NV_ENC_OUTPUT_PTR> &vOutputBuffer,
     vPacket[i].clear();
     vPacket[i].insert(vPacket[i].end(), &pData[0],
                       &pData[lockBitstreamData.bitstreamSizeInBytes]);
+    if (vPacketQp) {
+      vPacketQp->push_back(lockBitstreamData.frameAvgQP);
+    }
     i++;
 
     NVENC_API_CALL(m_nvenc.nvEncUnlockBitstream(

@@ -71,6 +71,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   NvEncoder* encoder_ = nullptr;
   CUcontext cuda_context_ = nullptr;
   std::vector<std::vector<uint8_t>> encoded_packets_;
+  std::vector<uint32_t> encoded_packet_qps_;
   unsigned char* encoded_image_ = nullptr;
   FILE* file_nv12_ = nullptr;
   FILE* file_h264_ = nullptr;
@@ -78,6 +79,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   std::string nv12_file_name_;
   unsigned char* nv12_data_ = nullptr;
   unsigned int seq_ = 0;
+  bool next_frame_is_key_ = false;
 };
 }  // namespace minirtc
 

@@ -224,6 +224,11 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   yuv420p_frame_capacity_ = frame_width_ * frame_height_ * 3 / 2;
   yuv420p_frame_ = new uint8_t[yuv420p_frame_capacity_];
 
+  // A reconfigured SVT instance starts a new coded sequence. Make the
+  // requirement explicit and restart the periodic key-frame interval.
+  force_idr_ = true;
+  seq_ = 0;
+
   return 0;
 }
 
@@ -323,6 +328,8 @@ int SvtAv1Encoder::Encode(
       encoded_frame.SetEncodedHeight(frame_height_);
       encoded_frame.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
       encoded_frame.SetEncodedTimestamp(clock_->CurrentTime());
+      encoded_frame.SetQp(static_cast<int>(output_packet->avg_qp), 0, 63,
+                          true);
       on_encoded_image(encoded_frame);
 #ifdef SAVE_ENCODED_AV1_STREAM
       fwrite(encoded_frame.Buffer(), 1, encoded_frame.Size(), file_av1_);

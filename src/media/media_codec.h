@@ -94,6 +94,9 @@ class MediaCodec {
   virtual int Encode(
       const RawFrame& raw_frame,
       std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
+    // Video encoders that rebuild themselves when the input dimensions change
+    // must guarantee that the first frame emitted at the new resolution is a
+    // key frame carrying the codec configuration needed by the decoder.
     LOG_INFO("Not implemented");
     return 0;
   }

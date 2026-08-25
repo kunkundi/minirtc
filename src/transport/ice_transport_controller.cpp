@@ -663,6 +663,11 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
         context->source_height != raw_frame.Height()) {
       context->source_width = raw_frame.Width();
       context->source_height = raw_frame.Height();
+      context->ResetResolutionUpgradeProbe();
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      context->post_upgrade_protection_until_ms = 0;
     }
 
     // Consume a key-frame request only after this frame is known to be
@@ -762,8 +767,8 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
 }
 
 void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
-    const std::string& channel_name, int queue_delay_ms, uint32_t encoded_w,
-    uint32_t encoded_h) {
+    const std::string& channel_name, int queue_delay_ms,
+    const EncodedFrame& encoded_frame) {
   const bool maintain_frame_rate =
       media_config_.video_degradation_preference ==
       VideoDegradationPreference::MaintainFrameRate;
@@ -771,9 +776,21 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       std::max(1, 1000 / std::max(1, media_config_.max_frame_rate));
   const int delay_threshold_ms =
       maintain_frame_rate ? std::max(2, frame_budget_ms / 3) : 8;
-  const int downgrade_streak = maintain_frame_rate ? 3 : 8;
-  constexpr int kUpgradeStreak = 15;
-  const int upgrade_cooldown_ms = maintain_frame_rate ? 8000 : 5000;
+  constexpr int kMinimumUpgradeFrameRate = 30;
+  constexpr int kCriticalFrameRate = 20;
+  constexpr int kFrameRateWindowMs = 1000;
+  constexpr int kFrameRateHealthyDurationMs = 2000;
+  constexpr int kUpgradeProbeMinDurationMs = 2000;
+  constexpr int kPostUpgradeProtectionMs = 2000;
+  constexpr int kQueueDelayWindowMs = 1000;
+  constexpr int kQueueBacklogSustainMs = 500;
+  constexpr int kCriticalQueueBacklogSustainMs = 250;
+  constexpr int kCriticalQueueDelayMs = 100;
+  constexpr float kMaxNormalizedQpForUpgrade = 0.60f;
+  constexpr float kQpEwmaAlpha = 0.10f;
+  constexpr int kUpgradeProbeBackoffBaseMs = 3000;
+  constexpr int kMaxUpgradeProbeBackoffMs = 24000;
+  constexpr int upgrade_cooldown_ms = 5000;
   const int downgrade_cooldown_ms = maintain_frame_rate ? 750 : 3000;
 
   if (!is_running_.load()) return;
@@ -783,13 +800,131 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) return;
   std::shared_ptr<StreamContext> context = it->second;
+  context->last_encoder_quality_stats = encoded_frame.QualityStats();
+  if (context->last_encoder_quality_stats.HasQp()) {
+    const float normalized_qp = std::clamp(
+        context->last_encoder_quality_stats.NormalizedQp(), 0.0f, 1.0f);
+    context->normalized_qp_ewma =
+        context->normalized_qp_ewma < 0.0f
+            ? normalized_qp
+            : context->normalized_qp_ewma * (1.0f - kQpEwmaAlpha) +
+                  normalized_qp * kQpEwmaAlpha;
+  }
 
-  if (queue_delay_ms >= delay_threshold_ms) {
+  const int64_t now_ms = clock_->CurrentTimeMs();
+  if (context->encoded_frame_rate_window_started_ms == 0) {
+    context->encoded_frame_rate_window_started_ms = now_ms;
+    context->encoded_frame_rate_window_frame_count = 1;
+  } else {
+    ++context->encoded_frame_rate_window_frame_count;
+    const int64_t frame_rate_window_ms =
+        now_ms - context->encoded_frame_rate_window_started_ms;
+    if (frame_rate_window_ms >= kFrameRateWindowMs) {
+      context->measured_encoded_frame_rate = static_cast<int>(
+          (static_cast<int64_t>(context->encoded_frame_rate_window_frame_count) *
+               1000 +
+           frame_rate_window_ms / 2) /
+          frame_rate_window_ms);
+      context->encoded_frame_rate_ready = true;
+      if (context->measured_encoded_frame_rate >=
+          kMinimumUpgradeFrameRate) {
+        if (context->encoded_frame_rate_healthy_since_ms == 0) {
+          context->encoded_frame_rate_healthy_since_ms = now_ms;
+        }
+      } else {
+        context->encoded_frame_rate_healthy_since_ms = 0;
+      }
+      context->encoded_frame_rate_window_started_ms = now_ms;
+      context->encoded_frame_rate_window_frame_count = 0;
+    }
+  }
+
+  const bool encoded_frame_rate_below_minimum =
+      context->encoded_frame_rate_ready &&
+      context->measured_encoded_frame_rate < kMinimumUpgradeFrameRate;
+  const bool startup_critical_encode_backlog_candidate =
+      queue_delay_ms >= kCriticalQueueDelayMs &&
+      (!context->encoded_frame_rate_ready ||
+       context->measured_encoded_frame_rate < kCriticalFrameRate);
+  if (startup_critical_encode_backlog_candidate) {
     ++context->encode_exceed_count;
-    context->encode_below_threshold_count = 0;
   } else {
     context->encode_exceed_count = 0;
-    ++context->encode_below_threshold_count;
+  }
+  if (context->encode_queue_delay_tracking_started_ms == 0) {
+    context->encode_queue_delay_tracking_started_ms = now_ms;
+  }
+  context->encode_queue_delay_samples.emplace_back(now_ms, queue_delay_ms);
+  while (!context->encode_queue_delay_samples.empty() &&
+         context->encode_queue_delay_samples.front().first <
+             now_ms - kQueueDelayWindowMs) {
+    context->encode_queue_delay_samples.pop_front();
+  }
+
+  int64_t queue_delay_sum_ms = 0;
+  std::vector<int> queue_delay_values;
+  queue_delay_values.reserve(context->encode_queue_delay_samples.size());
+  for (const auto& [_, delay_ms] : context->encode_queue_delay_samples) {
+    queue_delay_sum_ms += delay_ms;
+    queue_delay_values.push_back(delay_ms);
+  }
+  if (!queue_delay_values.empty()) {
+    context->average_encode_queue_delay_ms = static_cast<int>(
+        (queue_delay_sum_ms + queue_delay_values.size() / 2) /
+        queue_delay_values.size());
+    const size_t p95_index =
+        (queue_delay_values.size() * 95 + 99) / 100 - 1;
+    std::nth_element(queue_delay_values.begin(),
+                     queue_delay_values.begin() + p95_index,
+                     queue_delay_values.end());
+    context->p95_encode_queue_delay_ms = queue_delay_values[p95_index];
+  }
+  context->encode_queue_delay_window_ready =
+      now_ms - context->encode_queue_delay_tracking_started_ms >=
+      kQueueDelayWindowMs;
+
+  const bool normal_queue_pressure =
+      context->encode_queue_delay_window_ready &&
+      encoded_frame_rate_below_minimum &&
+      context->average_encode_queue_delay_ms >= delay_threshold_ms;
+  const bool severe_queue_pressure =
+      context->encode_queue_delay_window_ready &&
+      context->p95_encode_queue_delay_ms >= frame_budget_ms * 2;
+  const bool critical_queue_pressure =
+      context->encode_queue_delay_window_ready &&
+      context->p95_encode_queue_delay_ms >= kCriticalQueueDelayMs;
+
+  auto update_pressure_since = [now_ms](bool pressure, int64_t* since_ms) {
+    if (pressure) {
+      if (*since_ms == 0) {
+        *since_ms = now_ms;
+      }
+    } else {
+      *since_ms = 0;
+    }
+  };
+  update_pressure_since(normal_queue_pressure || severe_queue_pressure,
+                        &context->encode_backlog_since_ms);
+  update_pressure_since(severe_queue_pressure,
+                        &context->severe_encode_backlog_since_ms);
+  update_pressure_since(critical_queue_pressure,
+                        &context->critical_encode_backlog_since_ms);
+
+  const bool sustained_encode_backlog =
+      context->encode_backlog_since_ms > 0 &&
+      now_ms - context->encode_backlog_since_ms >= kQueueBacklogSustainMs;
+  const bool sustained_severe_encode_backlog =
+      context->severe_encode_backlog_since_ms > 0 &&
+      now_ms - context->severe_encode_backlog_since_ms >=
+          kQueueBacklogSustainMs;
+  const bool sustained_critical_encode_backlog =
+      context->critical_encode_backlog_since_ms > 0 &&
+      now_ms - context->critical_encode_backlog_since_ms >=
+          kCriticalQueueBacklogSustainMs;
+  const bool startup_critical_encode_backlog =
+      context->encode_exceed_count >= 3;
+  if (context->resolution_upgrade_probe_active) {
+    ++context->resolution_upgrade_probe_sample_count;
   }
 
   // Resolution-priority mode intentionally accepts a lower temporal rate.
@@ -824,7 +959,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   };
 
   if (!context->encoding_speed_priority_enabled &&
-      context->encode_exceed_count >= downgrade_streak && context->codec &&
+      (sustained_encode_backlog || startup_critical_encode_backlog) &&
+      context->codec &&
       media_config_.video_content_type == VideoContentType::ScreenContent &&
       context->codec->SupportsDynamicEncodingSpeedPriority()) {
     const std::optional<bool> changed = set_encoding_speed_priority(true);
@@ -844,18 +980,129 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   auto base = [&]() -> std::pair<int, int> {
     if (context->target_width && context->target_height)
       return {*context->target_width, *context->target_height};
-    return {(int)encoded_w, (int)encoded_h};
+    return {static_cast<int>(encoded_frame.EncodedWidth()),
+            static_cast<int>(encoded_frame.EncodedHeight())};
   };
 
+  if (context->resolution_upgrade_probe_active) {
+    const int64_t probe_duration_ms =
+        now_ms - context->resolution_upgrade_probe_started_ms;
+    const int probe_frame_rate =
+        probe_duration_ms > 0
+            ? static_cast<int>(
+                  (static_cast<int64_t>(
+                       context->resolution_upgrade_probe_sample_count) *
+                       1000 +
+                   probe_duration_ms / 2) /
+                  probe_duration_ms)
+            : 0;
+    const bool probe_backlogged =
+        sustained_severe_encode_backlog ||
+        sustained_critical_encode_backlog ||
+        (startup_critical_encode_backlog &&
+         probe_duration_ms >= downgrade_cooldown_ms);
+    const bool probe_frame_rate_too_low =
+        probe_duration_ms >= kUpgradeProbeMinDurationMs &&
+        probe_frame_rate < kMinimumUpgradeFrameRate;
+    const bool probe_qp_too_high =
+        probe_duration_ms >= kUpgradeProbeMinDurationMs &&
+        context->normalized_qp_ewma >= 0.0f &&
+        context->normalized_qp_ewma > kMaxNormalizedQpForUpgrade;
+
+    if (probe_backlogged || probe_frame_rate_too_low || probe_qp_too_high) {
+      const int rollback_width =
+          context->resolution_upgrade_probe_base_width;
+      const int rollback_height =
+          context->resolution_upgrade_probe_base_height;
+      const int failed_width =
+          context->resolution_upgrade_probe_target_width;
+      const int failed_height =
+          context->resolution_upgrade_probe_target_height;
+      context->resolution_upgrade_probe_failure_count = std::min(
+          context->resolution_upgrade_probe_failure_count + 1, 3);
+      const int backoff_ms = std::min(
+          kMaxUpgradeProbeBackoffMs,
+          kUpgradeProbeBackoffBaseMs
+              << context->resolution_upgrade_probe_failure_count);
+
+      LOG_INFO(
+          "Resolution upgrade probe failed: channel={} reason={} fps={} "
+          "delay_avg_ms={} delay_p95_ms={} qp={} target={}x{} rollback={}x{} "
+          "backoff_ms={}",
+          channel_name,
+          probe_backlogged
+              ? "encode_backlog"
+              : (probe_frame_rate_too_low ? "low_frame_rate" : "high_qp"),
+          probe_frame_rate, context->average_encode_queue_delay_ms,
+          context->p95_encode_queue_delay_ms,
+          context->last_encoder_quality_stats.qp, failed_width, failed_height,
+          rollback_width, rollback_height, backoff_ms);
+      context->target_width = rollback_width;
+      context->target_height = rollback_height;
+      context->last_resolution_change_ms = now_ms;
+      context->next_resolution_upgrade_probe_ms = now_ms + backoff_ms;
+      context->encode_exceed_count = 0;
+      context->encode_below_threshold_count = 0;
+      context->ClearResolutionUpgradeProbe();
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      context->post_upgrade_protection_until_ms = 0;
+      return;
+    }
+
+    if (probe_duration_ms >= kUpgradeProbeMinDurationMs) {
+      LOG_INFO(
+          "Resolution upgrade probe succeeded: channel={} target={}x{} "
+          "fps={} qp={} delay_avg_ms={} delay_p95_ms={} duration_ms={} "
+          "samples={}",
+          channel_name, context->resolution_upgrade_probe_target_width,
+          context->resolution_upgrade_probe_target_height, probe_frame_rate,
+          context->last_encoder_quality_stats.qp,
+          context->average_encode_queue_delay_ms,
+          context->p95_encode_queue_delay_ms, probe_duration_ms,
+          context->resolution_upgrade_probe_sample_count);
+      context->ResetResolutionUpgradeProbe();
+      context->last_resolution_change_ms = now_ms;
+      context->post_upgrade_protection_until_ms =
+          now_ms + kPostUpgradeProtectionMs;
+      context->ResetEncodeQueueDelayTracking();
+    }
+    return;
+  }
+
+  const bool in_post_upgrade_protection =
+      now_ms < context->post_upgrade_protection_until_ms;
+  const bool protection_emergency =
+      sustained_critical_encode_backlog ||
+      (context->encoded_frame_rate_ready &&
+       context->measured_encoded_frame_rate < kCriticalFrameRate &&
+       sustained_encode_backlog);
+  if (in_post_upgrade_protection && !protection_emergency) {
+    return;
+  }
+
+  const bool should_downgrade =
+      startup_critical_encode_backlog || sustained_encode_backlog;
+
   // Upgrade
-  if (context->encode_exceed_count < downgrade_streak) {
-    if (context->freeze_resolution || !context->target_width ||
-        !context->target_height ||
-        context->encode_below_threshold_count < kUpgradeStreak)
+  if (!should_downgrade) {
+    // Static-content hold blocks bandwidth-driven downgrades, but it must not
+    // trap a stream at a previously degraded resolution. Encode-time recovery
+    // remains gradual and is capped by mapped_target_* below.
+    if (!context->target_width || !context->target_height ||
+        !context->encoded_frame_rate_ready ||
+        context->measured_encoded_frame_rate < kMinimumUpgradeFrameRate ||
+        context->encoded_frame_rate_healthy_since_ms == 0 ||
+        now_ms - context->encoded_frame_rate_healthy_since_ms <
+            kFrameRateHealthyDurationMs ||
+        (context->normalized_qp_ewma >= 0.0f &&
+         context->normalized_qp_ewma > kMaxNormalizedQpForUpgrade))
       return;
     auto [bw, bh] = base();
-    int64_t now = clock_->CurrentTimeMs();
-    if (now - context->last_resolution_change_ms < upgrade_cooldown_ms) return;
+    if (now_ms - context->last_resolution_change_ms < upgrade_cooldown_ms)
+      return;
+    if (now_ms < context->next_resolution_upgrade_probe_ms) return;
 
     auto [nw, nh] = resolution_adapter_
                         ? resolution_adapter_->GetNextHigherResolution(
@@ -872,29 +1119,41 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     }
     if (nw * nh <= bw * bh) return;
 
-    LOG_INFO("Resolution upgrade: channel={} {}x{} -> {}x{}", channel_name, bw,
-             bh, nw, nh);
+    LOG_INFO("Resolution upgrade probe started: channel={} {}x{} -> {}x{}",
+             channel_name, bw, bh, nw, nh);
+    context->resolution_upgrade_probe_active = true;
+    context->resolution_upgrade_probe_base_width = bw;
+    context->resolution_upgrade_probe_base_height = bh;
+    context->resolution_upgrade_probe_target_width = nw;
+    context->resolution_upgrade_probe_target_height = nh;
+    context->resolution_upgrade_probe_sample_count = 0;
+    context->resolution_upgrade_probe_started_ms = now_ms;
     context->target_width = nw;
     context->target_height = nh;
     context->encode_below_threshold_count = 0;
-    context->last_resolution_change_ms = now;
-    FullIntraRequest(channel_name);
+    context->last_resolution_change_ms = now_ms;
+    context->ResetEncodedFrameRateTracking();
+    context->ResetEncoderQualityTracking();
+    context->ResetEncodeQueueDelayTracking();
+    context->post_upgrade_protection_until_ms = 0;
     return;
   }
 
   // Downgrade
   auto [bw, bh] = base();
-  int64_t now = clock_->CurrentTimeMs();
   if (context->last_resolution_change_ms > 0 &&
-      now - context->last_resolution_change_ms < downgrade_cooldown_ms) {
+      now_ms - context->last_resolution_change_ms < downgrade_cooldown_ms) {
     context->encode_exceed_count = 0;
     return;
   }
 
   int downgrade_steps = 1;
-  if (queue_delay_ms >= frame_budget_ms * 2) {
+  if (!context->encoded_frame_rate_ready) {
+    downgrade_steps = startup_critical_encode_backlog ? 3 : 1;
+  } else if (context->measured_encoded_frame_rate < 10 ||
+             sustained_critical_encode_backlog) {
     downgrade_steps = 3;
-  } else if (queue_delay_ms >= frame_budget_ms) {
+  } else if (context->measured_encoded_frame_rate < kCriticalFrameRate) {
     downgrade_steps = 2;
   }
 
@@ -918,14 +1177,21 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   }
 
   LOG_INFO(
-      "Frame-rate-priority resolution downgrade: channel={} delay_ms={} "
-      "budget_ms={} {}x{} -> {}x{}",
-      channel_name, queue_delay_ms, frame_budget_ms, bw, bh, nw, nh);
+      "Frame-rate-priority resolution downgrade: channel={} delay_avg_ms={} "
+      "delay_p95_ms={} budget_ms={} fps={} qp={} steps={} {}x{} -> {}x{}",
+      channel_name, context->average_encode_queue_delay_ms,
+      context->p95_encode_queue_delay_ms, frame_budget_ms,
+      context->measured_encoded_frame_rate,
+      context->last_encoder_quality_stats.qp, downgrade_steps, bw, bh, nw, nh);
   context->target_width = nw;
   context->target_height = nh;
-  context->last_resolution_change_ms = now;
+  context->last_resolution_change_ms = now_ms;
   context->encode_exceed_count = 0;
-  FullIntraRequest(channel_name);
+  context->ResetResolutionUpgradeProbe();
+  context->ResetEncodedFrameRateTracking();
+  context->ResetEncoderQualityTracking();
+  context->ResetEncodeQueueDelayTracking();
+  context->post_upgrade_protection_until_ms = 0;
 }
 
 void IceTransportController::FullIntraRequest() {
@@ -991,8 +1257,7 @@ int IceTransportController::OnVideoEncoded(
 
   if (measure_encode_delay) {
     MaybeDegradeResolutionOnEncodeTime(channel_name, queue_delay_ms,
-                                       encoded_frame.EncodedWidth(),
-                                       encoded_frame.EncodedHeight());
+                                       encoded_frame);
   }
 
   std::shared_lock lock(stream_senders_mutex_);
@@ -1918,17 +2183,27 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
           if (context->freeze_resolution) {
             if (maintain_frame_rate) {
               // Static desktops produce too little traffic for bandwidth
-              // estimation. Hold the last sustainable resolution instead of
-              // mistaking application-limited traffic for congestion. Resume
-              // adaptation immediately when motion leaves ALR.
+              // estimation. Ignore their application-limited bandwidth
+              // mapping for downgrades, but let the encode-time path gradually
+              // restore spatial quality while the network remains healthy.
+              int quality_width = -1;
+              int quality_height = -1;
+              if (resolution_adapter_->GetResolution(
+                      std::numeric_limits<int>::max(), source_width,
+                      source_height, &quality_width, &quality_height) != 0) {
+                continue;
+              }
+
+              context->mapped_target_width = quality_width;
+              context->mapped_target_height = quality_height;
               context->pending_mapped_width.reset();
               context->pending_mapped_height.reset();
               context->mapping_stability_count = 0;
               if (!was_frozen) {
                 LOG_INFO(
-                    "Hold frame-rate-priority resolution for static content: "
-                    "channel={}",
-                    channel_name);
+                    "Hold static-content bandwidth downgrades and allow "
+                    "gradual resolution recovery: channel={} ceiling={}x{}",
+                    channel_name, quality_width, quality_height);
               }
               continue;
             }
@@ -1969,12 +2244,15 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                 context->target_height = quality_height;
               }
               context->last_resolution_change_ms = now_ms;
+              context->ResetEncodedFrameRateTracking();
+              context->ResetEncoderQualityTracking();
+              context->ResetEncodeQueueDelayTracking();
+              context->post_upgrade_protection_until_ms = 0;
               LOG_INFO(
                   "Static-content resolution: channel={} target={}x{} native={}x{}",
                   channel_name, use_native ? source_width : quality_width,
                   use_native ? source_height : quality_height, source_width,
                   source_height);
-              FullIntraRequest(channel_name);
             } else if (!was_frozen) {
               LOG_INFO("Freeze resolution for static content: channel={}",
                        channel_name);
@@ -1994,6 +2272,12 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->pending_mapped_width.reset();
             context->pending_mapped_height.reset();
             context->mapping_stability_count = 0;
+            // Until a new non-ALR bandwidth ceiling is stable, prevent an
+            // encode-time upgrade from using the optimistic static ceiling.
+            context->mapped_target_width =
+                context->target_width.value_or(source_width);
+            context->mapped_target_height =
+                context->target_height.value_or(source_height);
           }
 
           int target_width = -1;
@@ -2048,7 +2332,11 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->last_resolution_change_ms = now_ms;
             context->encode_exceed_count = 0;
             context->encode_below_threshold_count = 0;
-            FullIntraRequest(channel_name);
+            context->ResetResolutionUpgradeProbe();
+            context->ResetEncodedFrameRateTracking();
+            context->ResetEncoderQualityTracking();
+            context->ResetEncodeQueueDelayTracking();
+            context->post_upgrade_protection_until_ms = 0;
           }
         }
       }
