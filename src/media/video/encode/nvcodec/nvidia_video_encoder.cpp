@@ -33,6 +33,10 @@ NvidiaVideoEncoder::~NvidiaVideoEncoder() {
     nv12_data_ = nullptr;
   }
 
+  ReleaseEncoderResources();
+}
+
+void NvidiaVideoEncoder::ReleaseEncoderResources() {
   if (encoder_) {
     encoder_->DestroyEncoder();
     delete encoder_;
@@ -65,91 +69,107 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
           ? NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY
           : NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY;
 
-  CudaInitializer::Init();
-  int num_of_gpu = 0;
-  ck(cuDeviceGetCount_ld(&num_of_gpu));
-  if (index_of_gpu_ < 0 || index_of_gpu_ >= num_of_gpu) {
-    LOG_ERROR("GPU ordinal out of range. Should be within [0-{}]");
+  try {
+    CudaInitializer::Init();
+    int num_of_gpu = 0;
+    ck(cuDeviceGetCount_ld(&num_of_gpu));
+    if (index_of_gpu_ < 0 || index_of_gpu_ >= num_of_gpu) {
+      LOG_ERROR("GPU ordinal out of range. Should be within [0-{}]");
+      return -1;
+    }
+
+    ck(cuDeviceGet_ld(&cuda_device_, index_of_gpu_));
+    char device_name[80];
+    ck(cuDeviceGetName_ld(device_name, sizeof(device_name), cuda_device_));
+    LOG_INFO("H.264 encoder using [{}]", device_name);
+    ck(cuCtxCreate_ld(&cuda_context_, 0, cuda_device_));
+
+    encoder_ = new NvEncoderCuda(cuda_context_, frame_width_, frame_height_,
+                                 buffer_format_, 0, false, false);
+
+    NV_ENC_INITIALIZE_PARAMS init_params = {NV_ENC_INITIALIZE_PARAMS_VER};
+    NV_ENC_CONFIG encodeConfig = {NV_ENC_CONFIG_VER};
+    init_params.encodeConfig = &encodeConfig;
+    encoder_->CreateDefaultEncoderParams(&init_params, codec_guid_,
+                                         preset_guid_, tuning_info_);
+
+    frame_width_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+                                                    NV_ENC_CAPS_WIDTH_MAX);
+    frame_height_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+                                                     NV_ENC_CAPS_HEIGHT_MAX);
+    // frame_width_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    //                                                 NV_ENC_CAPS_WIDTH_MIN);
+    // frame_height_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    //                                                  NV_ENC_CAPS_HEIGHT_MIN);
+    encode_level_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+                                                     NV_ENC_CAPS_LEVEL_MAX);
+    encode_level_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+                                                     NV_ENC_CAPS_LEVEL_MIN);
+    support_dynamic_resolution_ = encoder_->GetCapabilityValue(
+        NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_DYN_RES_CHANGE);
+    support_dynamic_bitrate_ = encoder_->GetCapabilityValue(
+        NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
+
+    init_params.encodeWidth = frame_width_;
+    init_params.encodeHeight = frame_height_;
+    init_params.frameRateNum = max_fps_;
+    init_params.frameRateDen = 1;
+    // must set max encode width and height otherwise will get crash when try to
+    // reconfigure the resolution
+    init_params.maxEncodeWidth = frame_width_max_;
+    init_params.maxEncodeHeight = frame_height_max_;
+    // init_params.darWidth = init_params.encodeWidth;
+    // init_params.darHeight = init_params.encodeHeight;
+
+    encodeConfig.gopLength = key_frame_interval_;
+    encodeConfig.frameIntervalP = 1;
+    encodeConfig.encodeCodecConfig.h264Config.idrPeriod = key_frame_interval_;
+    encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
+    // encodeConfig.rcParams.constQP.qpIntra = 20;
+    // encodeConfig.rcParams.constQP.qpInterP = 23;
+    // encodeConfig.rcParams.constQP.qpInterB = 25;
+    encodeConfig.rcParams.enableAQ = 1;          // enable AQ
+    encodeConfig.rcParams.aqStrength = 8;        // 4~8
+    encodeConfig.rcParams.enableTemporalAQ = 1;  // good for static area
+    encodeConfig.rcParams.enableMinQP = 1;
+    encodeConfig.rcParams.enableMaxQP = 1;
+    encodeConfig.rcParams.minQP.qpIntra = 18;
+    encodeConfig.rcParams.minQP.qpInterP = 20;
+    encodeConfig.rcParams.minQP.qpInterB = 22;
+    encodeConfig.rcParams.maxQP.qpIntra = 35;
+    encodeConfig.rcParams.maxQP.qpInterP = 37;
+    encodeConfig.rcParams.maxQP.qpInterB = 40;
+
+    encodeConfig.rcParams.averageBitRate = average_bitrate_;
+    // use the default VBV buffer size
+    encodeConfig.rcParams.vbvBufferSize = 0;
+    encodeConfig.rcParams.maxBitRate = average_bitrate_;
+    // use the default VBV initial delay
+    encodeConfig.rcParams.vbvInitialDelay = 0;
+    // enable adaptive quantization (Spatial)
+    // encodeConfig.rcParams.enableAQ = false;
+    encodeConfig.rcParams.enableLookahead = 0;
+    encodeConfig.encodeCodecConfig.h264Config.idrPeriod =
+        encodeConfig.gopLength;
+    encodeConfig.encodeCodecConfig.h264Config.level = NV_ENC_LEVEL_H264_52;
+    encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 0;
+    encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
+
+    encoder_->CreateEncoder(&init_params);
+  } catch (const NVENCException& exception) {
+    LOG_ERROR("NVENC H.264 encoder init failed, status=[{}]: {}",
+              static_cast<int>(exception.getErrorCode()), exception.what());
+    ReleaseEncoderResources();
+    return -1;
+  } catch (const std::exception& exception) {
+    LOG_ERROR("NVENC H.264 encoder init failed: {}", exception.what());
+    ReleaseEncoderResources();
+    return -1;
+  } catch (...) {
+    LOG_ERROR("NVENC H.264 encoder init failed with an unknown exception");
+    ReleaseEncoderResources();
     return -1;
   }
-
-  ck(cuDeviceGet_ld(&cuda_device_, index_of_gpu_));
-  char device_name[80];
-  ck(cuDeviceGetName_ld(device_name, sizeof(device_name), cuda_device_));
-  LOG_INFO("H.264 encoder using [{}]", device_name);
-  ck(cuCtxCreate_ld(&cuda_context_, 0, cuda_device_));
-
-  encoder_ = new NvEncoderCuda(cuda_context_, frame_width_, frame_height_,
-                               buffer_format_, 0, false, false);
-
-  NV_ENC_INITIALIZE_PARAMS init_params = {NV_ENC_INITIALIZE_PARAMS_VER};
-  NV_ENC_CONFIG encodeConfig = {NV_ENC_CONFIG_VER};
-  init_params.encodeConfig = &encodeConfig;
-  encoder_->CreateDefaultEncoderParams(&init_params, codec_guid_, preset_guid_,
-                                       tuning_info_);
-
-  frame_width_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
-                                                  NV_ENC_CAPS_WIDTH_MAX);
-  frame_height_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
-                                                   NV_ENC_CAPS_HEIGHT_MAX);
-  // frame_width_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
-  //                                                 NV_ENC_CAPS_WIDTH_MIN);
-  // frame_height_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
-  //                                                  NV_ENC_CAPS_HEIGHT_MIN);
-  encode_level_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
-                                                   NV_ENC_CAPS_LEVEL_MAX);
-  encode_level_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
-                                                   NV_ENC_CAPS_LEVEL_MIN);
-  support_dynamic_resolution_ = encoder_->GetCapabilityValue(
-      NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_DYN_RES_CHANGE);
-  support_dynamic_bitrate_ = encoder_->GetCapabilityValue(
-      NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
-
-  init_params.encodeWidth = frame_width_;
-  init_params.encodeHeight = frame_height_;
-  init_params.frameRateNum = max_fps_;
-  init_params.frameRateDen = 1;
-  // must set max encode width and height otherwise will get crash when try to
-  // reconfigure the resolution
-  init_params.maxEncodeWidth = frame_width_max_;
-  init_params.maxEncodeHeight = frame_height_max_;
-  // init_params.darWidth = init_params.encodeWidth;
-  // init_params.darHeight = init_params.encodeHeight;
-
-  encodeConfig.gopLength = key_frame_interval_;
-  encodeConfig.frameIntervalP = 1;
-  encodeConfig.encodeCodecConfig.h264Config.idrPeriod = key_frame_interval_;
-  encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
-  // encodeConfig.rcParams.constQP.qpIntra = 20;
-  // encodeConfig.rcParams.constQP.qpInterP = 23;
-  // encodeConfig.rcParams.constQP.qpInterB = 25;
-  encodeConfig.rcParams.enableAQ = 1;          // enable AQ
-  encodeConfig.rcParams.aqStrength = 8;        // 4~8
-  encodeConfig.rcParams.enableTemporalAQ = 1;  // good for static area
-  encodeConfig.rcParams.enableMinQP = 1;
-  encodeConfig.rcParams.enableMaxQP = 1;
-  encodeConfig.rcParams.minQP.qpIntra = 18;
-  encodeConfig.rcParams.minQP.qpInterP = 20;
-  encodeConfig.rcParams.minQP.qpInterB = 22;
-  encodeConfig.rcParams.maxQP.qpIntra = 35;
-  encodeConfig.rcParams.maxQP.qpInterP = 37;
-  encodeConfig.rcParams.maxQP.qpInterB = 40;
-
-  encodeConfig.rcParams.averageBitRate = average_bitrate_;
-  // use the default VBV buffer size
-  encodeConfig.rcParams.vbvBufferSize = 0;
-  encodeConfig.rcParams.maxBitRate = average_bitrate_;
-  // use the default VBV initial delay
-  encodeConfig.rcParams.vbvInitialDelay = 0;
-  // enable adaptive quantization (Spatial)
-  // encodeConfig.rcParams.enableAQ = false;
-  encodeConfig.rcParams.enableLookahead = 0;
-  encodeConfig.encodeCodecConfig.h264Config.idrPeriod = encodeConfig.gopLength;
-  encodeConfig.encodeCodecConfig.h264Config.level = NV_ENC_LEVEL_H264_52;
-  encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 0;
-  encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
-
-  encoder_->CreateEncoder(&init_params);
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +

@@ -38,6 +38,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   std::string GetEncoderName() const override { return "NvidiaH264"; }
 
  private:
+  void ReleaseEncoderResources();
   int ResetEncodeResolution(unsigned int width, unsigned int height);
 
  private:
