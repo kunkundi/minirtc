@@ -1,91 +1,92 @@
 # MiniRTC
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS-brightgreen.svg)]()
-[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)  
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS-brightgreen.svg)]()
+[![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](https://www.gnu.org/licenses/lgpl-3.0)
 [![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc.svg)]()
 [![GitHub stars](https://img.shields.io/github/stars/kunkundi/minirtc.svg?style=social)]()
 [![GitHub forks](https://img.shields.io/github/forks/kunkundi/minirtc.svg?style=social)]()
 
 [ [English](README_EN.md) / 中文 ]
 
-**轻量级跨平台实时音视频传输库**，专为 P2P 通信设计，低延迟、高性能、安全可靠。MiniRTC 提供完整的音视频编解码、加密传输和网络优化方案，并已在开源远程桌面项目 [CrossDesk](https://github.com/kunkundi/crossdesk.git) 中稳定应用。  
-
----
+MiniRTC 是一个**轻量级跨平台的实时音视频传输库**。它提供音视频编解码、ICE/STUN/TURN、SRTP、拥塞控制以及可靠与非可靠数据通道，并已用于开源远程桌面项目 [CrossDesk](https://github.com/kunkundi/crossdesk)。
 
 ## 核心特性
 
-- **跨平台支持**：Windows、Linux、macOS 等主流平台  
-- **P2P 音视频传输**：点对点直连，降低延迟，提高实时性  
-- **多视频编码支持**：
-  - **AV1** 软件编解码  
-  - **H.264** 硬件加速编码/解码  
-    - Windows / Linux: **NVIDIA Video Codec SDK (NVENC/NVDEC)**  
-    - macOS: **Video Toolbox**  
-- **音频编码支持**：**Opus** 编解码，高质量低延迟  
-- **安全加密**：支持 **SRTP 协议 (RFC 3711)**，保障音视频传输安全  
-- **网络透传**：基于 **RFC 5245 (ICE)** 的 NAT 穿透，适应复杂网络环境，实现直接连接  
-- **QoS 保证**：复用 WebRTC 核心模块，实现丢包恢复、带宽管理与网络抖动补偿  
-- **轻量化设计**：核心库体积小，易于集成到各类项目  
+- 支持 Windows、Linux、macOS 和 iOS。
+- 支持 P2P 直连以及 TURN/UDP、TURN/TCP 中继回退。
+- 支持 H.264 和 AV1 视频、Opus 音频。
+- 支持 SRTP、NACK、带宽估计、拥塞控制与网络状态统计。
+- 支持可靠与非可靠数据流，可承载控制、键鼠、剪贴板和文件数据。
 
-## 如何编译
+## 平台与编解码能力
 
-依赖：
-- [xmake](https://xmake.io/#/guide/installation)
-- [cmake](https://cmake.org/download/)
+| 平台 | H.264 硬件路径 | H.264 软件路径 | AV1 编码 / 解码 | 原生解码输出 |
+| --- | --- | --- | --- | --- |
+| Windows | NVIDIA NVENC/NVDEC（启用 CUDA 时） | OpenH264 | SVT-AV1 / dav1d | 暂不提供 |
+| Linux x86-64 | NVIDIA NVENC/NVDEC（启用 CUDA 时） | OpenH264 | SVT-AV1 / dav1d | 暂不提供 |
+| macOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | `CVPixelBufferRef` |
+| iOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | `CVPixelBufferRef` |
 
-Linux环境下需安装以下包：
+当前 AV1 运行时路径使用 SVT-AV1 编码和 dav1d 解码。libaom 也会随默认构建编入，但不作为工厂的默认 AV1 实现。Apple 平台暂不使用 VideoToolbox 进行 AV1 编解码。
 
-```
-sudo apt-get install -y software-properties-common git curl unzip build-essential libx11-dev libxrandr-dev libxinerama-dev libxcursor-dev libxi-dev libxcb-randr0-dev libxcb-xtest0-dev libxcb-xinerama0-dev libxcb-shape0-dev libxcb-xkb-dev libxcb-xfixes0-dev libxv-dev libxtst-dev libasound2-dev libsndio-dev libxcb-shm0-dev libasound2-dev libpulse-dev
-```
-编译
-```
+## 构建
+
+### 环境要求
+
+- [Xmake](https://xmake.io/#/guide/installation)
+- CMake
+- 支持 C++17 的编译工具链
+- 构建 iOS 时需要完整安装 Xcode 和 iPhoneOS SDK
+
+Xmake 会解析并构建 MiniRTC 的第三方依赖。首次构建需要访问依赖源，耗时会比增量构建更长。
+
+### 桌面平台
+
+```sh
 git clone https://github.com/kunkundi/minirtc.git
-
 cd minirtc
 
+xmake f -m release -y
 xmake b minirtc
 ```
-#### 无 CUDA 环境下的开发支持
 
-对于未安装 **CUDA 环境** 的Linux开发者，这里提供了预配置的 [Ubuntu 22.04 Docker 镜像](https://hub.docker.com/r/crossdesk/ubuntu22.04)。  
-该镜像内置必要的构建依赖，可在容器中开箱即用，无需额外配置即可直接编译项目。
+调试构建可将 `release` 改为 `debug`。CUDA 默认关闭；需要 NVIDIA 硬件编解码时使用：
 
-进入容器，下载工程后执行：
-```
-export CUDA_PATH=/usr/local/cuda
-export XMAKE_GLOBALDIR=/data
-
-xmake b --root minirtc
+```sh
+xmake f -m release --USE_CUDA=true --CUDA_DIR=/usr/local/cuda -y
+xmake b minirtc
 ```
 
-## 关于 Xmake
+没有 CUDA 环境的 Linux 开发者也可以使用预配置的 [Ubuntu 22.04 Docker 镜像](https://hub.docker.com/r/crossdesk/ubuntu22.04)。
 
-#### 安装 Xmake
-使用 curl：
-```
-curl -fsSL https://xmake.io/shget.text | bash
-```
-使用 wget：
-```
-wget https://xmake.io/shget.text -O - | bash
-```
-使用 powershell：
-```
-irm https://xmake.io/psget.text | iex
+### iOS 构建
+
+当前已验证的配置为 iOS 16.0 及以上、arm64 真机：
+
+```sh
+xmake f -c -p iphoneos -a arm64 -m release \
+  --target_minver=16.0 --USE_CUDA=false -y
+xmake b minirtc
 ```
 
-#### 编译选项
-```
-# 切换编译模式
-xmake f -m debug/release
+## 常用 Xmake 选项
 
-# 可选编译参数
--r ：重新构建目标
--v ：显示详细的构建日志
--y ：自动确认提示
+| 选项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `USE_CUDA` | `false` | 在支持的平台启用 NVIDIA 编解码后端 |
+| `CUDA_DIR` | 自动检测 | 指定 CUDA SDK 路径 |
 
-# 示例
+常用命令：
+
+```sh
+# 显示可配置选项
+xmake f --menu
+
+# 显示详细日志并自动确认依赖安装
 xmake b -vy minirtc
+
+# 重新构建
+xmake b -r minirtc
 ```
-更多使用方法可参考 [Xmake官方文档](https://xmake.io/guide/quick-start.html) 。
+
+更多信息请参阅 [Xmake 官方文档](https://xmake.io/guide/quick-start.html)。

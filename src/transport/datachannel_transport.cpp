@@ -341,10 +341,11 @@ int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
       hardware_acceleration_ = false;
       LOG_WARN("Only support software codec for AV1");
     }
-    ret = CreateStreamCodecs(clock, false, true);
+    ret = CreateStreamCodecs(clock, false, VideoCodecType::AV1);
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
 #if defined(__APPLE__)
-    ret = CreateStreamCodecs(clock, hardware_acceleration_, false);
+    ret = CreateStreamCodecs(clock, hardware_acceleration_,
+                             VideoCodecType::H264);
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
     bool use_hardware = false;
     if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
@@ -354,9 +355,9 @@ int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
           "Hardware accelerated codec not available, use default software "
           "codec");
     }
-    ret = CreateStreamCodecs(clock, use_hardware, false);
+    ret = CreateStreamCodecs(clock, use_hardware, VideoCodecType::H264);
 #else
-    ret = CreateStreamCodecs(clock, false, false);
+    ret = CreateStreamCodecs(clock, false, VideoCodecType::H264);
 #endif
   }
 
@@ -369,7 +370,7 @@ int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
 
 int DataChannelTransport::CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
                                              bool hardware_acceleration,
-                                             bool av1_encoding) {
+                                             VideoCodecType codec_type) {
   bool video_streams_init_first_time = true;
   bool audio_streams_init_first_time = true;
 
@@ -382,19 +383,10 @@ int DataChannelTransport::CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
       }
 
       if (!stream->codec_) {
-        stream->codec_ = VideoEncoderFactory::CreateVideoEncoder(
-            clock, hardware_acceleration, av1_encoding);
+        stream->codec_ = VideoEncoderFactory::CreateInitializedVideoEncoder(
+            clock, media_config_, hardware_acceleration, codec_type);
         if (!stream->codec_) {
-          stream->codec_ =
-              VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-          LOG_ERROR(
-              "Create encoder for [{}] failed, try to use software H.264 "
-              "encoder",
-              stream_id);
-        }
-
-        if (!stream->codec_ || 0 != stream->codec_->Init(media_config_)) {
-          LOG_ERROR("Encoder [{}] init failed", stream_id);
+          LOG_ERROR("Create and initialize encoder for [{}] failed", stream_id);
           return -1;
         }
         if (video_streams_init_first_time) {

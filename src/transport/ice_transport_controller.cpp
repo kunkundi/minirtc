@@ -44,6 +44,7 @@ IceTransportController::IceTransportController(
       video_codec_inited_(false),
       audio_codec_inited_(false),
       hardware_acceleration_(false),
+      native_video_output_(false),
       is_running_(true),
       congestion_window_size_(DataSize::PlusInfinity()) {
   media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
@@ -83,6 +84,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     rtp::PAYLOAD_TYPE video_codec_payload_type,
                                     bool video_rtx_enabled,
                                     bool hardware_acceleration,
+                                    bool native_video_output,
                                     OnReceiveVideo on_receive_video,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
@@ -94,6 +96,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   on_receive_audio_ = on_receive_audio;
   on_receive_data_ = on_receive_data;
   user_data_ = user_data;
+  native_video_output_ = native_video_output;
 
   CreateCodecs(clock_, video_codec_payload_type, hardware_acceleration);
 
@@ -1568,6 +1571,10 @@ void IceTransportController::OnReceiveCompleteFrame(
           x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
           x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
           x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
+          x_video_frame.native_handle = decoded_frame->NativeHandle();
+          x_video_frame.native_handle_type =
+              static_cast<XVideoFrameNativeHandleType>(
+                  decoded_frame->NativeHandleType());
           on_receive_video(&x_video_frame, remote_user_id.data(),
                            remote_user_id.size(), channel_name.data(),
                            channel_name.size(), user_data);
@@ -1682,7 +1689,7 @@ void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
 
 int IceTransportController::CreateStreamCodecs(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
-    bool av1_encoding) {
+    VideoCodecType codec_type) {
   bool video_sender_init_first_time = true;
   bool audio_sender_init_first_time = true;
   bool video_receiver_init_first_time = true;
@@ -1698,18 +1705,12 @@ int IceTransportController::CreateStreamCodecs(
 
       if (context->type == StreamType::kVideo) {
         if (!context->codec) {
-          context->codec = VideoEncoderFactory::CreateVideoEncoder(
-              clock, hardware_acceleration, av1_encoding);
+          context->codec =
+              VideoEncoderFactory::CreateInitializedVideoEncoder(
+                  clock, media_config_, hardware_acceleration, codec_type);
           if (!context->codec) {
-            context->codec =
-                VideoEncoderFactory::CreateVideoEncoder(clock, false, false);
-            LOG_ERROR(
-                "Create encoder for [{}] failed, try to use software H.264 "
-                "encoder",
-                channel_name);
-          }
-          if (!context->codec || 0 != context->codec->Init(media_config_)) {
-            LOG_ERROR("Encoder [{}] init failed", channel_name);
+            LOG_ERROR("Create and initialize encoder for [{}] failed",
+                      channel_name);
             return -1;
           }
           if (media_config_.video_degradation_preference ==
@@ -1757,10 +1758,12 @@ int IceTransportController::CreateStreamCodecs(
       if (!context->codec) {
         if (context->type == StreamType::kVideo) {
           context->codec = VideoDecoderFactory::CreateVideoDecoder(
-              clock, hardware_acceleration, av1_encoding);
+              clock, hardware_acceleration, codec_type, native_video_output_);
           if (!context->codec) {
             context->codec =
-                VideoDecoderFactory::CreateVideoDecoder(clock, false, false);
+                VideoDecoderFactory::CreateVideoDecoder(
+                    clock, false, VideoCodecType::H264,
+                    native_video_output_);
             LOG_ERROR(
                 "Create decoder for [{}] failed, try to use software H.264 "
                 "decoder",
@@ -1807,14 +1810,20 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
   int ret = -1;
 
   if (rtp::PAYLOAD_TYPE::AV1 == video_pt) {
+#if defined(__APPLE__)
+    ret = CreateStreamCodecs(clock, hardware_acceleration_,
+                             VideoCodecType::AV1);
+#else
     if (hardware_acceleration_) {
       hardware_acceleration_ = false;
       LOG_WARN("Only support software codec for AV1");
     }
-    ret = CreateStreamCodecs(clock, false, true);
+    ret = CreateStreamCodecs(clock, false, VideoCodecType::AV1);
+#endif
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
 #if defined(__APPLE__)
-    ret = CreateStreamCodecs(clock, hardware_acceleration_, false);
+    ret = CreateStreamCodecs(clock, hardware_acceleration_,
+                             VideoCodecType::H264);
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
     bool use_hardware = false;
     if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
@@ -1824,9 +1833,9 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
           "Hardware accelerated codec not available, use default software "
           "codec");
     }
-    ret = CreateStreamCodecs(clock, use_hardware, false);
+    ret = CreateStreamCodecs(clock, use_hardware, VideoCodecType::H264);
 #else
-    ret = CreateStreamCodecs(clock, false, false);
+    ret = CreateStreamCodecs(clock, false, VideoCodecType::H264);
 #endif
   }
 

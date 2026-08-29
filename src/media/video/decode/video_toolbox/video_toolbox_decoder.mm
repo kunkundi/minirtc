@@ -1,7 +1,10 @@
 #include "video_toolbox_decoder.h"
+#include "minirtc.h"
 #include <CoreMedia/CoreMedia.h>
 #include <VideoToolbox/VideoToolbox.h>
+#include <TargetConditionals.h>
 #include <arpa/inet.h>
+#include <atomic>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -109,7 +112,7 @@ std::vector<uint8_t> ConvertAnnexBToAVCCFiltered(const uint8_t* data, size_t siz
 
 class VideoToolboxDecoder::Impl {
  public:
-  Impl(std::shared_ptr<SystemClock> clock);
+  Impl(std::shared_ptr<SystemClock> clock, bool native_video_output);
   ~Impl();
 
   int Init();
@@ -125,12 +128,10 @@ class VideoToolboxDecoder::Impl {
 
  private:
   std::shared_ptr<SystemClock> clock_;
+  const bool native_video_output_;
   std::function<void(const DecodedFrame*)> on_receive_decoded_frame_;
-  DecodedFrame* decoded_frame_ = nullptr;
-  uint8_t* nv12_frame_ = nullptr;
-  size_t nv12_frame_size_ = 0;
-  uint32_t frame_width_ = 0;
-  uint32_t frame_height_ = 0;
+  std::atomic<uint64_t> submitted_frame_count_{0};
+  std::atomic<uint64_t> decoded_frame_count_{0};
 
   VTDecompressionSessionRef decompression_session_;
   CMVideoFormatDescriptionRef format_desc_;
@@ -143,24 +144,21 @@ class VideoToolboxDecoder::Impl {
   std::string nv12_file_name_;
 };
 
-VideoToolboxDecoder::Impl::Impl(std::shared_ptr<SystemClock> clock)
-    : clock_(std::move(clock)), decompression_session_(nullptr), format_desc_(nullptr) {}
+VideoToolboxDecoder::Impl::Impl(std::shared_ptr<SystemClock> clock,
+                               bool native_video_output)
+    : clock_(std::move(clock)),
+      native_video_output_(native_video_output),
+      decompression_session_(nullptr),
+      format_desc_(nullptr) {}
 
 VideoToolboxDecoder::Impl::~Impl() {
   if (decompression_session_) {
+    VTDecompressionSessionWaitForAsynchronousFrames(decompression_session_);
     VTDecompressionSessionInvalidate(decompression_session_);
     CFRelease(decompression_session_);
   }
   if (format_desc_) {
     CFRelease(format_desc_);
-  }
-  if (nv12_frame_) {
-    delete[] nv12_frame_;
-    nv12_frame_ = nullptr;
-  }
-  if (decoded_frame_) {
-    delete decoded_frame_;
-    decoded_frame_ = nullptr;
   }
   last_sps_.clear();
   last_pps_.clear();
@@ -181,10 +179,16 @@ VideoToolboxDecoder::Impl::~Impl() {
 }
 
 int VideoToolboxDecoder::Impl::Init() {
+#if defined(SAVE_DECODED_NV12_STREAM) || defined(SAVE_RECEIVED_H264_STREAM)
+#if defined(MINIRTC_IOS)
+  std::string log_dir = std::string(getenv("TMPDIR")) + "/CrossDesk/";
+#else
   std::string log_dir = std::string(getenv("HOME")) + "/Library/Logs/CrossDesk/";
   // Create directory if not exists
   std::string mkdir_cmd = "mkdir -p " + log_dir;
   system(mkdir_cmd.c_str());
+#endif
+#endif
 
 #ifdef SAVE_DECODED_NV12_STREAM
   nv12_file_name_ =
@@ -230,11 +234,13 @@ int VideoToolboxDecoder::Impl::Decode(
   // check if frame contains SPS (NAL type 7) using a more robust method
   // no longer assume start code is 4 bytes, parse directly with ExtractNalUnits
   bool has_sps = false;
+  bool is_keyframe = false;
   auto all_nalus = ExtractNalUnits(data, size);
   for (const auto& nalu : all_nalus) {
     if (nalu.type == 7) {  // SPS
       has_sps = true;
-      break;
+    } else if (nalu.type == 5) {  // IDR
+      is_keyframe = true;
     }
   }
 
@@ -268,11 +274,18 @@ int VideoToolboxDecoder::Impl::Decode(
   }
 
   CMBlockBufferRef block_buffer = nullptr;
-  OSStatus status = CMBlockBufferCreateWithMemoryBlock(nullptr, (void*)avcc_data.data(),
-                                                       avcc_data.size(), kCFAllocatorNull, nullptr, 0,
-                                                       avcc_data.size(), 0, &block_buffer);
+  OSStatus status = CMBlockBufferCreateWithMemoryBlock(
+      kCFAllocatorDefault, nullptr, avcc_data.size(), kCFAllocatorDefault,
+      nullptr, 0, avcc_data.size(), 0, &block_buffer);
   if (status != kCMBlockBufferNoErr) {
     LOG_ERROR("Failed to create block buffer, status: {}", status);
+    return -1;
+  }
+  status = CMBlockBufferReplaceDataBytes(avcc_data.data(), block_buffer, 0,
+                                         avcc_data.size());
+  if (status != kCMBlockBufferNoErr) {
+    LOG_ERROR("Failed to copy AVCC data into block buffer, status: {}", status);
+    CFRelease(block_buffer);
     return -1;
   }
 
@@ -281,18 +294,42 @@ int VideoToolboxDecoder::Impl::Decode(
   timing.duration = kCMTimeInvalid;
   timing.presentationTimeStamp = CMTimeMake(received_frame->ReceivedTimestamp(), 1000);
   timing.decodeTimeStamp = kCMTimeInvalid;
-  status = CMSampleBufferCreateReady(nullptr, block_buffer, format_desc_, 1, 1, &timing, 0, nullptr,
-                                     &sample_buffer);
+  // A compressed video access unit is one sample. Supplying zero sample-size
+  // entries creates a formally valid CMSampleBuffer whose sample size can be
+  // reported as zero, which VideoToolbox accepts without producing output.
+  const size_t sample_size = avcc_data.size();
+  status = CMSampleBufferCreateReady(nullptr, block_buffer, format_desc_, 1, 1,
+                                     &timing, 1, &sample_size, &sample_buffer);
   CFRelease(block_buffer);
   if (status != noErr) {
-    LOG_ERROR("Failed to create sample buffer");
+    LOG_ERROR("Failed to create sample buffer, status: {}", status);
     return -1;
+  }
+
+  CFArrayRef attachments =
+      CMSampleBufferGetSampleAttachmentsArray(sample_buffer, true);
+  if (attachments && CFArrayGetCount(attachments) > 0) {
+    auto attachment = static_cast<CFMutableDictionaryRef>(
+        const_cast<void*>(CFArrayGetValueAtIndex(attachments, 0)));
+    CFDictionarySetValue(attachment, kCMSampleAttachmentKey_DisplayImmediately,
+                         kCFBooleanTrue);
+    CFDictionarySetValue(attachment, kCMSampleAttachmentKey_NotSync,
+                         is_keyframe ? kCFBooleanFalse : kCFBooleanTrue);
   }
 
   status = VTDecompressionSessionDecodeFrame(decompression_session_, sample_buffer,
                                              kVTDecodeFrame_EnableAsynchronousDecompression,
                                              nullptr, nullptr);
   CFRelease(sample_buffer);
+  if (status != noErr) {
+    LOG_ERROR("VTDecompressionSessionDecodeFrame failed, status: {}", status);
+  } else {
+    const uint64_t frame_count = ++submitted_frame_count_;
+    if (frame_count == 1 || frame_count % 300 == 0) {
+      LOG_INFO("VideoToolbox submitted frame {}, sample_size={}, keyframe={}",
+               frame_count, sample_size, is_keyframe);
+    }
+  }
   return (status == noErr) ? 0 : -1;
 }
 
@@ -301,6 +338,7 @@ std::string VideoToolboxDecoder::Impl::GetDecoderName() const { return "VideoToo
 bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
                                               const std::vector<uint8_t>& pps) {
   if (decompression_session_) {
+    VTDecompressionSessionWaitForAsynchronousFrames(decompression_session_);
     VTDecompressionSessionInvalidate(decompression_session_);
     CFRelease(decompression_session_);
     decompression_session_ = nullptr;
@@ -326,12 +364,47 @@ bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
 
   CFMutableDictionaryRef decoder_spec = CFDictionaryCreateMutable(
       kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-  CFDictionarySetValue(decoder_spec,
-                       kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
-                       kCFBooleanTrue);
+#if TARGET_OS_IOS
+  if (@available(iOS 17.0, *)) {
+    CFDictionarySetValue(
+        decoder_spec,
+        kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
+        kCFBooleanTrue);
+  }
+#else
+  CFDictionarySetValue(
+      decoder_spec,
+      kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
+      kCFBooleanTrue);
+#endif
 
-  status = VTDecompressionSessionCreate(nullptr, format_desc_, decoder_spec, nullptr, &callback,
+  CFMutableDictionaryRef output_attributes = CFDictionaryCreateMutable(
+      kCFAllocatorDefault, 3, &kCFTypeDictionaryKeyCallBacks,
+      &kCFTypeDictionaryValueCallBacks);
+  int32_t pixel_format = kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange;
+  CFNumberRef pixel_format_number = CFNumberCreate(
+      kCFAllocatorDefault, kCFNumberSInt32Type, &pixel_format);
+  CFDictionarySetValue(output_attributes, kCVPixelBufferPixelFormatTypeKey,
+                       pixel_format_number);
+  CFDictionarySetValue(output_attributes, kCVPixelBufferMetalCompatibilityKey,
+                       kCFBooleanTrue);
+  CFDictionaryRef io_surface_properties = CFDictionaryCreate(
+      kCFAllocatorDefault, nullptr, nullptr, 0,
+      &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+  CFDictionarySetValue(output_attributes, kCVPixelBufferIOSurfacePropertiesKey,
+                       io_surface_properties);
+
+  status = VTDecompressionSessionCreate(nullptr, format_desc_, decoder_spec,
+                                        output_attributes, &callback,
                                         &decompression_session_);
+  CFRelease(io_surface_properties);
+  CFRelease(pixel_format_number);
+  CFRelease(output_attributes);
+  CFRelease(decoder_spec);
+  if (status != noErr) {
+    LOG_ERROR("Failed to create VideoToolbox decompression session, status: {}",
+              status);
+  }
   return status == noErr;
 }
 
@@ -357,77 +430,91 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
     return;
   }
 
-  {
-    if (!CVPixelBufferIsPlanar(image_buffer)) {
-      LOG_ERROR("Image buffer is not planar, expected NV12 format");
+  CVPixelBufferRef pixel_buffer = static_cast<CVPixelBufferRef>(image_buffer);
+  const OSType pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
+  if (!CVPixelBufferIsPlanar(pixel_buffer) ||
+      CVPixelBufferGetPlaneCount(pixel_buffer) < 2 ||
+      (pixel_format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+       pixel_format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)) {
+    LOG_ERROR("Unexpected VideoToolbox output pixel format: {}, planes: {}",
+              pixel_format, CVPixelBufferGetPlaneCount(pixel_buffer));
+    return;
+  }
+
+  const uint32_t width = static_cast<uint32_t>(CVPixelBufferGetWidth(pixel_buffer));
+  const uint32_t height = static_cast<uint32_t>(CVPixelBufferGetHeight(pixel_buffer));
+
+  DecodedFrame decoded_frame;
+  if (impl->native_video_output_) {
+    // All Apple consumers can present the IOSurface-backed image directly.
+    // The handle remains borrowed and is valid only during this callback.
+    decoded_frame.SetNativeHandle(pixel_buffer);
+    decoded_frame.SetNativeHandleType(XVideoFrameNativeHandleCVPixelBuffer);
+  } else {
+    CVReturn lock_status =
+        CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+    if (lock_status != kCVReturnSuccess) {
+      LOG_ERROR("Failed to lock decoded pixel buffer: {}", lock_status);
       return;
     }
 
-    CVPixelBufferRef pixelBuffer = static_cast<CVPixelBufferRef>(image_buffer);
-    CVPixelBufferLockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+    const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0);
+    const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 1);
+    const uint8_t* y_plane = static_cast<const uint8_t*>(
+        CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 0));
+    const uint8_t* uv_plane = static_cast<const uint8_t*>(
+        CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 1));
 
-    impl->frame_width_ = CVPixelBufferGetWidth(pixelBuffer);
-    impl->frame_height_ = CVPixelBufferGetHeight(pixelBuffer);
-    size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 0);
-    size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixelBuffer, 1);
-
-    const uint8_t* y_plane =
-        static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 0));
-    const uint8_t* uv_plane =
-        static_cast<const uint8_t*>(CVPixelBufferGetBaseAddressOfPlane(pixelBuffer, 1));
-
-    size_t nv12_size = y_stride * impl->frame_height_ + uv_stride * impl->frame_height_ / 2;
-
-    if (!impl->nv12_frame_) {
-      impl->nv12_frame_ = new uint8_t[nv12_size];
-      impl->nv12_frame_size_ = nv12_size;
+    if (!y_plane || !uv_plane || y_stride < width || uv_stride < width) {
+      LOG_ERROR("Invalid decoded NV12 planes: {}x{}, strides {} / {}", width,
+                height, y_stride, uv_stride);
+      CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+      return;
     }
 
-    if (impl->nv12_frame_ && impl->nv12_frame_size_ < nv12_size) {
-      delete[] impl->nv12_frame_;
-      impl->nv12_frame_ = new uint8_t[nv12_size];
-      impl->nv12_frame_size_ = nv12_size;
+    const size_t packed_size = static_cast<size_t>(width) * height * 3 / 2;
+    std::vector<uint8_t> packed_nv12(packed_size);
+    for (size_t row = 0; row < height; ++row) {
+      memcpy(packed_nv12.data() + row * width, y_plane + row * y_stride,
+             width);
     }
-
-    if (!impl->decoded_frame_) {
-      impl->decoded_frame_ =
-          new DecodedFrame(impl->nv12_frame_size_, impl->frame_width_, impl->frame_height_);
+    uint8_t* uv_dst =
+        packed_nv12.data() + static_cast<size_t>(width) * height;
+    for (size_t row = 0; row < height / 2; ++row) {
+      memcpy(uv_dst + row * width, uv_plane + row * uv_stride, width);
     }
+    CVPixelBufferUnlockBaseAddress(pixel_buffer,
+                                   kCVPixelBufferLock_ReadOnly);
 
-    for (size_t i = 0; i < impl->frame_height_; ++i) {
-      memcpy(impl->nv12_frame_ + i * impl->frame_width_, y_plane + i * y_stride,
-             impl->frame_width_);
-    }
+    decoded_frame.UpdateBuffer(packed_nv12.data(), packed_nv12.size());
+  }
+  decoded_frame.SetDecodedWidth(width);
+  decoded_frame.SetDecodedHeight(height);
+  decoded_frame.SetDecodedTimestamp(
+      CMTIME_IS_NUMERIC(pts)
+          ? static_cast<int64_t>(CMTimeGetSeconds(pts) * 1'000'000)
+          : 0);
 
-    uint8_t* uv_dst = impl->nv12_frame_ + impl->frame_width_ * impl->frame_height_;
-    for (size_t i = 0; i < impl->frame_height_ / 2; ++i) {
-      memcpy(uv_dst + i * impl->frame_width_, uv_plane + i * uv_stride, impl->frame_width_);
-    }
-
-    impl->decoded_frame_->UpdateBuffer(impl->nv12_frame_, impl->nv12_frame_size_);
-    impl->decoded_frame_->SetWidth(impl->frame_width_);
-    impl->decoded_frame_->SetHeight(impl->frame_height_);
-    impl->decoded_frame_->SetDecodedWidth(impl->frame_width_);
-    impl->decoded_frame_->SetDecodedHeight(impl->frame_height_);
-    impl->decoded_frame_->SetDecodedTimestamp(
-        static_cast<int64_t>(CMTimeGetSeconds(pts) * 1'000'000));
-
-    CVPixelBufferUnlockBaseAddress(pixelBuffer, kCVPixelBufferLock_ReadOnly);
+  const uint64_t frame_count = ++impl->decoded_frame_count_;
+  if (frame_count == 1 || frame_count % 300 == 0) {
+    LOG_INFO("VideoToolbox decoded frame {}, size={}x{}, pixel_format={}",
+             frame_count, width, height, pixel_format);
   }
 
   if (impl->on_receive_decoded_frame_) {
 #ifdef SAVE_DECODED_NV12_STREAM
-    fwrite((unsigned char*)impl->decoded_frame_->Buffer(), 1, impl->decoded_frame_->Size(),
+    fwrite((unsigned char*)decoded_frame.Buffer(), 1, decoded_frame.Size(),
            impl->file_nv12_);
 #endif
-    impl->on_receive_decoded_frame_(impl->decoded_frame_);
+    impl->on_receive_decoded_frame_(&decoded_frame);
   }
 }
 
 //
 
-VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock)
-    : impl_(std::make_shared<Impl>(std::move(clock))) {}
+VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock,
+                                         bool native_video_output)
+    : impl_(std::make_shared<Impl>(std::move(clock), native_video_output)) {}
 
 VideoToolboxDecoder::~VideoToolboxDecoder() = default;
 

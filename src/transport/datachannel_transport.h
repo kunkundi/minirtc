@@ -105,7 +105,8 @@ class DataChannelTransport
 
  private:
   int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
-                         bool hardware_acceleration, bool av1_encoding);
+                         bool hardware_acceleration,
+                         VideoCodecType codec_type);
 
  private:
   std::unordered_map<std::string, std::shared_ptr<Stream>> video_streams_;

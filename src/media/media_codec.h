@@ -43,6 +43,11 @@
 
 namespace minirtc {
 
+enum class VideoCodecType : uint8_t {
+  H264 = 0,
+  AV1 = 1,
+};
+
 class MediaCodecConfig {
  public:
   MediaCodecConfig()

@@ -15,7 +15,8 @@ namespace minirtc {
 
 class VideoToolboxDecoder : public MediaCodec {
  public:
-  VideoToolboxDecoder(std::shared_ptr<SystemClock> clock);
+  explicit VideoToolboxDecoder(std::shared_ptr<SystemClock> clock,
+                               bool native_video_output = false);
   ~VideoToolboxDecoder();
 
   int Init() override;

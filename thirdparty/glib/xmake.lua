@@ -10,6 +10,7 @@ package("glib")
     add_urls("https://gitlab.gnome.org/GNOME/glib.git")
     add_versions("home:2.71.0", "926816526f6e4bba9af726970ff87be7dac0b70d5805050c6207b7bb17ea4fca")
     add_versions("home:2.78.1", "915bc3d0f8507d650ead3832e2f8fb670fce59aac4d7754a7dab6f1e6fed78b2")
+    add_versions("home:2.84.1", "2b4bc2ec49611a5fc35f86aca855f2ed0196e69e53092bab6bb73396bf30789a")
     add_versions("home:2.85.0", "97cfb0466ae41fca4fa2a57a15440bee15b54ae76a12fb3cbff11df947240e48")
     add_patches("2.71.0", path.join(os.scriptdir(), "patches", "2.71.0", "macosx.patch"), "a0c928643e40f3a3dfdce52950486c7f5e6f6e9cfbd76b20c7c5b43de51d6399")
 
@@ -30,6 +31,9 @@ package("glib")
     elseif is_plat("macosx") then
         add_syslinks("resolv")
         add_frameworks("AppKit", "Foundation", "CoreServices", "CoreFoundation")
+    elseif is_plat("iphoneos") then
+        add_syslinks("resolv", "iconv")
+        add_frameworks("Foundation", "CoreFoundation", "SystemConfiguration")
     elseif is_plat("linux") then
         add_syslinks("pthread", "dl", "resolv")
     end
@@ -51,6 +55,12 @@ package("glib")
 
     add_includedirs("include/glib-2.0", "lib/glib-2.0/include")
     add_links("gio-2.0", "gobject-2.0", "gthread-2.0", "gmodule-2.0", "glib-2.0")
+    if is_plat("iphoneos") then
+        -- GLib falls back to its bundled proxy-libintl on iOS. Meson installs
+        -- that archive next to GLib, so expose it to consumers and to the
+        -- package link test.
+        add_links("intl")
+    end
 
     on_fetch("macosx", "linux", function (package, opt)
         if opt.system and package.find_package then
@@ -85,7 +95,7 @@ package("glib")
         package:add("deps", "libffi", {system = false, configs = {shared = false}})
     end)
 
-    on_install("windows", "macosx", "linux", "cross", "mingw", function (package)
+    on_install("windows", "macosx", "iphoneos", "linux", "cross", "mingw", function (package)
         local configs = {"-Dbsymbolic_functions=false",
                          "-Ddtrace=false",
                          "-Dman=false",
@@ -95,7 +105,12 @@ package("glib")
                          "-Dsystemtap=false",
                          "-Dselinux=disabled",
                          "-Dlibmount=disabled",
-                         "-Dsysprof=disabled"}
+                         "-Dsysprof=disabled",
+                         "-Dintrospection=disabled"}
+        if package:is_plat("iphoneos") then
+            table.insert(configs, "-Dnls=disabled")
+            table.insert(configs, "-Dxattr=false")
+        end
         if package:is_plat("macosx") and package:version():le("2.61.0") then
             table.insert(configs, "-Diconv=native")
         elseif package:is_plat("windows") and package:version():le("2.74.0") then

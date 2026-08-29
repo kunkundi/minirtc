@@ -39,11 +39,34 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
     "NOMINMAX", "WIN32_LEAN_AND_MEAN")
 add_defines("USE_CUDA=" .. (is_config("USE_CUDA", true) and "1" or "0"))
 
-add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
-add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
+local is_iphoneos = is_plat("iphoneos")
+-- Every iOS build contains the hardware and software codec backends. Runtime
+-- selection still prefers VideoToolbox for H.264 unless the caller explicitly
+-- requests software processing.
+if is_iphoneos then
+    add_defines("MINIRTC_IOS=1")
+    add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1",
+        "libnice 0.1.22", "websocketpp 0.8.2", "libsrtp v2.7.0",
+        "openfec 1.4.2", "libopus 1.5.1", "libyuv 2025.8.14",
+        "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+    add_packages("asio", "nlohmann_json", "spdlog", "libnice",
+        "websocketpp", "libsrtp", "openfec", "libopus", "libyuv",
+        "concurrentqueue")
+    add_requires("openh264 2.6.0", {system = false}, {configs = {shared = false}})
+    add_requires("dav1d 1.4.3", {system = false}, {configs = {shared = false, tools = false}})
+    add_requires("aom 3.9.0", {system = false}, {configs = {shared = false}})
+    add_requires("svt-av1 v3.0.2", {system = false}, {configs = {shared = false, tools = false}})
+    add_packages("openh264", "dav1d", "aom", "svt-av1")
+else
+    add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "libnice 0.1.22", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "aom 3.9.0", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+    add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "aom", "svt-av1", "concurrentqueue")
+end
 
-add_requires("libdatachannel 0.23.2", "kcp 1.7")
-add_packages("libdatachannel", "kcp")
+add_requires("kcp 1.7")
+add_packages("kcp")
+add_requires("libdatachannel 0.23.2",
+    {system = false, configs = {shared = false, nice = true, media = true}})
+add_packages("libdatachannel")
 
 includes("thirdparty")
 
@@ -54,14 +77,14 @@ if is_os("windows") then
 elseif is_os("linux") then
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
-elseif is_os("macosx") then
+elseif is_os("macosx") or is_iphoneos then
     -- add_ldflags("-fsanitize=address")
     if is_arch("x86_64") then
         add_ldflags("-Wl,-ld_classic")
     end
     add_cxflags("-Wno-unused-variable")
-    add_frameworks("VideoToolbox")
-    add_frameworks("Security")
+    add_frameworks("VideoToolbox", "CoreMedia", "CoreVideo", "Security",
+        "Foundation", "SystemConfiguration")
 end
 
 target("log")
@@ -236,6 +259,27 @@ target("media")
         elseif is_arch("arm64", "aarch64") then
         end
     elseif is_os("macosx") then
+        add_files("src/media/video/encode/*.cpp",
+        "src/media/video/decode/*.cpp",
+        "src/media/video/encode/openh264/*.cpp",
+        "src/media/video/decode/openh264/*.cpp",
+        "src/media/video/encode/video_toolbox/*.mm",
+        "src/media/video/decode/video_toolbox/*.mm",
+        "src/media/video/encode/aom/*.cpp",
+        "src/media/video/encode/avt/*.cpp",
+        "src/media/video/decode/dav1d/*.cpp",
+        "src/media/video/decode/aom/*.cpp")
+        add_includedirs("src/media/video/encode",
+        "src/media/video/decode",
+        "src/media/video/encode/openh264",
+        "src/media/video/decode/openh264",
+        "src/media/video/encode/video_toolbox",
+        "src/media/video/decode/video_toolbox",
+        "src/media/video/encode/aom",
+        "src/media/video/encode/avt",
+        "src/media/video/decode/dav1d",
+        "src/media/video/decode/aom", {public = true})
+    elseif is_iphoneos then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
         "src/media/video/encode/openh264/*.cpp",

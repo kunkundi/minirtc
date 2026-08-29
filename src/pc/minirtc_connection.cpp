@@ -200,8 +200,9 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           on_ice_status_change_, callbacks_.user_data);
 
       ice_transport_->SetLocalCapabilities(
-          info_.hardware_acceleration, info_.trickle_ice, info_.reliable_ice,
-          info_.turn_mode, info_.enable_srtp,
+          info_.hardware_acceleration, info_.native_video_output,
+          info_.trickle_ice, info_.reliable_ice, info_.turn_mode,
+          info_.enable_srtp,
           info_.video_content_type, info_.video_quality,
           info_.video_frame_rate, info_.video_degradation_preference,
           info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
@@ -262,8 +263,9 @@ void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           on_ice_status_change_, callbacks_.user_data);
 
       ice_transport_->SetLocalCapabilities(
-          info_.hardware_acceleration, info_.trickle_ice, info_.reliable_ice,
-          info_.turn_mode, info_.enable_srtp,
+          info_.hardware_acceleration, info_.native_video_output,
+          info_.trickle_ice, info_.reliable_ice, info_.turn_mode,
+          info_.enable_srtp,
           info_.video_content_type, info_.video_quality,
           info_.video_frame_rate, info_.video_degradation_preference,
           info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,

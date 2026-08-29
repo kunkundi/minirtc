@@ -4,6 +4,11 @@
 #include "dav1d/dav1d_av1_decoder.h"
 #include "openh264/openh264_decoder.h"
 
+#if defined(__APPLE__)
+#include <CoreMedia/CoreMedia.h>
+#include <VideoToolbox/VideoToolbox.h>
+#endif
+
 #if defined(_WIN32) || defined(_WIN64)
 #include "wmf/wmf_h264_software_decoder.h"
 #endif
@@ -31,52 +36,64 @@ VideoDecoderFactory::VideoDecoderFactory() {}
 
 VideoDecoderFactory::~VideoDecoderFactory() {}
 
-std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
-    std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
-    bool av1_encoding) {
-  if (av1_encoding) {
+std::unique_ptr<MediaCodec>
+VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
+                                        bool hardware_acceleration,
+                                        VideoCodecType codec_type,
+                                        bool native_video_output) {
+#if !defined(__APPLE__)
+  (void)native_video_output;
+#endif
+  if (codec_type == VideoCodecType::AV1) {
+    if (hardware_acceleration) {
+      LOG_INFO("Hardware AV1 decoding is not supported; using the dav1d "
+               "decoder");
+    }
     return std::make_unique<Dav1dAv1Decoder>(clock);
     // return std::make_unique<AomAv1Decoder>(clock);
-  } else {
+  }
+
+  if (codec_type != VideoCodecType::H264) {
+    LOG_ERROR("Unsupported video codec type [{}]",
+              static_cast<int>(codec_type));
+    return nullptr;
+  }
+
 #if defined(__APPLE__)
-    if (hardware_acceleration) {
-      return std::make_unique<VideoToolboxDecoder>(clock);
-    } else {
-      return std::make_unique<OpenH264Decoder>(clock);
-    }
+  if (hardware_acceleration &&
+      CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
+    return std::make_unique<VideoToolboxDecoder>(clock, native_video_output);
+  }
+  LOG_INFO("Hardware H.264 decoding {}; using the OpenH264 decoder",
+           hardware_acceleration ? "is unavailable" : "is disabled");
+  return std::make_unique<OpenH264Decoder>(clock);
 #elif defined(__linux__) && defined(__aarch64__)
-    return std::make_unique<OpenH264Decoder>(clock);
+  return std::make_unique<OpenH264Decoder>(clock);
 #else
 #if USE_CUDA
-    if (hardware_acceleration) {
-      if (CheckIsHardwareAccerlerationSupported()) {
-        return std::make_unique<NvidiaVideoDecoder>(clock);
-      } else {
-        // Hardware requested but not supported: fallback to software.
-        // #if defined(_WIN32) || defined(_WIN64)
-        //         return std::make_unique<WmfH264SoftwareDecoder>(clock);
-        // #else
-        return std::make_unique<OpenH264Decoder>(clock);
-        // #endif
-      }
+  if (hardware_acceleration) {
+    if (CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
+      return std::make_unique<NvidiaVideoDecoder>(clock);
     } else {
-#endif
-      // #if defined(_WIN32) || defined(_WIN64)
-      //       return
-      //       std::make_unique<WmfH264SoftwareDecoder>(clock);
-      // #else
+      // Hardware requested but not supported: fallback to software.
       return std::make_unique<OpenH264Decoder>(clock);
-// #endif
-#if USE_CUDA
     }
+  } else {
 #endif
-#endif
+    return std::make_unique<OpenH264Decoder>(clock);
+#if USE_CUDA
   }
+#endif
+#endif
 }
 
-bool VideoDecoderFactory::CheckIsHardwareAccerlerationSupported() {
+bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
+    VideoCodecType codec_type) {
+  if (codec_type != VideoCodecType::H264) {
+    return false;
+  }
 #if defined(__APPLE__)
-  return false;
+  return VTIsHardwareDecodeSupported(kCMVideoCodecType_H264);
 #elif ((defined(_WIN32) || defined(_WIN64)) ||                                 \
        (defined(__linux__) && (defined(__x86_64__) || defined(__amd64__)))) && \
     USE_CUDA
@@ -85,4 +102,5 @@ bool VideoDecoderFactory::CheckIsHardwareAccerlerationSupported() {
   return false;
 #endif
 }
-}  // namespace minirtc
+
+} // namespace minirtc

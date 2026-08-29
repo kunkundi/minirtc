@@ -81,6 +81,13 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void OnMessage(websocketpp::connection_hdl hdl, client::message_ptr msg);
 
  private:
+  static void LoadTlsSystemRootCertificates(SSL_CTX* ssl_ctx);
+
+  static bool VerifyTlsWithSystemTrust(X509_STORE_CTX* store_ctx,
+                                       const std::string& uri);
+
+  static bool LogTlsVerificationError(X509_STORE_CTX* store_ctx);
+
   void RegisterHandlers();
 
   void StopThreads();

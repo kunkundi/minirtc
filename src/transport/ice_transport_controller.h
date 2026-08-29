@@ -66,6 +66,7 @@ class IceTransportController
   void Create(bool offer_peer, std::string remote_user_id,
               rtp::PAYLOAD_TYPE video_codec_payload_type,
               bool video_rtx_enabled, bool hardware_acceleration,
+              bool native_video_output,
               OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
               OnReceiveData on_receive_data, void* user_data);
   void Destroy();
@@ -137,7 +138,8 @@ class IceTransportController
   int CreateCodecs(std::shared_ptr<SystemClock> clock,
                    rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
   int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
-                         bool hardware_acceleration, bool av1_encoding);
+                         bool hardware_acceleration,
+                         VideoCodecType codec_type);
 
  private:
   struct PacketFeedbackRegistration {
@@ -351,6 +353,7 @@ class IceTransportController
   std::unordered_set<std::string> force_i_frame_streams_;
   bool video_codec_inited_;
   bool hardware_acceleration_;
+  bool native_video_output_;
 
  private:
   std::unique_ptr<AudioEncoder> audio_encoder_ = nullptr;

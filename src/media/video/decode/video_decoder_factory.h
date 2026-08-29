@@ -7,16 +7,17 @@
 
 namespace minirtc {
 class VideoDecoderFactory {
- public:
+public:
   VideoDecoderFactory();
   ~VideoDecoderFactory();
 
-  static std::unique_ptr<MediaCodec> CreateVideoDecoder(
-      std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
-      bool av1_encoding);
+  static std::unique_ptr<MediaCodec>
+  CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
+                     bool hardware_acceleration, VideoCodecType codec_type,
+                     bool native_video_output = false);
 
-  static bool CheckIsHardwareAccerlerationSupported();
+  static bool CheckIsHardwareAccelerationSupported(VideoCodecType codec_type);
 };
-}  // namespace minirtc
+} // namespace minirtc
 
 #endif

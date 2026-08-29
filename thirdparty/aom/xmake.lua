@@ -12,7 +12,7 @@ package("aom")
         add_defines("_CRT_SECURE_NO_WARNINGS")
     end
 
-    on_install("windows", "linux", "macosx", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", function (package)
         local configs = {"-DENABLE_EXAMPLES=OFF", "-DENABLE_TESTS=OFF", "-DENABLE_TOOLS=OFF", "-DENABLE_DOCS=OFF", "-DBUILD_SHARED_LIBS=OFF"}
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
         import("package.tools.cmake").install(package, configs)

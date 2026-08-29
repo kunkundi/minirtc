@@ -52,12 +52,24 @@ class DecodedFrame : public VideoFrame {
     decoded_height_ = decoded_height;
   }
 
+  void* NativeHandle() const { return native_handle_; }
+
+  void SetNativeHandle(void* native_handle) { native_handle_ = native_handle; }
+
+  uint32_t NativeHandleType() const { return native_handle_type_; }
+
+  void SetNativeHandleType(uint32_t native_handle_type) {
+    native_handle_type_ = native_handle_type;
+  }
+
  private:
   int64_t received_timestamp_us_ = 0;
   int64_t captured_timestamp_us_ = 0;
   int64_t decoded_timestamp_us_ = 0;
   uint32_t decoded_width_ = 0;
   uint32_t decoded_height_ = 0;
+  void* native_handle_ = nullptr;
+  uint32_t native_handle_type_ = 0;
 };
 }  // namespace minirtc
 

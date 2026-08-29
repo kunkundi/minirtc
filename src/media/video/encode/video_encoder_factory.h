@@ -14,9 +14,13 @@ class VideoEncoderFactory {
 
   static std::unique_ptr<MediaCodec> CreateVideoEncoder(
       std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
-      bool av1_encoding);
+      VideoCodecType codec_type);
 
-  static bool CheckIsHardwareAccerlerationSupported();
+  static std::unique_ptr<MediaCodec> CreateInitializedVideoEncoder(
+      std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
+      bool hardware_acceleration, VideoCodecType codec_type);
+
+  static bool CheckIsHardwareAccelerationSupported(VideoCodecType codec_type);
 };
 }  // namespace minirtc
 

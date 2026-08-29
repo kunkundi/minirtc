@@ -8,9 +8,35 @@ package("libyuv")
 
     add_deps("cmake")
 
-    on_install("windows", "linux", "macosx", "android", "cross", "bsd", "mingw", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", "android", "cross", "bsd", "mingw", function (package)
         local configs = {"-DUNIT_TEST=OFF"}
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
+
+        if package:is_plat("iphoneos") then
+            -- libyuv's upstream CMake file does not recognize Xcode's iOS
+            -- toolchain processor consistently, which omits the arm64 NEON
+            -- objects and then fails while linking its optional dylib.
+            io.replace("CMakeLists.txt",
+                [[string(TOLOWER "${CMAKE_SYSTEM_PROCESSOR}" arch_lowercase)]],
+                [[set(arch_lowercase "arm64")]], {plain = true})
+            io.replace("CMakeLists.txt",
+                [[add_library( ${ly_lib_shared} SHARED ${ly_lib_parts})]],
+                [[if(NOT IOS)
+add_library( ${ly_lib_shared} SHARED ${ly_lib_parts})]], {plain = true})
+            io.replace("CMakeLists.txt",
+                [[if(WIN32)
+  set_target_properties( ${ly_lib_shared} PROPERTIES IMPORT_PREFIX "lib" )
+endif()]],
+                [[if(WIN32)
+  set_target_properties( ${ly_lib_shared} PROPERTIES IMPORT_PREFIX "lib" )
+endif()
+endif()]], {plain = true})
+            io.replace("CMakeLists.txt",
+                [[install ( TARGETS ${ly_lib_shared} LIBRARY DESTINATION lib RUNTIME DESTINATION bin ARCHIVE DESTINATION lib )]],
+                [[if(NOT IOS)
+install ( TARGETS ${ly_lib_shared} LIBRARY DESTINATION lib RUNTIME DESTINATION bin ARCHIVE DESTINATION lib )
+endif()]], {plain = true})
+        end
 
         -- Recent libyuv releases unconditionally enable I8MM and SVE2 for
         -- AArch64. Older compilers (for example GCC 9) reject those -march

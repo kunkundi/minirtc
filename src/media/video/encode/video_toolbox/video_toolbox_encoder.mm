@@ -2,6 +2,7 @@
 #import <CoreVideo/CoreVideo.h>
 #import <Foundation/Foundation.h>
 #import <VideoToolbox/VideoToolbox.h>
+#include <TargetConditionals.h>
 #include <algorithm>
 #include <atomic>
 #include <condition_variable>
@@ -181,9 +182,19 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
     return -1;
   }
 
-  CFDictionarySetValue(encoder_spec,
-                       kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
-                       kCFBooleanTrue);
+#if TARGET_OS_IOS
+  if (@available(iOS 17.4, *)) {
+    CFDictionarySetValue(
+        encoder_spec,
+        kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+        kCFBooleanTrue);
+  }
+#else
+  CFDictionarySetValue(
+      encoder_spec,
+      kVTVideoEncoderSpecification_EnableHardwareAcceleratedVideoEncoder,
+      kCFBooleanTrue);
+#endif
 
   VTCompressionSessionRef new_session = nullptr;
   OSStatus status =

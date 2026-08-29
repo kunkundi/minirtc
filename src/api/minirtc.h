@@ -58,6 +58,11 @@ enum TurnMode : uint8_t {
   TurnForceTcp,      // Relay-only candidates using TURN/TCP.
 };
 
+enum XVideoFrameNativeHandleType : uint32_t {
+  XVideoFrameNativeHandleNone = 0,
+  XVideoFrameNativeHandleCVPixelBuffer = 1,
+};
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -71,6 +76,11 @@ typedef struct {
   uint64_t received_timestamp;
   uint64_t decoded_timestamp;
   uint64_t rendered_timestamp;
+  // Optional platform-native decoded frame. The handle is borrowed and is
+  // valid only for the duration of the receive callback. Consumers that keep
+  // it must retain it using the platform's ownership API.
+  void* native_handle;
+  XVideoFrameNativeHandleType native_handle_type;
 } XVideoFrame;
 
 typedef struct {
@@ -142,6 +152,11 @@ typedef struct {
   char turn_server_password[256];
   char log_path[256];
   bool hardware_acceleration;
+  // Prefer a platform-native decoded frame in XVideoFrame::native_handle
+  // instead of copying it into XVideoFrame::data. The handle representation is
+  // identified by XVideoFrame::native_handle_type. Decoders that cannot expose
+  // a native frame ignore this option and continue to provide CPU data.
+  bool native_video_output;
   bool av1_encoding;
   TurnMode turn_mode;
   bool enable_srtp;

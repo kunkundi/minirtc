@@ -44,9 +44,10 @@ class IceTransport {
   ~IceTransport();
 
  public:
-  int SetLocalCapabilities(bool hardware_acceleration, bool use_trickle_ice,
-                           bool use_reliable_ice, TurnMode turn_mode,
-                           bool enable_srtp,
+  int SetLocalCapabilities(bool hardware_acceleration,
+                           bool native_video_output,
+                           bool use_trickle_ice, bool use_reliable_ice,
+                           TurnMode turn_mode, bool enable_srtp,
                            VideoContentType video_content_type,
                            VideoQuality video_quality, int video_frame_rate,
                            VideoDegradationPreference
@@ -183,6 +184,7 @@ class IceTransport {
 
  private:
   bool hardware_acceleration_ = false;
+  bool native_video_output_ = false;
   bool use_trickle_ice_ = true;
   bool use_reliable_ice_ = false;
   TurnMode turn_mode_ = TurnMode::TurnDisabled;

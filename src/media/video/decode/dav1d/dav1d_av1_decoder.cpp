@@ -53,6 +53,10 @@ Dav1dAv1Decoder::Dav1dAv1Decoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
 
 Dav1dAv1Decoder::~Dav1dAv1Decoder() {
+  if (context_) {
+    dav1d_close(&context_);
+  }
+
   if (decoded_frame_) {
     delete decoded_frame_;
   }
@@ -92,7 +96,8 @@ int Dav1dAv1Decoder::Init() {
 
   int ret = dav1d_open(&context_, &s);
   if (ret) {
-    LOG_ERROR("Dav1d AV1 decoder open failed");
+    LOG_ERROR("Dav1d AV1 decoder open failed, error={}", ret);
+    return -1;
   }
 
 #ifdef SAVE_DECODED_NV12_STREAM
@@ -119,6 +124,9 @@ int Dav1dAv1Decoder::Init() {
 int Dav1dAv1Decoder::Decode(
     std::unique_ptr<ReceivedFrame> received_frame,
     std::function<void(const DecodedFrame *)> on_receive_decoded_frame) {
+  if (!received_frame || !context_) {
+    return -1;
+  }
   const uint8_t *data = received_frame->Buffer();
   size_t size = received_frame->Size();
 
@@ -128,9 +136,14 @@ int Dav1dAv1Decoder::Decode(
 
   ScopedDav1dData scoped_dav1d_data;
   Dav1dData &dav1d_data = scoped_dav1d_data.Data();
-  dav1d_data_wrap(&dav1d_data, data, size,
-                  /*free_callback=*/&NullFreeCallback,
-                  /*user_data=*/nullptr);
+  const int wrap_result = dav1d_data_wrap(
+      &dav1d_data, data, size,
+      /*free_callback=*/&NullFreeCallback,
+      /*user_data=*/nullptr);
+  if (wrap_result != 0) {
+    LOG_ERROR("Dav1d AV1 input wrap failed, error={}", wrap_result);
+    return -1;
+  }
 
   if (int decode_res = dav1d_send_data(context_, &dav1d_data)) {
     // On EAGAIN, dav1d can not consume more data and

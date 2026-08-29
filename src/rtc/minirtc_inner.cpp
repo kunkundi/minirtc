@@ -41,6 +41,8 @@ PeerPtr* CreatePeer(const Params* params) {
     peer_ptr->pc_params.turn_server_username = params->turn_server_username;
     peer_ptr->pc_params.turn_server_password = params->turn_server_password;
     peer_ptr->pc_params.hardware_acceleration = params->hardware_acceleration;
+    peer_ptr->pc_params.native_video_output =
+        params->native_video_output;
     peer_ptr->pc_params.av1_encoding = params->av1_encoding;
     peer_ptr->pc_params.turn_mode = params->turn_mode;
     peer_ptr->pc_params.enable_srtp = params->enable_srtp;

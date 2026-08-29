@@ -34,6 +34,7 @@ struct ConnectionInfo {
   std::string remote_user_id;
 
   bool hardware_acceleration;
+  bool native_video_output;
   bool trickle_ice;
   bool reliable_ice;
   TurnMode turn_mode;

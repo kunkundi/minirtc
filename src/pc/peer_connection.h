@@ -60,6 +60,7 @@ typedef struct {
   const char* turn_server_username;
   const char* turn_server_password;
   bool hardware_acceleration;
+  bool native_video_output;
   bool av1_encoding;
   TurnMode turn_mode;
   bool enable_srtp;
@@ -171,6 +172,7 @@ class PeerConnection {
   std::string cfg_turn_server_password_;
   int64_t turn_credential_expires_at_ = 0;
   std::string cfg_hardware_acceleration_;
+  std::string cfg_native_video_output_;
   std::string cfg_av1_encoding_;
   std::string cfg_turn_mode_;
   std::string cfg_enable_turn_;
@@ -183,6 +185,7 @@ class PeerConnection {
   int stun_server_port_ = 0;
   int turn_server_port_ = 0;
   bool hardware_acceleration_ = false;
+  bool native_video_output_ = false;
   bool av1_encoding_ = false;
   TurnMode turn_mode_ = TurnMode::TurnDisabled;
   bool enable_srtp_ = true;

@@ -185,6 +185,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_turn_server_password_ = reader.Get("turn server", "password", "");
     cfg_hardware_acceleration_ =
         reader.Get("hardware acceleration", "turn_on", "false");
+    cfg_native_video_output_ =
+        reader.Get("native video output", "turn_on", "false");
     cfg_av1_encoding_ = reader.Get("av1 encoding", "turn_on", "false");
     cfg_turn_mode_ = reader.Get("turn mode", "mode", "");
     cfg_enable_turn_ = reader.Get("enable turn", "turn_on", "false");
@@ -204,6 +206,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
     hardware_acceleration_ =
         cfg_hardware_acceleration_ == "true" ? true : false;
+    native_video_output_ =
+        cfg_native_video_output_ == "true" ? true : false;
     av1_encoding_ = cfg_av1_encoding_ == "true" ? true : false;
     turn_mode_ = ParseTurnMode(cfg_turn_mode_, cfg_enable_turn_ == "true");
     enable_srtp_ = cfg_enable_srtp_ == "true" ? true : false;
@@ -229,6 +233,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_turn_server_username_ = params.turn_server_username;
     cfg_turn_server_password_ = params.turn_server_password;
     hardware_acceleration_ = params.hardware_acceleration;
+    native_video_output_ = params.native_video_output;
     av1_encoding_ = params.av1_encoding;
     if (IsValidTurnMode(params.turn_mode)) {
       turn_mode_ = params.turn_mode;
@@ -256,6 +261,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_info_.turn_server_username = cfg_turn_server_username_;
   connection_info_.turn_server_password = cfg_turn_server_password_;
   connection_info_.hardware_acceleration = hardware_acceleration_;
+  connection_info_.native_video_output = native_video_output_;
   connection_info_.trickle_ice = trickle_ice_;
   connection_info_.reliable_ice = reliable_ice_;
   connection_info_.turn_mode = turn_mode_;
@@ -284,6 +290,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   LOG_INFO("Hardware accelerated codec [{}]",
            hardware_acceleration_ ? "ON" : "OFF");
+  LOG_INFO("Native video output [{}]",
+           native_video_output_ ? "ON" : "OFF");
   LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
   LOG_INFO("Video frame rate [{} fps]", video_frame_rate_);
   LOG_INFO("Video degradation preference [{}]",
@@ -470,8 +478,8 @@ int PeerConnection::Leave(const std::string& transmission_id) {
                       {"transmission_id", transmission_id}};
       if (ws_transport_) {
         ws_transport_->Send(message.dump());
-        LOG_INFO("[{}] sends leave transmission [{}] notification ", user_id_,
-                 transmission_id);
+        LOG_INFO("[{}] leave transmission [{}] notification queued",
+                 user_id_, transmission_id);
       }
     }
     leave_ = true;

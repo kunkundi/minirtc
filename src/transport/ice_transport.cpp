@@ -196,8 +196,9 @@ IceTransport::IceTransport(
 IceTransport::~IceTransport() {}
 
 int IceTransport::SetLocalCapabilities(
-    bool hardware_acceleration, bool use_trickle_ice, bool use_reliable_ice,
-    TurnMode turn_mode, bool enable_srtp,
+    bool hardware_acceleration, bool native_video_output,
+    bool use_trickle_ice, bool use_reliable_ice, TurnMode turn_mode,
+    bool enable_srtp,
     VideoContentType video_content_type, VideoQuality video_quality,
     int video_frame_rate,
     VideoDegradationPreference video_degradation_preference,
@@ -205,6 +206,7 @@ int IceTransport::SetLocalCapabilities(
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
   hardware_acceleration_ = hardware_acceleration;
+  native_video_output_ = native_video_output;
   use_trickle_ice_ = use_trickle_ice;
   use_reliable_ice_ = use_reliable_ice;
   turn_mode_ = turn_mode;
@@ -878,6 +880,7 @@ int IceTransport::AppendLocalCapabilitiesToAnswer() {
     ice_transport_controller_->Create(
         offer_peer_, remote_user_id_, negotiated_video_pt_,
         remote_video_capabilities.rtx, hardware_acceleration_,
+        native_video_output_,
         on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
     ice_transport_controller_->Start();
   }
@@ -1106,6 +1109,7 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
       ice_transport_controller_->Create(
           offer_peer_, remote_user_id_, negotiated_video_pt_,
           remote_video_capabilities.rtx, hardware_acceleration_,
+          native_video_output_,
           on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
       ice_transport_controller_->Start();
     }

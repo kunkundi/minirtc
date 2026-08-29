@@ -1,303 +1,14 @@
 #include "ws_client.h"
 
-#include <openssl/err.h>
-#include <openssl/ssl.h>
-#include <openssl/x509.h>
-#include <openssl/x509_vfy.h>
-#include <openssl/x509v3.h>
-
-#ifdef _WIN32
-#include <wincrypt.h>
-#include <windows.h>
-#endif
-
-#ifdef __APPLE__
-#include <CoreFoundation/CoreFoundation.h>
-#include <Security/Security.h>
-#endif
-
 #include <algorithm>
 #include <chrono>
 #include <iostream>
 #include <thread>
+#include <vector>
 
 #include "log.h"
 
 namespace minirtc {
-
-#ifdef _WIN32
-namespace {
-struct WindowsRootStoreLocation {
-  DWORD flag;
-  const char* name;
-};
-
-bool ShouldImportWindowsCertificateAsRoot(X509* x509,
-                                          bool require_self_signed_ca) {
-  if (!require_self_signed_ca) {
-    return true;
-  }
-
-  return X509_check_issued(x509, x509) == X509_V_OK &&
-         X509_check_ca(x509) > 0;
-}
-
-int LoadWindowsCertificateStore(X509_STORE* store, DWORD location_flag,
-                                const wchar_t* store_name,
-                                const char* location_name,
-                                bool require_self_signed_ca) {
-  HCERTSTORE sys_store =
-      CertOpenStore(CERT_STORE_PROV_SYSTEM_W, 0, 0,
-                    location_flag | CERT_STORE_READONLY_FLAG, store_name);
-  if (!sys_store) {
-    LOG_WARN("Failed to open Windows {} certificate store", location_name);
-    return 0;
-  }
-
-  int imported_count = 0;
-  PCCERT_CONTEXT cert_ctx = nullptr;
-  while ((cert_ctx = CertEnumCertificatesInStore(sys_store, cert_ctx)) !=
-         nullptr) {
-    const unsigned char* cert_data = cert_ctx->pbCertEncoded;
-    X509* x509 = d2i_X509(
-        nullptr, &cert_data, static_cast<long>(cert_ctx->cbCertEncoded));
-    if (!x509) {
-      ERR_clear_error();
-      continue;
-    }
-
-    if (!ShouldImportWindowsCertificateAsRoot(x509,
-                                              require_self_signed_ca)) {
-      X509_free(x509);
-      continue;
-    }
-
-    if (X509_STORE_add_cert(store, x509) == 1) {
-      ++imported_count;
-    } else {
-      ERR_clear_error();
-    }
-    X509_free(x509);
-  }
-
-  CertCloseStore(sys_store, 0);
-  LOG_INFO("Loaded {} Windows certificates from {}", imported_count,
-           location_name);
-  return imported_count;
-}
-
-bool LoadWindowsRootCertificates(SSL_CTX* ssl_ctx) {
-  if (!ssl_ctx) {
-    return false;
-  }
-
-  X509_STORE* store = SSL_CTX_get_cert_store(ssl_ctx);
-  if (!store) {
-    LOG_WARN("Failed to get OpenSSL X509_STORE for Windows certificates");
-    return false;
-  }
-
-  const WindowsRootStoreLocation locations[] = {
-      {CERT_SYSTEM_STORE_CURRENT_USER, "CurrentUser"},
-      {CERT_SYSTEM_STORE_LOCAL_MACHINE, "LocalMachine"},
-      {CERT_SYSTEM_STORE_CURRENT_USER_GROUP_POLICY,
-       "CurrentUserGroupPolicy"},
-      {CERT_SYSTEM_STORE_LOCAL_MACHINE_GROUP_POLICY,
-       "LocalMachineGroupPolicy"},
-      {CERT_SYSTEM_STORE_LOCAL_MACHINE_ENTERPRISE,
-       "LocalMachineEnterprise"},
-  };
-
-  int total_count = 0;
-  for (const auto& location : locations) {
-    total_count += LoadWindowsCertificateStore(store, location.flag, L"ROOT",
-                                               location.name, false);
-  }
-
-  const WindowsRootStoreLocation compatibility_locations[] = {
-      {CERT_SYSTEM_STORE_CURRENT_USER, "CurrentUserIntermediate"},
-      {CERT_SYSTEM_STORE_LOCAL_MACHINE, "LocalMachineIntermediate"},
-  };
-
-  for (const auto& location : compatibility_locations) {
-    total_count += LoadWindowsCertificateStore(store, location.flag, L"CA",
-                                               location.name, true);
-  }
-
-  return total_count > 0;
-}
-}  // namespace
-#endif
-
-#ifdef __APPLE__
-namespace {
-int AddMacCertificateToOpenSslStore(X509_STORE* store, SecCertificateRef cert) {
-  if (!store || !cert) {
-    return 0;
-  }
-
-  CFDataRef cert_data = SecCertificateCopyData(cert);
-  if (!cert_data) {
-    return 0;
-  }
-
-  int imported_count = 0;
-  const unsigned char* data =
-      reinterpret_cast<const unsigned char*>(CFDataGetBytePtr(cert_data));
-  long data_len = static_cast<long>(CFDataGetLength(cert_data));
-  if (data && data_len > 0) {
-    const unsigned char* cursor = data;
-    X509* x509 = d2i_X509(nullptr, &cursor, data_len);
-    if (x509) {
-      if (X509_STORE_add_cert(store, x509) == 1) {
-        imported_count = 1;
-      } else {
-        ERR_clear_error();
-      }
-      X509_free(x509);
-    } else {
-      ERR_clear_error();
-    }
-  }
-
-  CFRelease(cert_data);
-  return imported_count;
-}
-
-bool MacTrustSettingsAllowRoot(SecCertificateRef cert,
-                               SecTrustSettingsDomain domain) {
-  CFArrayRef trust_settings = nullptr;
-  OSStatus status =
-      SecTrustSettingsCopyTrustSettings(cert, domain, &trust_settings);
-  if (status != errSecSuccess || trust_settings == nullptr) {
-    return false;
-  }
-
-  bool allow_root = false;
-  CFIndex settings_count = CFArrayGetCount(trust_settings);
-  if (settings_count == 0) {
-    allow_root = true;
-  }
-
-  for (CFIndex i = 0; i < settings_count; ++i) {
-    CFTypeRef setting = CFArrayGetValueAtIndex(trust_settings, i);
-    if (!setting || CFGetTypeID(setting) != CFDictionaryGetTypeID()) {
-      continue;
-    }
-
-    auto setting_dict =
-        reinterpret_cast<CFDictionaryRef>(const_cast<void*>(setting));
-    SecTrustSettingsResult result = kSecTrustSettingsResultTrustRoot;
-    CFTypeRef result_value =
-        CFDictionaryGetValue(setting_dict, kSecTrustSettingsResult);
-    if (result_value) {
-      if (CFGetTypeID(result_value) != CFNumberGetTypeID()) {
-        continue;
-      }
-
-      SInt32 raw_result = kSecTrustSettingsResultInvalid;
-      if (!CFNumberGetValue(reinterpret_cast<CFNumberRef>(
-                                const_cast<void*>(result_value)),
-                            kCFNumberSInt32Type, &raw_result)) {
-        continue;
-      }
-      result = static_cast<SecTrustSettingsResult>(raw_result);
-    }
-
-    if (result == kSecTrustSettingsResultTrustRoot ||
-        result == kSecTrustSettingsResultTrustAsRoot) {
-      allow_root = true;
-      break;
-    }
-  }
-
-  CFRelease(trust_settings);
-  return allow_root;
-}
-
-int LoadMacCertificatesFromArray(X509_STORE* store, CFArrayRef certs) {
-  if (!store || !certs) {
-    return 0;
-  }
-
-  int imported_count = 0;
-  CFIndex cert_count = CFArrayGetCount(certs);
-  for (CFIndex i = 0; i < cert_count; ++i) {
-    auto cert = reinterpret_cast<SecCertificateRef>(
-        const_cast<void*>(CFArrayGetValueAtIndex(certs, i)));
-    imported_count += AddMacCertificateToOpenSslStore(store, cert);
-  }
-  return imported_count;
-}
-
-int LoadMacAnchorCertificates(X509_STORE* store) {
-  CFArrayRef certs = nullptr;
-  OSStatus status = SecTrustCopyAnchorCertificates(&certs);
-  if (status != errSecSuccess || certs == nullptr) {
-    LOG_WARN("SecTrustCopyAnchorCertificates failed: {}",
-             static_cast<int>(status));
-    return 0;
-  }
-
-  int imported_count = LoadMacCertificatesFromArray(store, certs);
-  CFRelease(certs);
-
-  LOG_INFO("Loaded {} anchor certificates from macOS default anchors",
-           imported_count);
-  return imported_count;
-}
-
-int LoadMacTrustSettingsCertificates(X509_STORE* store,
-                                     SecTrustSettingsDomain domain,
-                                     const char* domain_name) {
-  CFArrayRef certs = nullptr;
-  OSStatus status = SecTrustSettingsCopyCertificates(domain, &certs);
-  if (status != errSecSuccess || certs == nullptr) {
-    if (status != errSecNoTrustSettings) {
-      LOG_WARN("SecTrustSettingsCopyCertificates({}) failed: {}",
-               domain_name, static_cast<int>(status));
-    }
-    return 0;
-  }
-
-  int imported_count = 0;
-  CFIndex cert_count = CFArrayGetCount(certs);
-  for (CFIndex i = 0; i < cert_count; ++i) {
-    auto cert = reinterpret_cast<SecCertificateRef>(
-        const_cast<void*>(CFArrayGetValueAtIndex(certs, i)));
-    if (MacTrustSettingsAllowRoot(cert, domain)) {
-      imported_count += AddMacCertificateToOpenSslStore(store, cert);
-    }
-  }
-
-  CFRelease(certs);
-  LOG_INFO("Loaded {} trusted root certificates from macOS {} trust settings",
-           imported_count, domain_name);
-  return imported_count;
-}
-
-bool LoadMacSystemAnchorCertificates(SSL_CTX* ssl_ctx) {
-  if (!ssl_ctx) {
-    return false;
-  }
-
-  X509_STORE* store = SSL_CTX_get_cert_store(ssl_ctx);
-  if (!store) {
-    LOG_WARN("Failed to get OpenSSL X509_STORE for macOS system certificates");
-    return false;
-  }
-
-  int total_count = LoadMacAnchorCertificates(store);
-  total_count += LoadMacTrustSettingsCertificates(
-      store, kSecTrustSettingsDomainAdmin, "Admin");
-  total_count += LoadMacTrustSettingsCertificates(
-      store, kSecTrustSettingsDomainUser, "User");
-
-  LOG_INFO("Loaded {} certificates from macOS trust stores", total_count);
-  return total_count > 0;
-}
-}  // namespace
-#endif
 
 WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
@@ -616,8 +327,12 @@ void WsClient::Close() {
 
 void WsClient::Send(const std::string& message) {
   websocketpp::lib::error_code ec;
+  if (!m_endpoint_) {
+    LOG_WARN("Send failed: WebSocket endpoint is unavailable");
+    return;
+  }
   auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
-  if (ec || con->get_state() != websocketpp::session::state::open) {
+  if (ec || !con || con->get_state() != websocketpp::session::state::open) {
     LOG_WARN("Send failed: not connected or error: {}", ec.message());
     return;
   }
@@ -690,67 +405,7 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
     ctx->set_verify_mode(asio::ssl::verify_peer |
                          asio::ssl::verify_fail_if_no_peer_cert);
 
-    // Load system CA certificates (no need to bundle cert files with client)
-#ifdef _WIN32
-    // On Windows, OpenSSL's set_default_verify_paths() does NOT read the
-    // Windows certificate store. We must manually load trusted root CAs
-    // from the Windows system store into the OpenSSL X509_STORE.
-    // Load from Current User, Local Machine, Group Policy, and Enterprise
-    // ROOT stores. If the Windows import wizard auto-placed a self-signed CA
-    // into Intermediate, accept only that narrow misplaced-root case.
-    if (!LoadWindowsRootCertificates(ctx->native_handle())) {
-      LOG_WARN("Unable to load Windows Root certificates");
-    }
-#else
-    bool loaded_macos_anchors = false;
-#ifdef __APPLE__
-    loaded_macos_anchors =
-        LoadMacSystemAnchorCertificates(ctx->native_handle());
-    if (!loaded_macos_anchors) {
-      LOG_WARN(
-          "Failed to load certificates from macOS system trust store, fallback "
-          "to OpenSSL default verify paths");
-    }
-#endif
-
-    bool loaded_system_certs = false;
-    try {
-      ctx->set_default_verify_paths();
-      loaded_system_certs = true;
-    } catch (const std::exception& e) {
-      LOG_WARN(
-          "Failed to load system CA certificates from default verify paths: {}",
-          e.what());
-    }
-
-#if defined(__linux__)
-    const char* ca_bundle_paths[] = {
-        "/etc/ssl/certs/ca-certificates.crt",  // Debian/Ubuntu
-        "/etc/pki/tls/certs/ca-bundle.crt",    // RHEL/CentOS/Fedora
-        "/etc/ssl/ca-bundle.pem",              // openSUSE/SLES
-        "/etc/pki/ca-trust/extracted/pem/tls-ca-bundle.pem",
-        "/etc/ssl/cert.pem"  // Arch, Alpine, etc.
-    };
-
-    bool loaded_linux_bundle = false;
-    for (const char* path : ca_bundle_paths) {
-      try {
-        ctx->load_verify_file(path);
-        LOG_INFO("Loaded Linux system CA bundle from {}", path);
-        loaded_linux_bundle = true;
-        break;
-      } catch (const std::exception&) {
-        // Ignore and try the next candidate path.
-      }
-    }
-
-    if (!loaded_system_certs && !loaded_linux_bundle) {
-      LOG_WARN(
-          "Unable to load Linux system CA bundle from any known path; TLS "
-          "verification may fail if no custom CA is provided");
-    }
-#endif  // defined(__linux__)
-#endif  // _WIN32
+    LoadTlsSystemRootCertificates(ctx->native_handle());
 
     std::weak_ptr<WsClient> weak_self = shared_from_this();
     ctx->set_verify_callback(
@@ -768,23 +423,15 @@ ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
 
 bool WsClient::OnTlsVerify(bool preverified,
                            websocketpp::lib::asio::ssl::verify_context& ctx) {
+  if (!preverified &&
+      VerifyTlsWithSystemTrust(ctx.native_handle(), uri_)) {
+    tls_failure_count_ = 0;
+    return true;
+  }
+
   if (!preverified) {
-    // Provide more details than the generic "TLS handshake failed".
-    X509_STORE_CTX* store_ctx = ctx.native_handle();
-    if (store_ctx) {
-      int err = X509_STORE_CTX_get_error(store_ctx);
-      int depth = X509_STORE_CTX_get_error_depth(store_ctx);
-      const char* err_str = X509_verify_cert_error_string(err);
-      LOG_ERROR("TLS certificate verify failed: {} (err={}, depth={})",
-                (err_str ? err_str : "unknown"), err, depth);
-      if (err == X509_V_ERR_SELF_SIGNED_CERT_IN_CHAIN ||
-          err == X509_V_ERR_DEPTH_ZERO_SELF_SIGNED_CERT ||
-          err == X509_V_ERR_UNABLE_TO_GET_ISSUER_CERT_LOCALLY ||
-          err == X509_V_ERR_UNABLE_TO_VERIFY_LEAF_SIGNATURE) {
-        SetStatus(WsTlsCertError);
-      }
-    } else {
-      LOG_ERROR("TLS certificate verify failed: no store_ctx");
+    if (LogTlsVerificationError(ctx.native_handle())) {
+      SetStatus(WsTlsCertError);
     }
     tls_failure_count_++;
   } else {
