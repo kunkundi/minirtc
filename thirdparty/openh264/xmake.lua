@@ -14,7 +14,7 @@ package("openh264")
         add_syslinks("pthread", "rt")
     end
 
-    add_deps("meson", "ninja", "nasm", {host = true})
+    add_deps("meson~host", "ninja~host", "nasm~host", {host = true})
 
     on_load("windows", function (package)
         if package:is_plat("windows") and package:is_arch("arm.*") and (not package:is_precompiled()) then

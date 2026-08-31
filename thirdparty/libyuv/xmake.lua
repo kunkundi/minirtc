@@ -6,7 +6,7 @@ package("libyuv")
     set_urls("https://github.com/kunkundi/libyuv.git")
     add_versions("2025.8.14", "ec10b61c58ee4b8fbe648d2744d9dad9ccba6430")
 
-    add_deps("cmake", {host = true})
+    add_deps("cmake~host", {host = true})
 
     on_install("windows", "linux", "macosx", "iphoneos", "android", "cross", "bsd", "mingw", function (package)
         local configs = {"-DUNIT_TEST=OFF"}

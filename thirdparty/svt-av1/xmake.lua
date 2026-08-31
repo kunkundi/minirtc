@@ -12,7 +12,7 @@ package("svt-av1")
     add_configs("pgo", {description = "Enable profile-guided optimization", default = false, type = "boolean"})
     add_configs("native", {description = "Build for the host CPU", default = false, type = "boolean"})
 
-    add_deps("cmake", "nasm", {host = true})
+    add_deps("cmake~host", "nasm~host", {host = true})
 
     on_load(function (package)
         -- SVT-AV1 already has an Apple/AArch64 runtime feature detector based

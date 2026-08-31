@@ -38,7 +38,7 @@ package("glib")
         add_syslinks("pthread", "dl", "resolv")
     end
 
-    add_deps("meson", "ninja", {host = true})
+    add_deps("meson~host", "ninja~host", {host = true})
     add_deps("libffi", "zlib")
     if is_plat("linux") then
         add_deps("libiconv")

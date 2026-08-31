@@ -9,7 +9,7 @@ package("websocketpp")
     
     add_configs("asio_standalone", {description = "Use standalone asio", default = true, type = "boolean"})
 
-    add_deps("cmake", {host = true})
+    add_deps("cmake~host", {host = true})
 
     on_load(function (package)
         package:add("defines", "ASIO_STANDALONE", "_WEBSOCKETPP_CPP11_STL_")

@@ -9,7 +9,7 @@ package("openfec")
 
     add_versions("1.4.2", "5aa19dc56038f4b19927efb53ca28e896fb05f068a4715de512f0709420f03be")
 
-    add_deps("cmake", {host = true})
+    add_deps("cmake~host", {host = true})
 
     on_install(function (package)
         local configs = {}
