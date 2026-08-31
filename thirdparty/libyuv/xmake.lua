@@ -36,6 +36,11 @@ endif()]], {plain = true})
                 [[if(NOT IOS)
 install ( TARGETS ${ly_lib_shared} LIBRARY DESTINATION lib RUNTIME DESTINATION bin ARCHIVE DESTINATION lib )
 endif()]], {plain = true})
+            io.replace("CMakeLists.txt",
+                [[  target_link_libraries( ${ly_lib_shared} ${JPEG_LIBRARY} )]],
+                [[  if(TARGET ${ly_lib_shared})
+    target_link_libraries( ${ly_lib_shared} ${JPEG_LIBRARY} )
+  endif()]], {plain = true})
         end
 
         -- Recent libyuv releases unconditionally enable I8MM and SVE2 for
