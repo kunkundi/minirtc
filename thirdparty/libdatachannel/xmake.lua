@@ -26,7 +26,7 @@ package("libdatachannel")
         add_syslinks("pthread")
     end
 
-    add_deps("cmake")
+    add_deps("cmake", {host = true})
     add_deps("plog", "usrsctp")
     add_deps("nlohmann_json 3.11.3")
 

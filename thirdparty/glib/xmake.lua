@@ -38,7 +38,8 @@ package("glib")
         add_syslinks("pthread", "dl", "resolv")
     end
 
-    add_deps("meson", "ninja", "libffi", "zlib")
+    add_deps("meson", "ninja", {host = true})
+    add_deps("libffi", "zlib")
     if is_plat("linux") then
         add_deps("libiconv")
     elseif is_plat("macosx") then
@@ -126,7 +127,18 @@ package("glib")
         if package:is_plat("windows") then
             io.gsub("meson.build", "dependency%('libffi',", "dependency('libffi', modules: ['libffi::ffi'],")
         end
-        import("package.tools.meson").install(package, configs, {packagedeps = {"libintl", "libiconv", "libffi", "zlib"}})
+        local opt = {packagedeps = {"libintl", "libiconv", "libffi", "zlib"}}
+        if package:is_plat("iphoneos") then
+            import("lib.detect.find_tool")
+            local host_cc = assert(find_tool("clang"), "host C compiler not found")
+            local host_cxx = assert(find_tool("clang++"), "host C++ compiler not found")
+            local native_file = os.tmpfile() .. ".ini"
+            io.writefile(native_file, format(
+                "[binaries]\nc = ['%s']\ncpp = ['%s']\n",
+                host_cc.program, host_cxx.program))
+            table.insert(configs, "--native-file=" .. native_file)
+        end
+        import("package.tools.meson").install(package, configs, opt)
         package:addenv("PATH", "bin")
     end)
 

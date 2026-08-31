@@ -31,7 +31,7 @@ package("libsrtp")
     -- one is too old (for example, Ubuntu 20.04 ships CMake 3.16). Stay on
     -- CMake 3.x because some bundled dependencies still use legacy policies
     -- removed by CMake 4.
-    add_deps("cmake >=3.21 <4.0")
+    add_deps("cmake >=3.21 <4.0", {host = true})
 
     on_load(function (package)
         if package:config("openssl") then

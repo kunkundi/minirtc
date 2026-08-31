@@ -5,7 +5,8 @@ package("libnice")
 
     add_urls("https://gitlab.freedesktop.org/libnice/libnice/-/archive/$(version)/libnice-$(version).tar.gz")
 
-    add_deps("meson", "glib 2.84.1", "openssl3 3.3.2")
+    add_deps("meson", {host = true})
+    add_deps("glib 2.84.1", "openssl3 3.3.2")
 
     on_install(function (package)
         if package:is_plat("windows") then

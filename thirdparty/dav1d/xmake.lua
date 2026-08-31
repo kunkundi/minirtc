@@ -11,7 +11,7 @@ package("dav1d")
 
     add_configs("tools", {description = "Build tools", default = false, type = "boolean"})
 
-    add_deps("nasm", "meson", "ninja")
+    add_deps("nasm", "meson", "ninja", {host = true})
     if is_plat("linux", "bsd") then
         add_syslinks("pthread", "dl")
     end
