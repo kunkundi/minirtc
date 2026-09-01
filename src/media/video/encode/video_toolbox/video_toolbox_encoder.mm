@@ -10,6 +10,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include "h264_bitstream_parser.h"
 #include "log.h"
 
 // #define SAVE_RECEIVED_NV12_STREAM
@@ -79,6 +80,10 @@ class VideoToolboxEncoder::Impl {
   uintptr_t next_frame_callback_token_ = 1;
   size_t active_callbacks_ = 0;
   bool shutting_down_ = false;
+
+  mutex h264_parser_lock_;
+  H264BitstreamParser h264_bitstream_parser_;
+  uint64_t h264_parser_generation_ = 0;
 
   FILE* file_h264_ = nullptr;
   FILE* file_nv12_ = nullptr;
@@ -353,6 +358,9 @@ void VideoToolboxEncoder::Impl::ResetCodecState() {
   // delta frame at the new resolution.
   seq_ = 0;
   force_idr_ = true;
+  lock_guard<mutex> parser_guard(h264_parser_lock_);
+  h264_bitstream_parser_.Reset();
+  h264_parser_generation_ = session_generation_.load();
 }
 
 static CVPixelBufferRef CreateNV12PixelBufferFromData(const char* data, size_t width,
@@ -714,6 +722,22 @@ void VideoToolboxEncoder::Impl::HandleEncodedSampleBuffer(
   frame.SetEncodedHeight(dimensions.height);
   frame.SetCapturedTimestamp(CMSampleBufferGetOutputPresentationTimeStamp(sampleBuffer).value);
   frame.SetEncodedTimestamp(clock_->CurrentTime());
+
+  {
+    lock_guard<mutex> parser_guard(h264_parser_lock_);
+    const uint64_t current_generation = session_generation_.load();
+    if (context.generation == current_generation &&
+        context.generation == h264_parser_generation_) {
+      h264_bitstream_parser_.ParseBitstream(annexBData.data(),
+                                            annexBData.size());
+      const std::optional<int> qp = h264_bitstream_parser_.GetLastSliceQp();
+      if (qp) {
+        // WebRTC's H264BitstreamParser reports the last slice's base QP, not
+        // a macroblock-weighted frame average.
+        frame.SetQp(*qp, 0, 51, false);
+      }
+    }
+  }
 
   if (context.callback &&
       context.generation == session_generation_.load()) {
