@@ -96,8 +96,9 @@ VideoDegradationPreference ParseVideoDegradationPreference(
   if (value != "maintain_frame_rate" && value != "frame_rate_priority") {
     LOG_WARN(
         "Invalid video degradation preference [{}], using "
-        "maintain_frame_rate",
+        "maintain_resolution",
         value);
+    return VideoDegradationPreference::MaintainResolution;
   }
   return VideoDegradationPreference::MaintainFrameRate;
 }
@@ -110,9 +111,9 @@ VideoDegradationPreference NormalizeVideoDegradationPreference(
   }
   LOG_WARN(
       "Invalid video degradation preference [{}], using "
-      "maintain_frame_rate",
+      "maintain_resolution",
       static_cast<int>(value));
-  return VideoDegradationPreference::MaintainFrameRate;
+  return VideoDegradationPreference::MaintainResolution;
 }
 
 const char* TurnModeToString(TurnMode mode) {
@@ -196,7 +197,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_video_quality_ = reader.Get("video quality", "quality", "high");
     cfg_video_frame_rate_ = reader.Get("video frame rate", "fps", "60");
     cfg_video_degradation_preference_ = reader.Get(
-        "video degradation preference", "preference", "maintain_frame_rate");
+        "video degradation preference", "preference", "maintain_resolution");
 
     std::regex regex("\n");
 

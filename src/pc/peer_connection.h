@@ -193,7 +193,7 @@ class PeerConnection {
   VideoQuality video_quality_ = VideoQuality::QualityHigh;
   int video_frame_rate_ = 60;
   VideoDegradationPreference video_degradation_preference_ =
-      VideoDegradationPreference::MaintainFrameRate;
+      VideoDegradationPreference::MaintainResolution;
   bool trickle_ice_ = true;
   bool reliable_ice_ = false;
   bool try_rejoin_with_turn_ = false;

@@ -193,7 +193,7 @@ class IceTransport {
   VideoQuality video_quality_ = QualityHigh;
   int video_frame_rate_ = 60;
   VideoDegradationPreference video_degradation_preference_ =
-      VideoDegradationPreference::MaintainFrameRate;
+      VideoDegradationPreference::MaintainResolution;
 
   std::vector<std::string> video_stream_ids_;
   std::vector<std::string> audio_stream_ids_;

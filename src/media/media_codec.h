@@ -63,7 +63,7 @@ class MediaCodecConfig {
         max_payload_size(MINIRTC_MAX_PAYLOAD_SIZE),
         video_content_type(VideoContentType::ScreenContent),
         video_degradation_preference(
-            VideoDegradationPreference::MaintainFrameRate) {}
+            VideoDegradationPreference::MaintainResolution) {}
   ~MediaCodecConfig() {}
 
   int init_width;

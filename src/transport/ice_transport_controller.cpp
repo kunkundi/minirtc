@@ -6,6 +6,7 @@
 
 #include "data_channel_send.h"
 #include "resolution_adapter.h"
+#include "video_adaptation_policy.h"
 #include "video_frame_wrapper.h"
 
 #if defined(__APPLE__)
@@ -666,6 +667,11 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
         context->source_height != raw_frame.Height()) {
       context->source_width = raw_frame.Width();
       context->source_height = raw_frame.Height();
+      context->source_resolution_initialized_ms = clock_->CurrentTimeMs();
+      context->pending_mapped_width.reset();
+      context->pending_mapped_height.reset();
+      context->mapping_stability_count = 0;
+      context->pending_mapped_since_ms = 0;
       context->ResetResolutionUpgradeProbe();
       context->ResetEncodedFrameRateTracking();
       context->ResetEncoderQualityTracking();
@@ -793,7 +799,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   constexpr float kQpEwmaAlpha = 0.10f;
   constexpr int kUpgradeProbeBackoffBaseMs = 3000;
   constexpr int kMaxUpgradeProbeBackoffMs = 24000;
-  constexpr int upgrade_cooldown_ms = 5000;
+  constexpr int upgrade_cooldown_ms = 3000;
   const int downgrade_cooldown_ms = maintain_frame_rate ? 750 : 3000;
 
   if (!is_running_.load()) return;
@@ -2132,16 +2138,15 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
         const bool is_screen_content =
             media_config_.video_content_type ==
             VideoContentType::ScreenContent;
-        const bool static_content_network_healthy =
-            network_estimate.loss_rate_ratio <= 0.01f &&
-            network_estimate.round_trip_time <=
-                webrtc::TimeDelta::Millis(40);
+        const int64_t network_rtt_ms =
+            network_estimate.round_trip_time.ms();
         const bool static_content_candidate =
-            is_screen_content && network_estimate.in_alr &&
-            static_content_network_healthy;
-        constexpr int64_t kStaticContentEnterHoldMs = 1000;
-        const int64_t static_content_exit_hold_ms =
-            maintain_frame_rate ? 0 : 3000;
+            VideoAdaptationPolicy::IsStaticContentCandidate(
+                is_screen_content, network_estimate.in_alr,
+                network_estimate.loss_rate_ratio, network_rtt_ms);
+        const bool static_content_network_critical =
+            VideoAdaptationPolicy::IsStaticContentNetworkCritical(
+                network_estimate.loss_rate_ratio, network_rtt_ms);
         for (auto& [channel_name, context] : stream_senders_) {
           if (!context->codec || context->type != StreamType::kVideo) {
             continue;
@@ -2167,18 +2172,21 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
           const int64_t candidate_duration_ms =
               now_ms - context->static_content_candidate_since_ms;
           if (!context->freeze_resolution && static_content_candidate &&
-              candidate_duration_ms >= kStaticContentEnterHoldMs) {
+              candidate_duration_ms >=
+                  VideoAdaptationPolicy::kStaticContentEnterHoldMs) {
             context->freeze_resolution = true;
           } else if (context->freeze_resolution &&
                      (!is_screen_content ||
-                      !static_content_network_healthy)) {
-            // Loss or RTT deterioration must override the ALR exit hold so
-            // congestion adaptation is never delayed by the quality policy.
+                      static_content_network_critical)) {
+            // Severe loss or RTT deterioration overrides the exit hold. Small
+            // estimate movements use the normal hysteresis below so a static
+            // desktop does not oscillate between native and mapped sizes.
             context->freeze_resolution = false;
           } else if (context->freeze_resolution &&
                      !static_content_candidate &&
                      candidate_duration_ms >=
-                         static_content_exit_hold_ms) {
+                         VideoAdaptationPolicy::
+                             kStaticContentExitHoldMs) {
             context->freeze_resolution = false;
           }
 
@@ -2208,6 +2216,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
               context->pending_mapped_width.reset();
               context->pending_mapped_height.reset();
               context->mapping_stability_count = 0;
+              context->pending_mapped_since_ms = 0;
               if (!was_frozen) {
                 LOG_INFO(
                     "Hold static-content bandwidth downgrades and allow "
@@ -2233,6 +2242,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->pending_mapped_width.reset();
             context->pending_mapped_height.reset();
             context->mapping_stability_count = 0;
+            context->pending_mapped_since_ms = 0;
 
             const bool use_native =
                 static_cast<int64_t>(quality_width) * quality_height >=
@@ -2275,12 +2285,13 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                 channel_name,
                 !is_screen_content
                     ? "content_type"
-                    : (!static_content_network_healthy
+                    : (static_content_network_critical
                            ? "network_conditions"
                            : "alr_exit_hysteresis"));
             context->pending_mapped_width.reset();
             context->pending_mapped_height.reset();
             context->mapping_stability_count = 0;
+            context->pending_mapped_since_ms = 0;
             // Until a new non-ALR bandwidth ceiling is stable, prevent an
             // encode-time upgrade from using the optimistic static ceiling.
             context->mapped_target_width =
@@ -2297,10 +2308,10 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             continue;
           }
 
-          // Require a short stable streak before accepting a new bandwidth
-          // ceiling. Bandwidth-driven downgrades are then applied directly;
-          // upgrades remain gradual through the encode-time adaptation path.
-          constexpr int kStableThreshold = 5;
+          // Controller updates may arrive only milliseconds apart. Require a
+          // duration, rather than a tick count, before accepting a bandwidth
+          // ceiling so startup probes and short estimate dips cannot blur the
+          // desktop immediately after connection.
           if (!context->pending_mapped_width.has_value() ||
               !context->pending_mapped_height.has_value() ||
               context->pending_mapped_width.value() != target_width ||
@@ -2308,17 +2319,20 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->pending_mapped_width = target_width;
             context->pending_mapped_height = target_height;
             context->mapping_stability_count = 1;
+            context->pending_mapped_since_ms = now_ms;
             continue;
           }
 
           ++context->mapping_stability_count;
-          if (context->mapping_stability_count < kStableThreshold) {
+          if (!VideoAdaptationPolicy::IsBandwidthMappingStable(
+                  now_ms, context->pending_mapped_since_ms)) {
             continue;
           }
 
           context->mapped_target_width = target_width;
           context->mapped_target_height = target_height;
           context->mapping_stability_count = 0;
+          context->pending_mapped_since_ms = 0;
 
           const int current_width =
               context->target_width.value_or(source_width);
@@ -2328,16 +2342,37 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
               static_cast<int64_t>(current_width) * current_height;
           const int64_t target_area =
               static_cast<int64_t>(target_width) * target_height;
-          constexpr int kNetworkDowngradeCooldownMs = 1000;
-          if (target_area < current_area &&
-              now_ms - context->last_resolution_change_ms >=
-                  kNetworkDowngradeCooldownMs) {
+          if (VideoAdaptationPolicy::
+                  ShouldApplyBandwidthResolutionDowngrade(
+                      maintain_frame_rate, now_ms,
+                      context->source_resolution_initialized_ms,
+                      context->last_resolution_change_ms, current_area,
+                      target_area)) {
+            // Network estimates cap the spatial ladder but only move one rung
+            // at a time. Frame admission and the bounded pacer protect latency
+            // while the estimate is confirmed.
+            int downgrade_width = target_width;
+            int downgrade_height = target_height;
+            const auto next_resolution =
+                resolution_adapter_->GetNextLowerResolution(
+                    current_width, current_height, source_width,
+                    source_height);
+            if (next_resolution.first > 0 && next_resolution.second > 0) {
+              const int64_t next_area =
+                  static_cast<int64_t>(next_resolution.first) *
+                  next_resolution.second;
+              if (next_area >= target_area) {
+                downgrade_width = next_resolution.first;
+                downgrade_height = next_resolution.second;
+              }
+            }
             LOG_INFO(
-                "Bandwidth resolution downgrade: channel={} bitrate={} {}x{} -> {}x{}",
-                channel_name, sub_target_bitrate, current_width,
-                current_height, target_width, target_height);
-            context->target_width = target_width;
-            context->target_height = target_height;
+                "Bandwidth resolution downgrade: channel={} bitrate={} mapped={}x{} {}x{} -> {}x{}",
+                channel_name, sub_target_bitrate, target_width, target_height,
+                current_width, current_height, downgrade_width,
+                downgrade_height);
+            context->target_width = downgrade_width;
+            context->target_height = downgrade_height;
             context->last_resolution_change_ms = now_ms;
             context->encode_exceed_count = 0;
             context->encode_below_threshold_count = 0;

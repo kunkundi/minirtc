@@ -198,9 +198,11 @@ class IceTransportController
     bool static_content_candidate = false;
     bool static_content_candidate_initialized = false;
     int64_t static_content_candidate_since_ms = 0;
+    int64_t source_resolution_initialized_ms = 0;
     std::optional<int> pending_mapped_width;
     std::optional<int> pending_mapped_height;
     int mapping_stability_count = 0;
+    int64_t pending_mapped_since_ms = 0;
     int64_t last_resolution_change_ms = 0;
     bool resolution_upgrade_probe_active = false;
     int resolution_upgrade_probe_base_width = 0;

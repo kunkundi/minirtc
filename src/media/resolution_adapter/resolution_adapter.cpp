@@ -52,7 +52,7 @@ constexpr float kStartRatio = 0.60f;
 constexpr float kMaxRatio = 1.60f;
 
 constexpr float kDownscaleStep = 0.88f;
-constexpr float kUpscaleStep = 1.10f;
+constexpr float kUpscaleStep = 1.25f;
 
 libyuv::FilterMode ScaleFilterForContent(VideoContentType content_type) {
   return content_type == VideoContentType::ScreenContent

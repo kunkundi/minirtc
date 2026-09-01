@@ -22,7 +22,7 @@ class ResolutionAdapter {
                     VideoContentType video_content_type =
                         VideoContentType::ScreenContent,
                     VideoDegradationPreference video_degradation_preference =
-                        VideoDegradationPreference::MaintainFrameRate);
+                        VideoDegradationPreference::MaintainResolution);
   ~ResolutionAdapter();
 
  public:
