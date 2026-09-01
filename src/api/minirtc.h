@@ -44,11 +44,11 @@ enum class VideoContentType : uint8_t {
   ScreenContent = 1,
 };
 
-// Select which dimension should be preserved first when the active media
-// pipeline cannot sustain both the requested resolution and frame rate.
+
 enum class VideoDegradationPreference : uint8_t {
   MaintainFrameRate = 0,
   MaintainResolution = 1,
+  Balanced = 2,
 };
 
 enum TurnMode : uint8_t {

@@ -781,11 +781,22 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   const bool maintain_frame_rate =
       media_config_.video_degradation_preference ==
       VideoDegradationPreference::MaintainFrameRate;
+  const bool maintain_resolution =
+      media_config_.video_degradation_preference ==
+      VideoDegradationPreference::MaintainResolution;
+  const bool balanced = media_config_.video_degradation_preference ==
+                        VideoDegradationPreference::Balanced;
   const int frame_budget_ms =
       std::max(1, 1000 / std::max(1, media_config_.max_frame_rate));
   const int delay_threshold_ms =
-      maintain_frame_rate ? std::max(2, frame_budget_ms / 3) : 8;
-  constexpr int kMinimumUpgradeFrameRate = 30;
+      maintain_frame_rate
+          ? std::max(2, frame_budget_ms / 3)
+          : (balanced ? std::max(4, frame_budget_ms / 2) : 8);
+  // A 60 fps stream must demonstrate substantially more than the old fixed
+  // 30 fps floor before spatial quality is restored. The lower threshold for
+  // a 30 fps stream leaves a small margin for capture and timer jitter.
+  const int minimum_upgrade_frame_rate =
+      media_config_.max_frame_rate == 30 ? 25 : 45;
   constexpr int kCriticalFrameRate = 20;
   constexpr int kFrameRateWindowMs = 1000;
   constexpr int kFrameRateHealthyDurationMs = 2000;
@@ -800,7 +811,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   constexpr int kUpgradeProbeBackoffBaseMs = 3000;
   constexpr int kMaxUpgradeProbeBackoffMs = 24000;
   constexpr int upgrade_cooldown_ms = 3000;
-  const int downgrade_cooldown_ms = maintain_frame_rate ? 750 : 3000;
+  const int downgrade_cooldown_ms =
+      maintain_frame_rate ? 750 : (balanced ? 1500 : 3000);
 
   if (!is_running_.load()) return;
 
@@ -836,7 +848,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
           frame_rate_window_ms);
       context->encoded_frame_rate_ready = true;
       if (context->measured_encoded_frame_rate >=
-          kMinimumUpgradeFrameRate) {
+          minimum_upgrade_frame_rate) {
         if (context->encoded_frame_rate_healthy_since_ms == 0) {
           context->encoded_frame_rate_healthy_since_ms = now_ms;
         }
@@ -850,7 +862,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
   const bool encoded_frame_rate_below_minimum =
       context->encoded_frame_rate_ready &&
-      context->measured_encoded_frame_rate < kMinimumUpgradeFrameRate;
+      context->measured_encoded_frame_rate < minimum_upgrade_frame_rate;
   const bool startup_critical_encode_backlog_candidate =
       queue_delay_ms >= kCriticalQueueDelayMs &&
       (!context->encoded_frame_rate_ready ||
@@ -939,7 +951,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   // Resolution-priority mode intentionally accepts a lower temporal rate.
   // The bounded encode queue already coalesces excess input frames, so do not
   // undo that choice by reducing spatial detail here.
-  if (!maintain_frame_rate) {
+  if (maintain_resolution) {
     return;
   }
 
@@ -967,7 +979,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     return true;
   };
 
-  if (!context->encoding_speed_priority_enabled &&
+  if (!context->resolution_upgrade_probe_active &&
+      !context->encoding_speed_priority_enabled &&
       (sustained_encode_backlog || startup_critical_encode_backlog) &&
       context->codec &&
       media_config_.video_content_type == VideoContentType::ScreenContent &&
@@ -980,10 +993,50 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       LOG_INFO(
           "Encoding queue backlog; enable speed priority: channel={} delay_ms={}",
           channel_name, queue_delay_ms);
+      // Give the faster encoder setting a fresh observation window before
+      // deciding whether balanced mode also needs a spatial downgrade.
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
       return;
     }
     // If the encoder rejects the property, fall through to the existing
     // resolution downgrade instead of repeatedly delaying adaptation.
+  }
+
+  const bool balanced_pipeline_healthy =
+      balanced && !context->resolution_upgrade_probe_active &&
+      context->encoding_speed_priority_enabled &&
+      context->encoded_frame_rate_ready &&
+      context->measured_encoded_frame_rate >= minimum_upgrade_frame_rate &&
+      context->encoded_frame_rate_healthy_since_ms > 0 &&
+      now_ms - context->encoded_frame_rate_healthy_since_ms >=
+          kFrameRateHealthyDurationMs &&
+      (!context->encode_queue_delay_window_ready ||
+       (context->average_encode_queue_delay_ms < delay_threshold_ms &&
+        context->p95_encode_queue_delay_ms < frame_budget_ms)) &&
+      (context->normalized_qp_ewma < 0.0f ||
+       context->normalized_qp_ewma <= kMaxNormalizedQpForUpgrade);
+  if (balanced_pipeline_healthy) {
+    const std::optional<bool> changed = set_encoding_speed_priority(false);
+    if (!changed.has_value()) {
+      return;
+    }
+    if (changed.value()) {
+      LOG_INFO(
+          "Balanced pipeline healthy; restore encoder quality priority: "
+          "channel={} fps={} required_fps={} qp={} delay_avg_ms={} "
+          "delay_p95_ms={}",
+          channel_name, context->measured_encoded_frame_rate,
+          minimum_upgrade_frame_rate,
+          context->last_encoder_quality_stats.qp,
+          context->average_encode_queue_delay_ms,
+          context->p95_encode_queue_delay_ms);
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      return;
+    }
   }
 
   auto base = [&]() -> std::pair<int, int> {
@@ -1012,7 +1065,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
          probe_duration_ms >= downgrade_cooldown_ms);
     const bool probe_frame_rate_too_low =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
-        probe_frame_rate < kMinimumUpgradeFrameRate;
+        probe_frame_rate < minimum_upgrade_frame_rate;
     const bool probe_qp_too_high =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
         context->normalized_qp_ewma >= 0.0f &&
@@ -1036,13 +1089,14 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
       LOG_INFO(
           "Resolution upgrade probe failed: channel={} reason={} fps={} "
-          "delay_avg_ms={} delay_p95_ms={} qp={} target={}x{} rollback={}x{} "
-          "backoff_ms={}",
+          "required_fps={} delay_avg_ms={} delay_p95_ms={} qp={} "
+          "target={}x{} rollback={}x{} backoff_ms={}",
           channel_name,
           probe_backlogged
               ? "encode_backlog"
               : (probe_frame_rate_too_low ? "low_frame_rate" : "high_qp"),
-          probe_frame_rate, context->average_encode_queue_delay_ms,
+          probe_frame_rate, minimum_upgrade_frame_rate,
+          context->average_encode_queue_delay_ms,
           context->p95_encode_queue_delay_ms,
           context->last_encoder_quality_stats.qp, failed_width, failed_height,
           rollback_width, rollback_height, backoff_ms);
@@ -1063,11 +1117,11 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     if (probe_duration_ms >= kUpgradeProbeMinDurationMs) {
       LOG_INFO(
           "Resolution upgrade probe succeeded: channel={} target={}x{} "
-          "fps={} qp={} delay_avg_ms={} delay_p95_ms={} duration_ms={} "
-          "samples={}",
+          "fps={} required_fps={} qp={} delay_avg_ms={} delay_p95_ms={} "
+          "duration_ms={} samples={}",
           channel_name, context->resolution_upgrade_probe_target_width,
           context->resolution_upgrade_probe_target_height, probe_frame_rate,
-          context->last_encoder_quality_stats.qp,
+          minimum_upgrade_frame_rate, context->last_encoder_quality_stats.qp,
           context->average_encode_queue_delay_ms,
           context->p95_encode_queue_delay_ms, probe_duration_ms,
           context->resolution_upgrade_probe_sample_count);
@@ -1096,12 +1150,12 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
   // Upgrade
   if (!should_downgrade) {
-    // Static-content hold blocks bandwidth-driven downgrades, but it must not
-    // trap a stream at a previously degraded resolution. Encode-time recovery
-    // remains gradual and is capped by mapped_target_* below.
+    // Static-content hold blocks bandwidth-driven downgrades. Encode-time
+    // recovery is allowed only after the configured-frame-rate and QP health
+    // checks above, remains gradual, and is capped by mapped_target_* below.
     if (!context->target_width || !context->target_height ||
         !context->encoded_frame_rate_ready ||
-        context->measured_encoded_frame_rate < kMinimumUpgradeFrameRate ||
+        context->measured_encoded_frame_rate < minimum_upgrade_frame_rate ||
         context->encoded_frame_rate_healthy_since_ms == 0 ||
         now_ms - context->encoded_frame_rate_healthy_since_ms <
             kFrameRateHealthyDurationMs ||
@@ -1186,9 +1240,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   }
 
   LOG_INFO(
-      "Frame-rate-priority resolution downgrade: channel={} delay_avg_ms={} "
+      "Adaptive resolution downgrade: channel={} policy={} delay_avg_ms={} "
       "delay_p95_ms={} budget_ms={} fps={} qp={} steps={} {}x{} -> {}x{}",
-      channel_name, context->average_encode_queue_delay_ms,
+      channel_name, maintain_frame_rate ? "frame_rate" : "balanced",
+      context->average_encode_queue_delay_ms,
       context->p95_encode_queue_delay_ms, frame_budget_ms,
       context->measured_encoded_frame_rate,
       context->last_encoder_quality_stats.qp, downgrade_steps, bw, bh, nw, nh);
@@ -2135,6 +2190,9 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
         const bool maintain_frame_rate =
             media_config_.video_degradation_preference ==
             VideoDegradationPreference::MaintainFrameRate;
+        const bool allow_spatial_downgrade =
+            media_config_.video_degradation_preference !=
+            VideoDegradationPreference::MaintainResolution;
         const bool is_screen_content =
             media_config_.video_content_type ==
             VideoContentType::ScreenContent;
@@ -2198,37 +2256,43 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
           }
 
           if (context->freeze_resolution) {
-            if (maintain_frame_rate) {
+            if (allow_spatial_downgrade) {
               // Static desktops produce too little traffic for bandwidth
-              // estimation. Ignore their application-limited bandwidth
-              // mapping for downgrades, but let the encode-time path gradually
-              // restore spatial quality while the network remains healthy.
-              int quality_width = -1;
-              int quality_height = -1;
-              if (resolution_adapter_->GetResolution(
-                      std::numeric_limits<int>::max(), source_width,
-                      source_height, &quality_width, &quality_height) != 0) {
-                continue;
+              // estimation. In frame-rate and balanced modes, pause bandwidth
+              // downgrades without replacing a previously established recovery
+              // ceiling with the configured quality maximum. If no stable
+              // ceiling exists yet, freeze recovery at the current resolution
+              // until non-ALR bandwidth mapping becomes available again.
+              const int current_width =
+                  context->target_width.value_or(source_width);
+              const int current_height =
+                  context->target_height.value_or(source_height);
+              if (!context->mapped_target_width.has_value() ||
+                  !context->mapped_target_height.has_value()) {
+                context->mapped_target_width = current_width;
+                context->mapped_target_height = current_height;
               }
 
-              context->mapped_target_width = quality_width;
-              context->mapped_target_height = quality_height;
               context->pending_mapped_width.reset();
               context->pending_mapped_height.reset();
               context->mapping_stability_count = 0;
               context->pending_mapped_since_ms = 0;
               if (!was_frozen) {
                 LOG_INFO(
-                    "Hold static-content bandwidth downgrades and allow "
-                    "gradual resolution recovery: channel={} ceiling={}x{}",
-                    channel_name, quality_width, quality_height);
+                    "Hold static-content bandwidth downgrades: channel={} "
+                    "policy={} current={}x{} recovery_ceiling={}x{}",
+                    channel_name,
+                    maintain_frame_rate ? "frame_rate" : "balanced",
+                    current_width, current_height,
+                    context->mapped_target_width.value(),
+                    context->mapped_target_height.value());
               }
               continue;
             }
 
-            // Static desktop content can use the selected quality ceiling even
-            // when its instantaneous bitrate is low. Still respect Low/Medium
-            // caps instead of unconditionally restoring the native resolution.
+            // Quality-priority static content can use the selected quality
+            // ceiling even when its instantaneous bitrate is low. Still respect
+            // Low/Medium caps instead of unconditionally restoring native.
             int quality_width = -1;
             int quality_height = -1;
             if (resolution_adapter_->GetResolution(
@@ -2344,7 +2408,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
               static_cast<int64_t>(target_width) * target_height;
           if (VideoAdaptationPolicy::
                   ShouldApplyBandwidthResolutionDowngrade(
-                      maintain_frame_rate, now_ms,
+                      allow_spatial_downgrade, now_ms,
                       context->source_resolution_initialized_ms,
                       context->last_resolution_change_ms, current_area,
                       target_area)) {

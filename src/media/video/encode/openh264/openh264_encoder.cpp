@@ -101,11 +101,11 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
           ? LOW_COMPLEXITY
           : MEDIUM_COMPLEXITY;
   // Frame-rate priority lowers resolution before the encoder is allowed to
-  // skip. Resolution priority does the inverse and lets rate control reduce
-  // temporal output when it cannot preserve per-frame quality.
+  // skip. Quality and balanced modes let rate control reduce temporal output
+  // before spending more bandwidth on every captured frame.
   encoder_params_.bEnableFrameSkip =
-      video_degradation_preference_ ==
-      VideoDegradationPreference::MaintainResolution;
+      video_degradation_preference_ !=
+      VideoDegradationPreference::MaintainFrameRate;
   encoder_params_.uiIntraPeriod = key_frame_interval_;
   encoder_params_.eSpsPpsIdStrategy = SPS_LISTING;
   encoder_params_.uiMaxNalSize = max_payload_size_;

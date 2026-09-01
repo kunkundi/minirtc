@@ -93,6 +93,9 @@ VideoDegradationPreference ParseVideoDegradationPreference(
   if (value == "maintain_resolution" || value == "quality_priority") {
     return VideoDegradationPreference::MaintainResolution;
   }
+  if (value == "balanced") {
+    return VideoDegradationPreference::Balanced;
+  }
   if (value != "maintain_frame_rate" && value != "frame_rate_priority") {
     LOG_WARN(
         "Invalid video degradation preference [{}], using "
@@ -106,7 +109,8 @@ VideoDegradationPreference ParseVideoDegradationPreference(
 VideoDegradationPreference NormalizeVideoDegradationPreference(
     VideoDegradationPreference value) {
   if (value == VideoDegradationPreference::MaintainFrameRate ||
-      value == VideoDegradationPreference::MaintainResolution) {
+      value == VideoDegradationPreference::MaintainResolution ||
+      value == VideoDegradationPreference::Balanced) {
     return value;
   }
   LOG_WARN(
@@ -114,6 +118,19 @@ VideoDegradationPreference NormalizeVideoDegradationPreference(
       "maintain_resolution",
       static_cast<int>(value));
   return VideoDegradationPreference::MaintainResolution;
+}
+
+const char* VideoDegradationPreferenceToString(
+    VideoDegradationPreference value) {
+  switch (value) {
+    case VideoDegradationPreference::MaintainFrameRate:
+      return "maintain_frame_rate";
+    case VideoDegradationPreference::Balanced:
+      return "balanced";
+    case VideoDegradationPreference::MaintainResolution:
+    default:
+      return "maintain_resolution";
+  }
 }
 
 const char* TurnModeToString(TurnMode mode) {
@@ -296,10 +313,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
   LOG_INFO("Video format [{}]", av1_encoding_ ? "AV1" : "H.264");
   LOG_INFO("Video frame rate [{} fps]", video_frame_rate_);
   LOG_INFO("Video degradation preference [{}]",
-           video_degradation_preference_ ==
-                   VideoDegradationPreference::MaintainFrameRate
-               ? "maintain_frame_rate"
-               : "maintain_resolution");
+           VideoDegradationPreferenceToString(
+               video_degradation_preference_));
   LOG_INFO("Video content type [{}]",
            video_content_type_ == VideoContentType::ScreenContent
                ? "screen_content"

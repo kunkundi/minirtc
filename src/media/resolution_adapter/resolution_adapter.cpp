@@ -40,6 +40,10 @@ constexpr float kReferenceFrameRate = 30.0f;
 // this margin, normal throughput variance keeps the pipeline on the edge of
 // its budget and the input queue has to discard frames to stay bounded.
 constexpr float kMaintainFrameRateHeadroom = 1.25f;
+// Balanced mode keeps part of the temporal headroom while still allowing a
+// higher spatial ceiling than frame-rate priority. This is the multiplicative
+// midpoint between quality's 1.0 and frame-rate priority's 1.25 headroom.
+constexpr float kBalancedHeadroom = 1.12f;
 constexpr float kLegacyBitrateAlpha = 0.822f;
 constexpr float kLegacyBitrateCoeff = 10.025f;
 
@@ -52,7 +56,9 @@ constexpr float kStartRatio = 0.60f;
 constexpr float kMaxRatio = 1.60f;
 
 constexpr float kDownscaleStep = 0.88f;
-constexpr float kUpscaleStep = 1.25f;
+// Make one successful recovery probe roughly undo one downgrade instead of
+// jumping across multiple spatial steps at once.
+constexpr float kUpscaleStep = 1.0f / kDownscaleStep;
 
 libyuv::FilterMode ScaleFilterForContent(VideoContentType content_type) {
   return content_type == VideoContentType::ScreenContent
@@ -193,11 +199,14 @@ float ResolutionAdapter::GetBitrateCoefficient() const {
   }
   const float frame_rate_scale =
       std::sqrt(static_cast<float>(video_frame_rate_) / kReferenceFrameRate);
-  const float headroom =
-      video_degradation_preference_ ==
-              VideoDegradationPreference::MaintainFrameRate
-          ? kMaintainFrameRateHeadroom
-          : 1.0f;
+  float headroom = 1.0f;
+  if (video_degradation_preference_ ==
+      VideoDegradationPreference::MaintainFrameRate) {
+    headroom = kMaintainFrameRateHeadroom;
+  } else if (video_degradation_preference_ ==
+             VideoDegradationPreference::Balanced) {
+    headroom = kBalancedHeadroom;
+  }
   return kBitrateCoeff30Fps * frame_rate_scale * headroom;
 }
 

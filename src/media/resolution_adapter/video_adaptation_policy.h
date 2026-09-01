@@ -62,10 +62,10 @@ public:
   }
 
   static bool ShouldApplyBandwidthResolutionDowngrade(
-      bool maintain_frame_rate, int64_t now_ms, int64_t source_started_ms,
+      bool allow_spatial_downgrade, int64_t now_ms, int64_t source_started_ms,
       int64_t last_resolution_change_ms, int64_t current_area,
       int64_t target_area) {
-    return maintain_frame_rate &&
+    return allow_spatial_downgrade &&
            IsMeaningfulBandwidthDownscale(current_area, target_area) &&
            IsBandwidthStartupGraceElapsed(now_ms, source_started_ms) &&
            now_ms >= last_resolution_change_ms &&
