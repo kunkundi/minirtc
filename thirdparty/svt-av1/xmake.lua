@@ -1,7 +1,8 @@
 package("svt-av1")
     set_homepage("https://gitlab.com/AOMediaCodec/SVT-AV1")
     set_description("Scalable Video Technology for AV1 encoder")
-    set_license("BSD-3-Clause")
+    -- The main project uses Clear BSD; selected bundled files use BSD-2-Clause.
+    set_license("BSD-3-Clause-Clear")
 
     add_urls("https://gitlab.com/AOMediaCodec/SVT-AV1.git")
     add_versions("v3.0.2", "efc905a7c2ed155b3654d7968173622734eeb0c0")

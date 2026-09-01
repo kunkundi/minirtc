@@ -2,6 +2,7 @@ package("websocketpp")
     set_kind("library", {headeronly = true})
     set_homepage("http://www.zaphoyd.com/websocketpp")
     set_description("C++ websocket client/server library")
+    set_license("BSD-3-Clause")
 
     add_urls("https://github.com/zaphoyd/websocketpp/archive/refs/tags/$(version).tar.gz",
              "https://github.com/zaphoyd/websocketpp.git")

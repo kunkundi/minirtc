@@ -2,6 +2,7 @@ package("libnice")
     set_kind("library")
     set_homepage("https://libnice.freedesktop.org/")
     set_description("libnice is an implementation of the IETF's Interactive Connectivity Establishment (ICE) standard")
+    set_license("LGPL-2.1-or-later")
 
     add_urls("https://gitlab.freedesktop.org/libnice/libnice/-/archive/$(version)/libnice-$(version).tar.gz")
 

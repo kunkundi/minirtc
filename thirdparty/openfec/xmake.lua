@@ -2,7 +2,7 @@ package("openfec")
 
     set_homepage("http://openfec.inrialpes.fr/")
     set_description("Application-Level Forward Erasure Correction codes.")
-    set_license("CeCCIL-C")
+    set_license("CECILL-C")
 
     add_urls("https://github.com/kunkundi/openfec/archive/refs/tags/$(version).tar.gz",
              "https://github.com/kunkundi/openfec.git")

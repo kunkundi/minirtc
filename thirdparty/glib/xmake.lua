@@ -1,7 +1,7 @@
 package("glib")
     set_homepage("https://docs.gtk.org/glib/")
     set_description("Low-level core library that forms the basis for projects such as GTK+ and GNOME.")
-    set_license("LGPL-2.1")
+    set_license("LGPL-2.1-or-later")
 
     add_urls("https://download.gnome.org/sources/glib/$(version).tar.xz", {alias = "home", version = function (version)
         return format("%d.%d/glib-%s", version:major(), version:minor(), version)

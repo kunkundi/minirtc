@@ -1,6 +1,6 @@
 set_project("minirtc")
 set_version("0.0.1")
-set_license("LGPL-3.0")
+set_license("LGPL-3.0-only")
 
 option("USE_CUDA")
     set_default(false)
