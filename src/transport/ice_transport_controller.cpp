@@ -634,6 +634,8 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
   }
 
   if (task_queue_encode_) {
+    context->capture_input_frame_total.fetch_add(1,
+                                                 std::memory_order_relaxed);
     if (media_config_.video_content_type == VideoContentType::ScreenContent &&
         paced_sender_ &&
         (paced_sender_->ExpectedQueueTime() >=
@@ -643,6 +645,8 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
       // Remote desktop frames expire quickly. Stop admitting new frames while
       // the packet queue drains instead of extending end-to-end latency with
       // content the viewer will only see long after it was captured.
+      context->pacer_rejected_frame_total.fetch_add(
+          1, std::memory_order_relaxed);
       return 0;
     }
 
@@ -650,6 +654,8 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
     // copying frames that are known to be dropped can consume hundreds of MB/s
     // and slow the capture callback itself below its configured frame rate.
     if (task_queue_encode_->PendingTasks() > 0) {
+      context->encode_queue_dropped_frame_total.fetch_add(
+          1, std::memory_order_relaxed);
       return 0;
     }
 
@@ -792,11 +798,13 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       maintain_frame_rate
           ? std::max(2, frame_budget_ms / 3)
           : (balanced ? std::max(4, frame_budget_ms / 2) : 8);
-  // A 60 fps stream must demonstrate substantially more than the old fixed
-  // 30 fps floor before spatial quality is restored. The lower threshold for
-  // a 30 fps stream leaves a small margin for capture and timer jitter.
+  const int minimum_frame_rate =
+      VideoAdaptationPolicy::MinimumFrameRate(media_config_.max_frame_rate);
+  // A lower spatial rung must have enough temporal margin to absorb the next
+  // resolution step. For 60 fps streams, 45 fps remains the downgrade floor
+  // while 55 fps is required before an upgrade is attempted.
   const int minimum_upgrade_frame_rate =
-      media_config_.max_frame_rate == 30 ? 25 : 45;
+      VideoAdaptationPolicy::UpgradeFrameRate(media_config_.max_frame_rate);
   constexpr int kCriticalFrameRate = 20;
   constexpr int kFrameRateWindowMs = 1000;
   constexpr int kFrameRateHealthyDurationMs = 2000;
@@ -833,6 +841,63 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   }
 
   const int64_t now_ms = clock_->CurrentTimeMs();
+  const uint64_t capture_input_total =
+      context->capture_input_frame_total.load(std::memory_order_acquire);
+  const uint64_t pacer_rejected_total =
+      context->pacer_rejected_frame_total.load(std::memory_order_acquire);
+  const uint64_t encode_queue_dropped_total =
+      context->encode_queue_dropped_frame_total.load(
+          std::memory_order_acquire);
+  if (context->frame_admission_window_started_ms == 0) {
+    context->frame_admission_window_started_ms = now_ms;
+    context->frame_admission_window_capture_start = capture_input_total;
+    context->frame_admission_window_pacer_rejected_start =
+        pacer_rejected_total;
+    context->frame_admission_window_encode_queue_dropped_start =
+        encode_queue_dropped_total;
+  } else {
+    const int64_t admission_window_ms =
+        now_ms - context->frame_admission_window_started_ms;
+    if (admission_window_ms >=
+        VideoAdaptationPolicy::kFrameHealthWindowMs) {
+      context->frame_admission_capture_samples =
+          capture_input_total - context->frame_admission_window_capture_start;
+      context->frame_admission_pacer_rejected_samples =
+          pacer_rejected_total -
+          context->frame_admission_window_pacer_rejected_start;
+      context->frame_admission_encode_queue_dropped_samples =
+          encode_queue_dropped_total -
+          context->frame_admission_window_encode_queue_dropped_start;
+      context->measured_capture_input_frame_rate = static_cast<int>(
+          (context->frame_admission_capture_samples * 1000 +
+           admission_window_ms / 2) /
+          admission_window_ms);
+      context->measured_pacer_rejection_percent =
+          context->frame_admission_capture_samples > 0
+              ? static_cast<int>(
+                    (context->frame_admission_pacer_rejected_samples * 100 +
+                     context->frame_admission_capture_samples / 2) /
+                    context->frame_admission_capture_samples)
+              : 0;
+      context->measured_encode_queue_drop_percent =
+          context->frame_admission_capture_samples > 0
+              ? static_cast<int>(
+                    (context->frame_admission_encode_queue_dropped_samples *
+                         100 +
+                     context->frame_admission_capture_samples / 2) /
+                    context->frame_admission_capture_samples)
+              : 0;
+      context->frame_admission_metrics_ready = true;
+      context->frame_admission_window_started_ms = now_ms;
+      context->frame_admission_window_capture_start = capture_input_total;
+      context->frame_admission_window_pacer_rejected_start =
+          pacer_rejected_total;
+      context->frame_admission_window_encode_queue_dropped_start =
+          encode_queue_dropped_total;
+    }
+  }
+
+  bool encoded_frame_rate_window_updated = false;
   if (context->encoded_frame_rate_window_started_ms == 0) {
     context->encoded_frame_rate_window_started_ms = now_ms;
     context->encoded_frame_rate_window_frame_count = 1;
@@ -847,8 +912,24 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
            frame_rate_window_ms / 2) /
           frame_rate_window_ms);
       context->encoded_frame_rate_ready = true;
-      if (context->measured_encoded_frame_rate >=
-          minimum_upgrade_frame_rate) {
+      if (context->encoded_frame_rate_valid_window_count <
+          context->encoded_frame_rate_windows.size()) {
+        context->encoded_frame_rate_windows
+            [context->encoded_frame_rate_valid_window_count++] =
+                context->measured_encoded_frame_rate;
+      } else {
+        for (size_t i = 1; i < context->encoded_frame_rate_windows.size();
+             ++i) {
+          context->encoded_frame_rate_windows[i - 1] =
+              context->encoded_frame_rate_windows[i];
+        }
+        context->encoded_frame_rate_windows.back() =
+            context->measured_encoded_frame_rate;
+      }
+      encoded_frame_rate_window_updated = true;
+      if (VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
+              media_config_.max_frame_rate,
+              context->measured_encoded_frame_rate)) {
         if (context->encoded_frame_rate_healthy_since_ms == 0) {
           context->encoded_frame_rate_healthy_since_ms = now_ms;
         }
@@ -862,7 +943,18 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
   const bool encoded_frame_rate_below_minimum =
       context->encoded_frame_rate_ready &&
-      context->measured_encoded_frame_rate < minimum_upgrade_frame_rate;
+      context->measured_encoded_frame_rate < minimum_frame_rate;
+  const bool encoded_frame_rate_persistently_low =
+      VideoAdaptationPolicy::IsEncodedFrameRatePersistentlyLow(
+          media_config_.max_frame_rate, context->encoded_frame_rate_windows,
+          context->encoded_frame_rate_valid_window_count);
+  const auto frame_health = VideoAdaptationPolicy::EvaluateFrameHealth(
+      media_config_.max_frame_rate, encoded_frame_rate_persistently_low,
+      context->frame_admission_metrics_ready,
+      context->measured_capture_input_frame_rate,
+      context->frame_admission_capture_samples,
+      context->frame_admission_pacer_rejected_samples,
+      context->frame_admission_encode_queue_dropped_samples);
   const bool startup_critical_encode_backlog_candidate =
       queue_delay_ms >= kCriticalQueueDelayMs &&
       (!context->encoded_frame_rate_ready ||
@@ -930,6 +1022,12 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
                         &context->severe_encode_backlog_since_ms);
   update_pressure_since(critical_queue_pressure,
                         &context->critical_encode_backlog_since_ms);
+  update_pressure_since(frame_health.capture_frame_rate_low,
+                        &context->low_capture_frame_rate_since_ms);
+  update_pressure_since(frame_health.pacer_rejection_high,
+                        &context->high_pacer_rejection_since_ms);
+  update_pressure_since(frame_health.encode_queue_drop_high,
+                        &context->high_encode_queue_drop_since_ms);
 
   const bool sustained_encode_backlog =
       context->encode_backlog_since_ms > 0 &&
@@ -944,6 +1042,38 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
           kCriticalQueueBacklogSustainMs;
   const bool startup_critical_encode_backlog =
       context->encode_exceed_count >= 3;
+  const bool sustained_low_encoded_frame_rate =
+      frame_health.encoded_frame_rate_low;
+  const bool sustained_low_capture_frame_rate =
+      VideoAdaptationPolicy::IsFrameHealthPressureSustained(
+          now_ms, context->low_capture_frame_rate_since_ms);
+  const bool sustained_high_pacer_rejection =
+      VideoAdaptationPolicy::IsFrameHealthPressureSustained(
+          now_ms, context->high_pacer_rejection_since_ms);
+  const bool sustained_high_encode_queue_drop =
+      VideoAdaptationPolicy::IsFrameHealthPressureSustained(
+          now_ms, context->high_encode_queue_drop_since_ms);
+  if (encoded_frame_rate_window_updated) {
+    const size_t low_frame_rate_window_count =
+        VideoAdaptationPolicy::CountLowFrameRateWindows(
+            media_config_.max_frame_rate,
+            context->encoded_frame_rate_windows,
+            context->encoded_frame_rate_valid_window_count);
+    LOG_INFO(
+        "Video frame health: channel={} encoded_fps={} low_windows={}/{} "
+        "capture_fps={} pacer_reject_percent={} "
+        "encode_queue_drop_percent={} delay_avg_ms={} delay_p95_ms={} "
+        "resolution={}x{}",
+        channel_name, context->measured_encoded_frame_rate,
+        low_frame_rate_window_count,
+        context->encoded_frame_rate_valid_window_count,
+        context->measured_capture_input_frame_rate,
+        context->measured_pacer_rejection_percent,
+        context->measured_encode_queue_drop_percent,
+        context->average_encode_queue_delay_ms,
+        context->p95_encode_queue_delay_ms, encoded_frame.EncodedWidth(),
+        encoded_frame.EncodedHeight());
+  }
   if (context->resolution_upgrade_probe_active) {
     ++context->resolution_upgrade_probe_sample_count;
   }
@@ -1008,7 +1138,9 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       balanced && !context->resolution_upgrade_probe_active &&
       context->encoding_speed_priority_enabled &&
       context->encoded_frame_rate_ready &&
-      context->measured_encoded_frame_rate >= minimum_upgrade_frame_rate &&
+      VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
+          media_config_.max_frame_rate,
+          context->measured_encoded_frame_rate) &&
       context->encoded_frame_rate_healthy_since_ms > 0 &&
       now_ms - context->encoded_frame_rate_healthy_since_ms >=
           kFrameRateHealthyDurationMs &&
@@ -1065,7 +1197,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
          probe_duration_ms >= downgrade_cooldown_ms);
     const bool probe_frame_rate_too_low =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
-        probe_frame_rate < minimum_upgrade_frame_rate;
+        !VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
+            media_config_.max_frame_rate, probe_frame_rate);
     const bool probe_qp_too_high =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
         context->normalized_qp_ewma >= 0.0f &&
@@ -1145,8 +1278,13 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     return;
   }
 
-  const bool should_downgrade =
-      startup_critical_encode_backlog || sustained_encode_backlog;
+  const bool should_downgrade = startup_critical_encode_backlog ||
+                                sustained_encode_backlog ||
+                                (maintain_frame_rate &&
+                                 (sustained_low_encoded_frame_rate ||
+                                  sustained_low_capture_frame_rate ||
+                                  sustained_high_pacer_rejection ||
+                                  sustained_high_encode_queue_drop));
 
   // Upgrade
   if (!should_downgrade) {
@@ -1155,7 +1293,9 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     // checks above, remains gradual, and is capped by mapped_target_* below.
     if (!context->target_width || !context->target_height ||
         !context->encoded_frame_rate_ready ||
-        context->measured_encoded_frame_rate < minimum_upgrade_frame_rate ||
+        !VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
+            media_config_.max_frame_rate,
+            context->measured_encoded_frame_rate) ||
         context->encoded_frame_rate_healthy_since_ms == 0 ||
         now_ms - context->encoded_frame_rate_healthy_since_ms <
             kFrameRateHealthyDurationMs ||
@@ -1241,11 +1381,20 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
   LOG_INFO(
       "Adaptive resolution downgrade: channel={} policy={} delay_avg_ms={} "
-      "delay_p95_ms={} budget_ms={} fps={} qp={} steps={} {}x{} -> {}x{}",
+      "delay_p95_ms={} budget_ms={} encoded_fps={} capture_fps={} "
+      "pacer_reject_percent={} encode_queue_drop_percent={} "
+      "low_encoded={} low_capture={} high_pacer_reject={} "
+      "high_encode_queue_drop={} qp={} steps={} {}x{} -> {}x{}",
       channel_name, maintain_frame_rate ? "frame_rate" : "balanced",
       context->average_encode_queue_delay_ms,
       context->p95_encode_queue_delay_ms, frame_budget_ms,
       context->measured_encoded_frame_rate,
+      context->measured_capture_input_frame_rate,
+      context->measured_pacer_rejection_percent,
+      context->measured_encode_queue_drop_percent,
+      sustained_low_encoded_frame_rate, sustained_low_capture_frame_rate,
+      sustained_high_pacer_rejection,
+      sustained_high_encode_queue_drop,
       context->last_encoder_quality_stats.qp, downgrade_steps, bw, bh, nw, nh);
   context->target_width = nw;
   context->target_height = nh;

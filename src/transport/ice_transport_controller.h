@@ -6,6 +6,7 @@
 
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
 #define _ICE_TRANSPORT_CONTROLLER_H_
+#include <array>
 #include <atomic>
 #include <deque>
 #include <mutex>
@@ -218,6 +219,25 @@ class IceTransportController
     int measured_encoded_frame_rate = 0;
     bool encoded_frame_rate_ready = false;
     int64_t encoded_frame_rate_healthy_since_ms = 0;
+    std::array<int, 3> encoded_frame_rate_windows{};
+    size_t encoded_frame_rate_valid_window_count = 0;
+    std::atomic<uint64_t> capture_input_frame_total{0};
+    std::atomic<uint64_t> pacer_rejected_frame_total{0};
+    std::atomic<uint64_t> encode_queue_dropped_frame_total{0};
+    int64_t frame_admission_window_started_ms = 0;
+    uint64_t frame_admission_window_capture_start = 0;
+    uint64_t frame_admission_window_pacer_rejected_start = 0;
+    uint64_t frame_admission_window_encode_queue_dropped_start = 0;
+    uint64_t frame_admission_capture_samples = 0;
+    uint64_t frame_admission_pacer_rejected_samples = 0;
+    uint64_t frame_admission_encode_queue_dropped_samples = 0;
+    int measured_capture_input_frame_rate = 0;
+    int measured_pacer_rejection_percent = 0;
+    int measured_encode_queue_drop_percent = 0;
+    bool frame_admission_metrics_ready = false;
+    int64_t low_capture_frame_rate_since_ms = 0;
+    int64_t high_pacer_rejection_since_ms = 0;
+    int64_t high_encode_queue_drop_since_ms = 0;
     EncoderQualityStats last_encoder_quality_stats;
     float normalized_qp_ewma = -1.0f;
     std::deque<std::pair<int64_t, int>> encode_queue_delay_samples;
@@ -246,12 +266,35 @@ class IceTransportController
       next_resolution_upgrade_probe_ms = 0;
     }
 
+    void ResetFrameAdmissionTracking() {
+      frame_admission_window_started_ms = 0;
+      frame_admission_window_capture_start =
+          capture_input_frame_total.load(std::memory_order_acquire);
+      frame_admission_window_pacer_rejected_start =
+          pacer_rejected_frame_total.load(std::memory_order_acquire);
+      frame_admission_window_encode_queue_dropped_start =
+          encode_queue_dropped_frame_total.load(std::memory_order_acquire);
+      frame_admission_capture_samples = 0;
+      frame_admission_pacer_rejected_samples = 0;
+      frame_admission_encode_queue_dropped_samples = 0;
+      measured_capture_input_frame_rate = 0;
+      measured_pacer_rejection_percent = 0;
+      measured_encode_queue_drop_percent = 0;
+      frame_admission_metrics_ready = false;
+      low_capture_frame_rate_since_ms = 0;
+      high_pacer_rejection_since_ms = 0;
+      high_encode_queue_drop_since_ms = 0;
+    }
+
     void ResetEncodedFrameRateTracking() {
       encoded_frame_rate_window_started_ms = 0;
       encoded_frame_rate_window_frame_count = 0;
       measured_encoded_frame_rate = 0;
       encoded_frame_rate_ready = false;
       encoded_frame_rate_healthy_since_ms = 0;
+      encoded_frame_rate_windows.fill(0);
+      encoded_frame_rate_valid_window_count = 0;
+      ResetFrameAdmissionTracking();
     }
 
     void ResetEncoderQualityTracking() {
