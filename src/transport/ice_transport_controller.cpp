@@ -1,6 +1,7 @@
 #include "ice_transport_controller.h"
 
 #include <algorithm>
+#include <chrono>
 #include <memory>
 #include <vector>
 
@@ -24,6 +25,14 @@ namespace {
 
 constexpr int64_t kDesktopPacerQueueLimitMs = 100;
 constexpr int64_t kDesktopFrameAdmissionQueueMs = 80;
+
+void UpdateAtomicMaximum(std::atomic<int64_t>& maximum, int64_t value) {
+  int64_t previous = maximum.load(std::memory_order_relaxed);
+  while (value > previous &&
+         !maximum.compare_exchange_weak(previous, value,
+                                        std::memory_order_relaxed)) {
+  }
+}
 
 }  // namespace
 
@@ -66,6 +75,9 @@ IceTransportController::~IceTransportController() {
   if (task_queue_pacer_) {
     task_queue_pacer_->Stop();
   }
+  if (task_queue_video_scheduler_) {
+    task_queue_video_scheduler_->Stop();
+  }
   if (task_queue_encode_) {
     task_queue_encode_->Stop();
   }
@@ -107,6 +119,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 
   task_queue_cc_ = std::make_shared<TaskQueue>("congest control");
   task_queue_pacer_ = std::make_shared<TaskQueue>("pacer");
+  task_queue_video_scheduler_ =
+      std::make_shared<TaskQueue>("video receive scheduler");
   task_queue_encode_ = std::make_shared<TaskQueueLockFree>("encode");
   task_queue_decode_ = std::make_shared<TaskQueueLockFree>("decode");
   task_queue_trans_fb_ =
@@ -311,6 +325,9 @@ void IceTransportController::Destroy() {
   if (task_queue_pacer_) {
     task_queue_pacer_->Stop();
   }
+  if (task_queue_video_scheduler_) {
+    task_queue_video_scheduler_->Stop();
+  }
   if (task_queue_encode_) {
     task_queue_encode_->Stop();
   }
@@ -490,6 +507,11 @@ uint32_t IceTransportController::AddVideoReceiveChannel(
     if (context->rtx_ssrc.has_value()) {
       ssrc_to_name_[*context->rtx_ssrc] = channel_name;
     }
+  }
+
+  if (!context->video_receive_scheduler) {
+    context->video_receive_scheduler =
+        std::make_shared<VideoReceiveScheduler>(media_config_.max_frame_rate);
   }
 
   if (!context->transceiver) {
@@ -1725,76 +1747,342 @@ int IceTransportController::OnReceiveDataAckRtpPacket(
 void IceTransportController::OnReceiveCompleteFrame(
     std::unique_ptr<ReceivedFrame> received_frame,
     const std::string& channel_name) {
-  if (!task_queue_decode_) {
-    LOG_ERROR("Decode task queue is nullptr");
+  if (!received_frame || !task_queue_video_scheduler_) {
+    LOG_ERROR("Video receive scheduler queue is unavailable");
     return;
   }
 
+  std::shared_ptr<StreamContext> receive_context;
+  {
+    std::shared_lock lock(stream_receivers_mutex_);
+    auto it = stream_receivers_.find(channel_name);
+    if (it != stream_receivers_.end() && it->second &&
+        it->second->type == StreamType::kVideo) {
+      receive_context = it->second;
+    }
+  }
+  if (!receive_context || !receive_context->video_receive_scheduler) {
+    LOG_ERROR("Video receive scheduler [{}] is unavailable", channel_name);
+    return;
+  }
+  receive_context->rtp_complete_frame_total.fetch_add(
+      1, std::memory_order_relaxed);
+
   std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-  task_queue_decode_->PostTask([weak_self,
-                                received_frame = std::move(received_frame),
-                                channel_name]() mutable {
-    auto self = weak_self.lock();
-    if (!self) {
+  std::weak_ptr<StreamContext> weak_context = receive_context;
+  task_queue_video_scheduler_->PostTask(
+      [weak_self, weak_context,
+       received_frame = std::move(received_frame)]() mutable {
+        auto self = weak_self.lock();
+        auto context = weak_context.lock();
+        if (!self || !context || !context->video_receive_scheduler) {
+          return;
+        }
+        context->video_receive_scheduler->Enqueue(
+            std::move(received_frame), self->clock_->CurrentTimeUs());
+        self->ScheduleVideoReceiveSchedulerTick(context, 0);
+      });
+}
+
+void IceTransportController::ScheduleVideoReceiveSchedulerTick(
+    const std::shared_ptr<StreamContext>& context, int64_t delay_us) {
+  if (!context || !context->video_receive_scheduler ||
+      !task_queue_video_scheduler_ || !clock_) {
+    return;
+  }
+
+  delay_us = std::max<int64_t>(0, delay_us);
+  const int64_t deadline_us = clock_->CurrentTimeUs() + delay_us;
+  if (context->receive_scheduler_tick_scheduled &&
+      deadline_us >= context->receive_scheduler_tick_deadline_us) {
+    return;
+  }
+
+  const uint64_t generation = ++context->receive_scheduler_tick_generation;
+  context->receive_scheduler_tick_scheduled = true;
+  context->receive_scheduler_tick_deadline_us = deadline_us;
+
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  std::weak_ptr<StreamContext> weak_context = context;
+  const bool posted = task_queue_video_scheduler_->PostDelayedHighPrecisionTask(
+      [weak_self, weak_context, generation]() {
+        auto self = weak_self.lock();
+        auto scheduled_context = weak_context.lock();
+        if (!self || !scheduled_context ||
+            generation !=
+                scheduled_context->receive_scheduler_tick_generation) {
+          return;
+        }
+        scheduled_context->receive_scheduler_tick_scheduled = false;
+        scheduled_context->receive_scheduler_tick_deadline_us = 0;
+        self->RunVideoReceiveScheduler(scheduled_context);
+      },
+      std::chrono::microseconds(delay_us));
+  if (!posted && generation == context->receive_scheduler_tick_generation) {
+    context->receive_scheduler_tick_scheduled = false;
+    context->receive_scheduler_tick_deadline_us = 0;
+  }
+}
+
+void IceTransportController::RunVideoReceiveScheduler(
+    const std::shared_ptr<StreamContext>& context) {
+  if (!context || !context->video_receive_scheduler ||
+      !is_running_.load()) {
+    return;
+  }
+
+  {
+    std::shared_lock lock(stream_receivers_mutex_);
+    auto it = stream_receivers_.find(context->name);
+    if (it == stream_receivers_.end() || it->second != context) {
       return;
     }
+  }
 
-    std::shared_ptr<MediaCodec> codec;
-    std::shared_ptr<MediaChannel> transceiver;
-    OnReceiveVideo on_receive_video = nullptr;
-    std::string remote_user_id;
-    void* user_data = nullptr;
+  VideoReceiveScheduler::PollResult result =
+      context->video_receive_scheduler->Poll(
+          clock_->CurrentTimeUs(),
+          context->decode_in_flight.load(std::memory_order_acquire));
 
-    {
-      std::shared_lock lock(self->stream_receivers_mutex_);
-      auto it = self->stream_receivers_.find(channel_name);
-      if (it == self->stream_receivers_.end() || !it->second) {
-        LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
-        return;
-      }
+  if (result.dropped_frames > 0) {
+    LOG_WARN(
+        "VIDEO_RECEIVE_SCHEDULER stream=[{}] catch_up_dropped={} "
+        "request_key_frame={}",
+        context->name, result.dropped_frames, result.request_key_frame);
+  }
+  if (result.request_key_frame && context->transceiver) {
+    context->transceiver->RequestKeyFrame();
+  }
 
-      auto& context = it->second;
-      if (!self->CheckSteamContext(channel_name, context)) {
-        return;
-      }
-
-      codec = context->codec;
-      transceiver = context->transceiver;
-      on_receive_video = self->on_receive_video_;
-      remote_user_id = self->remote_user_id_;
-      user_data = self->user_data_;
+  if (result.frame) {
+    if (!task_queue_decode_) {
+      return;
     }
-
-    int num_frame_returned = codec->Decode(
-        std::move(received_frame),
-        [on_receive_video, remote_user_id, channel_name,
-         user_data](const DecodedFrame* decoded_frame) {
-          if (!on_receive_video || !decoded_frame) {
+    context->decode_in_flight.store(true, std::memory_order_release);
+    context->decode_queue_depth_at_post.store(
+        task_queue_decode_->PendingTasks() + 1, std::memory_order_relaxed);
+    const int64_t enqueued_us = clock_->CurrentTimeUs();
+    std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+    std::weak_ptr<StreamContext> weak_context = context;
+    task_queue_decode_->PostTask(
+        [weak_self, weak_context, frame = std::move(result.frame),
+         enqueued_us]() mutable {
+          auto self = weak_self.lock();
+          auto decode_context = weak_context.lock();
+          if (!self || !decode_context) {
             return;
           }
-
-          XVideoFrame x_video_frame{};
-          x_video_frame.data = (const char*)decoded_frame->Buffer();
-          x_video_frame.width = decoded_frame->DecodedWidth();
-          x_video_frame.height = decoded_frame->DecodedHeight();
-          x_video_frame.size = decoded_frame->Size();
-          x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
-          x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
-          x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
-          x_video_frame.native_handle = decoded_frame->NativeHandle();
-          x_video_frame.native_handle_type =
-              static_cast<XVideoFrameNativeHandleType>(
-                  decoded_frame->NativeHandleType());
-          on_receive_video(&x_video_frame, remote_user_id.data(),
-                           remote_user_id.size(), channel_name.data(),
-                           channel_name.size(), user_data);
+          self->DecodeScheduledVideoFrame(
+              decode_context, std::move(frame), enqueued_us);
         });
-    if (num_frame_returned < 0 && transceiver) {
-      LOG_WARN("Decoder failed for stream [{}], requesting key frame",
-               channel_name);
-      transceiver->RequestKeyFrame();
+    return;
+  }
+
+  if (result.next_delay_us >= 0) {
+    ScheduleVideoReceiveSchedulerTick(context, result.next_delay_us);
+  }
+}
+
+void IceTransportController::DecodeScheduledVideoFrame(
+    const std::shared_ptr<StreamContext>& context,
+    std::unique_ptr<ReceivedFrame> received_frame,
+    int64_t decode_queue_enqueued_us) {
+  if (!context || !received_frame || !clock_) {
+    NotifyVideoDecodeFinished(context);
+    return;
+  }
+
+  const int64_t queue_wait_us =
+      std::max<int64_t>(0, clock_->CurrentTimeUs() - decode_queue_enqueued_us);
+  context->decode_queue_wait_us.store(queue_wait_us,
+                                      std::memory_order_relaxed);
+  UpdateAtomicMaximum(context->decode_queue_max_wait_us, queue_wait_us);
+
+  std::shared_ptr<MediaCodec> codec;
+  std::shared_ptr<MediaChannel> transceiver;
+  OnReceiveVideo on_receive_video = nullptr;
+  std::string remote_user_id;
+  void* user_data = nullptr;
+  {
+    std::shared_lock lock(stream_receivers_mutex_);
+    auto it = stream_receivers_.find(context->name);
+    if (it == stream_receivers_.end() || it->second != context ||
+        !CheckSteamContext(context->name, context)) {
+      NotifyVideoDecodeFinished(context);
+      return;
+    }
+    codec = context->codec;
+    transceiver = context->transceiver;
+    on_receive_video = on_receive_video_;
+    remote_user_id = remote_user_id_;
+    user_data = user_data_;
+  }
+
+  context->decoder_input_timestamp_us.store(
+      received_frame->CapturedTimestamp(), std::memory_order_relaxed);
+  context->decode_input_frame_total.fetch_add(1, std::memory_order_relaxed);
+
+  const std::string channel_name = context->name;
+  const int num_frame_returned = codec->Decode(
+      std::move(received_frame),
+      [context, on_receive_video, remote_user_id, channel_name,
+       user_data](const DecodedFrame* decoded_frame) {
+        if (!decoded_frame) {
+          return;
+        }
+
+        context->decoder_output_timestamp_us.store(
+            decoded_frame->CapturedTimestamp(), std::memory_order_relaxed);
+        context->decode_output_frame_total.fetch_add(
+            1, std::memory_order_relaxed);
+        if (!on_receive_video) {
+          return;
+        }
+
+        XVideoFrame x_video_frame{};
+        x_video_frame.data = (const char*)decoded_frame->Buffer();
+        x_video_frame.width = decoded_frame->DecodedWidth();
+        x_video_frame.height = decoded_frame->DecodedHeight();
+        x_video_frame.size = decoded_frame->Size();
+        x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
+        x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
+        x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
+        x_video_frame.native_handle = decoded_frame->NativeHandle();
+        x_video_frame.native_handle_type =
+            static_cast<XVideoFrameNativeHandleType>(
+                decoded_frame->NativeHandleType());
+        on_receive_video(&x_video_frame, remote_user_id.data(),
+                         remote_user_id.size(), channel_name.data(),
+                         channel_name.size(), user_data);
+      });
+  if (num_frame_returned < 0 && transceiver) {
+    LOG_WARN("Decoder failed for stream [{}], requesting key frame",
+             channel_name);
+    transceiver->RequestKeyFrame();
+  }
+  NotifyVideoDecodeFinished(context);
+}
+
+void IceTransportController::NotifyVideoDecodeFinished(
+    const std::shared_ptr<StreamContext>& context) {
+  if (!context) {
+    return;
+  }
+  context->decode_in_flight.store(false, std::memory_order_release);
+  if (!task_queue_video_scheduler_) {
+    return;
+  }
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  std::weak_ptr<StreamContext> weak_context = context;
+  task_queue_video_scheduler_->PostTask([weak_self, weak_context]() {
+    auto self = weak_self.lock();
+    auto scheduled_context = weak_context.lock();
+    if (self && scheduled_context) {
+      self->ScheduleVideoReceiveSchedulerTick(scheduled_context, 0);
     }
   });
+}
+
+void IceTransportController::MaybeLogVideoReceivePipeline(
+    const std::string& channel_name,
+    const std::shared_ptr<StreamContext>& context) {
+  if (!context || !webrtc_clock_) {
+    return;
+  }
+
+  const int64_t now_ms = webrtc_clock_->TimeInMilliseconds();
+  const int64_t now_us = clock_->CurrentTimeUs();
+  const uint64_t rtp_total =
+      context->rtp_complete_frame_total.load(std::memory_order_relaxed);
+  const uint64_t decode_input_total =
+      context->decode_input_frame_total.load(std::memory_order_relaxed);
+  const uint64_t decode_total =
+      context->decode_output_frame_total.load(std::memory_order_relaxed);
+  const VideoReceiveScheduler::Metrics scheduler_metrics =
+      context->video_receive_scheduler
+          ? context->video_receive_scheduler->GetMetrics(now_us)
+          : VideoReceiveScheduler::Metrics{};
+  const uint64_t scheduler_release_total = scheduler_metrics.released_frames;
+  if (context->receive_pipeline_window_started_ms == 0) {
+    if (rtp_total == 0 && decode_total == 0) {
+      return;
+    }
+    context->receive_pipeline_window_started_ms = now_ms;
+    context->receive_pipeline_window_rtp_start = rtp_total;
+    context->receive_pipeline_window_scheduler_release_start =
+        scheduler_release_total;
+    context->receive_pipeline_window_decode_input_start = decode_input_total;
+    context->receive_pipeline_window_decode_start = decode_total;
+    return;
+  }
+
+  const int64_t elapsed_ms =
+      now_ms - context->receive_pipeline_window_started_ms;
+  if (elapsed_ms < 1000) {
+    return;
+  }
+
+  const uint64_t rtp_delta =
+      rtp_total - context->receive_pipeline_window_rtp_start;
+  const uint64_t scheduler_release_delta =
+      scheduler_release_total -
+      context->receive_pipeline_window_scheduler_release_start;
+  const uint64_t decode_input_delta =
+      decode_input_total - context->receive_pipeline_window_decode_input_start;
+  const uint64_t decode_delta =
+      decode_total - context->receive_pipeline_window_decode_start;
+  const bool decode_in_flight =
+      context->decode_in_flight.load(std::memory_order_acquire);
+  const size_t pending_total = scheduler_metrics.buffered_frames +
+                               (decode_in_flight ? 1U : 0U);
+  const uint64_t rtp_fps = rtp_delta * 1000 / elapsed_ms;
+  const uint64_t scheduler_fps =
+      scheduler_release_delta * 1000 / elapsed_ms;
+  const uint64_t decode_input_fps =
+      decode_input_delta * 1000 / elapsed_ms;
+  const uint64_t decode_fps = decode_delta * 1000 / elapsed_ms;
+  const int decode_queue_depth =
+      task_queue_decode_ ? task_queue_decode_->PendingTasks() : 0;
+  const int64_t decoder_input_pts_us =
+      context->decoder_input_timestamp_us.load(std::memory_order_relaxed);
+  const int64_t decoder_output_pts_us =
+      context->decoder_output_timestamp_us.load(std::memory_order_relaxed);
+  LOG_INFO(
+      "VIDEO_PIPELINE_DECODE stream=[{}] interval_ms={} "
+      "rtp_complete_fps={} scheduler_release_fps={} decode_input_fps={} "
+      "decode_output_fps={} rtp_complete_total={} scheduler_buffered={} "
+      "scheduler_target={} scheduler_interval_us={} scheduler_jitter_us={} "
+      "scheduler_oldest_wait_us={} scheduler_lag_us={} scheduler_dropped={} "
+      "scheduler_catch_up={} scheduler_key_requests={} "
+      "scheduler_timestamp_fallbacks={} "
+      "decode_queue_depth={} decode_queue_depth_at_post={} "
+      "decode_queue_wait_us={} decode_queue_max_wait_us={} "
+      "decode_queue_avg_wait_ms={:.2f} decode_in_flight={} "
+      "decoder_input_pts_us={} decoder_output_pts_us={} decoder_pts_delta_us={} "
+      "decode_input_total={} decode_output_total={} pending_total={}",
+      channel_name, elapsed_ms, rtp_fps, scheduler_fps, decode_input_fps,
+      decode_fps, rtp_total, scheduler_metrics.buffered_frames,
+      scheduler_metrics.target_buffer_frames,
+      scheduler_metrics.estimated_frame_interval_us,
+      scheduler_metrics.estimated_jitter_us,
+      scheduler_metrics.oldest_frame_wait_us, scheduler_metrics.playout_lag_us,
+      scheduler_metrics.dropped_frames, scheduler_metrics.catch_up_count,
+      scheduler_metrics.key_frame_requests,
+      scheduler_metrics.timestamp_fallbacks, decode_queue_depth,
+      context->decode_queue_depth_at_post.load(std::memory_order_relaxed),
+      context->decode_queue_wait_us.load(std::memory_order_relaxed),
+      context->decode_queue_max_wait_us.load(std::memory_order_relaxed),
+      task_queue_decode_ ? task_queue_decode_->AvgQueueDelayMs() : 0.0,
+      decode_in_flight, decoder_input_pts_us, decoder_output_pts_us,
+      decoder_output_pts_us - decoder_input_pts_us, decode_input_total,
+      decode_total, pending_total);
+
+  context->receive_pipeline_window_started_ms = now_ms;
+  context->receive_pipeline_window_rtp_start = rtp_total;
+  context->receive_pipeline_window_scheduler_release_start =
+      scheduler_release_total;
+  context->receive_pipeline_window_decode_input_start = decode_input_total;
+  context->receive_pipeline_window_decode_start = decode_total;
 }
 
 void IceTransportController::OnReceiveCompleteAudio(
@@ -2802,6 +3090,15 @@ bool IceTransportController::Process() {
       msg.at_time = Timestamp::Millis(webrtc_clock_->TimeInMilliseconds());
       PostUpdates(controller_->OnProcessInterval(msg));
     });
+  }
+
+  {
+    std::shared_lock lock(stream_receivers_mutex_);
+    for (const auto& [channel_name, context] : stream_receivers_) {
+      if (context && context->type == StreamType::kVideo) {
+        MaybeLogVideoReceivePipeline(channel_name, context);
+      }
+    }
   }
 
   return true;

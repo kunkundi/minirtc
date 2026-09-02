@@ -554,6 +554,7 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
   // freeing the backing buffers so Decode() cannot return a stale pointer from
   // GetFrame() after the reconfiguration completes.
   std::lock_guard<std::mutex> lock(m_mtxVPFrame);
+  ++m_currentFrameGeneration;
   m_nDecodedFrame = 0;
   m_nDecodedFrameReturned = 0;
   m_vTimestamp.clear();
@@ -570,6 +571,7 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
     } else {
       delete[] pFrame;
     }
+    m_frameGeneration.erase(pFrame);
   }
 
   return 1;
@@ -584,6 +586,7 @@ int NvDecoder::HandlePictureDecode(CUVIDPICPARAMS *pPicParams) {
     return false;
   }
   m_nPicNumInDecodeOrder[pPicParams->CurrPicIdx] = m_nDecodePicCnt++;
+  m_nPicTimestamp[pPicParams->CurrPicIdx] = m_nCurrentTimestamp;
   CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
   NVDEC_API_CALL(cuvidDecodePicture_ld(m_hDecoder, pPicParams));
   if (m_bForce_zero_latency &&
@@ -593,6 +596,10 @@ int NvDecoder::HandlePictureDecode(CUVIDPICPARAMS *pPicParams) {
     dispInfo.picture_index = pPicParams->CurrPicIdx;
     dispInfo.progressive_frame = !pPicParams->field_pic_flag;
     dispInfo.top_field_first = pPicParams->bottom_field_flag ^ 1;
+    // The parser normally supplies the PTS to its display callback. In forced
+    // zero-latency mode there is no parser display callback, so preserve the
+    // packet PTS captured for this decoded picture explicitly.
+    dispInfo.timestamp = m_nPicTimestamp[pPicParams->CurrPicIdx];
     HandlePictureDisplay(&dispInfo);
   }
   CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
@@ -648,6 +655,7 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
         pFrame = new uint8_t[GetFrameSize()];
       }
       m_vpFrame.push_back(pFrame);
+      m_frameGeneration[pFrame] = m_currentFrameGeneration;
     }
     pDecodedFrame = m_vpFrame[m_nDecodedFrame - 1];
   }
@@ -747,6 +755,7 @@ NvDecoder::~NvDecoder() {
     } else {
       delete[] pFrame;
     }
+    m_frameGeneration.erase(pFrame);
   }
   cuCtxPopCurrent_ld(NULL);
 
@@ -761,6 +770,7 @@ int NvDecoder::Decode(const uint8_t *pData, int nSize, int nFlags,
                       int64_t nTimestamp) {
   m_nDecodedFrame = 0;
   m_nDecodedFrameReturned = 0;
+  m_nCurrentTimestamp = nTimestamp;
   CUVIDSOURCEDATAPACKET packet = {0};
   packet.payload = pData;
   packet.payload_size = nSize;
@@ -814,6 +824,23 @@ void NvDecoder::UnlockFrame(uint8_t **pFrame) {
   std::lock_guard<std::mutex> lock(m_mtxVPFrame);
   if (std::find(m_vpFrame.begin(), m_vpFrame.end(), *pFrame) !=
       m_vpFrame.end()) {
+    return;
+  }
+
+  const auto generation = m_frameGeneration.find(*pFrame);
+  if (generation == m_frameGeneration.end() ||
+      generation->second != m_currentFrameGeneration) {
+    if (m_bUseDeviceFrame) {
+      CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
+      CUDA_DRVAPI_CALL(cuMemFree_ld(reinterpret_cast<CUdeviceptr>(*pFrame)));
+      CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
+    } else {
+      delete[] *pFrame;
+    }
+    if (generation != m_frameGeneration.end()) {
+      m_frameGeneration.erase(generation);
+    }
+    *pFrame = nullptr;
     return;
   }
 

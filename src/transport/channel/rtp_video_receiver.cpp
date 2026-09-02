@@ -36,8 +36,13 @@ uint16_t SequenceNumberAt(uint16_t start_sequence_number, uint32_t offset) {
 }
 
 bool IsH264KeyFrame(const uint8_t* data, size_t size) {
-  if (!data) {
+  if (!data || size == 0) {
     return false;
+  }
+  // MiniRTC's RTP depacketizer emits a raw NAL unit. Keep Annex-B support for
+  // callers that provide an access unit with start codes.
+  if ((data[0] & 0x1f) == 5) {
+    return true;
   }
   for (size_t offset = 0; offset + 3 < size; ++offset) {
     size_t nal_offset = 0;
@@ -84,9 +89,7 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
             return data_send_func_((const char*)buffer, size);
           },
           1200)),
-      nack_(std::make_unique<NackRequester>(clock_)),
-      delta_ntp_internal_ms_(clock->CurrentNtpInMilliseconds() -
-                             clock->CurrentTimeMs()) {
+      nack_(std::make_unique<NackRequester>(clock_)) {
   SetPeriod(std::chrono::milliseconds(5));
   SetThreadName("RtpVideoReceiver");
   rtcp_thread_ = std::thread(&RtpVideoReceiver::RtcpThread, this);
@@ -221,6 +224,10 @@ void RtpVideoReceiver::CommitPendingFrame(
     pending_it = pending_frames_.try_emplace(timestamp).first;
   }
   PendingFrame& pending_frame = pending_it->second;
+  if (frame) {
+    frame->SetFrameType(is_keyframe ? VideoFrameType::kVideoFrameKey
+                                    : VideoFrameType::kVideoFrameDelta);
+  }
   const int64_t first_arrival_time =
       pending_frame.arrival_time != 0 ? pending_frame.arrival_time
                                       : clock_->CurrentTime().ms();
@@ -246,11 +253,22 @@ void RtpVideoReceiver::EnsureFrameBufferCapacity(size_t required_capacity) {
 std::unique_ptr<ReceivedFrame> RtpVideoReceiver::CreateReceivedFrame(
     const uint8_t* data, size_t size, uint32_t timestamp) {
   auto frame = std::make_unique<ReceivedFrame>(data, size);
-  frame->SetReceivedTimestamp(clock_->CurrentTime().us());
+  const int64_t arrival_timestamp_us = clock_->CurrentTime().us();
+  frame->SetReceivedTimestamp(arrival_timestamp_us);
+  frame->SetRtpTimestamp(timestamp);
+  const int64_t unwrapped_rtp_timestamp =
+      capture_timestamp_unwrapper_.Unwrap(timestamp);
+  if (!capture_rtp_anchor_) {
+    capture_rtp_anchor_ = unwrapped_rtp_timestamp;
+    capture_local_anchor_us_ = arrival_timestamp_us;
+  }
+  // Keep decoder PTS in the receiver's monotonic clock domain. RTP provides
+  // the cadence while the first arrival supplies a stable local epoch; this
+  // remains monotonic across the 32-bit RTP timestamp wrap.
   frame->SetCapturedTimestamp(
-      (static_cast<int64_t>(timestamp) / rtp::kMsToRtpTimestamp -
-       delta_ntp_internal_ms_) *
-      1000);
+      capture_local_anchor_us_ +
+      rtp::VideoTimestampToMicroseconds(unwrapped_rtp_timestamp -
+                                        *capture_rtp_anchor_));
   return frame;
 }
 
@@ -889,6 +907,7 @@ bool RtpVideoReceiver::Process() {
 
   const auto [soft_deadline_ms, hard_deadline_ms] =
       FrameRecoveryDeadlinesMs();
+  size_t released_this_process = 0;
   while (true) {
     std::unique_ptr<ReceivedFrame> completed_frame;
     uint32_t dropped_timestamp = 0;
@@ -993,6 +1012,7 @@ bool RtpVideoReceiver::Process() {
       LOG_WARN("Frame timestamp {} exceeded RTX recovery window {} ms",
                dropped_timestamp, hard_deadline_ms);
       RequestKeyFrame();
+      MaybeLogReassemblyMetrics(released_this_process);
       return false;
     }
 
@@ -1002,6 +1022,7 @@ bool RtpVideoReceiver::Process() {
           "retaining RTX until {} ms",
           soft_deadline_ms, hard_deadline_ms);
       SendKeyFrameRequest(false);
+      MaybeLogReassemblyMetrics(released_this_process);
       return false;
     }
 
@@ -1013,12 +1034,55 @@ bool RtpVideoReceiver::Process() {
       continue;
     }
 
-    if (on_receive_complete_frame_) {
-      on_receive_complete_frame_(std::move(completed_frame));
+    if (completed_frame) {
+      ++released_this_process;
+      if (on_receive_complete_frame_) {
+        on_receive_complete_frame_(std::move(completed_frame));
+      }
     }
   }
 
+  MaybeLogReassemblyMetrics(released_this_process);
   return true;
+}
+
+void RtpVideoReceiver::MaybeLogReassemblyMetrics(
+    size_t released_this_process) {
+  reassembly_released_window_ += released_this_process;
+  reassembly_max_released_per_process_ = std::max(
+      reassembly_max_released_per_process_, released_this_process);
+
+  const int64_t now_ms = clock_->CurrentTime().ms();
+  if (reassembly_metrics_window_started_ms_ == 0) {
+    reassembly_metrics_window_started_ms_ = now_ms;
+    return;
+  }
+  const int64_t elapsed_ms = now_ms - reassembly_metrics_window_started_ms_;
+  if (elapsed_ms < 1000) {
+    return;
+  }
+
+  size_t pending_frames = 0;
+  size_t complete_but_blocked_frames = 0;
+  {
+    std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+    pending_frames = pending_frames_.size();
+    complete_but_blocked_frames = static_cast<size_t>(std::count_if(
+        pending_frames_.begin(), pending_frames_.end(),
+        [](const auto& entry) { return entry.second.is_complete; }));
+  }
+
+  LOG_INFO(
+      "VIDEO_RTP_REASSEMBLY ssrc={} interval_ms={} pending_frames={} "
+      "complete_blocked_frames={} released_this_process={} "
+      "released_window={} max_released_per_process={}",
+      remote_ssrc_.load(), elapsed_ms, pending_frames,
+      complete_but_blocked_frames, released_this_process,
+      reassembly_released_window_, reassembly_max_released_per_process_);
+
+  reassembly_metrics_window_started_ms_ = now_ms;
+  reassembly_released_window_ = 0;
+  reassembly_max_released_per_process_ = 0;
 }
 
 void RtpVideoReceiver::ReviseFrequencyAndJitter(int payload_type_frequency) {

@@ -38,6 +38,7 @@
 #include "video_channel_send.h"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
+#include "video_receive_scheduler.h"
 
 typedef void (*OnReceiveVideo)(const XVideoFrame*, const char*, const size_t,
                                const char*, const size_t, void*);
@@ -224,6 +225,20 @@ class IceTransportController
     std::atomic<uint64_t> capture_input_frame_total{0};
     std::atomic<uint64_t> pacer_rejected_frame_total{0};
     std::atomic<uint64_t> encode_queue_dropped_frame_total{0};
+    std::atomic<uint64_t> rtp_complete_frame_total{0};
+    std::atomic<uint64_t> decode_input_frame_total{0};
+    std::atomic<uint64_t> decode_output_frame_total{0};
+    std::atomic<int64_t> decoder_input_timestamp_us{0};
+    std::atomic<int64_t> decoder_output_timestamp_us{0};
+    std::atomic<int64_t> decode_queue_wait_us{0};
+    std::atomic<int64_t> decode_queue_max_wait_us{0};
+    std::atomic<int> decode_queue_depth_at_post{0};
+    std::atomic<bool> decode_in_flight{false};
+    int64_t receive_pipeline_window_started_ms = 0;
+    uint64_t receive_pipeline_window_rtp_start = 0;
+    uint64_t receive_pipeline_window_scheduler_release_start = 0;
+    uint64_t receive_pipeline_window_decode_input_start = 0;
+    uint64_t receive_pipeline_window_decode_start = 0;
     int64_t frame_admission_window_started_ms = 0;
     uint64_t frame_admission_window_capture_start = 0;
     uint64_t frame_admission_window_pacer_rejected_start = 0;
@@ -315,6 +330,10 @@ class IceTransportController
 
     std::shared_ptr<MediaChannel> transceiver;
     std::shared_ptr<MediaCodec> codec;
+    std::shared_ptr<VideoReceiveScheduler> video_receive_scheduler;
+    bool receive_scheduler_tick_scheduled = false;
+    int64_t receive_scheduler_tick_deadline_us = 0;
+    uint64_t receive_scheduler_tick_generation = 0;
 
     bool reliable;
   };
@@ -330,6 +349,19 @@ class IceTransportController
 
   bool CheckSteamContext(const std::string& channel_name,
                          const std::shared_ptr<StreamContext>& context);
+  void MaybeLogVideoReceivePipeline(
+      const std::string& channel_name,
+      const std::shared_ptr<StreamContext>& context);
+  void ScheduleVideoReceiveSchedulerTick(
+      const std::shared_ptr<StreamContext>& context, int64_t delay_us);
+  void RunVideoReceiveScheduler(
+      const std::shared_ptr<StreamContext>& context);
+  void DecodeScheduledVideoFrame(
+      const std::shared_ptr<StreamContext>& context,
+      std::unique_ptr<ReceivedFrame> received_frame,
+      int64_t decode_queue_enqueued_us);
+  void NotifyVideoDecodeFinished(
+      const std::shared_ptr<StreamContext>& context);
   int OnVideoEncoded(const std::string& channel_name,
                      const std::shared_ptr<StreamContext>& context,
                      int queue_delay_ms, bool measure_encode_delay,
@@ -384,6 +416,7 @@ class IceTransportController
   BitrateProber prober_;
   std::shared_ptr<TaskQueue> task_queue_cc_;
   std::shared_ptr<TaskQueue> task_queue_pacer_;
+  std::shared_ptr<TaskQueue> task_queue_video_scheduler_;
   std::shared_ptr<TaskQueueLockFree> task_queue_encode_;
   std::shared_ptr<TaskQueueLockFree> task_queue_decode_;
   std::shared_ptr<TaskQueueLockFree> task_queue_trans_fb_;

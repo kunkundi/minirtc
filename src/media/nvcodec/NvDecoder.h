@@ -20,6 +20,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "NvCodecUtils.h"
@@ -394,10 +395,17 @@ class NvDecoder {
   Rect m_displayRect = {};
   // stock of frames
   std::vector<uint8_t *> m_vpFrame;
+  // Locked application-owned frames can outlive a sequence reconfigure. A
+  // generation prevents an old-sized frame from being returned to the new
+  // output pool when it is finally unlocked.
+  std::unordered_map<uint8_t *, uint64_t> m_frameGeneration;
+  uint64_t m_currentFrameGeneration = 0;
   // timestamps of decoded frames
   std::vector<int64_t> m_vTimestamp;
   int m_nDecodedFrame = 0, m_nDecodedFrameReturned = 0;
   int m_nDecodePicCnt = 0, m_nPicNumInDecodeOrder[32];
+  int64_t m_nCurrentTimestamp = 0;
+  int64_t m_nPicTimestamp[32] = {};
   bool m_bEndDecodeDone = false;
   std::mutex m_mtxVPFrame;
   int m_nFrameAlloc = 0;

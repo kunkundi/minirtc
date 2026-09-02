@@ -34,6 +34,15 @@ TcuStreamSynchronize cuStreamSynchronize_ld = NULL;
 TcuMemcpy2D cuMemcpy2D_ld = NULL;
 TcuMemcpy2DUnaligned cuMemcpy2DUnaligned_ld = NULL;
 
+#ifdef _WIN32
+TcuGraphicsGLRegisterBuffer cuGraphicsGLRegisterBuffer_ld = NULL;
+TcuGraphicsUnregisterResource cuGraphicsUnregisterResource_ld = NULL;
+TcuGraphicsMapResources cuGraphicsMapResources_ld = NULL;
+TcuGraphicsUnmapResources cuGraphicsUnmapResources_ld = NULL;
+TcuGraphicsResourceGetMappedPointer cuGraphicsResourceGetMappedPointer_ld =
+    NULL;
+#endif
+
 TcuvidCtxLockCreate cuvidCtxLockCreate_ld = NULL;
 TcuvidGetDecoderCaps cuvidGetDecoderCaps_ld = NULL;
 TcuvidCreateDecoder cuvidCreateDecoder_ld = NULL;
@@ -107,6 +116,14 @@ static void ResetNvCodecFunctions() {
   cuStreamSynchronize_ld = NULL;
   cuMemcpy2D_ld = NULL;
   cuMemcpy2DUnaligned_ld = NULL;
+
+#ifdef _WIN32
+  cuGraphicsGLRegisterBuffer_ld = NULL;
+  cuGraphicsUnregisterResource_ld = NULL;
+  cuGraphicsMapResources_ld = NULL;
+  cuGraphicsUnmapResources_ld = NULL;
+  cuGraphicsResourceGetMappedPointer_ld = NULL;
+#endif
 
   cuvidCtxLockCreate_ld = NULL;
   cuvidGetDecoderCaps_ld = NULL;
@@ -255,4 +272,48 @@ int LoadNvCodecDll() {
 
   return 0;
 }
+
+#ifdef _WIN32
+int LoadCudaGraphicsInterop() {
+  if (LoadNvCodecDll() != 0) {
+    return -1;
+  }
+
+  std::lock_guard<std::mutex> lock(nvcodec_dll_mutex);
+  if (cuGraphicsGLRegisterBuffer_ld && cuGraphicsUnregisterResource_ld &&
+      cuGraphicsMapResources_ld && cuGraphicsUnmapResources_ld &&
+      cuGraphicsResourceGetMappedPointer_ld) {
+    return 0;
+  }
+
+  if (LoadFunctionHelper(nvcuda_dll,
+                         reinterpret_cast<void**>(
+                             &cuGraphicsGLRegisterBuffer_ld),
+                         "cuGraphicsGLRegisterBuffer") != 0 ||
+      LoadFunctionHelper(nvcuda_dll,
+                         reinterpret_cast<void**>(
+                             &cuGraphicsUnregisterResource_ld),
+                         "cuGraphicsUnregisterResource") != 0 ||
+      LoadFunctionHelper(
+          nvcuda_dll, reinterpret_cast<void**>(&cuGraphicsMapResources_ld),
+          "cuGraphicsMapResources") != 0 ||
+      LoadFunctionHelper(
+          nvcuda_dll, reinterpret_cast<void**>(&cuGraphicsUnmapResources_ld),
+          "cuGraphicsUnmapResources") != 0 ||
+      LoadFunctionHelper(nvcuda_dll,
+                         reinterpret_cast<void**>(
+                             &cuGraphicsResourceGetMappedPointer_ld),
+                         "cuGraphicsResourceGetMappedPointer_v2") != 0) {
+    cuGraphicsGLRegisterBuffer_ld = NULL;
+    cuGraphicsUnregisterResource_ld = NULL;
+    cuGraphicsMapResources_ld = NULL;
+    cuGraphicsUnmapResources_ld = NULL;
+    cuGraphicsResourceGetMappedPointer_ld = NULL;
+    return -1;
+  }
+
+  LOG_INFO("Load CUDA/OpenGL interop API success");
+  return 0;
+}
+#endif
 }  // namespace minirtc

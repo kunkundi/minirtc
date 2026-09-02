@@ -1,5 +1,6 @@
 #include "rtp_video_sender.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "api/clock/clock.h"
@@ -48,7 +49,10 @@ void RtpVideoSender::Enqueue(
   for (auto& rtp_packet : rtp_packets) {
     std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet_to_send(
         static_cast<webrtc::RtpPacketToSend*>(rtp_packet.release()));
-    rtp_packet_to_send->set_capture_time(clock_->CurrentTime());
+    rtp_packet_to_send->set_capture_time(
+        captured_timestamp_us > 0
+            ? webrtc::Timestamp::Micros(captured_timestamp_us)
+            : clock_->CurrentTime());
     rtp_packet_to_send->set_transport_sequence_number(transport_seq_++);
     rtp_packet_to_send->set_packet_type(webrtc::RtpPacketMediaType::kVideo);
     // rtp_packet_queue_.push(std::move(rtp_packet_to_send));
@@ -81,7 +85,8 @@ int RtpVideoSender::SendRtpPacket(
     return -1;
   }
 
-  last_rtp_timestamp_ = rtp_packet_to_send->capture_time().ms();
+  last_rtp_timestamp_ = rtp_packet_to_send->Timestamp();
+  last_frame_capture_time_ = rtp_packet_to_send->capture_time().us();
 
   int ret = data_send_func_((const char*)rtp_packet_to_send->Buffer().data(),
                             rtp_packet_to_send->Size());
@@ -108,10 +113,12 @@ int RtpVideoSender::SendRtpPacket(
     SenderReport rtcp_sr;
     rtcp_sr.SetSenderSsrc(ssrc_);
 
-    uint32_t rtp_timestamp =
+    const int64_t elapsed_us =
+        std::max<int64_t>(0, clock_->CurrentTime().us() -
+                                last_frame_capture_time_);
+    const uint32_t rtp_timestamp =
         last_rtp_timestamp_ +
-        ((clock_->CurrentTime().us() + 500) / 1000 - last_frame_capture_time_) *
-            rtp::kVideoPayloadTypeFrequency;
+        rtp::VideoTimestampFromMicroseconds(elapsed_us);
     rtcp_sr.SetTimestamp(rtp_timestamp);
     rtcp_sr.SetNtpTimestamp((uint64_t)clock_->CurrentNtpTime());
     rtcp_sr.SetSenderPacketCount(total_rtp_packets_sent_);

@@ -20,6 +20,7 @@
 #include "received_frame.h"
 #include "receiver_report.h"
 #include "ringbuffer.h"
+#include "rtc_base/numerics/sequence_number_unwrapper.h"
 #include "rtc_base/numerics/sequence_number_util.h"
 #include "rtcp_sender.h"
 #include "rtp_packet_av1.h"
@@ -93,6 +94,7 @@ class RtpVideoReceiver : public ThreadBase {
   void DropFrameAssembly(uint32_t timestamp);
   std::pair<int64_t, int64_t> FrameRecoveryDeadlinesMs();
   void SendKeyFrameRequest(bool enter_awaiting_state);
+  void MaybeLogReassemblyMetrics(size_t released_this_process);
   bool RtxEnabled() const { return rtx_ssrc_.load() != 0; }
 
  private:
@@ -122,6 +124,9 @@ class RtpVideoReceiver : public ThreadBase {
   std::map<uint16_t, RtpPacket> incomplete_frame_list_;
   uint8_t* nv12_data_ = nullptr;
   size_t frame_buffer_capacity_ = 0;
+  webrtc::RtpTimestampUnwrapper capture_timestamp_unwrapper_;
+  std::optional<int64_t> capture_rtp_anchor_;
+  int64_t capture_local_anchor_us_ = 0;
   std::function<void(std::unique_ptr<ReceivedFrame>)>
       on_receive_complete_frame_ = nullptr;
   std::optional<uint32_t> last_complete_frame_ts_;
@@ -145,6 +150,9 @@ class RtpVideoReceiver : public ThreadBase {
   std::map<uint32_t, PendingFrame, RtpTimestampLess> pending_frames_;
   std::mutex pending_frames_mtx_;
   bool awaiting_keyframe_ = false;
+  int64_t reassembly_metrics_window_started_ms_ = 0;
+  uint64_t reassembly_released_window_ = 0;
+  size_t reassembly_max_released_per_process_ = 0;
 
  private:
   std::shared_ptr<IOStatistics> io_statistics_ = nullptr;
@@ -222,7 +230,6 @@ class RtpVideoReceiver : public ThreadBase {
 
  private:
   FILE* file_rtp_recv_ = nullptr;
-  int64_t delta_ntp_internal_ms_;
 };
 }  // namespace minirtc
 

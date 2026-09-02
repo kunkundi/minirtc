@@ -74,6 +74,30 @@ extern TcuStreamSynchronize cuStreamSynchronize_ld;
 extern TcuMemcpy2D cuMemcpy2D_ld;
 extern TcuMemcpy2DUnaligned cuMemcpy2DUnaligned_ld;
 
+#if defined(_WIN32)
+typedef CUresult(CUDAAPI *TcuGraphicsGLRegisterBuffer)(
+    CUgraphicsResource* resource, unsigned int buffer, unsigned int flags);
+typedef CUresult(CUDAAPI *TcuGraphicsUnregisterResource)(
+    CUgraphicsResource resource);
+typedef CUresult(CUDAAPI *TcuGraphicsMapResources)(
+    unsigned int count, CUgraphicsResource* resources, CUstream stream);
+typedef CUresult(CUDAAPI *TcuGraphicsUnmapResources)(
+    unsigned int count, CUgraphicsResource* resources, CUstream stream);
+typedef CUresult(CUDAAPI *TcuGraphicsResourceGetMappedPointer)(
+    CUdeviceptr* device_pointer, size_t* size, CUgraphicsResource resource);
+
+extern TcuGraphicsGLRegisterBuffer cuGraphicsGLRegisterBuffer_ld;
+extern TcuGraphicsUnregisterResource cuGraphicsUnregisterResource_ld;
+extern TcuGraphicsMapResources cuGraphicsMapResources_ld;
+extern TcuGraphicsUnmapResources cuGraphicsUnmapResources_ld;
+extern TcuGraphicsResourceGetMappedPointer
+    cuGraphicsResourceGetMappedPointer_ld;
+
+// Loads the optional CUDA/OpenGL interop entry points from the already
+// process-lifetime NVIDIA driver module.
+int LoadCudaGraphicsInterop();
+#endif
+
 // nvcuvid.dll
 typedef CUresult (*TcuvidCtxLockCreate)(CUvideoctxlock *pLock, CUcontext ctx);
 typedef CUresult (*TcuvidGetDecoderCaps)(CUVIDDECODECAPS *pdc);

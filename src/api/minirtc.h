@@ -61,11 +61,42 @@ enum TurnMode : uint8_t {
 enum XVideoFrameNativeHandleType : uint32_t {
   XVideoFrameNativeHandleNone = 0,
   XVideoFrameNativeHandleCVPixelBuffer = 1,
+  XVideoFrameNativeHandleWindowsNv12 = 2,
+};
+
+// Storage backing a Windows native NV12 frame. CPU frames expose y_plane and
+// uv_plane; CUDA frames expose y_device_pointer, uv_device_pointer and the
+// owning CUDA context. The native frame is borrowed for the receive callback.
+// Call retain(owner) before keeping it and release(owner) when finished.
+enum XWindowsVideoFrameMemoryType : uint32_t {
+  XWindowsVideoFrameMemoryCpu = 0,
+  XWindowsVideoFrameMemoryCuda = 1,
 };
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct {
+  uint32_t struct_size;
+  XWindowsVideoFrameMemoryType memory_type;
+  const uint8_t* y_plane;
+  const uint8_t* uv_plane;
+  uint64_t y_device_pointer;
+  uint64_t uv_device_pointer;
+  size_t size;
+  uint32_t width;
+  uint32_t height;
+  uint32_t y_stride;
+  uint32_t uv_stride;
+  void* device_context;
+  void* owner;
+  void (*retain)(void* owner);
+  void (*release)(void* owner);
+  // Copies the frame to tightly packed NV12. Returns 0 on success.
+  int (*copy_to_cpu)(void* owner, uint8_t* destination,
+                     size_t destination_size);
+} XWindowsVideoFrame;
 
 typedef struct {
   const char* data;
@@ -78,7 +109,8 @@ typedef struct {
   uint64_t rendered_timestamp;
   // Optional platform-native decoded frame. The handle is borrowed and is
   // valid only for the duration of the receive callback. Consumers that keep
-  // it must retain it using the platform's ownership API.
+  // a Windows handle must use XWindowsVideoFrame::retain/release; Apple
+  // consumers use the platform object's retain/release API.
   void* native_handle;
   XVideoFrameNativeHandleType native_handle_type;
 } XVideoFrame;

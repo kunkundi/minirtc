@@ -29,9 +29,7 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
     bool use_rtp_packet_to_send) {
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets;
   std::vector<Obu> obus = ParseObus(payload, payload_size);
-  uint32_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                           std::chrono::system_clock::now().time_since_epoch())
-                           .count();
+  const uint32_t timestamp = rtp_timestamp;
 
   auto BuildRtpHeader = [&](bool marker) {
     rtp_packet_frame_.clear();

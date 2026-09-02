@@ -105,7 +105,6 @@ class VideoChannelSend : public MediaChannel {
   // reverse declaration order, so the worker is stopped before packet history
   // is released even if Destroy() was not called explicitly.
   std::shared_ptr<TaskQueue> task_queue_history_;
-  int64_t delta_ntp_internal_ms_;
 
  private:
   FILE* file_rtp_sent_ = nullptr;

@@ -43,9 +43,32 @@ typedef struct {
 
 typedef enum { UNKNOWN = 0, NALU = 1, FU_A = 28, FU_B = 29 } NAL_UNIT_TYPE;
 
-const int kVideoPayloadTypeFrequency = 90000;
+constexpr int64_t kVideoPayloadTypeFrequency = 90000;
+constexpr int64_t kMsToRtpTimestamp = 90;
+constexpr int64_t kMicrosecondsPerSecond = 1000000;
 
-static int kMsToRtpTimestamp = 90;
+// RTP video timestamps always use the standard 90 kHz clock. Keep the
+// conversion here so packetizers cannot accidentally put microseconds in the
+// RTP header (which makes a 60 fps interval look like roughly 185 ms).
+inline uint32_t VideoTimestampFromMicroseconds(int64_t timestamp_us) {
+  if (timestamp_us <= 0) {
+    return 0;
+  }
+  const uint64_t value = static_cast<uint64_t>(timestamp_us);
+  const uint64_t seconds = value / kMicrosecondsPerSecond;
+  const uint64_t remainder_us = value % kMicrosecondsPerSecond;
+  const uint64_t timestamp =
+      seconds * kVideoPayloadTypeFrequency +
+      (remainder_us * kVideoPayloadTypeFrequency +
+       kMicrosecondsPerSecond / 2) /
+          kMicrosecondsPerSecond;
+  return static_cast<uint32_t>(timestamp);
+}
+
+inline int64_t VideoTimestampToMicroseconds(int64_t timestamp) {
+  return timestamp * kMicrosecondsPerSecond /
+         kVideoPayloadTypeFrequency;
+}
 }  // namespace rtp
 }  // namespace minirtc
 #endif

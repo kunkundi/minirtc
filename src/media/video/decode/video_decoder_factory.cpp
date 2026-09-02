@@ -41,7 +41,7 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
                                         bool hardware_acceleration,
                                         VideoCodecType codec_type,
                                         bool native_video_output) {
-#if !defined(__APPLE__)
+#if !defined(__APPLE__) && !defined(_WIN32) && !defined(_WIN64)
   (void)native_video_output;
 #endif
   if (codec_type == VideoCodecType::AV1) {
@@ -49,7 +49,11 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
       LOG_INFO("Hardware AV1 decoding is not supported; using the dav1d "
                "decoder");
     }
+#if defined(_WIN32) || defined(_WIN64)
+    return std::make_unique<Dav1dAv1Decoder>(clock, native_video_output);
+#else
     return std::make_unique<Dav1dAv1Decoder>(clock);
+#endif
     // return std::make_unique<AomAv1Decoder>(clock);
   }
 
@@ -73,14 +77,26 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
 #if USE_CUDA
   if (hardware_acceleration) {
     if (CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
+#if defined(_WIN32) || defined(_WIN64)
+      return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output);
+#else
       return std::make_unique<NvidiaVideoDecoder>(clock);
+#endif
     } else {
       // Hardware requested but not supported: fallback to software.
+#if defined(_WIN32) || defined(_WIN64)
+      return std::make_unique<OpenH264Decoder>(clock, native_video_output);
+#else
       return std::make_unique<OpenH264Decoder>(clock);
+#endif
     }
   } else {
 #endif
+#if defined(_WIN32) || defined(_WIN64)
+    return std::make_unique<OpenH264Decoder>(clock, native_video_output);
+#else
     return std::make_unique<OpenH264Decoder>(clock);
+#endif
 #if USE_CUDA
   }
 #endif
