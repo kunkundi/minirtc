@@ -202,7 +202,19 @@ int NvidiaVideoEncoder::Encode(
   }
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
-  fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
+  if (const auto* native_frame = raw_frame.NativeFrame()) {
+    const auto& nv12 = native_frame->payload.cpu_nv12;
+    for (uint32_t row = 0; row < native_frame->height; ++row) {
+      fwrite(nv12.y_plane + static_cast<size_t>(row) * nv12.y_stride, 1,
+             native_frame->width, file_nv12_);
+    }
+    for (uint32_t row = 0; row < native_frame->height / 2U; ++row) {
+      fwrite(nv12.uv_plane + static_cast<size_t>(row) * nv12.uv_stride, 1,
+             native_frame->width, file_nv12_);
+    }
+  } else {
+    fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
+  }
 #endif
 
   if (raw_frame.Width() != frame_width_ ||
@@ -229,13 +241,25 @@ int NvidiaVideoEncoder::Encode(
 #endif
 
   const NvEncInputFrame* encoder_inputframe = encoder_->GetNextInputFrame();
-  NvEncoderCuda::CopyToDeviceFrame(
-      cuda_context_,
-      (void*)raw_frame.Buffer(),  // NOLINT
-      0, (CUdeviceptr)encoder_inputframe->inputPtr, encoder_inputframe->pitch,
-      encoder_->GetEncodeWidth(), encoder_->GetEncodeHeight(),
-      CU_MEMORYTYPE_HOST, encoder_inputframe->bufferFormat,
-      encoder_inputframe->chromaOffsets, encoder_inputframe->numChromaPlanes);
+  const XNativeVideoFrame* native_frame = raw_frame.NativeFrame();
+  if (native_frame && native_frame->type == XNativeVideoFrameCpuNv12) {
+    const auto& nv12 = native_frame->payload.cpu_nv12;
+    NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
+        cuda_context_, nv12.y_plane, nv12.y_stride, nv12.uv_plane,
+        nv12.uv_stride,
+        reinterpret_cast<CUdeviceptr>(encoder_inputframe->inputPtr),
+        encoder_inputframe->pitch, encoder_->GetEncodeWidth(),
+        encoder_->GetEncodeHeight(), encoder_inputframe->chromaOffsets);
+  } else {
+    NvEncoderCuda::CopyToDeviceFrame(
+        cuda_context_,
+        (void*)raw_frame.Buffer(),  // NOLINT
+        0, reinterpret_cast<CUdeviceptr>(encoder_inputframe->inputPtr),
+        encoder_inputframe->pitch, encoder_->GetEncodeWidth(),
+        encoder_->GetEncodeHeight(), CU_MEMORYTYPE_HOST,
+        encoder_inputframe->bufferFormat, encoder_inputframe->chromaOffsets,
+        encoder_inputframe->numChromaPlanes);
+  }
 
   encoder_->EncodeFrame(encoded_packets_, nullptr, &encoded_packet_qps_);
 

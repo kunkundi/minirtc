@@ -180,6 +180,42 @@ void NvEncoderCuda::CopyToDeviceFrame(
   CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
 }
 
+void NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
+    CUcontext device, const uint8_t* pSrcY, uint32_t nSrcYPitch,
+    const uint8_t* pSrcUV, uint32_t nSrcUVPitch, CUdeviceptr pDstFrame,
+    uint32_t dstPitch, int width, int height,
+    const uint32_t dstChromaOffsets[], CUstream stream) {
+  if (!pSrcY || !pSrcUV || !pDstFrame || !dstChromaOffsets || width <= 0 ||
+      height <= 0 || nSrcYPitch < static_cast<uint32_t>(width) ||
+      nSrcUVPitch < static_cast<uint32_t>(width)) {
+    NVENC_THROW_ERROR("Invalid NV12 planes for copy",
+                      NV_ENC_ERR_INVALID_PARAM);
+  }
+
+  CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(device));
+
+  CUDA_MEMCPY2D copy = {0};
+  copy.srcMemoryType = CU_MEMORYTYPE_HOST;
+  copy.srcHost = pSrcY;
+  copy.srcPitch = nSrcYPitch;
+  copy.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+  copy.dstDevice = pDstFrame;
+  copy.dstPitch = dstPitch;
+  copy.WidthInBytes = static_cast<size_t>(width);
+  copy.Height = static_cast<size_t>(height);
+  CUDA_DRVAPI_CALL(stream == NULL ? cuMemcpy2D_ld(&copy)
+                                  : cuMemcpy2DAsync_ld(&copy, stream));
+
+  copy.srcHost = pSrcUV;
+  copy.srcPitch = nSrcUVPitch;
+  copy.dstDevice = pDstFrame + dstChromaOffsets[0];
+  copy.Height = static_cast<size_t>(height / 2);
+  CUDA_DRVAPI_CALL(stream == NULL ? cuMemcpy2D_ld(&copy)
+                                  : cuMemcpy2DAsync_ld(&copy, stream));
+
+  CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
+}
+
 void NvEncoderCuda::CopyToDeviceFrame(
     CUcontext device, void *pSrcFrame, uint32_t nSrcPitch,
     CUdeviceptr pDstFrame, uint32_t dstPitch, int width, int height,

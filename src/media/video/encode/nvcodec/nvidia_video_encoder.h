@@ -25,6 +25,11 @@ class NvidiaVideoEncoder : public MediaCodec {
 
   int SetTargetBitrate(int bitrate) override;
 
+  bool SupportsNativeFrameInput(
+      XNativeVideoFrameType frame_type) const override {
+    return frame_type == XNativeVideoFrameCpuNv12;
+  }
+
   int GetResolution(int* width, int* height) const override {
     if (seq_ == 0) {
       return -1;

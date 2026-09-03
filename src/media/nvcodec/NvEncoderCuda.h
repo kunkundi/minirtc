@@ -61,6 +61,16 @@ class NvEncoderCuda : public NvEncoder {
       bool bUnAlignedDeviceCopy = false, CUstream stream = NULL);
 
   /**
+   *  @brief Copies host NV12 planes to an encoder input frame without first
+   * packing them into a temporary contiguous buffer.
+   */
+  static void CopyHostNv12PlanesToDeviceFrame(
+      CUcontext device, const uint8_t* pSrcY, uint32_t nSrcYPitch,
+      const uint8_t* pSrcUV, uint32_t nSrcUVPitch, CUdeviceptr pDstFrame,
+      uint32_t dstPitch, int width, int height,
+      const uint32_t dstChromaOffsets[], CUstream stream = NULL);
+
+  /**
    *  @brief This is a static function to copy input data from host memory to
    * device memory. Application must pass a seperate device pointer for each YUV
    * plane.
