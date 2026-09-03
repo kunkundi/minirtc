@@ -7,6 +7,9 @@
 #ifndef _RAW_FRAME_H_
 #define _RAW_FRAME_H_
 
+#include <utility>
+
+#include "native_video_frame.h"
 #include "video_frame.h"
 
 namespace minirtc {
@@ -19,7 +22,21 @@ class RawFrame : public VideoFrame {
       : VideoFrame(size, width, height) {}
   RawFrame(size_t size) : VideoFrame(size) {}
   RawFrame(const uint8_t *buffer, size_t size) : VideoFrame(buffer, size) {}
+  explicit RawFrame(const XNativeVideoFrame& native_frame)
+      : native_frame_(&native_frame) {
+    if (const auto* frame = native_frame_.Get()) {
+      size_t size = 0;
+      GetNv12FrameSize(frame->width, frame->height, &size);
+      SetSize(size);
+      SetWidth(frame->width);
+      SetHeight(frame->height);
+    }
+  }
   RawFrame() = default;
+  RawFrame(const RawFrame&) = default;
+  RawFrame(RawFrame&&) noexcept = default;
+  RawFrame& operator=(const RawFrame&) = default;
+  RawFrame& operator=(RawFrame&&) noexcept = default;
   ~RawFrame() = default;
 
   int64_t CapturedTimestamp() const { return captured_timestamp_us_; }
@@ -28,8 +45,37 @@ class RawFrame : public VideoFrame {
     captured_timestamp_us_ = captured_timestamp_us;
   }
 
+  const XNativeVideoFrame* NativeFrame() const {
+    return native_frame_.Get();
+  }
+
+  bool MaterializeNativeFrame() {
+    const auto* native_frame = native_frame_.Get();
+    if (!native_frame) {
+      return Buffer() != nullptr;
+    }
+
+    size_t required_size = 0;
+    if (!GetNv12FrameSize(native_frame->width, native_frame->height,
+                          &required_size)) {
+      return false;
+    }
+    VideoFrame cpu_frame(required_size, native_frame->width,
+                         native_frame->height);
+    if (!cpu_frame.MutableBuffer() ||
+        native_frame->copy_to_nv12(native_frame->owner,
+                                   cpu_frame.MutableBuffer(),
+                                   required_size) != 0) {
+      return false;
+    }
+    VideoFrame::operator=(std::move(cpu_frame));
+    native_frame_.Reset();
+    return true;
+  }
+
  private:
   int64_t captured_timestamp_us_ = 0;
+  NativeVideoFrameRef native_frame_;
 };
 }  // namespace minirtc
 

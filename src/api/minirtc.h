@@ -90,10 +90,10 @@ typedef union {
   void* cv_pixel_buffer;
 } XNativeVideoFramePayload;
 
-// A tagged, ref-counted decoded-frame descriptor. NV12 data is interpreted as
+// A tagged, ref-counted video-frame descriptor. NV12 data is interpreted as
 // video (limited) range by default. Exactly one payload member is active,
-// selected by type. The descriptor itself is borrowed for the receive callback;
-// retain owner before keeping a copy and release it after last use.
+// selected by type. The descriptor itself is borrowed for the API call or
+// callback; retain owner before keeping a copy and release it after last use.
 typedef struct {
   uint32_t struct_size;
   XNativeVideoFrameType type;
@@ -108,7 +108,9 @@ typedef struct {
 } XNativeVideoFrame;
 
 typedef struct {
+  // Packed NV12 pixels. May be null when native_frame is provided.
   const char* data;
+  // Logical packed NV12 size, including for native frames.
   size_t size;
   uint32_t width;
   uint32_t height;
@@ -116,9 +118,9 @@ typedef struct {
   uint64_t received_timestamp;
   uint64_t decoded_timestamp;
   uint64_t rendered_timestamp;
-  // Optional platform-neutral decoded frame descriptor. The pointer is valid
-  // only for the duration of the receive callback; follow the descriptor's
-  // retain/release contract before keeping a copy.
+  // Optional platform-neutral capture or decoded frame descriptor. The pointer
+  // is valid only for the duration of the API call or receive callback; follow
+  // the descriptor's retain/release contract before keeping a copy.
   const XNativeVideoFrame* native_frame;
 } XVideoFrame;
 

@@ -46,12 +46,14 @@ VideoFrame &VideoFrame::operator=(VideoFrame &&video_frame) = default;
 VideoFrame::~VideoFrame() = default;
 
 void VideoFrame::UpdateBuffer(const uint8_t *new_buffer, size_t new_size) {
-  if (new_size > size_) {
-    buffer_ = CopyOnWriteBuffer(new_buffer, new_size);
-    size_ = new_size;
-  } else {
-    std::memcpy((void *)buffer_.data(), new_buffer, new_size);
-    size_ = new_size;
+  if (!new_buffer && new_size != 0) {
+    return;
   }
+  if (new_size > buffer_.capacity()) {
+    buffer_ = CopyOnWriteBuffer(new_buffer, new_size);
+  } else if (new_size != 0) {
+    std::memcpy(buffer_.MutableData(), new_buffer, new_size);
+  }
+  size_ = new_size;
 }
 }  // namespace minirtc

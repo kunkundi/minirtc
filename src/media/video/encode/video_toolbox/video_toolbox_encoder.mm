@@ -69,6 +69,7 @@ class VideoToolboxEncoder::Impl {
   int seq_ = 0;
   bool prioritize_encoding_speed_ = false;
   std::atomic<bool> force_idr_ = false;
+  std::atomic<bool> native_input_logged_ = false;
 
   VTCompressionSessionRef session_ = nullptr;
   mutex lock_;
@@ -405,30 +406,71 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
   const int raw_height = static_cast<int>(raw_frame.Height());
   const uint64_t expected_size =
       static_cast<uint64_t>(raw_frame.Width()) * raw_frame.Height() * 3 / 2;
-  if (!raw_frame.Buffer() || raw_width <= 0 || raw_height <= 0 || raw_width % 2 != 0 ||
-      raw_height % 2 != 0 || raw_frame.Size() < expected_size) {
-    LOG_ERROR("Invalid NV12 frame for VideoToolbox: {}x{}, size={}", raw_width, raw_height,
-              raw_frame.Size());
+  const XNativeVideoFrame* native_frame = raw_frame.NativeFrame();
+  const bool has_native_pixel_buffer =
+      native_frame &&
+      native_frame->type == XNativeVideoFrameCVPixelBuffer &&
+      native_frame->payload.cv_pixel_buffer;
+  if (raw_width <= 0 || raw_height <= 0 || raw_width % 2 != 0 ||
+      raw_height % 2 != 0 ||
+      (!has_native_pixel_buffer &&
+       (!raw_frame.Buffer() || raw_frame.Size() < expected_size))) {
+    LOG_ERROR("Invalid NV12 frame for VideoToolbox: {}x{}, size={}",
+              raw_width, raw_height, raw_frame.Size());
     return -1;
+  }
+
+  CVPixelBufferRef pixel_buffer = nullptr;
+  if (has_native_pixel_buffer) {
+    pixel_buffer = static_cast<CVPixelBufferRef>(
+        native_frame->payload.cv_pixel_buffer);
+    const OSType pixel_format = CVPixelBufferGetPixelFormatType(pixel_buffer);
+    if (CVPixelBufferGetWidth(pixel_buffer) != raw_frame.Width() ||
+        CVPixelBufferGetHeight(pixel_buffer) != raw_frame.Height() ||
+        !CVPixelBufferIsPlanar(pixel_buffer) ||
+        CVPixelBufferGetPlaneCount(pixel_buffer) < 2 ||
+        (pixel_format !=
+             kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+         pixel_format !=
+             kCVPixelFormatType_420YpCbCr8BiPlanarFullRange)) {
+      LOG_ERROR(
+          "Invalid native CVPixelBuffer for VideoToolbox: {}x{}, format={}",
+          CVPixelBufferGetWidth(pixel_buffer),
+          CVPixelBufferGetHeight(pixel_buffer), pixel_format);
+      return -1;
+    }
+    CVPixelBufferRetain(pixel_buffer);
+  } else {
+    pixel_buffer = CreateNV12PixelBufferFromData(
+        reinterpret_cast<const char*>(raw_frame.Buffer()), raw_frame.Width(),
+        raw_frame.Height());
+    if (!pixel_buffer) {
+      LOG_ERROR("Failed to create VideoToolbox pixel buffer [{}x{}]", raw_width,
+                raw_height);
+      return -1;
+    }
   }
 
   if (raw_width != width_ || raw_height != height_) {
     if (ResetEncodeResolution(raw_width, raw_height) != 0) {
-      LOG_ERROR("Failed to reset VideoToolbox encoder resolution to {}x{}", raw_width, raw_height);
+      CFRelease(pixel_buffer);
+      LOG_ERROR("Failed to reset VideoToolbox encoder resolution to {}x{}",
+                raw_width, raw_height);
       return -1;
     }
   }
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
-  fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
-#endif
-
-  CVPixelBufferRef pixel_buffer = CreateNV12PixelBufferFromData(
-      (const char*)raw_frame.Buffer(), raw_frame.Width(), raw_frame.Height());
-  if (!pixel_buffer) {
-    LOG_ERROR("Failed to create VideoToolbox pixel buffer [{}x{}]", raw_width, raw_height);
-    return -1;
+  if (raw_frame.Buffer()) {
+    fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
+  } else if (native_frame) {
+    vector<uint8_t> packed_nv12(expected_size);
+    if (native_frame->copy_to_nv12(native_frame->owner, packed_nv12.data(),
+                                   packed_nv12.size()) == 0) {
+      fwrite(packed_nv12.data(), 1, packed_nv12.size(), file_nv12_);
+    }
   }
+#endif
 
   CMTime pts = CMTimeMake(raw_frame.CapturedTimestamp(), 1000000);
   const int keyframe_interval = std::max(1, keyframe_interval_);
@@ -465,8 +507,9 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
     return -1;
   }
 
-  OSStatus status = VTCompressionSessionEncodeFrame(session_, pixel_buffer, pts, kCMTimeInvalid,
-                                                    frame_options, frame_callback, nullptr);
+  OSStatus status = VTCompressionSessionEncodeFrame(
+      session_, pixel_buffer, pts, kCMTimeInvalid, frame_options,
+      frame_callback, nullptr);
   CFRelease(pixel_buffer);
   if (frame_options) {
     CFRelease(frame_options);
@@ -476,6 +519,11 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
     restore_force_idr_request();
     LOG_ERROR("VTCompressionSessionEncodeFrame failed: {}", status);
     return -2;
+  }
+
+  if (has_native_pixel_buffer && !native_input_logged_.exchange(true)) {
+    LOG_INFO(
+        "macOS ScreenCaptureKit-to-VideoToolbox native NV12 path enabled");
   }
 
   return 0;

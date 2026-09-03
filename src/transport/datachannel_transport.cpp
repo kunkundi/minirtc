@@ -3,6 +3,7 @@
 #include <vector>
 
 #include "log.h"
+#include "native_video_frame.h"
 #include "resolution_adapter.h"
 #include "video_frame_wrapper.h"
 
@@ -93,6 +94,19 @@ void DataChannelTransport::Shutdown() {
 
 int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
                                          const std::string& stream_id) {
+  const XNativeVideoFrame* native_frame =
+      GetNativeVideoFrameInput(video_frame);
+  size_t required_cpu_size = 0;
+  const bool valid_cpu_frame =
+      video_frame &&
+      GetNv12FrameSize(video_frame->width, video_frame->height,
+                       &required_cpu_size) &&
+      video_frame->data && video_frame->size >= required_cpu_size;
+  if (!native_frame && !valid_cpu_frame) {
+    LOG_ERROR("Invalid video frame for stream [{}]", stream_id);
+    return -1;
+  }
+
   std::shared_ptr<Stream> stream;
   std::shared_ptr<MediaCodec> codec;
   std::shared_ptr<::rtc::Track> track;
@@ -131,8 +145,12 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
     return 0;
   }
 
-  RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
-                     video_frame->width, video_frame->height);
+  RawFrame raw_frame = native_frame
+                           ? RawFrame(*native_frame)
+                           : RawFrame(reinterpret_cast<const uint8_t*>(
+                                          video_frame->data),
+                                      video_frame->size, video_frame->width,
+                                      video_frame->height);
   raw_frame.SetCapturedTimestamp(
       video_frame->captured_timestamp != 0
           ? static_cast<int64_t>(video_frame->captured_timestamp)
@@ -166,6 +184,15 @@ int DataChannelTransport::SendVideoFrame(const XVideoFrame* video_frame,
     if (!codec) {
       LOG_WARN("[{}] Codec is null, drop frame", stream_id);
       return -1;
+    }
+
+    if (const auto* native_frame = raw_frame.NativeFrame();
+        native_frame &&
+        !codec->SupportsNativeFrameInput(native_frame->type)) {
+      if (!raw_frame.MaterializeNativeFrame()) {
+        LOG_ERROR("[{}] Failed to materialize native video frame", stream_id);
+        return -1;
+      }
     }
 
     std::shared_ptr<::rtc::Track> track_shared = track_ptr;

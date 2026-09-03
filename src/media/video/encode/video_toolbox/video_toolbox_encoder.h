@@ -35,6 +35,11 @@ class VideoToolboxEncoder : public MediaCodec {
 
   bool SupportsDynamicEncodingSpeedPriority() const override { return true; }
 
+  bool SupportsNativeFrameInput(
+      XNativeVideoFrameType frame_type) const override {
+    return frame_type == XNativeVideoFrameCVPixelBuffer;
+  }
+
   int SetPrioritizeEncodingSpeedOverQuality(
       bool prioritize_speed) override;
 

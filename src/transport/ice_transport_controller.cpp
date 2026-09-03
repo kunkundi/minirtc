@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "data_channel_send.h"
+#include "native_video_frame.h"
 #include "resolution_adapter.h"
 #include "video_adaptation_policy.h"
 #include "video_frame_wrapper.h"
@@ -619,6 +620,19 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
     return -1;
   }
 
+  const XNativeVideoFrame* native_frame =
+      GetNativeVideoFrameInput(video_frame);
+  size_t required_cpu_size = 0;
+  const bool valid_cpu_frame =
+      video_frame &&
+      GetNv12FrameSize(video_frame->width, video_frame->height,
+                       &required_cpu_size) &&
+      video_frame->data && video_frame->size >= required_cpu_size;
+  if (!native_frame && !valid_cpu_frame) {
+    LOG_ERROR("Invalid video frame for stream [{}]", channel_name);
+    return -1;
+  }
+
   std::shared_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
@@ -659,8 +673,13 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
       return 0;
     }
 
-    RawFrame raw_frame((const uint8_t*)video_frame->data, video_frame->size,
-                       video_frame->width, video_frame->height);
+    RawFrame raw_frame = native_frame
+                             ? RawFrame(*native_frame)
+                             : RawFrame(
+                                   reinterpret_cast<const uint8_t*>(
+                                       video_frame->data),
+                                   video_frame->size, video_frame->width,
+                                   video_frame->height);
     raw_frame.SetCapturedTimestamp(
         video_frame->captured_timestamp != 0
             ? static_cast<int64_t>(video_frame->captured_timestamp)
@@ -718,6 +737,15 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
         if (!context->codec) {
           return;
         }
+        if (const auto* native_frame = frame.NativeFrame();
+            native_frame &&
+            !context->codec->SupportsNativeFrameInput(native_frame->type)) {
+          if (!frame.MaterializeNativeFrame()) {
+            LOG_ERROR("Failed to materialize native video frame for stream [{}]",
+                      channel_name);
+            return;
+          }
+        }
         int64_t queue_delay_ms = encode_queue->CurrentTaskQueueDelayMs();
         if (force_i_frame) {
           if (context->codec->ForceIdr() != 0) {
@@ -755,6 +783,11 @@ int IceTransportController::SendVideo(const XVideoFrame* video_frame,
         context->target_height.has_value() &&
         context->target_width.value() < raw_frame.Width() &&
         context->target_height.value() < raw_frame.Height()) {
+      if (raw_frame.NativeFrame() && !raw_frame.MaterializeNativeFrame()) {
+        LOG_ERROR("Failed to materialize native frame before scaling [{}x{}]",
+                  raw_frame.Width(), raw_frame.Height());
+        return -1;
+      }
       RawFrame scaled_frame(context->target_width.value() *
                             context->target_height.value() * 3 / 2);
 

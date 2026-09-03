@@ -6,6 +6,7 @@
 #include "ice_agent.h"
 #include "log.h"
 #include "minirtc.h"
+#include "native_video_frame.h"
 #include "ws_client.h"
 
 using nlohmann::json;
@@ -141,11 +142,8 @@ int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
     return -1;
   }
 
-  if (!video_frame) {
-    LOG_ERROR("Invaild video frame");
-    return -1;
-  } else if (!video_frame->data || video_frame->size <= 0) {
-    LOG_ERROR("Invaild video frame");
+  if (!minirtc::IsValidVideoFrameInput(video_frame)) {
+    LOG_ERROR("Invalid video frame");
     return -1;
   }
 
@@ -228,6 +226,11 @@ int SendVideoFrameToPeer(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
                          size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+
+  if (!minirtc::IsValidVideoFrameInput(video_frame)) {
+    LOG_ERROR("Invalid video frame");
     return -1;
   }
 

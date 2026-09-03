@@ -37,6 +37,7 @@ class VideoFrame {
 
  public:
   const uint8_t *Buffer() const { return buffer_.data(); }
+  uint8_t *MutableBuffer() { return buffer_.MutableData(); }
   size_t Size() const { return size_; }
   uint32_t Width() const { return width_; }
   uint32_t Height() const { return height_; }
