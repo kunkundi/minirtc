@@ -1781,10 +1781,7 @@ void IceTransportController::OnReceiveCompleteFrame(
           x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
           x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
           x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
-          x_video_frame.native_handle = decoded_frame->NativeHandle();
-          x_video_frame.native_handle_type =
-              static_cast<XVideoFrameNativeHandleType>(
-                  decoded_frame->NativeHandleType());
+          x_video_frame.native_frame = decoded_frame->NativeFrame();
           on_receive_video(&x_video_frame, remote_user_id.data(),
                            remote_user_id.size(), channel_name.data(),
                            channel_name.size(), user_data);

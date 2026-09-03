@@ -53,6 +53,10 @@ typedef CUresult (*TcuMemcpy2DAsync)(const CUDA_MEMCPY2D *pCopy,
 
 typedef CUresult (*TcuStreamSynchronize)(CUstream hStream);
 
+typedef CUresult (*TcuStreamCreate)(CUstream *stream, unsigned int flags);
+
+typedef CUresult (*TcuStreamDestroy)(CUstream stream);
+
 typedef CUresult (*TcuMemcpy2D)(const CUDA_MEMCPY2D *pCopy);
 
 typedef CUresult (*TcuMemcpy2DUnaligned)(const CUDA_MEMCPY2D *pCopy);
@@ -71,8 +75,32 @@ extern TcuMemAllocPitch cuMemAllocPitch_ld;
 extern TcuMemFree cuMemFree_ld;
 extern TcuMemcpy2DAsync cuMemcpy2DAsync_ld;
 extern TcuStreamSynchronize cuStreamSynchronize_ld;
+extern TcuStreamCreate cuStreamCreate_ld;
+extern TcuStreamDestroy cuStreamDestroy_ld;
 extern TcuMemcpy2D cuMemcpy2D_ld;
 extern TcuMemcpy2DUnaligned cuMemcpy2DUnaligned_ld;
+
+#if defined(_WIN32)
+typedef CUresult(CUDAAPI *TcuGraphicsGLRegisterBuffer)(
+    CUgraphicsResource* resource, unsigned int buffer, unsigned int flags);
+typedef CUresult(CUDAAPI *TcuGraphicsUnregisterResource)(
+    CUgraphicsResource resource);
+typedef CUresult(CUDAAPI *TcuGraphicsMapResources)(
+    unsigned int count, CUgraphicsResource* resources, CUstream stream);
+typedef CUresult(CUDAAPI *TcuGraphicsUnmapResources)(
+    unsigned int count, CUgraphicsResource* resources, CUstream stream);
+typedef CUresult(CUDAAPI *TcuGraphicsResourceGetMappedPointer)(
+    CUdeviceptr* device_pointer, size_t* size, CUgraphicsResource resource);
+
+extern TcuGraphicsGLRegisterBuffer cuGraphicsGLRegisterBuffer_ld;
+extern TcuGraphicsUnregisterResource cuGraphicsUnregisterResource_ld;
+extern TcuGraphicsMapResources cuGraphicsMapResources_ld;
+extern TcuGraphicsUnmapResources cuGraphicsUnmapResources_ld;
+extern TcuGraphicsResourceGetMappedPointer
+    cuGraphicsResourceGetMappedPointer_ld;
+
+int LoadCudaGraphicsInterop();
+#endif
 
 // nvcuvid.dll
 typedef CUresult (*TcuvidCtxLockCreate)(CUvideoctxlock *pLock, CUcontext ctx);

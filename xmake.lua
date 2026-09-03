@@ -129,7 +129,7 @@ target("frame")
     set_kind("object")
     add_deps("common")
     add_files("src/frame/*.cpp")
-    add_includedirs("src/frame", {public = true})
+    add_includedirs("src/frame", "src/api", {public = true})
 
 target("fec")
     set_kind("object")

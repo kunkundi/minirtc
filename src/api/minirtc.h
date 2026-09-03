@@ -58,14 +58,54 @@ enum TurnMode : uint8_t {
   TurnForceTcp,      // Relay-only candidates using TURN/TCP.
 };
 
-enum XVideoFrameNativeHandleType : uint32_t {
-  XVideoFrameNativeHandleNone = 0,
-  XVideoFrameNativeHandleCVPixelBuffer = 1,
+enum XNativeVideoFrameType : uint32_t {
+  XNativeVideoFrameNone = 0,
+  XNativeVideoFrameCpuNv12 = 1,
+  XNativeVideoFrameCudaNv12 = 2,
+  XNativeVideoFrameCVPixelBuffer = 3,
 };
 
 #ifdef __cplusplus
 extern "C" {
 #endif
+
+typedef struct {
+  const uint8_t* y_plane;
+  const uint8_t* uv_plane;
+  uint32_t y_stride;
+  uint32_t uv_stride;
+} XCpuNv12Frame;
+
+typedef struct {
+  uint64_t y_device_pointer;
+  uint64_t uv_device_pointer;
+  uint32_t y_stride;
+  uint32_t uv_stride;
+  void* context;
+} XCudaNv12Frame;
+
+typedef union {
+  XCpuNv12Frame cpu_nv12;
+  XCudaNv12Frame cuda_nv12;
+  void* cv_pixel_buffer;
+} XNativeVideoFramePayload;
+
+// A tagged, ref-counted decoded-frame descriptor. NV12 data is interpreted as
+// video (limited) range by default. Exactly one payload member is active,
+// selected by type. The descriptor itself is borrowed for the receive callback;
+// retain owner before keeping a copy and release it after last use.
+typedef struct {
+  uint32_t struct_size;
+  XNativeVideoFrameType type;
+  uint32_t width;
+  uint32_t height;
+  XNativeVideoFramePayload payload;
+  void* owner;
+  void (*retain)(void* owner);
+  void (*release)(void* owner);
+  int (*copy_to_nv12)(void* owner, uint8_t* destination,
+                      size_t destination_size);
+} XNativeVideoFrame;
 
 typedef struct {
   const char* data;
@@ -76,11 +116,10 @@ typedef struct {
   uint64_t received_timestamp;
   uint64_t decoded_timestamp;
   uint64_t rendered_timestamp;
-  // Optional platform-native decoded frame. The handle is borrowed and is
-  // valid only for the duration of the receive callback. Consumers that keep
-  // it must retain it using the platform's ownership API.
-  void* native_handle;
-  XVideoFrameNativeHandleType native_handle_type;
+  // Optional platform-neutral decoded frame descriptor. The pointer is valid
+  // only for the duration of the receive callback; follow the descriptor's
+  // retain/release contract before keeping a copy.
+  const XNativeVideoFrame* native_frame;
 } XVideoFrame;
 
 typedef struct {
@@ -152,10 +191,9 @@ typedef struct {
   char turn_server_password[256];
   char log_path[256];
   bool hardware_acceleration;
-  // Prefer a platform-native decoded frame in XVideoFrame::native_handle
-  // instead of copying it into XVideoFrame::data. The handle representation is
-  // identified by XVideoFrame::native_handle_type. Decoders that cannot expose
-  // a native frame ignore this option and continue to provide CPU data.
+  // Prefer XVideoFrame::native_frame instead of copying decoded pixels into
+  // XVideoFrame::data. Decoders that cannot expose a descriptor ignore this
+  // option and continue to provide CPU data.
   bool native_video_output;
   bool av1_encoding;
   TurnMode turn_mode;

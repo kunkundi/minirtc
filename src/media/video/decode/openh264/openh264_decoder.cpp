@@ -1,17 +1,27 @@
 #include "openh264_decoder.h"
 
 #include <cstring>
+#include <utility>
 
 #include "libyuv.h"
 #include "log.h"
+#if defined(_WIN32)
+#include "native_nv12_frame.h"
+#endif
 
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_H264_STREAM
 
 namespace minirtc {
 
-OpenH264Decoder::OpenH264Decoder(std::shared_ptr<SystemClock> clock)
-    : clock_(clock) {}
+OpenH264Decoder::OpenH264Decoder(std::shared_ptr<SystemClock> clock,
+                                 bool native_video_output)
+    : clock_(std::move(clock)),
+      native_video_output_(native_video_output) {
+#if !defined(_WIN32)
+  native_video_output_ = false;
+#endif
+}
 OpenH264Decoder::~OpenH264Decoder() {
   if (openh264_decoder_) {
     openh264_decoder_->Uninitialize();
@@ -96,10 +106,17 @@ int OpenH264Decoder::Init() {
     return -1;
   }
 
-  if (!decoded_frame_) {
+  if (!decoded_frame_ && !native_video_output_) {
     decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,
                                       frame_width_, frame_height_);
   }
+
+#if defined(_WIN32)
+  if (native_video_output_) {
+    native_frame_pool_ = NativeNv12FramePool::Create();
+    LOG_INFO("OpenH264 Windows pooled NV12 output enabled");
+  }
+#endif
 
   return 0;
 }
@@ -142,13 +159,60 @@ int OpenH264Decoder::Decode(
     frame_width_ = sDstBufInfo.UsrData.sSystemBuffer.iWidth;
     frame_height_ = sDstBufInfo.UsrData.sSystemBuffer.iHeight;
     frame_size_ = (size_t)frame_width_ * (size_t)frame_height_ * 3 / 2;
-    yuv420p_frame_.resize(frame_size_);
-    nv12_frame_.resize(frame_size_);
+    if (!native_video_output_) {
+      yuv420p_frame_.resize(frame_size_);
+      nv12_frame_.resize(frame_size_);
+    }
 
     if (on_receive_decoded_frame) {
       int stride_y = sDstBufInfo.UsrData.sSystemBuffer.iStride[0];
       int stride_u = sDstBufInfo.UsrData.sSystemBuffer.iStride[1];
       int stride_v = stride_u;
+
+#if defined(_WIN32)
+      if (native_video_output_) {
+        auto* native_frame = native_frame_pool_
+                                 ? native_frame_pool_->Acquire(frame_width_,
+                                                               frame_height_)
+                                 : nullptr;
+        if (!native_frame) {
+          LOG_ERROR("Failed to acquire pooled OpenH264 NV12 frame");
+          return -1;
+        }
+        const int conversion_result = libyuv::I420ToNV12(
+            yuv420p_planes_[0], stride_y, yuv420p_planes_[1], stride_u,
+            yuv420p_planes_[2], stride_v, native_frame->YPlane(),
+            frame_width_, native_frame->UvPlane(), frame_width_, frame_width_,
+            frame_height_);
+        if (conversion_result != 0) {
+          native_frame->Release();
+          LOG_ERROR("OpenH264 I420 to pooled NV12 conversion failed, ret {}",
+                    conversion_result);
+          return -1;
+        }
+
+        DecodedFrame native_decoded_frame;
+        native_decoded_frame.SetSize(native_frame->Size());
+        native_decoded_frame.SetWidth(frame_width_);
+        native_decoded_frame.SetHeight(frame_height_);
+        native_decoded_frame.SetDecodedWidth(frame_width_);
+        native_decoded_frame.SetDecodedHeight(frame_height_);
+        native_decoded_frame.SetReceivedTimestamp(
+            received_frame->ReceivedTimestamp());
+        native_decoded_frame.SetCapturedTimestamp(
+            received_frame->CapturedTimestamp());
+        native_decoded_frame.SetDecodedTimestamp(clock_->CurrentTime());
+        native_decoded_frame.SetNativeFrame(native_frame->Descriptor());
+#ifdef SAVE_DECODED_NV12_STREAM
+        if (file_nv12_) {
+          fwrite(native_frame->Data(), 1, native_frame->Size(), file_nv12_);
+        }
+#endif
+        on_receive_decoded_frame(&native_decoded_frame);
+        native_frame->Release();
+        return 0;
+      }
+#endif
 
       libyuv::I420Copy(
           yuv420p_planes_[0], stride_y, yuv420p_planes_[1], stride_u,

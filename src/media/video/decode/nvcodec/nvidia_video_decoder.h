@@ -1,7 +1,14 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2026-09-03
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _NVIDIA_VIDEO_DECODER_H_
 #define _NVIDIA_VIDEO_DECODER_H_
 
 #include <functional>
+#include <memory>
 
 #include "NvDecoder.h"
 #include "media_codec.h"
@@ -10,9 +17,12 @@
 
 namespace minirtc {
 
+struct NvidiaVideoDecoderState;
+
 class NvidiaVideoDecoder : public MediaCodec {
  public:
-  NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock);
+  NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock,
+                     bool native_video_output = false);
   virtual ~NvidiaVideoDecoder();
 
  public:
@@ -26,8 +36,8 @@ class NvidiaVideoDecoder : public MediaCodec {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  NvDecoder* decoder_ = nullptr;
-  CUcontext cuda_context_ = NULL;
+  bool native_video_output_ = false;
+  std::shared_ptr<NvidiaVideoDecoderState> state_;
   CUdevice cuda_device_ = 0;
   DecodedFrame* decoded_frame_ = nullptr;
   bool get_first_keyframe_ = false;

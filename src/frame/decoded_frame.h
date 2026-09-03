@@ -8,6 +8,7 @@
 #define _DECODED_FRAME_H_
 
 #include "video_frame.h"
+#include "minirtc.h"
 
 namespace minirtc {
 
@@ -52,14 +53,10 @@ class DecodedFrame : public VideoFrame {
     decoded_height_ = decoded_height;
   }
 
-  void* NativeHandle() const { return native_handle_; }
+  const XNativeVideoFrame* NativeFrame() const { return native_frame_; }
 
-  void SetNativeHandle(void* native_handle) { native_handle_ = native_handle; }
-
-  uint32_t NativeHandleType() const { return native_handle_type_; }
-
-  void SetNativeHandleType(uint32_t native_handle_type) {
-    native_handle_type_ = native_handle_type;
+  void SetNativeFrame(const XNativeVideoFrame* native_frame) {
+    native_frame_ = native_frame;
   }
 
  private:
@@ -68,8 +65,7 @@ class DecodedFrame : public VideoFrame {
   int64_t decoded_timestamp_us_ = 0;
   uint32_t decoded_width_ = 0;
   uint32_t decoded_height_ = 0;
-  void* native_handle_ = nullptr;
-  uint32_t native_handle_type_ = 0;
+  const XNativeVideoFrame* native_frame_ = nullptr;
 };
 }  // namespace minirtc
 

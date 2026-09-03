@@ -20,6 +20,7 @@
 #include <mutex>
 #include <sstream>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 #include "NvCodecUtils.h"
@@ -394,6 +395,11 @@ class NvDecoder {
   Rect m_displayRect = {};
   // stock of frames
   std::vector<uint8_t *> m_vpFrame;
+  // A retained application frame can outlive a resolution reconfigure. Track
+  // its allocation generation so an old-sized frame is freed instead of being
+  // returned to the new output pool.
+  std::unordered_map<uint8_t *, uint64_t> m_frameGeneration;
+  uint64_t m_currentFrameGeneration = 0;
   // timestamps of decoded frames
   std::vector<int64_t> m_vTimestamp;
   int m_nDecodedFrame = 0, m_nDecodedFrameReturned = 0;

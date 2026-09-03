@@ -1,11 +1,16 @@
 #include "dav1d_av1_decoder.h"
 
+#include <utility>
+
 #include "log.h"
 
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_AV1_STREAM
 
 #include "libyuv.h"
+#if defined(_WIN32)
+#include "native_nv12_frame.h"
+#endif
 
 namespace minirtc {
 
@@ -49,8 +54,14 @@ void Yuv420pToNv12(unsigned char *SrcY, unsigned char *SrcU,
   }
 }
 
-Dav1dAv1Decoder::Dav1dAv1Decoder(std::shared_ptr<SystemClock> clock)
-    : clock_(clock) {}
+Dav1dAv1Decoder::Dav1dAv1Decoder(std::shared_ptr<SystemClock> clock,
+                                 bool native_video_output)
+    : clock_(std::move(clock)),
+      native_video_output_(native_video_output) {
+#if !defined(_WIN32)
+  native_video_output_ = false;
+#endif
+}
 
 Dav1dAv1Decoder::~Dav1dAv1Decoder() {
   if (context_) {
@@ -99,6 +110,13 @@ int Dav1dAv1Decoder::Init() {
     LOG_ERROR("Dav1d AV1 decoder open failed, error={}", ret);
     return -1;
   }
+
+#if defined(_WIN32)
+  if (native_video_output_) {
+    native_frame_pool_ = NativeNv12FramePool::Create();
+    LOG_INFO("dav1d Windows pooled NV12 output enabled");
+  }
+#endif
 
 #ifdef SAVE_DECODED_NV12_STREAM
   nv12_file_name_ = "decoded_nv12_stream_" +
@@ -178,10 +196,58 @@ int Dav1dAv1Decoder::Decode(
               dav1d_picture.p.bpc);
     return -1;
   }
-
   frame_width_ = dav1d_picture.p.w;
   frame_height_ = dav1d_picture.p.h;
   nv12_frame_size_ = dav1d_picture.p.w * dav1d_picture.p.h * 3 / 2;
+
+#if defined(_WIN32)
+  if (native_video_output_) {
+    auto* native_frame = native_frame_pool_
+                             ? native_frame_pool_->Acquire(frame_width_,
+                                                           frame_height_)
+                             : nullptr;
+    if (!native_frame) {
+      LOG_ERROR("Failed to acquire pooled dav1d NV12 frame");
+      return -1;
+    }
+    const int conversion_result = libyuv::I420ToNV12(
+        static_cast<const uint8_t*>(dav1d_picture.data[0]),
+        static_cast<int>(dav1d_picture.stride[0]),
+        static_cast<const uint8_t*>(dav1d_picture.data[1]),
+        static_cast<int>(dav1d_picture.stride[1]),
+        static_cast<const uint8_t*>(dav1d_picture.data[2]),
+        static_cast<int>(dav1d_picture.stride[1]), native_frame->YPlane(),
+        frame_width_, native_frame->UvPlane(), frame_width_, frame_width_,
+        frame_height_);
+    if (conversion_result != 0) {
+      native_frame->Release();
+      LOG_ERROR("dav1d I420 to pooled NV12 conversion failed, ret {}",
+                conversion_result);
+      return -1;
+    }
+
+    DecodedFrame native_decoded_frame;
+    native_decoded_frame.SetSize(native_frame->Size());
+    native_decoded_frame.SetWidth(received_frame->Width());
+    native_decoded_frame.SetHeight(received_frame->Height());
+    native_decoded_frame.SetDecodedWidth(frame_width_);
+    native_decoded_frame.SetDecodedHeight(frame_height_);
+    native_decoded_frame.SetReceivedTimestamp(
+        received_frame->ReceivedTimestamp());
+    native_decoded_frame.SetCapturedTimestamp(
+        received_frame->CapturedTimestamp());
+    native_decoded_frame.SetDecodedTimestamp(clock_->CurrentTime());
+    native_decoded_frame.SetNativeFrame(native_frame->Descriptor());
+#ifdef SAVE_DECODED_NV12_STREAM
+    if (file_nv12_) {
+      fwrite(native_frame->Data(), 1, native_frame->Size(), file_nv12_);
+    }
+#endif
+    on_receive_decoded_frame(&native_decoded_frame);
+    native_frame->Release();
+    return 0;
+  }
+#endif
 
   if (!nv12_frame_) {
     nv12_frame_capacity_ = nv12_frame_size_;

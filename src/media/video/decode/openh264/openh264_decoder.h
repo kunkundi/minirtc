@@ -13,15 +13,21 @@
 #include <wels/codec_ver.h>
 
 #include <functional>
+#include <memory>
 #include <vector>
 
 #include "media_codec.h"
 
 namespace minirtc {
 
+#if defined(_WIN32)
+class NativeNv12FramePool;
+#endif
+
 class OpenH264Decoder : public MediaCodec {
  public:
-  OpenH264Decoder(std::shared_ptr<SystemClock> clock);
+  OpenH264Decoder(std::shared_ptr<SystemClock> clock,
+                  bool native_video_output = false);
   virtual ~OpenH264Decoder();
 
  public:
@@ -35,6 +41,10 @@ class OpenH264Decoder : public MediaCodec {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
+  bool native_video_output_ = false;
+#if defined(_WIN32)
+  std::shared_ptr<NativeNv12FramePool> native_frame_pool_;
+#endif
   ISVCDecoder* openh264_decoder_ = nullptr;
   DecodedFrame* decoded_frame_ = nullptr;
   bool get_first_keyframe_ = false;

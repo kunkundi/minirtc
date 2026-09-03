@@ -554,6 +554,7 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
   // freeing the backing buffers so Decode() cannot return a stale pointer from
   // GetFrame() after the reconfiguration completes.
   std::lock_guard<std::mutex> lock(m_mtxVPFrame);
+  ++m_currentFrameGeneration;
   m_nDecodedFrame = 0;
   m_nDecodedFrameReturned = 0;
   m_vTimestamp.clear();
@@ -570,6 +571,7 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
     } else {
       delete[] pFrame;
     }
+    m_frameGeneration.erase(pFrame);
   }
 
   return 1;
@@ -648,6 +650,7 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
         pFrame = new uint8_t[GetFrameSize()];
       }
       m_vpFrame.push_back(pFrame);
+      m_frameGeneration[pFrame] = m_currentFrameGeneration;
     }
     pDecodedFrame = m_vpFrame[m_nDecodedFrame - 1];
   }
@@ -747,6 +750,7 @@ NvDecoder::~NvDecoder() {
     } else {
       delete[] pFrame;
     }
+    m_frameGeneration.erase(pFrame);
   }
   cuCtxPopCurrent_ld(NULL);
 
@@ -814,6 +818,23 @@ void NvDecoder::UnlockFrame(uint8_t **pFrame) {
   std::lock_guard<std::mutex> lock(m_mtxVPFrame);
   if (std::find(m_vpFrame.begin(), m_vpFrame.end(), *pFrame) !=
       m_vpFrame.end()) {
+    return;
+  }
+
+  const auto generation = m_frameGeneration.find(*pFrame);
+  if (generation == m_frameGeneration.end() ||
+      generation->second != m_currentFrameGeneration) {
+    if (m_bUseDeviceFrame) {
+      CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
+      CUDA_DRVAPI_CALL(cuMemFree_ld(reinterpret_cast<CUdeviceptr>(*pFrame)));
+      CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
+    } else {
+      delete[] *pFrame;
+    }
+    if (generation != m_frameGeneration.end()) {
+      m_frameGeneration.erase(generation);
+    }
+    *pFrame = nullptr;
     return;
   }
 
