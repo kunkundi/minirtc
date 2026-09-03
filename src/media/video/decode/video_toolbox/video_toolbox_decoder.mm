@@ -518,6 +518,7 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
     native_frame.release = &ReleasePixelBufferOwner;
     native_frame.copy_to_nv12 = &CopyPixelBufferToNv12;
     decoded_frame.SetNativeFrame(&native_frame);
+    decoded_frame.SetSize(static_cast<size_t>(width) * height * 3U / 2U);
   } else {
     CVReturn lock_status =
         CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
