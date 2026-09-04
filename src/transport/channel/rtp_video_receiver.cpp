@@ -9,6 +9,7 @@
 #include "log.h"
 #include "nack.h"
 #include "rtcp_sender.h"
+#include "video_recovery_timing.h"
 
 // #define SAVE_RTP_RECV_STREAM
 
@@ -846,9 +847,9 @@ RtpVideoReceiver::FrameRecoveryDeadlinesMs() {
   }
   const int64_t rtt_ms = std::max<int64_t>(nack_->RttMs(), 1);
   const int64_t soft_deadline_ms =
-      std::clamp<int64_t>(2 * rtt_ms + 30, 100, 500);
+      video_recovery::SoftFrameRecoveryDeadlineMs(rtt_ms);
   const int64_t hard_deadline_ms =
-      std::clamp<int64_t>(4 * rtt_ms + 80, 300, 1000);
+      video_recovery::HardFrameRecoveryDeadlineMs(rtt_ms);
   return {soft_deadline_ms, hard_deadline_ms};
 }
 
