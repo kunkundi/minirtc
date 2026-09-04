@@ -49,7 +49,7 @@ class VideoChannelSend : public MediaChannel {
   void OnRttUpdate(int64_t rtt_ms) override;
 
   std::vector<std::unique_ptr<RtpPacket>> GeneratePadding(
-      uint32_t payload_size, int64_t captured_timestamp_us) override;
+      uint32_t payload_size, int64_t padding_time_us) override;
 
   bool CanGeneratePadding() const override {
     return padding_packetizer_ != nullptr;

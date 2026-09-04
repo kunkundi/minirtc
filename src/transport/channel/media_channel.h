@@ -51,7 +51,7 @@ class MediaChannel {
   }
 
   virtual int SendAudio(char* data, size_t size,
-                        int64_t captured_timestamp_us) {
+                        uint32_t samples_per_channel) {
     LOG_INFO("SendAudio() default implementation");
     return 0;
   }
@@ -99,7 +99,7 @@ class MediaChannel {
   }
 
   virtual std::vector<std::unique_ptr<RtpPacket>> GeneratePadding(
-      uint32_t payload_size, int64_t captured_timestamp_us) {
+      uint32_t payload_size, int64_t padding_time_us) {
     LOG_INFO("GeneratePadding() default implementation");
     return {};
   }

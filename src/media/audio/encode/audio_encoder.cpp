@@ -40,8 +40,7 @@ int AudioEncoder::Init(const MediaCodecConfig& config) {
 
 int AudioEncoder::Encode(
     const uint8_t* data, size_t size,
-    std::function<int(char* encoded_audio_buffer, size_t size)>
-        on_encoded_audio_buffer) {
+    EncodedAudioCallback on_encoded_audio_buffer) {
   if (!data || size == 0 || !on_encoded_audio_buffer) {
     return -1;
   }
@@ -71,6 +70,7 @@ int AudioEncoder::Encode(
     return -1;
   }
 
-  return on_encoded_audio_buffer(reinterpret_cast<char*>(out_data), ret);
+  return on_encoded_audio_buffer(reinterpret_cast<char*>(out_data), ret,
+                                 input_samples_per_channel);
 }
 }  // namespace minirtc

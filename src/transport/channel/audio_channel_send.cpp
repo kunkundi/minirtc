@@ -6,8 +6,7 @@
 namespace minirtc {
 
 AudioChannelSend::AudioChannelSend()
-    : rtp_timestamp_generator_(rtp::kAudioPayloadTypeFrequency,
-                               GenerateRandomRtpTimestamp()) {}
+    : rtp_timestamp_generator_(GenerateRandomRtpTimestamp()) {}
 
 AudioChannelSend::~AudioChannelSend() {}
 
@@ -18,8 +17,7 @@ AudioChannelSend::AudioChannelSend(
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
       rtp_audio_sender_(std::make_unique<RtpAudioSender>(ice_io_statistics)),
-      rtp_timestamp_generator_(rtp::kAudioPayloadTypeFrequency,
-                               GenerateRandomRtpTimestamp()) {}
+      rtp_timestamp_generator_(GenerateRandomRtpTimestamp()) {}
 
 void AudioChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
                                   std::shared_ptr<PacedSender> packet_sender) {
@@ -54,11 +52,10 @@ void AudioChannelSend::Destroy() {
 }
 
 int AudioChannelSend::SendAudio(char* data, size_t size,
-                                int64_t captured_timestamp_us) {
+                                uint32_t samples_per_channel) {
   if (rtp_audio_sender_ && rtp_packetizer_) {
     const uint32_t rtp_timestamp =
-        rtp_timestamp_generator_.TimestampForCaptureTimeUs(
-            captured_timestamp_us);
+        rtp_timestamp_generator_.NextTimestamp(samples_per_channel);
     std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
         rtp_packetizer_->Build((uint8_t *)data, (uint32_t)size,
                                rtp_timestamp, true);

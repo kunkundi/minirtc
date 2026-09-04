@@ -219,7 +219,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
       });
 
   paced_sender_->SetGeneratePaddingFunc(
-      [weak_this](uint32_t size, int64_t captured_timestamp_us)
+      [weak_this](uint32_t size, int64_t padding_time_us)
           -> std::vector<std::unique_ptr<RtpPacket>> {
         if (auto self = weak_this.lock()) {
           std::shared_lock lock(self->stream_senders_mutex_);
@@ -228,7 +228,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
               it->second->type == StreamType::kVideo &&
               it->second->transceiver) {
             return it->second->transceiver->GeneratePadding(
-                size, captured_timestamp_us);
+                size, padding_time_us);
           }
           std::shared_ptr<StreamContext> best_ctx = nullptr;
           int64_t best_ts = std::numeric_limits<int64_t>::min();
@@ -244,7 +244,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           }
           if (best_ctx) {
             return best_ctx->transceiver->GeneratePadding(
-                size, captured_timestamp_us);
+                size, padding_time_us);
           }
           return {};
         } else {
@@ -1542,18 +1542,13 @@ int IceTransportController::SendAudio(const MiniRtcAudioFrame* audio_frame,
     return -1;
   }
 
-  const int64_t captured_timestamp_us =
-      audio_frame->captured_timestamp != 0
-          ? static_cast<int64_t>(audio_frame->captured_timestamp)
-          : clock_->CurrentTimeUs();
   int ret = context->codec->Encode(
       reinterpret_cast<const uint8_t*>(audio_frame->data), audio_frame->size,
-      [this, channel_name, context,
-       captured_timestamp_us](char* encoded_audio_buffer,
-                              size_t size) -> int {
+      [this, channel_name, context](char* encoded_audio_buffer, size_t size,
+                                    uint32_t samples_per_channel) -> int {
         context->last_active_time = clock_->CurrentTimeMs();
         return context->transceiver->SendAudio(
-            encoded_audio_buffer, size, captured_timestamp_us);
+            encoded_audio_buffer, size, samples_per_channel);
       });
 
   return ret;

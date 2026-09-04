@@ -265,22 +265,21 @@ int DataChannelTransport::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
   }
 
   std::lock_guard<std::mutex> encode_lock(stream->audio_encode_mutex_);
-  const uint64_t timestamp_us =
-      audio_frame->captured_timestamp != 0
-          ? audio_frame->captured_timestamp
-          : static_cast<uint64_t>(clock_->CurrentTimeUs());
   const int ret = codec->Encode(
       reinterpret_cast<const uint8_t*>(audio_frame->data), audio_frame->size,
-      [track, timestamp_us](char* encoded_audio_buffer,
-                            size_t encoded_size) -> int {
+      [track, stream](char* encoded_audio_buffer, size_t encoded_size,
+                      uint32_t samples_per_channel) -> int {
         if (!track->isOpen()) {
           return -1;
         }
 
+        const double timestamp_seconds =
+            static_cast<double>(stream->audio_sample_count_) /
+            ::rtc::OpusRtpPacketizer::DefaultClockRate;
         track->sendFrame(
             reinterpret_cast<const std::byte*>(encoded_audio_buffer),
-            encoded_size,
-            std::chrono::duration<double, std::micro>(timestamp_us));
+            encoded_size, std::chrono::duration<double>(timestamp_seconds));
+        stream->audio_sample_count_ += samples_per_channel;
         return 0;
       });
   return ret;

@@ -23,8 +23,7 @@ class AudioEncoder : public MediaCodec {
   int Init(const MediaCodecConfig& config) override;
 
   int Encode(const uint8_t* data, size_t size,
-             std::function<int(char* encoded_audio_buffer, size_t size)>
-                 on_encoded_audio_buffer) override;
+             EncodedAudioCallback on_encoded_audio_buffer) override;
 
   std::string GetEncoderName() const override { return "Opus"; }
 

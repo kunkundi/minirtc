@@ -43,6 +43,10 @@
 
 namespace minirtc {
 
+using EncodedAudioCallback =
+    std::function<int(char* encoded_audio_buffer, size_t size,
+                      uint32_t samples_per_channel)>;
+
 enum class VideoCodecType : uint8_t {
   H264 = 0,
   AV1 = 1,
@@ -114,8 +118,7 @@ class MediaCodec {
   }
 
   virtual int Encode(const uint8_t* data, size_t size,
-                     std::function<int(char* encoded_audio_buffer, size_t size)>
-                         on_encoded_audio_buffer) {
+                     EncodedAudioCallback on_encoded_audio_buffer) {
     LOG_INFO("Not implemented");
     return 0;
   }

@@ -42,6 +42,7 @@ class Stream {
   std::shared_ptr<::rtc::RtcpSrReporter> sender_;
   std::shared_ptr<MediaCodec> codec_;
   std::mutex audio_encode_mutex_;
+  uint64_t audio_sample_count_ = 0;
 };
 
 class DataChannelTransport

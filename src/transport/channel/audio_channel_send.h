@@ -37,7 +37,7 @@ class AudioChannelSend : public MediaChannel {
   }
 
   int SendAudio(char* data, size_t size,
-                int64_t captured_timestamp_us) override;
+                uint32_t samples_per_channel) override;
 
   void OnReceiverReport(const ReceiverReport& receiver_report) override {}
 
@@ -48,7 +48,7 @@ class AudioChannelSend : public MediaChannel {
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpAudioSender> rtp_audio_sender_ = nullptr;
-  RtpTimestampGenerator rtp_timestamp_generator_;
+  RtpSampleTimestampGenerator rtp_timestamp_generator_;
 };
 }  // namespace minirtc
 

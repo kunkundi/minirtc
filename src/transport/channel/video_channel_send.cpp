@@ -205,10 +205,10 @@ void VideoChannelSend::ProcessPendingNacks() {
 }
 
 std::vector<std::unique_ptr<RtpPacket>> VideoChannelSend::GeneratePadding(
-    uint32_t payload_size, int64_t captured_timestamp_us) {
+    uint32_t payload_size, int64_t padding_time_us) {
   if (padding_packetizer_) {
     const uint32_t rtp_timestamp =
-        rtp_timestamp_generator_.TimestampForTimeUs(captured_timestamp_us);
+        rtp_timestamp_generator_.TimestampForPaddingTimeUs(padding_time_us);
     return padding_packetizer_->BuildPadding(
         payload_size, rtp_timestamp, true);
   }

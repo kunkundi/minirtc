@@ -1,3 +1,9 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2026-09-04
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _RTP_TIMESTAMP_H_
 #define _RTP_TIMESTAMP_H_
 
@@ -28,7 +34,7 @@ class RtpTimestampGenerator {
 
   // Padding can be requested before the first media frame. In that case use
   // the base without moving the media timeline's first-capture anchor.
-  uint32_t TimestampForTimeUs(int64_t time_us) {
+  uint32_t TimestampForPaddingTimeUs(int64_t time_us) {
     std::lock_guard<std::mutex> lock(mutex_);
     if (!first_capture_time_us_) {
       return base_timestamp_;
@@ -60,6 +66,28 @@ class RtpTimestampGenerator {
   const uint32_t clock_rate_;
   const uint32_t base_timestamp_;
   std::optional<int64_t> first_capture_time_us_;
+  std::mutex mutex_;
+};
+
+// Generates RTP timestamps for sample-clocked media such as Opus. One sample
+// per channel advances the 48 kHz Opus RTP clock by one tick. The counter is
+// owned by one SSRC and intentionally wraps in uint32_t space.
+class RtpSampleTimestampGenerator {
+ public:
+  explicit RtpSampleTimestampGenerator(uint32_t base_timestamp)
+      : base_timestamp_(base_timestamp) {}
+
+  uint32_t NextTimestamp(uint32_t samples_per_channel) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    const uint32_t timestamp =
+        base_timestamp_ + static_cast<uint32_t>(sample_count_);
+    sample_count_ += samples_per_channel;
+    return timestamp;
+  }
+
+ private:
+  const uint32_t base_timestamp_;
+  uint64_t sample_count_ = 0;
   std::mutex mutex_;
 };
 
