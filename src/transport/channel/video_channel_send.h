@@ -22,6 +22,7 @@
 #include "paced_sender.h"
 #include "rtp_packet_history.h"
 #include "rtp_packetizer.h"
+#include "rtp_timestamp.h"
 #include "rtp_video_sender.h"
 #include "task_queue.h"
 #include "transport_feedback_adapter.h"
@@ -96,6 +97,7 @@ class VideoChannelSend : public MediaChannel {
   uint32_t rtx_ssrc_ = 0;
   bool rtx_enabled_ = false;
   std::shared_ptr<SystemClock> clock_;
+  RtpTimestampGenerator rtp_timestamp_generator_;
   RtpPacketHistory rtp_packet_history_;
   std::mutex pending_nacks_mtx_;
   std::unordered_set<uint16_t> pending_nack_sequence_numbers_;
@@ -105,8 +107,6 @@ class VideoChannelSend : public MediaChannel {
   // reverse declaration order, so the worker is stopped before packet history
   // is released even if Destroy() was not called explicitly.
   std::shared_ptr<TaskQueue> task_queue_history_;
-  int64_t delta_ntp_internal_ms_;
-
  private:
   FILE* file_rtp_sent_ = nullptr;
 };

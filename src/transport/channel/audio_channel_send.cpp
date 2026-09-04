@@ -1,10 +1,15 @@
 #include "audio_channel_send.h"
 
+#include <chrono>
+
+#include "common.h"
 #include "log.h"
 
 namespace minirtc {
 
-AudioChannelSend::AudioChannelSend() {}
+AudioChannelSend::AudioChannelSend()
+    : rtp_timestamp_generator_(rtp::kAudioPayloadTypeFrequency,
+                               GenerateRandomRtpTimestamp()) {}
 
 AudioChannelSend::~AudioChannelSend() {}
 
@@ -14,7 +19,9 @@ AudioChannelSend::AudioChannelSend(
     : channel_name_(channel_name),
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
-      rtp_audio_sender_(std::make_unique<RtpAudioSender>(ice_io_statistics)) {}
+      rtp_audio_sender_(std::make_unique<RtpAudioSender>(ice_io_statistics)),
+      rtp_timestamp_generator_(rtp::kAudioPayloadTypeFrequency,
+                               GenerateRandomRtpTimestamp()) {}
 
 void AudioChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
                                   std::shared_ptr<PacedSender> packet_sender) {
@@ -48,10 +55,23 @@ void AudioChannelSend::Destroy() {
   }
 }
 
-int AudioChannelSend::SendAudio(char *data, size_t size) {
+int AudioChannelSend::SendAudio(char* data, size_t size) {
+  const int64_t captured_timestamp_us =
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now().time_since_epoch())
+          .count();
+  return SendAudio(data, size, captured_timestamp_us);
+}
+
+int AudioChannelSend::SendAudio(char* data, size_t size,
+                                int64_t captured_timestamp_us) {
   if (rtp_audio_sender_ && rtp_packetizer_) {
+    const uint32_t rtp_timestamp =
+        rtp_timestamp_generator_.TimestampForCaptureTimeUs(
+            captured_timestamp_us);
     std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
-        rtp_packetizer_->Build((uint8_t *)data, (uint32_t)size, 0, true);
+        rtp_packetizer_->Build((uint8_t *)data, (uint32_t)size,
+                               rtp_timestamp, true);
     // paced_sender_->EnqueueRtpPackets(rtp_packets, 0);
     rtp_audio_sender_->Enqueue(rtp_packets);
   }

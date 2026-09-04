@@ -12,6 +12,7 @@
 #include "paced_sender.h"
 #include "rtp_audio_sender.h"
 #include "rtp_packetizer.h"
+#include "rtp_timestamp.h"
 
 namespace minirtc {
 
@@ -25,19 +26,21 @@ class AudioChannelSend : public MediaChannel {
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
-                  std::shared_ptr<PacedSender> packet_sender);
-  void Destroy();
+                  std::shared_ptr<PacedSender> packet_sender) override;
+  void Destroy() override;
 
-  uint32_t GetSsrc() {
+  uint32_t GetSsrc() override {
     if (rtp_audio_sender_) {
       return rtp_audio_sender_->GetSsrc();
     }
     return 0;
   }
 
-  int SendAudio(char* data, size_t size);
+  int SendAudio(char* data, size_t size) override;
+  int SendAudio(char* data, size_t size,
+                int64_t captured_timestamp_us) override;
 
-  void OnReceiverReport(const ReceiverReport& receiver_report) {}
+  void OnReceiverReport(const ReceiverReport& receiver_report) override {}
 
  private:
   std::string channel_name_;
@@ -46,6 +49,7 @@ class AudioChannelSend : public MediaChannel {
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpAudioSender> rtp_audio_sender_ = nullptr;
+  RtpTimestampGenerator rtp_timestamp_generator_;
 };
 }  // namespace minirtc
 

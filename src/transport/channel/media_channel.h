@@ -55,6 +55,11 @@ class MediaChannel {
     return 0;
   }
 
+  virtual int SendAudio(char* data, size_t size,
+                        int64_t captured_timestamp_us) {
+    return SendAudio(data, size);
+  }
+
   virtual int SendData(const char* data, size_t size) {
     LOG_INFO("SendData() default implementation");
     return 0;

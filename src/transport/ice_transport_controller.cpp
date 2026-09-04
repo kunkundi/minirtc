@@ -1541,12 +1541,15 @@ int IceTransportController::SendAudio(const char* data, size_t size,
     return -1;
   }
 
+  const int64_t captured_timestamp_us = clock_->CurrentTimeUs();
   int ret = context->codec->Encode(
       (uint8_t*)data, size,
-      [this, channel_name, context](char* encoded_audio_buffer,
-                                    size_t size) -> int {
+      [this, channel_name, context,
+       captured_timestamp_us](char* encoded_audio_buffer,
+                              size_t size) -> int {
         context->last_active_time = clock_->CurrentTimeMs();
-        return context->transceiver->SendAudio(encoded_audio_buffer, size);
+        return context->transceiver->SendAudio(
+            encoded_audio_buffer, size, captured_timestamp_us);
       });
 
   return ret;

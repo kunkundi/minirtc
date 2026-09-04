@@ -82,13 +82,14 @@ PacedSender::GeneratePadding(webrtc::DataSize size) {
   if (is_shutdown_.load()) {
     return to_send_rtp_packets;
   }
+  const webrtc::Timestamp capture_time = clock_->CurrentTime();
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
-      generat_padding_func_(size.bytes(), clock_->CurrentTime().ms());
+      generat_padding_func_(size.bytes(), capture_time.us());
   for (auto &packet : rtp_packets) {
     std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet_to_send(
         static_cast<webrtc::RtpPacketToSend *>(packet.release()));
 
-    rtp_packet_to_send->set_capture_time(clock_->CurrentTime());
+    rtp_packet_to_send->set_capture_time(capture_time);
     rtp_packet_to_send->set_transport_sequence_number((transport_seq_)++);
     rtp_packet_to_send->set_packet_type(webrtc::RtpPacketMediaType::kPadding);
 
@@ -395,7 +396,8 @@ int PacedSender::EnqueueRtpPackets(
   for (auto &rtp_packet : rtp_packets) {
     std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet_to_send(
         static_cast<webrtc::RtpPacketToSend *>(rtp_packet.release()));
-    rtp_packet_to_send->set_capture_time(clock_->CurrentTime());
+    rtp_packet_to_send->set_capture_time(
+        webrtc::Timestamp::Micros(captured_timestamp_us));
     rtp_packet_to_send->set_stream_name(stream_name);
 
     switch (rtp_packet_to_send->PayloadType()) {

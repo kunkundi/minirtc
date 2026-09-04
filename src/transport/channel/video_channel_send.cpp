@@ -17,9 +17,9 @@ VideoChannelSend::VideoChannelSend(
       ssrc_(GenerateUniqueSsrc()),
       rtx_ssrc_(GenerateUniqueSsrc()),
       clock_(clock),
-      rtp_packet_history_(clock),
-      delta_ntp_internal_ms_(clock->CurrentNtpInMilliseconds() -
-                             clock->CurrentTimeMs()) {
+      rtp_timestamp_generator_(rtp::kVideoPayloadTypeFrequency,
+                               GenerateRandomRtpTimestamp()),
+      rtp_packet_history_(clock) {
 #ifdef SAVE_RTP_SENT_STREAM
   file_rtp_sent_ = fopen("rtp_sent_stream.h264", "w+b");
   if (!file_rtp_sent_) {
@@ -207,8 +207,10 @@ void VideoChannelSend::ProcessPendingNacks() {
 std::vector<std::unique_ptr<RtpPacket>> VideoChannelSend::GeneratePadding(
     uint32_t payload_size, int64_t captured_timestamp_us) {
   if (padding_packetizer_) {
+    const uint32_t rtp_timestamp =
+        rtp_timestamp_generator_.TimestampForTimeUs(captured_timestamp_us);
     return padding_packetizer_->BuildPadding(
-        payload_size, captured_timestamp_us, true);
+        payload_size, rtp_timestamp, true);
   }
   return std::vector<std::unique_ptr<RtpPacket>>{};
 }
@@ -233,9 +235,9 @@ int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
     const bool is_key_frame =
         encoded_frame.FrameType() == VideoFrameType::kVideoFrameKey;
     rtp_packetizer_->SetIsKeyFrame(is_key_frame);
-    uint32_t rtp_timestamp =
-        delta_ntp_internal_ms_ +
-        static_cast<uint32_t>(encoded_frame.CapturedTimestamp() / 1000);
+    const uint32_t rtp_timestamp =
+        rtp_timestamp_generator_.TimestampForCaptureTimeUs(
+            encoded_frame.CapturedTimestamp());
     std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
         rtp_packetizer_->Build((uint8_t*)encoded_frame.Buffer(),
                                (uint32_t)encoded_frame.Size(), rtp_timestamp,
@@ -251,7 +253,8 @@ int VideoChannelSend::SendVideo(const EncodedFrame& encoded_frame) {
     fwrite((unsigned char*)encoded_frame.Buffer(), 1, encoded_frame.Size(),
            file_rtp_sent_);
 #endif
-    paced_sender_->EnqueueRtpPackets(rtp_packets, rtp_timestamp, channel_name_);
+    paced_sender_->EnqueueRtpPackets(
+        rtp_packets, encoded_frame.CapturedTimestamp(), channel_name_);
   }
 
   return 0;

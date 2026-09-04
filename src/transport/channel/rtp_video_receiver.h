@@ -25,6 +25,7 @@
 #include "rtp_packet_av1.h"
 #include "rtp_packet_h264.h"
 #include "rtp_rtcp_defines.h"
+#include "rtp_timestamp.h"
 #include "sender_report.h"
 #include "thread_base.h"
 
@@ -44,6 +45,9 @@ class RtpVideoReceiver : public ThreadBase {
 
   void SetMediaConfig(uint32_t remote_ssrc, uint32_t rtx_ssrc,
                       rtp::PAYLOAD_TYPE media_payload_type) {
+    if (remote_ssrc_.load() != remote_ssrc) {
+      rtp_timestamp_mapper_.Reset();
+    }
     remote_ssrc_.store(remote_ssrc);
     rtx_ssrc_.store(rtx_ssrc != remote_ssrc ? rtx_ssrc : 0);
     media_payload_type_ = media_payload_type;
@@ -185,6 +189,7 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<uint32_t> remote_ssrc_{0};
   std::atomic<uint32_t> rtx_ssrc_{0};
   rtp::PAYLOAD_TYPE media_payload_type_ = rtp::PAYLOAD_TYPE::H264;
+  RtpTimestampMapper rtp_timestamp_mapper_;
   std::shared_ptr<webrtc::Clock> clock_;
   ReceiveSideCongestionController receive_side_congestion_controller_;
   RtcpFeedbackSenderInterface* active_remb_module_ = nullptr;
@@ -222,7 +227,6 @@ class RtpVideoReceiver : public ThreadBase {
 
  private:
   FILE* file_rtp_recv_ = nullptr;
-  int64_t delta_ntp_internal_ms_;
 };
 }  // namespace minirtc
 

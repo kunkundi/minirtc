@@ -67,6 +67,7 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
     : io_statistics_(io_statistics),
       is_running_(true),
       ssrc_(GenerateUniqueSsrc()),
+      rtp_timestamp_mapper_(rtp::kVideoPayloadTypeFrequency),
       clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
       receive_side_congestion_controller_(
           clock_,
@@ -84,9 +85,7 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
             return data_send_func_((const char*)buffer, size);
           },
           1200)),
-      nack_(std::make_unique<NackRequester>(clock_)),
-      delta_ntp_internal_ms_(clock->CurrentNtpInMilliseconds() -
-                             clock->CurrentTimeMs()) {
+      nack_(std::make_unique<NackRequester>(clock_)) {
   SetPeriod(std::chrono::milliseconds(5));
   SetThreadName("RtpVideoReceiver");
   rtcp_thread_ = std::thread(&RtpVideoReceiver::RtcpThread, this);
@@ -246,11 +245,10 @@ void RtpVideoReceiver::EnsureFrameBufferCapacity(size_t required_capacity) {
 std::unique_ptr<ReceivedFrame> RtpVideoReceiver::CreateReceivedFrame(
     const uint8_t* data, size_t size, uint32_t timestamp) {
   auto frame = std::make_unique<ReceivedFrame>(data, size);
-  frame->SetReceivedTimestamp(clock_->CurrentTime().us());
+  const int64_t received_time_us = clock_->CurrentTime().us();
+  frame->SetReceivedTimestamp(received_time_us);
   frame->SetCapturedTimestamp(
-      (static_cast<int64_t>(timestamp) / rtp::kMsToRtpTimestamp -
-       delta_ntp_internal_ms_) *
-      1000);
+      rtp_timestamp_mapper_.ToLocalTimeUs(timestamp, received_time_us));
   return frame;
 }
 

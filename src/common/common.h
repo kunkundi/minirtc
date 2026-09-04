@@ -1,3 +1,9 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2024-12-18
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _COMMON_H_
 #define _COMMON_H_
 
@@ -75,6 +81,13 @@ inline uint32_t GenerateRandomSSRC() {
   std::random_device rd;
   std::mt19937 gen(rd());
   std::uniform_int_distribution<uint32_t> dis(1, 0xFFFFFFFF);
+  return dis(gen);
+}
+
+inline uint32_t GenerateRandomRtpTimestamp() {
+  std::random_device rd;
+  std::mt19937 gen(rd());
+  std::uniform_int_distribution<uint32_t> dis;
   return dis(gen);
 }
 

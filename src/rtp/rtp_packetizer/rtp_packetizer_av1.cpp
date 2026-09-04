@@ -29,9 +29,6 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
     bool use_rtp_packet_to_send) {
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets;
   std::vector<Obu> obus = ParseObus(payload, payload_size);
-  uint32_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                           std::chrono::system_clock::now().time_since_epoch())
-                           .count();
 
   auto BuildRtpHeader = [&](bool marker) {
     rtp_packet_frame_.clear();
@@ -41,10 +38,10 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
                                 rtp::PAYLOAD_TYPE(payload_type_));
     rtp_packet_frame_.push_back((sequence_number_ >> 8) & 0xFF);
     rtp_packet_frame_.push_back(sequence_number_ & 0xFF);
-    rtp_packet_frame_.push_back((timestamp >> 24) & 0xFF);
-    rtp_packet_frame_.push_back((timestamp >> 16) & 0xFF);
-    rtp_packet_frame_.push_back((timestamp >> 8) & 0xFF);
-    rtp_packet_frame_.push_back(timestamp & 0xFF);
+    rtp_packet_frame_.push_back((rtp_timestamp >> 24) & 0xFF);
+    rtp_packet_frame_.push_back((rtp_timestamp >> 16) & 0xFF);
+    rtp_packet_frame_.push_back((rtp_timestamp >> 8) & 0xFF);
+    rtp_packet_frame_.push_back(rtp_timestamp & 0xFF);
     rtp_packet_frame_.push_back((ssrc_ >> 24) & 0xFF);
     rtp_packet_frame_.push_back((ssrc_ >> 16) & 0xFF);
     rtp_packet_frame_.push_back((ssrc_ >> 8) & 0xFF);

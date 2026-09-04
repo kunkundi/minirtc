@@ -23,6 +23,8 @@ class RtpPacketizer {
 
   virtual ~RtpPacketizer() = default;
 
+  // rtp_timestamp is the final timestamp in the payload format's RTP clock
+  // ticks. Packetizers serialize it unchanged into every packet of the frame.
   virtual std::vector<std::unique_ptr<RtpPacket>> Build(
       uint8_t* payload, uint32_t payload_size, uint32_t rtp_timestamp,
       bool use_rtp_packet_to_send) = 0;

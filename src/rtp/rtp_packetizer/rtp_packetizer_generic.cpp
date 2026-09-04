@@ -55,11 +55,6 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerGeneric::Build(
   uint32_t packet_num =
       payload_size / MAX_NALU_LEN + (last_packet_size ? 1 : 0);
 
-  // TODO: use frame timestamp
-  uint32_t timestamp = std::chrono::duration_cast<std::chrono::microseconds>(
-                           std::chrono::system_clock::now().time_since_epoch())
-                           .count();
-
   std::vector<std::unique_ptr<RtpPacket>> rtp_packets;
 
   for (uint32_t index = 0; index < packet_num; index++) {
@@ -70,7 +65,7 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerGeneric::Build(
     marker_ = index == packet_num - 1 ? 1 : 0;
     payload_type_ = rtp::PAYLOAD_TYPE(payload_type_);
     sequence_number_++;
-    timestamp_ = timestamp;
+    timestamp_ = rtp_timestamp;
     // ssrc_ = ssrc_;
 
     if (!csrc_count_) {
