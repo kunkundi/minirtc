@@ -4,6 +4,7 @@
 
 #include <cstdint>
 #include <limits>
+#include <utility>
 
 #if defined(__linux__)
 #include <sys/time.h>
@@ -23,12 +24,7 @@ constexpr int64_t kNanosecondsPerSecond = 1'000'000'000;
 constexpr int64_t kNtpEpochOffsetSeconds = 2'208'988'800LL;
 constexpr uint64_t kNtpFractionalUnit = uint64_t{1} << 32;
 
-}  // namespace
-
-SystemClock::SystemClock()
-    : monotonic_to_utc_offset_us_(CurrentUtcTimeUs() - CurrentTimeUs()) {}
-
-int64_t SystemClock::CurrentTimeNs() const {
+int64_t ReadMonotonicTimeNs() {
   int64_t ticks;
 #if defined(__APPLE__)
   static mach_timebase_info_data_t timebase;
@@ -54,7 +50,7 @@ int64_t SystemClock::CurrentTimeNs() const {
 #elif defined(_WIN32)
   static volatile LONG last_timegettime = 0;
   static volatile int64_t num_wrap_timegettime = 0;
-  volatile LONG* last_timegettime_ptr = &last_timegettime;
+  volatile LONG *last_timegettime_ptr = &last_timegettime;
   DWORD now = timeGetTime();
   // Atomically update the last gotten time
   DWORD old = InterlockedExchange(last_timegettime_ptr, now);
@@ -69,9 +65,48 @@ int64_t SystemClock::CurrentTimeNs() const {
   ticks = now + (num_wrap_timegettime << 32);
   // TODO(deadbeef): Calculate with nanosecond precision. Otherwise, we're
   // just wasting a multiply and divide when doing Time() on Windows.
-  ticks = ticks * 1000000LL;  // Convert milliseconds to nanoseconds
+  ticks = ticks * 1000000LL; // Convert milliseconds to nanoseconds
 #endif
   return ticks;
+}
+
+int64_t ReadUtcTimeNs() {
+#if defined(__linux__)
+  struct timespec ts;
+  clock_gettime(CLOCK_REALTIME, &ts);
+  return static_cast<int64_t>(ts.tv_sec) * kNanosecondsPerSecond + ts.tv_nsec;
+#elif defined(_WIN32)
+  FILETIME file_time;
+  GetSystemTimeAsFileTime(&file_time);
+  uint64_t file_time_100ns =
+      (static_cast<uint64_t>(file_time.dwHighDateTime) << 32) |
+      file_time.dwLowDateTime;
+  constexpr uint64_t kUnixEpochFileTimeOffsetIn100ns = 116444736000000000ULL;
+  return static_cast<int64_t>(file_time_100ns -
+                              kUnixEpochFileTimeOffsetIn100ns) *
+         100;
+#elif defined(__APPLE__)
+  struct timespec ts;
+  if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
+    return -1; // Error case for macOS clock retrieval
+  }
+  return static_cast<int64_t>(ts.tv_sec) * kNanosecondsPerSecond + ts.tv_nsec;
+#endif
+  return 0;
+}
+
+} // namespace
+
+SystemClock::SystemClock() : SystemClock(ReadMonotonicTimeNs, ReadUtcTimeNs) {}
+
+SystemClock::SystemClock(TimeSource monotonic_time_ns_source,
+                         TimeSource utc_time_ns_source)
+    : monotonic_time_ns_source_(std::move(monotonic_time_ns_source)),
+      utc_time_ns_source_(std::move(utc_time_ns_source)),
+      monotonic_to_utc_offset_us_(CurrentUtcTimeUs() - CurrentTimeUs()) {}
+
+int64_t SystemClock::CurrentTimeNs() const {
+  return monotonic_time_ns_source_ ? monotonic_time_ns_source_() : 0;
 }
 
 int64_t SystemClock::CurrentTime() const { return CurrentTimeUs(); }
@@ -86,8 +121,7 @@ uint64_t SystemClock::CurrentNtpTime() const {
   return MonotonicTimeUsToNtp(CurrentTimeUs());
 }
 
-uint64_t SystemClock::MonotonicTimeUsToNtp(
-    int64_t monotonic_time_us) const {
+uint64_t SystemClock::MonotonicTimeUsToNtp(int64_t monotonic_time_us) const {
   return UtcTimeUsToNtp(monotonic_time_us + monotonic_to_utc_offset_us_);
 }
 
@@ -99,11 +133,11 @@ uint64_t SystemClock::UtcTimeUsToNtp(int64_t utc_time_us) const {
     --unix_seconds;
   }
 
-  const uint32_t ntp_seconds = static_cast<uint32_t>(
-      unix_seconds + kNtpEpochOffsetSeconds);
-  const uint32_t ntp_fractions = static_cast<uint32_t>(
-      static_cast<uint64_t>(microseconds) * kNtpFractionalUnit /
-      kMicrosecondsPerSecond);
+  const uint32_t ntp_seconds =
+      static_cast<uint32_t>(unix_seconds + kNtpEpochOffsetSeconds);
+  const uint32_t ntp_fractions =
+      static_cast<uint32_t>(static_cast<uint64_t>(microseconds) *
+                            kNtpFractionalUnit / kMicrosecondsPerSecond);
   return (static_cast<uint64_t>(ntp_seconds) << 32) | ntp_fractions;
 }
 
@@ -121,8 +155,7 @@ int64_t SystemClock::NtpToUtcTimeUs(uint64_t ntp_time) const {
   constexpr int64_t kNtpEraSeconds = int64_t{1} << 32;
   if (expanded_ntp_seconds - current_ntp_seconds > kNtpEraSeconds / 2) {
     expanded_ntp_seconds -= kNtpEraSeconds;
-  } else if (current_ntp_seconds - expanded_ntp_seconds >
-             kNtpEraSeconds / 2) {
+  } else if (current_ntp_seconds - expanded_ntp_seconds > kNtpEraSeconds / 2) {
     expanded_ntp_seconds += kNtpEraSeconds;
   }
 
@@ -147,34 +180,21 @@ uint32_t SystemClock::CompactNtp(uint64_t ntp_time) {
 int64_t SystemClock::CompactNtpIntervalToMilliseconds(uint32_t interval) {
   constexpr uint64_t kCompactNtpUnitsPerSecond = uint64_t{1} << 16;
   return static_cast<int64_t>(
-      (static_cast<uint64_t>(interval) * 1000 +
-       kCompactNtpUnitsPerSecond / 2) /
+      (static_cast<uint64_t>(interval) * 1000 + kCompactNtpUnitsPerSecond / 2) /
       kCompactNtpUnitsPerSecond);
 }
 
+uint32_t SystemClock::NtpToAbsoluteSendTime(uint64_t ntp_time) {
+  constexpr int kNtpFractionBits = 32;
+  constexpr int kAbsoluteSendTimeFractionBits = 18;
+  constexpr uint32_t kAbsoluteSendTimeMask = 0x00FFFFFF;
+  return static_cast<uint32_t>(
+             ntp_time >> (kNtpFractionBits - kAbsoluteSendTimeFractionBits)) &
+         kAbsoluteSendTimeMask;
+}
+
 int64_t SystemClock::CurrentUtcTimeNs() const {
-#if defined(__linux__)
-  struct timespec ts;
-  clock_gettime(CLOCK_REALTIME, &ts);
-  return static_cast<int64_t>(ts.tv_sec) * kNanosecondsPerSecond + ts.tv_nsec;
-#elif defined(_WIN32)
-  FILETIME file_time;
-  GetSystemTimeAsFileTime(&file_time);
-  uint64_t file_time_100ns =
-      (static_cast<uint64_t>(file_time.dwHighDateTime) << 32) |
-      file_time.dwLowDateTime;
-  constexpr uint64_t kUnixEpochFileTimeOffsetIn100ns = 116444736000000000ULL;
-  return static_cast<int64_t>(file_time_100ns -
-                              kUnixEpochFileTimeOffsetIn100ns) *
-         100;
-#elif defined(__APPLE__)
-  struct timespec ts;
-  if (clock_gettime(CLOCK_REALTIME, &ts) != 0) {
-    return -1;  // Error case for macOS clock retrieval
-  }
-  return static_cast<int64_t>(ts.tv_sec) * kNanosecondsPerSecond + ts.tv_nsec;
-#endif
-  return 0;
+  return utc_time_ns_source_ ? utc_time_ns_source_() : 0;
 }
 
 int64_t SystemClock::CurrentUtcTimeUs() const {
@@ -188,4 +208,4 @@ int64_t SystemClock::CurrentUtcTimeMs() const {
 int64_t SystemClock::CurrentUtcTime() const {
   return CurrentUtcTimeNs() / kNanosecondsPerSecond;
 }
-}  // namespace minirtc
+} // namespace minirtc

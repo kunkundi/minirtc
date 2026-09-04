@@ -87,6 +87,14 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     bool video_rtx_enabled,
                                     bool hardware_acceleration,
                                     bool native_video_output,
+                                    std::optional<uint8_t>
+                                        video_abs_send_time_ext_id,
+                                    std::optional<uint8_t>
+                                        video_abs_recv_time_ext_id,
+                                    std::optional<uint8_t>
+                                        audio_abs_send_time_ext_id,
+                                    std::optional<uint8_t>
+                                        audio_abs_recv_time_ext_id,
                                     OnReceiveVideo on_receive_video,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
@@ -94,6 +102,10 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
   video_rtx_enabled_ = video_rtx_enabled;
+  video_abs_send_time_ext_id_ = video_abs_send_time_ext_id;
+  video_abs_recv_time_ext_id_ = video_abs_recv_time_ext_id;
+  audio_abs_send_time_ext_id_ = audio_abs_send_time_ext_id;
+  audio_abs_recv_time_ext_id_ = audio_abs_recv_time_ext_id;
   on_receive_video_ = on_receive_video;
   on_receive_audio_ = on_receive_audio;
   on_receive_data_ = on_receive_data;
@@ -147,6 +159,22 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           if (!self->ice_agent_) {
             notify_send_failure();
             return;
+          }
+
+          std::optional<uint8_t> abs_send_time_ext_id =
+              self->video_abs_send_time_ext_id_;
+          if (packet->packet_type() == webrtc::RtpPacketMediaType::kAudio) {
+            abs_send_time_ext_id = self->audio_abs_send_time_ext_id_;
+          }
+          if (abs_send_time_ext_id.has_value()) {
+            const uint64_t send_time_ntp = self->clock_->CurrentNtpTime();
+            if (!packet->UpdateAbsoluteSendTimestamp(
+                    *abs_send_time_ext_id,
+                    SystemClock::NtpToAbsoluteSendTime(send_time_ntp))) {
+              LOG_ERROR("Failed updating RTP Absolute Send Time extension");
+              notify_send_failure();
+              return;
+            }
           }
 
           std::vector<uint8_t> protected_packet;
@@ -262,10 +290,14 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
     for (auto& [channel_name, context] : stream_senders_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
+          context->transceiver->SetAbsoluteSendTimeExtensionId(
+              video_abs_send_time_ext_id_);
           std::static_pointer_cast<VideoChannelSend>(context->transceiver)
               ->Initialize(video_codec_payload_type, paced_sender_,
                            video_rtx_enabled_);
         } else if (context->type == StreamType::kAudio) {
+          context->transceiver->SetAbsoluteSendTimeExtensionId(
+              audio_abs_send_time_ext_id_);
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS,
                                            paced_sender_);
         } else if (context->type == StreamType::kData) {
@@ -283,8 +315,12 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
     for (auto& [_, context] : stream_receivers_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
+          context->transceiver->SetAbsoluteSendTimeExtensionId(
+              video_abs_recv_time_ext_id_);
           context->transceiver->Initialize(video_codec_payload_type);
         } else if (context->type == StreamType::kAudio) {
+          context->transceiver->SetAbsoluteSendTimeExtensionId(
+              audio_abs_recv_time_ext_id_);
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS);
         } else if (context->type == StreamType::kData) {
           rtp::PAYLOAD_TYPE data_pt = context->reliable

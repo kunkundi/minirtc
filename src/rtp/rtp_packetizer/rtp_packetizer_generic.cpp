@@ -5,7 +5,7 @@ namespace minirtc {
 RtpPacketizerGeneric::RtpPacketizerGeneric(uint32_t ssrc, uint32_t payload_type)
     : version_(kRtpVersion),
       has_padding_(false),
-      has_extension_(true),
+      has_extension_(false),
       csrc_count_(0),
       marker_(false),
       payload_type_(payload_type),
@@ -19,35 +19,6 @@ RtpPacketizerGeneric::RtpPacketizerGeneric(uint32_t ssrc, uint32_t payload_type)
 
 RtpPacketizerGeneric::~RtpPacketizerGeneric() {}
 
-void RtpPacketizerGeneric::AddAbsSendTimeExtension(
-    std::vector<uint8_t>& rtp_packet_frame) {
-  uint16_t extension_profile = 0xBEDE;  // One-byte header extension
-  uint8_t sub_extension_id = 3;         // ID for Absolute Send Time
-  uint8_t sub_extension_length =
-      2;  // Length of the extension data in bytes minus 1
-
-  uint32_t abs_send_time =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::system_clock::now().time_since_epoch())
-          .count();
-  abs_send_time &= 0x00FFFFFF;  // Absolute Send Time is 24 bits
-
-  // Add extension profile
-  rtp_packet_frame.push_back((extension_profile >> 8) & 0xFF);
-  rtp_packet_frame.push_back(extension_profile & 0xFF);
-
-  // Add extension length (in 32-bit words, minus one)
-  rtp_packet_frame.push_back(
-      0x00);  // Placeholder for length, will be updated later
-  rtp_packet_frame.push_back(0x01);  // One 32-bit word
-
-  // Add Absolute Send Time extension
-  rtp_packet_frame.push_back((sub_extension_id << 4) | sub_extension_length);
-  rtp_packet_frame.push_back((abs_send_time >> 16) & 0xFF);
-  rtp_packet_frame.push_back((abs_send_time >> 8) & 0xFF);
-  rtp_packet_frame.push_back(abs_send_time & 0xFF);
-}
-
 std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerGeneric::Build(
     uint8_t* payload, uint32_t payload_size, uint32_t rtp_timestamp,
     bool use_rtp_packet_to_send) {
@@ -60,7 +31,7 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerGeneric::Build(
   for (uint32_t index = 0; index < packet_num; index++) {
     version_ = kRtpVersion;
     has_padding_ = false;
-    has_extension_ = true;
+    has_extension_ = HasAbsoluteSendTimeExtension();
     csrc_count_ = 0;
     marker_ = index == packet_num - 1 ? 1 : 0;
     payload_type_ = rtp::PAYLOAD_TYPE(payload_type_);
@@ -94,7 +65,7 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerGeneric::Build(
     }
 
     if (has_extension_) {
-      AddAbsSendTimeExtension(rtp_packet_frame_);
+      AppendAbsoluteSendTimeExtension(rtp_packet_frame_);
     }
 
     if (index == packet_num - 1 && last_packet_size > 0) {

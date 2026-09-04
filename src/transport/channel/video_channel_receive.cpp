@@ -27,6 +27,8 @@ void VideoChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
   rtp_video_receiver_ =
       std::make_unique<RtpVideoReceiver>(clock_, ice_io_statistics_);
   rtp_video_receiver_->SetMediaConfig(ssrc_, rtx_ssrc_, payload_type);
+  rtp_video_receiver_->SetAbsoluteSendTimeExtensionId(
+      abs_send_time_ext_id_);
   rtp_video_receiver_->SetOnReceiveCompleteFrame(
       [this](std::unique_ptr<ReceivedFrame> received_frame) -> void {
         on_receive_complete_frame_(std::move(received_frame));
@@ -51,6 +53,14 @@ void VideoChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
   });
 
   rtp_video_receiver_->Start();
+}
+
+void VideoChannelReceive::SetAbsoluteSendTimeExtensionId(
+    std::optional<uint8_t> extension_id) {
+  abs_send_time_ext_id_ = extension_id;
+  if (rtp_video_receiver_) {
+    rtp_video_receiver_->SetAbsoluteSendTimeExtensionId(extension_id);
+  }
 }
 
 void VideoChannelReceive::Destroy() {

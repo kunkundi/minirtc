@@ -10,6 +10,7 @@
 #include <atomic>
 #include <deque>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <unordered_set>
 
@@ -68,6 +69,10 @@ class IceTransportController
               rtp::PAYLOAD_TYPE video_codec_payload_type,
               bool video_rtx_enabled, bool hardware_acceleration,
               bool native_video_output,
+              std::optional<uint8_t> video_abs_send_time_ext_id,
+              std::optional<uint8_t> video_abs_recv_time_ext_id,
+              std::optional<uint8_t> audio_abs_send_time_ext_id,
+              std::optional<uint8_t> audio_abs_recv_time_ext_id,
               OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
               OnReceiveData on_receive_data, void* user_data);
   void Destroy();
@@ -366,6 +371,10 @@ class IceTransportController
 
   bool enable_srtp_;
   bool video_rtx_enabled_ = false;
+  std::optional<uint8_t> video_abs_send_time_ext_id_;
+  std::optional<uint8_t> video_abs_recv_time_ext_id_;
+  std::optional<uint8_t> audio_abs_send_time_ext_id_;
+  std::optional<uint8_t> audio_abs_recv_time_ext_id_;
   std::atomic<bool> ice_ready_{false};
   std::atomic<bool> dtls_ready_{false};
   std::atomic<bool> media_transport_ready_{false};

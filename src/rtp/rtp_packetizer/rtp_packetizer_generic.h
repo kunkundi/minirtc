@@ -28,9 +28,6 @@ class RtpPacketizerGeneric : public RtpPacketizer {
   };
 
  private:
-  void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
-
- private:
   uint8_t version_;
   bool has_padding_;
   bool has_extension_;

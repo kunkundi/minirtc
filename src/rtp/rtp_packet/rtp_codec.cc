@@ -450,12 +450,7 @@ void RtpCodec::Encode(uint8_t* buffer, uint32_t size,
       rtp_packet.SetVerion(version_);
       rtp_packet.SetHasPadding(has_padding_);
 
-      has_extension_ = true;
-      uint32_t abs_send_time =
-          std::chrono::duration_cast<std::chrono::microseconds>(
-              std::chrono::system_clock::now().time_since_epoch())
-              .count();
-      rtp_packet.SetAbsoluteSendTimestamp(abs_send_time);
+      has_extension_ = false;
 
       rtp_packet.SetHasExtension(has_extension_);
       rtp_packet.SetMarker(1);
@@ -499,12 +494,7 @@ void RtpCodec::Encode(uint8_t* buffer, uint32_t size,
         rtp_packet.SetVerion(version_);
         rtp_packet.SetHasPadding(has_padding_);
 
-        has_extension_ = true;
-        uint32_t abs_send_time =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count();
-        rtp_packet.SetAbsoluteSendTimestamp(abs_send_time);
+        has_extension_ = false;
 
         rtp_packet.SetHasExtension(has_extension_);
         rtp_packet.SetMarker(index == packet_num - 1 ? 1 : 0);
@@ -558,12 +548,7 @@ void RtpCodec::Encode(uint8_t* buffer, uint32_t size,
         rtp_packet.SetVerion(version_);
         rtp_packet.SetHasPadding(has_padding_);
 
-        has_extension_ = true;
-        uint32_t abs_send_time =
-            std::chrono::duration_cast<std::chrono::microseconds>(
-                std::chrono::system_clock::now().time_since_epoch())
-                .count();
-        rtp_packet.SetAbsoluteSendTimestamp(abs_send_time);
+        has_extension_ = false;
 
         rtp_packet.SetHasExtension(has_extension_);
         rtp_packet.SetMarker(1);
@@ -594,12 +579,7 @@ void RtpCodec::Encode(uint8_t* buffer, uint32_t size,
           rtp_packet.SetVerion(version_);
           rtp_packet.SetHasPadding(has_padding_);
 
-          has_extension_ = true;
-          uint32_t abs_send_time =
-              std::chrono::duration_cast<std::chrono::microseconds>(
-                  std::chrono::system_clock::now().time_since_epoch())
-                  .count();
-          rtp_packet.SetAbsoluteSendTimestamp(abs_send_time);
+          has_extension_ = false;
 
           rtp_packet.SetHasExtension(has_extension_);
           rtp_packet.SetMarker(index == packet_num - 1 ? 1 : 0);

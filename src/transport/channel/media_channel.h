@@ -8,6 +8,7 @@
 #define _MEDIA_CHANNEL_H_
 
 #include <memory>
+#include <optional>
 #include <vector>
 
 #include "encoded_frame.h"
@@ -34,6 +35,9 @@ class MediaChannel {
   }
 
   virtual void Destroy() { LOG_INFO("Destroy() default implementation"); }
+
+  virtual void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id) {}
 
   virtual uint32_t GetSsrc() {
     LOG_INFO("GetSsrc() default implementation");

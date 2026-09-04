@@ -8,6 +8,7 @@
 #define _RTP_AUDIO_SENDER_H_
 
 #include <functional>
+#include <optional>
 
 #include "clock/system_clock.h"
 #include "io_statistics.h"
@@ -31,6 +32,10 @@ class RtpAudioSender : public ThreadBase {
                int64_t media_time_us);
   void SetSendDataFunc(std::function<int(const char *, size_t)> data_send_func);
   uint32_t GetSsrc() { return ssrc_; }
+  void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id) {
+    abs_send_time_ext_id_ = extension_id;
+  }
   void OnReceiverReport(const ReceiverReport &receiver_report) {}
 
  private:
@@ -56,6 +61,7 @@ class RtpAudioSender : public ThreadBase {
   uint32_t total_rtp_payload_sent_ = 0;
   uint32_t total_rtp_packets_sent_ = 0;
   int64_t last_sender_report_time_us_ = 0;
+  std::optional<uint8_t> abs_send_time_ext_id_;
 };
 }  // namespace minirtc
 

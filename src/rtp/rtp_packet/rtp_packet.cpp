@@ -33,6 +33,8 @@ bool RtpPacket::Build(const uint8_t* buffer, uint32_t size) {
 
 bool RtpPacket::Parse(const uint8_t* buffer, uint32_t size) {
   payload_offset_ = 0;
+  csrcs_.clear();
+  extensions_.clear();
 
   if (size < kFixedHeaderSize) {
     LOG_WARN("RtpPacket::Parse: size is too small");
@@ -113,21 +115,35 @@ bool RtpPacket::Parse(const uint8_t* buffer, uint32_t size) {
       return false;
     }
 
-    size_t offset = payload_offset_;
     size_t total_ext_len = extension_len_ * 4;
-    while (offset < payload_offset_ + total_ext_len) {
-      uint8_t id = buffer[offset] >> 4;
-      uint8_t len = (buffer[offset] & 0x0F) + 1;
-      if (offset + 1 + len > payload_offset_ + total_ext_len) {
-        LOG_WARN("RtpPacket::Parse: extension data is too large");
-        return false;
+    if (extension_profile_ == kOneByteExtensionProfileId) {
+      size_t offset = payload_offset_;
+      const size_t extension_end = payload_offset_ + total_ext_len;
+      while (offset < extension_end) {
+        const uint8_t id = buffer[offset] >> 4;
+        if (id == 0) {
+          ++offset;
+          continue;
+        }
+        if (id == 15) {
+          break;
+        }
+
+        const uint8_t len = (buffer[offset] & 0x0F) + 1;
+        if (offset + 1 + len > extension_end) {
+          LOG_WARN("RtpPacket::Parse: extension data is too large");
+          return false;
+        }
+        Extension extension;
+        extension.id = id;
+        extension.len = len;
+        extension.data_offset = offset + 1;
+        extension.data =
+            std::vector<uint8_t>(buffer + extension.data_offset,
+                                 buffer + extension.data_offset + len);
+        extensions_.push_back(std::move(extension));
+        offset += 1 + len;
       }
-      Extension extension;
-      extension.id = id;
-      extension.data =
-          std::vector<uint8_t>(buffer + offset + 1, buffer + offset + 1 + len);
-      extensions_.push_back(extension);
-      offset += 1 + len;
     }
     payload_offset_ += total_ext_len;
   }
@@ -153,5 +169,49 @@ bool RtpPacket::Parse(const uint8_t* buffer, uint32_t size) {
   payload_size_ = size - payload_offset_ - padding_size_;
 
   return true;
+}
+
+bool RtpPacket::UpdateAbsoluteSendTimestamp(uint8_t extension_id,
+                                            uint32_t abs_send_time) {
+  if (extension_profile_ != kOneByteExtensionProfileId) {
+    return false;
+  }
+
+  for (auto& extension : extensions_) {
+    if (extension.id != extension_id || extension.len != 3 ||
+        extension.data_offset + 3 > buffer_.size()) {
+      continue;
+    }
+
+    abs_send_time &= 0x00FFFFFF;
+    uint8_t* data = buffer_.MutableData() + extension.data_offset;
+    data[0] = static_cast<uint8_t>(abs_send_time >> 16);
+    data[1] = static_cast<uint8_t>(abs_send_time >> 8);
+    data[2] = static_cast<uint8_t>(abs_send_time);
+    extension.data.assign(data, data + 3);
+    return true;
+  }
+  return false;
+}
+
+bool RtpPacket::GetAbsoluteSendTimestamp(uint32_t* abs_send_time) const {
+  return abs_send_time_ext_id_.has_value() &&
+         GetAbsoluteSendTimestamp(*abs_send_time_ext_id_, abs_send_time);
+}
+
+bool RtpPacket::GetAbsoluteSendTimestamp(uint8_t extension_id,
+                                         uint32_t* abs_send_time) const {
+  if (!abs_send_time) {
+    return false;
+  }
+  for (const auto& extension : extensions_) {
+    if (extension.id == extension_id && extension.data.size() == 3) {
+      *abs_send_time = (static_cast<uint32_t>(extension.data[0]) << 16) |
+                       (static_cast<uint32_t>(extension.data[1]) << 8) |
+                       extension.data[2];
+      return true;
+    }
+  }
+  return false;
 }
 }  // namespace minirtc

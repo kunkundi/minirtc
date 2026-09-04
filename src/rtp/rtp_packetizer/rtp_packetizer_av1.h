@@ -32,7 +32,6 @@ class RtpPacketizerAv1 : public RtpPacketizer {
   }
 
  private:
-  void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
   void SetAv1AggrHeader(int z, int y, int w, int n) {
     av1_aggr_header_ = 0;
     if (z) av1_aggr_header_ |= (1 << 7);

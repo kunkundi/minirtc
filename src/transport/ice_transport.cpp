@@ -14,6 +14,8 @@
 
 #include "common.h"
 #include "log.h"
+#include "rtp_extension_negotiation.h"
+#include "rtp_header_extension.h"
 #include "rtx_ssrc_mapping.h"
 
 using nlohmann::json;
@@ -53,6 +55,59 @@ std::string GetMediaSection(const std::string& sdp,
   const size_t end = sdp.find("\nm=", start + 1);
   return sdp.substr(start, end == std::string::npos ? std::string::npos
                                                     : end - start);
+}
+
+std::string GetSessionSection(const std::string& sdp) {
+  const size_t media_start = sdp.find("m=");
+  return sdp.substr(0, media_start);
+}
+
+bool HasExtmap(const std::string& sdp_section) {
+  constexpr std::string_view kExtmapPrefix = "a=extmap:";
+  std::istringstream lines(sdp_section);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (Trim(line).rfind(kExtmapPrefix.data(), 0) == 0) {
+      return true;
+    }
+  }
+  return false;
+}
+
+RtpExtensionDirection GetMediaDirection(const std::string& media_section) {
+  std::istringstream lines(media_section);
+  std::string line;
+  while (std::getline(lines, line)) {
+    line = Trim(line);
+    if (line == "a=sendonly") {
+      return RtpExtensionDirection::kSendOnly;
+    }
+    if (line == "a=recvonly") {
+      return RtpExtensionDirection::kRecvOnly;
+    }
+    if (line == "a=inactive") {
+      return RtpExtensionDirection::kInactive;
+    }
+  }
+  return RtpExtensionDirection::kSendRecv;
+}
+
+AbsoluteSendTimeExtensionIds GetAbsoluteSendTimeExtensionIds(
+    const std::string& sdp, const std::string& media_tag) {
+  const std::string media_section = GetMediaSection(sdp, media_tag);
+  const std::string session_section = GetSessionSection(sdp);
+  const bool has_media_extmap = HasExtmap(media_section);
+  const bool has_session_extmap = HasExtmap(session_section);
+  if (has_media_extmap && has_session_extmap) {
+    AbsoluteSendTimeExtensionIds invalid_ids;
+    invalid_ids.valid = false;
+    return invalid_ids;
+  }
+  if (has_media_extmap) {
+    return ParseRemoteAbsoluteSendTimeExtension(
+        media_section, GetMediaDirection(media_section));
+  }
+  return ParseRemoteAbsoluteSendTimeExtension(session_section);
 }
 
 struct VideoTransportCapabilities {
@@ -823,9 +878,19 @@ int IceTransport::AppendLocalCapabilitiesToOffer() {
   }
   video_capabilities += " " + std::to_string(rtp::PAYLOAD_TYPE::RTX);
 
-  std::string video_ssrc_lines = BuildVideoTransportAttributes(
-      preferred_video_pt, true, true, true, true);
-  std::string audio_ssrc_lines;
+  video_abs_send_time_ext_id_ = rtp::kPreferredAbsoluteSendTimeExtensionId;
+  video_abs_recv_time_ext_id_ = rtp::kPreferredAbsoluteSendTimeExtensionId;
+  audio_abs_send_time_ext_id_ = rtp::kPreferredAbsoluteSendTimeExtensionId;
+  audio_abs_recv_time_ext_id_ = rtp::kPreferredAbsoluteSendTimeExtensionId;
+
+  std::string video_ssrc_lines =
+      BuildLocalAbsoluteSendTimeExtmap({video_abs_send_time_ext_id_,
+                                        video_abs_recv_time_ext_id_}) +
+      BuildVideoTransportAttributes(preferred_video_pt, true, true, true,
+                                    true);
+  std::string audio_ssrc_lines =
+      BuildLocalAbsoluteSendTimeExtmap({audio_abs_send_time_ext_id_,
+                                        audio_abs_recv_time_ext_id_});
   std::string data_ssrc_lines;
   AppendLocalSenderSsrcAttributes(true, video_ssrc_lines, audio_ssrc_lines,
                                   data_ssrc_lines);
@@ -864,7 +929,13 @@ int IceTransport::AppendLocalCapabilitiesToAnswer() {
       negotiated_video_pt, remote_video_capabilities.rtx,
       remote_video_capabilities.nack, remote_video_capabilities.fir,
       remote_video_capabilities.reduced_size_rtcp);
-  std::string audio_ssrc_lines;
+  video_ssrc_lines =
+      BuildLocalAbsoluteSendTimeExtmap({video_abs_send_time_ext_id_,
+                                        video_abs_recv_time_ext_id_}) +
+      video_ssrc_lines;
+  std::string audio_ssrc_lines =
+      BuildLocalAbsoluteSendTimeExtmap({audio_abs_send_time_ext_id_,
+                                        audio_abs_recv_time_ext_id_});
   std::string data_ssrc_lines;
   AppendLocalSenderSsrcAttributes(remote_video_capabilities.rtx,
                                   video_ssrc_lines, audio_ssrc_lines,
@@ -874,7 +945,9 @@ int IceTransport::AppendLocalCapabilitiesToAnswer() {
     ice_transport_controller_->Create(
         offer_peer_, remote_user_id_, negotiated_video_pt_,
         remote_video_capabilities.rtx, hardware_acceleration_,
-        native_video_output_,
+        native_video_output_, video_abs_send_time_ext_id_,
+        video_abs_recv_time_ext_id_, audio_abs_send_time_ext_id_,
+        audio_abs_recv_time_ext_id_,
         on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
     ice_transport_controller_->Start();
   }
@@ -1065,6 +1138,41 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   }
 
   if (!remote_capabilities_got_) {
+    const AbsoluteSendTimeExtensionIds video_extension_ids =
+        GetAbsoluteSendTimeExtensionIds(remote_sdp, "video");
+    const AbsoluteSendTimeExtensionIds audio_extension_ids =
+        GetAbsoluteSendTimeExtensionIds(remote_sdp, "audio");
+    video_abs_send_time_ext_id_ = video_extension_ids.send_id;
+    video_abs_recv_time_ext_id_ = video_extension_ids.recv_id;
+    audio_abs_send_time_ext_id_ = audio_extension_ids.send_id;
+    audio_abs_recv_time_ext_id_ = audio_extension_ids.recv_id;
+    if (offer_peer_) {
+      const bool video_id_changed =
+          (video_abs_send_time_ext_id_.has_value() &&
+           *video_abs_send_time_ext_id_ !=
+               rtp::kPreferredAbsoluteSendTimeExtensionId) ||
+          (video_abs_recv_time_ext_id_.has_value() &&
+           *video_abs_recv_time_ext_id_ !=
+               rtp::kPreferredAbsoluteSendTimeExtensionId);
+      if (video_id_changed) {
+        LOG_WARN("Answer remapped offered video Absolute Send Time id");
+        video_abs_send_time_ext_id_.reset();
+        video_abs_recv_time_ext_id_.reset();
+      }
+      const bool audio_id_changed =
+          (audio_abs_send_time_ext_id_.has_value() &&
+           *audio_abs_send_time_ext_id_ !=
+               rtp::kPreferredAbsoluteSendTimeExtensionId) ||
+          (audio_abs_recv_time_ext_id_.has_value() &&
+           *audio_abs_recv_time_ext_id_ !=
+               rtp::kPreferredAbsoluteSendTimeExtensionId);
+      if (audio_id_changed) {
+        LOG_WARN("Answer remapped offered audio Absolute Send Time id");
+        audio_abs_send_time_ext_id_.reset();
+        audio_abs_recv_time_ext_id_.reset();
+      }
+    }
+
     if (ice_transport_controller_) {
       ice_transport_controller_->SetSrtpEnabled(enable_srtp_);
     }
@@ -1103,7 +1211,9 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
       ice_transport_controller_->Create(
           offer_peer_, remote_user_id_, negotiated_video_pt_,
           remote_video_capabilities.rtx, hardware_acceleration_,
-          native_video_output_,
+          native_video_output_, video_abs_send_time_ext_id_,
+          video_abs_recv_time_ext_id_, audio_abs_send_time_ext_id_,
+          audio_abs_recv_time_ext_id_,
           on_receive_video_, on_receive_audio_, on_receive_data_, user_data_);
       ice_transport_controller_->Start();
     }

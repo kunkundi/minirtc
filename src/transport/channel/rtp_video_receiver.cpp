@@ -299,6 +299,8 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
   rtp_packet_received.set_ecn(EcnMarking::kEct0);
   rtp_packet_received.set_recovered(is_recovered);
   rtp_packet_received.set_payload_type_frequency(kVideoPayloadTypeFrequency);
+  rtp_packet_received.SetAbsoluteSendTimeExtensionId(
+      abs_send_time_ext_id_);
 
   const uint8_t padding_payload_type =
       static_cast<uint8_t>(media_payload_type_) - 1;

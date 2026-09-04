@@ -35,34 +35,6 @@ void RtpPacketToSend::set_packet_type(RtpPacketMediaType type) {
   packet_type_ = type;
 }
 
-void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame) {
-  uint16_t extension_profile = 0xBEDE;  // One-byte header extension
-  uint8_t sub_extension_id = 3;         // ID for Absolute Send Time
-  uint8_t sub_extension_length =
-      2;  // Length of the extension data in bytes minus 1
-
-  uint32_t abs_send_time =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::system_clock::now().time_since_epoch())
-          .count();
-  abs_send_time &= 0x00FFFFFF;  // Absolute Send Time is 24 bits
-
-  // Add extension profile
-  rtp_packet_frame.push_back((extension_profile >> 8) & 0xFF);
-  rtp_packet_frame.push_back(extension_profile & 0xFF);
-
-  // Add extension length (in 32-bit words, minus one)
-  rtp_packet_frame.push_back(
-      0x00);  // Placeholder for length, will be updated later
-  rtp_packet_frame.push_back(0x01);  // One 32-bit word
-
-  // Add Absolute Send Time extension
-  rtp_packet_frame.push_back((sub_extension_id << 4) | sub_extension_length);
-  rtp_packet_frame.push_back((abs_send_time >> 16) & 0xFF);
-  rtp_packet_frame.push_back((abs_send_time >> 8) & 0xFF);
-  rtp_packet_frame.push_back(abs_send_time & 0xFF);
-}
-
 bool RtpPacketToSend::BuildRtxPacket() {
   if (!retransmitted_sequence_number_.has_value()) {
     return false;
@@ -79,6 +51,8 @@ bool RtpPacketToSend::BuildRtxPacket() {
   std::vector<uint32_t> csrcs = Csrcs();
 
   uint32_t timestamp = Timestamp();
+  const CopyOnWriteBuffer original_buffer = Buffer();
+  const size_t original_header_size = HeaderSize();
 
   if (!csrc_count) {
   }
@@ -108,8 +82,14 @@ bool RtpPacketToSend::BuildRtxPacket() {
   }
 
   if (has_extension) {
-    std::vector<Extension> extensions = Extensions();
-    AddAbsSendTimeExtension(rtp_packet_frame_);
+    const size_t extension_offset = kFixedHeaderSize + csrc_count * 4;
+    if (extension_offset > original_header_size ||
+        original_header_size > original_buffer.size()) {
+      return false;
+    }
+    rtp_packet_frame_.insert(
+        rtp_packet_frame_.end(), original_buffer.data() + extension_offset,
+        original_buffer.data() + original_header_size);
   }
 
   rtp_packet_frame_.push_back((retransmitted_sequence_number_.value() >> 8) &

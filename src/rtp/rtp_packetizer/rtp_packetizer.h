@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 #include "rtp_packet.h"
 #include "rtp_packet_to_send.h"
@@ -34,6 +35,19 @@ class RtpPacketizer {
       bool use_rtp_packet_to_send) = 0;
 
   virtual void SetIsKeyFrame(bool is_key_frame) {}
+
+  void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id);
+
+ protected:
+  bool HasAbsoluteSendTimeExtension() const {
+    return abs_send_time_ext_id_.has_value();
+  }
+  void AppendAbsoluteSendTimeExtension(
+      std::vector<uint8_t>& rtp_packet_frame) const;
+
+ private:
+  std::optional<uint8_t> abs_send_time_ext_id_;
 };
 }  // namespace minirtc
 

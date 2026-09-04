@@ -8,12 +8,17 @@
 #define _SYSTEM_CLOCK_H_
 
 #include <cstdint>
+#include <functional>
 
 namespace minirtc {
 
 class SystemClock {
- public:
+public:
+  using TimeSource = std::function<int64_t()>;
+
   SystemClock();
+  SystemClock(TimeSource monotonic_time_ns_source,
+              TimeSource utc_time_ns_source);
   ~SystemClock() = default;
 
   int64_t CurrentTime() const;
@@ -31,17 +36,22 @@ class SystemClock {
 
   static uint32_t CompactNtp(uint64_t ntp_time);
   static int64_t CompactNtpIntervalToMilliseconds(uint32_t interval);
+  // Absolute Send Time is the middle 24 bits of an NTP timestamp: 6 bits of
+  // whole seconds followed by 18 fractional bits (Q6.18).
+  static uint32_t NtpToAbsoluteSendTime(uint64_t ntp_time);
 
   int64_t CurrentUtcTime() const;
   int64_t CurrentUtcTimeMs() const;
   int64_t CurrentUtcTimeUs() const;
   int64_t CurrentUtcTimeNs() const;
 
- private:
+private:
   uint64_t UtcTimeUsToNtp(int64_t utc_time_us) const;
 
+  const TimeSource monotonic_time_ns_source_;
+  const TimeSource utc_time_ns_source_;
   const int64_t monotonic_to_utc_offset_us_;
 };
-}  // namespace minirtc
+} // namespace minirtc
 
 #endif

@@ -47,6 +47,18 @@ int RtpAudioSender::SendRtpPacket(QueuedAudioPacket queued_packet) {
   }
 
   RtpPacket& rtp_packet = *queued_packet.packet;
+  const int64_t send_time_us = clock_ ? clock_->CurrentTimeUs() : 0;
+  if (clock_ && abs_send_time_ext_id_.has_value()) {
+    const uint64_t send_time_ntp =
+        clock_->MonotonicTimeUsToNtp(send_time_us);
+    if (!rtp_packet.UpdateAbsoluteSendTimestamp(
+            *abs_send_time_ext_id_,
+            SystemClock::NtpToAbsoluteSendTime(send_time_ntp))) {
+      LOG_ERROR("Failed updating audio Absolute Send Time extension");
+      return -1;
+    }
+  }
+
   int ret = data_send_func_((const char*)rtp_packet.Buffer().data(),
                             rtp_packet.Size());
   if (-2 == ret) {
@@ -67,7 +79,7 @@ int RtpAudioSender::SendRtpPacket(QueuedAudioPacket queued_packet) {
   }
 
   if (clock_) {
-    const int64_t now_us = clock_->CurrentTimeUs();
+    const int64_t now_us = send_time_us;
     if (last_sender_report_time_us_ == 0 ||
         now_us - last_sender_report_time_us_ >= kSenderReportIntervalUs) {
       last_sender_report_time_us_ = now_us;

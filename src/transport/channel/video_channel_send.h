@@ -63,6 +63,9 @@ class VideoChannelSend : public MediaChannel {
                   bool rtx_enabled);
   void Destroy() override;
 
+  void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id) override;
+
   uint32_t GetSsrc() override { return ssrc_; }
 
   uint32_t GetRtxSsrc() override { return rtx_ssrc_; }
@@ -92,6 +95,7 @@ class VideoChannelSend : public MediaChannel {
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpPacketizer> rtp_packetizer_ = nullptr;
   std::unique_ptr<RtpPacketizer> padding_packetizer_ = nullptr;
+  std::optional<uint8_t> abs_send_time_ext_id_;
 
  private:
   uint32_t ssrc_ = 0;

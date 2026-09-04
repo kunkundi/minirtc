@@ -4,6 +4,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <optional>
 #include <vector>
 
 #include "copy_on_write_buffer.h"
@@ -212,23 +213,12 @@ class RtpPacket {
   void SetCsrcs(std::vector<uint32_t> &csrcs) { csrcs_ = csrcs; }
   void SetSize(size_t size) { size_ = size; }
 
-  void SetAbsoluteSendTimestamp(uint32_t abs_send_time) {
-    // Absolute Send Time is a 24-bit field, we need to ensure it fits in 24
-    // bits
-    abs_send_time &= 0x00FFFFFF;
+  bool UpdateAbsoluteSendTimestamp(uint8_t extension_id,
+                                   uint32_t abs_send_time);
 
-    // Set the extension profile to 0xBEDE (one-byte header)
-    extension_profile_ = kOneByteExtensionProfileId;
-    extension_len_ = 5;  // 2 bytes for profile, 2 bytes for length, 3 bytes for
-                         // abs_send_time
-
-    Extension extension;
-    extension.id = 0;
-    extension.len = 2;
-    extension.data.push_back(extension.id << 4 | extension.len);
-    extension.data.push_back((abs_send_time >> 16) & 0xFF);
-    extension.data.push_back((abs_send_time >> 8) & 0xFF);
-    extension.data.push_back(abs_send_time & 0xFF);
+  void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id) {
+    abs_send_time_ext_id_ = extension_id;
   }
 
   void UpdateSequenceNumber(uint16_t sequence_number) {
@@ -242,8 +232,9 @@ class RtpPacket {
 
  public:
   struct Extension {
-    uint8_t id;
-    uint8_t len;
+    uint8_t id = 0;
+    uint8_t len = 0;
+    size_t data_offset = 0;
     std::vector<uint8_t> data;
   };
 
@@ -263,18 +254,9 @@ class RtpPacket {
   uint16_t ExtensionLen() const { return extension_len_; }
   std::vector<Extension> Extensions() const { return extensions_; }
 
-  uint32_t GetAbsoluteSendTimestamp(uint32_t *abs_send_time) const {
-    if (!extensions_.empty()) {
-      for (auto &ext : extensions_) {
-        if (ext.id == 1) {
-          *abs_send_time = (ext.data[0] << 16) | (ext.data[1] << 8) |
-                           ext.data[2];  // 24-bit value
-          return *abs_send_time;
-        }
-      }
-    }
-    return 0;
-  }
+  bool GetAbsoluteSendTimestamp(uint32_t *abs_send_time) const;
+  bool GetAbsoluteSendTimestamp(uint8_t extension_id,
+                                uint32_t *abs_send_time) const;
 
   // Payload
   const uint8_t *Payload() { return Buffer().data() + payload_offset_; };
@@ -316,6 +298,7 @@ class RtpPacket {
   uint16_t extension_profile_ = 0;
   uint16_t extension_len_ = 0;
   std::vector<Extension> extensions_;
+  std::optional<uint8_t> abs_send_time_ext_id_;
 
   // Payload
   size_t payload_offset_ = 0;

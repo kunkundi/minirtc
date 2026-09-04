@@ -9,6 +9,7 @@
 
 #include <atomic>
 #include <iostream>
+#include <optional>
 
 #include "clock/system_clock.h"
 #include "ice_agent.h"
@@ -265,6 +266,10 @@ class IceTransport {
   rtp::PAYLOAD_TYPE negotiated_video_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE negotiated_audio_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE negotiated_data_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
+  std::optional<uint8_t> video_abs_send_time_ext_id_;
+  std::optional<uint8_t> video_abs_recv_time_ext_id_;
+  std::optional<uint8_t> audio_abs_send_time_ext_id_;
+  std::optional<uint8_t> audio_abs_recv_time_ext_id_;
 };
 }  // namespace minirtc
 

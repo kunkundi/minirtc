@@ -26,6 +26,10 @@ void AudioChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
   paced_sender_ = packet_sender;
   rtp_packetizer_ =
       RtpPacketizer::Create(payload_type, rtp_audio_sender_->GetSsrc());
+  rtp_packetizer_->SetAbsoluteSendTimeExtensionId(
+      abs_send_time_ext_id_);
+  rtp_audio_sender_->SetAbsoluteSendTimeExtensionId(
+      abs_send_time_ext_id_);
 
   rtp_audio_sender_->SetSendDataFunc(
       [this](const char *data, size_t size) -> int {
@@ -45,6 +49,17 @@ void AudioChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
       });
 
   rtp_audio_sender_->Start();
+}
+
+void AudioChannelSend::SetAbsoluteSendTimeExtensionId(
+    std::optional<uint8_t> extension_id) {
+  abs_send_time_ext_id_ = extension_id;
+  if (rtp_packetizer_) {
+    rtp_packetizer_->SetAbsoluteSendTimeExtensionId(extension_id);
+  }
+  if (rtp_audio_sender_) {
+    rtp_audio_sender_->SetAbsoluteSendTimeExtensionId(extension_id);
+  }
 }
 
 void AudioChannelSend::Destroy() {

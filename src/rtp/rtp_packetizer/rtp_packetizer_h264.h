@@ -39,7 +39,6 @@ class RtpPacketizerH264 : public RtpPacketizer {
  private:
   bool EncodeH264Fua(RtpPacket& rtp_packet, uint8_t* payload,
                      size_t payload_size);
-  void AddAbsSendTimeExtension(std::vector<uint8_t>& rtp_packet_frame);
 
  private:
   std::mutex packetizer_mutex_;

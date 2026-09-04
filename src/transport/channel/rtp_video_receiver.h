@@ -43,6 +43,11 @@ class RtpVideoReceiver : public ThreadBase {
 
   void SetSendDataFunc(std::function<int(const char*, size_t)> data_send_func);
 
+  void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id) {
+    abs_send_time_ext_id_ = extension_id;
+  }
+
   void SetMediaConfig(uint32_t remote_ssrc, uint32_t rtx_ssrc,
                       rtp::PAYLOAD_TYPE media_payload_type) {
     if (remote_ssrc_.load() != remote_ssrc) {
@@ -189,6 +194,7 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<uint32_t> remote_ssrc_{0};
   std::atomic<uint32_t> rtx_ssrc_{0};
   rtp::PAYLOAD_TYPE media_payload_type_ = rtp::PAYLOAD_TYPE::H264;
+  std::optional<uint8_t> abs_send_time_ext_id_;
   RtpTimestampMapper rtp_timestamp_mapper_;
   std::shared_ptr<SystemClock> system_clock_;
   std::shared_ptr<webrtc::Clock> clock_;

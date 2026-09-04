@@ -215,7 +215,7 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
               reinterpret_cast<const std::byte*>(encoded_frame.Buffer()),
               encoded_frame.Size(),
               std::chrono::duration<double, std::micro>(
-                  encoded_frame.EncodedTimestamp()));
+                  encoded_frame.CapturedTimestamp()));
           return 0;
         });
     return 0;

@@ -31,6 +31,9 @@ class VideoChannelReceive : public MediaChannel {
   void Initialize(rtp::PAYLOAD_TYPE payload_type) override;
   void Destroy() override;
 
+  void SetAbsoluteSendTimeExtensionId(
+      std::optional<uint8_t> extension_id) override;
+
   int OnReceiveRtpPacket(const char *data, size_t size) override;
 
   void RequestKeyFrame() override;
@@ -50,6 +53,7 @@ class VideoChannelReceive : public MediaChannel {
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpVideoReceiver> rtp_video_receiver_ = nullptr;
+  std::optional<uint8_t> abs_send_time_ext_id_;
   std::function<void(std::unique_ptr<ReceivedFrame>)>
       on_receive_complete_frame_ = nullptr;
 

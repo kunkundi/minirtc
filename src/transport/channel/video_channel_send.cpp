@@ -59,7 +59,22 @@ void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
   rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
   padding_packetizer_ = RtpPacketizer::Create(
       payload_type, rtx_enabled_ ? rtx_ssrc_ : ssrc_);
+  rtp_packetizer_->SetAbsoluteSendTimeExtensionId(
+      abs_send_time_ext_id_);
+  padding_packetizer_->SetAbsoluteSendTimeExtensionId(
+      abs_send_time_ext_id_);
   task_queue_history_ = std::make_shared<TaskQueue>("rtp pakcet history");
+}
+
+void VideoChannelSend::SetAbsoluteSendTimeExtensionId(
+    std::optional<uint8_t> extension_id) {
+  abs_send_time_ext_id_ = extension_id;
+  if (rtp_packetizer_) {
+    rtp_packetizer_->SetAbsoluteSendTimeExtensionId(extension_id);
+  }
+  if (padding_packetizer_) {
+    padding_packetizer_->SetAbsoluteSendTimeExtensionId(extension_id);
+  }
 }
 
 void VideoChannelSend::OnSentRtpPacket(
