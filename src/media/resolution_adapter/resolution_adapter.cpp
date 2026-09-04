@@ -295,9 +295,9 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
   return 0;
 }
 
-int ResolutionAdapter::ResolutionDowngrade(const XVideoFrame* video_frame,
+int ResolutionAdapter::ResolutionDowngrade(const MiniRtcVideoFrame* video_frame,
                                            int target_width, int target_height,
-                                           XVideoFrame* scaled_frame) {
+                                           MiniRtcVideoFrame* scaled_frame) {
   if (!video_frame || !video_frame->data || !scaled_frame ||
       target_width <= 0 || target_height <= 0) {
     return -1;

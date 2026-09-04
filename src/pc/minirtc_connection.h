@@ -17,24 +17,24 @@
 
 namespace minirtc {
 
-class MiniRTCConnection : public ConnectionInterface {
+class MiniRtcConnection : public ConnectionInterface {
  public:
-  MiniRTCConnection(std::shared_ptr<SystemClock> clock,
+  MiniRtcConnection(std::shared_ptr<SystemClock> clock,
                     std::shared_ptr<WsClient> ws, const ConnectionInfo& info,
                     const MediaStreamIds& media_stream_ids,
                     const ConnectionCallbacks& callbacks);
-  virtual ~MiniRTCConnection();
+  virtual ~MiniRtcConnection();
 
  public:
   int Init() override;
 
   int ReleaseAllIceTransmission() override;
 
-  int SendVideoFrame(const XVideoFrame* video_frame,
+  int SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                      const char* stream_id) override;
   int RequestVideoKeyFrame(const char* stream_id) override;
   int RequestAllVideoKeyFrames() override;
-  int SendAudioFrame(const char* data, size_t size,
+  int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                      const char* stream_id) override;
   int SendDataFrame(const char* data, size_t size,
                     const char* stream_id) override;

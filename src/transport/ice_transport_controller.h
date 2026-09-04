@@ -39,7 +39,7 @@
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 
-typedef void (*OnReceiveVideo)(const XVideoFrame*, const char*, const size_t,
+typedef void (*OnReceiveVideo)(const MiniRtcVideoFrame*, const char*, const size_t,
                                const char*, const size_t, void*);
 typedef void (*OnReceiveAudio)(const char*, size_t, const char*, const size_t,
                                const char*, const size_t, void*);
@@ -89,9 +89,10 @@ class IceTransportController
   uint32_t AddDataReceiveChannel(const std::string& channel_name, uint32_t ssrc,
                                  bool reliable = false);
 
-  int SendVideo(const XVideoFrame* video_frame,
+  int SendVideo(const MiniRtcVideoFrame* video_frame,
                 const std::string& channel_name);
-  int SendAudio(const char* data, size_t size, const std::string& channel_name);
+  int SendAudio(const MiniRtcAudioFrame* audio_frame,
+                const std::string& channel_name);
   int SendData(const char* data, size_t size, const std::string& channel_name);
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);

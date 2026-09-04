@@ -42,7 +42,6 @@ class Stream {
   std::shared_ptr<::rtc::RtcpSrReporter> sender_;
   std::shared_ptr<MediaCodec> codec_;
   std::mutex audio_encode_mutex_;
-  uint64_t audio_timestamp_us_ = 0;
 };
 
 class DataChannelTransport
@@ -65,7 +64,7 @@ class DataChannelTransport
       VideoDegradationPreference video_degradation_preference);
 
  public:
-  int SendVideoFrame(const XVideoFrame* video_frame,
+  int SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                      const std::string& stream_id);
 
   void RequestVideoKeyFrame(const std::string& stream_id) {
@@ -78,7 +77,7 @@ class DataChannelTransport
   }
   void RequestAllVideoKeyFrames();
 
-  int SendAudioFrame(const char* data, size_t size,
+  int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                      const std::string& stream_id);
 
   int SendDataFrame(const char* data, size_t size,

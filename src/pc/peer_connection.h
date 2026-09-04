@@ -32,7 +32,7 @@ namespace minirtc {
 typedef void (*OnReceiveBuffer)(const char*, size_t, const char*, const size_t,
                                 const char*, const size_t, void*);
 
-typedef void (*OnReceiveVideoFrame)(const XVideoFrame* video_frame, const char*,
+typedef void (*OnReceiveVideoFrame)(const MiniRtcVideoFrame* video_frame, const char*,
                                     const size_t, const char*, const size_t,
                                     void*);
 
@@ -42,7 +42,7 @@ typedef void (*OnConnectionStatus)(ConnectionStatus, const char*, const size_t,
                                    void*);
 
 typedef void (*OnNetStatusReport)(const char*, const size_t, TraversalMode,
-                                  const XNetTrafficStats*, const char*,
+                                  const MiniRtcNetTrafficStats*, const char*,
                                   const size_t, void*);
 
 typedef void (*OnSignalMessage)(const char*, size_t, void*);
@@ -107,18 +107,19 @@ class PeerConnection {
 
   SignalStatus GetSignalStatus();
 
-  int SendVideoFrame(const XVideoFrame* video_frame, const char* stream_id);
+  int SendVideoFrame(const MiniRtcVideoFrame* video_frame, const char* stream_id);
   int RequestVideoKeyFrame(const char* stream_id);
   int RequestAllVideoKeyFrames();
-  int SendAudioFrame(const char* data, size_t size, const char* stream_id);
+  int SendAudioFrame(const MiniRtcAudioFrame* audio_frame, const char* stream_id);
   int SendDataFrame(const char* data, size_t size, const char* stream_id);
   int SendReliableDataFrame(const char* data, size_t size,
                             const char* stream_id);
 
-  int SendVideoFrameToPeer(const XVideoFrame* video_frame,
+  int SendVideoFrameToPeer(const MiniRtcVideoFrame* video_frame,
                            const char* stream_id, const char* remote_peer_id,
                            size_t remote_peer_id_size);
-  int SendAudioFrameToPeer(const char* data, size_t size, const char* stream_id,
+  int SendAudioFrameToPeer(const MiniRtcAudioFrame* audio_frame,
+                           const char* stream_id,
                            const char* remote_peer_id,
                            size_t remote_peer_id_size);
   int SendDataFrameToPeer(const char* data, size_t size, const char* stream_id,

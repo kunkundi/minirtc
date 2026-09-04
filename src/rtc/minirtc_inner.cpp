@@ -11,6 +11,14 @@
 
 using nlohmann::json;
 
+namespace {
+
+bool IsValidAudioFrameInput(const MiniRtcAudioFrame* audio_frame) {
+  return audio_frame && audio_frame->data && audio_frame->size > 0;
+}
+
+}  // namespace
+
 PeerPtr* CreatePeer(const Params* params) {
   if (!params) {
     std::cerr << "Params is null" << std::endl;
@@ -135,7 +143,7 @@ int AddDataStream(PeerPtr* peer_ptr, const char* stream_id, bool reliable) {
   return peer_ptr->peer_connection->AddDataStream(stream_id, reliable);
 }
 
-int SendVideoFrame(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
+int SendVideoFrame(PeerPtr* peer_ptr, const MiniRtcVideoFrame* video_frame,
                    const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
@@ -170,21 +178,19 @@ int RequestAllVideoKeyFrames(PeerPtr* peer_ptr) {
   return peer_ptr->peer_connection->RequestAllVideoKeyFrames();
 }
 
-int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+int SendAudioFrame(PeerPtr* peer_ptr, const MiniRtcAudioFrame* audio_frame,
                    const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
   }
 
-  if (!data || size <= 0) {
-    LOG_ERROR("Invaild video frame");
+  if (!IsValidAudioFrameInput(audio_frame)) {
+    LOG_ERROR("Invalid audio frame");
     return -1;
   }
 
-  peer_ptr->peer_connection->SendAudioFrame(data, size, stream_id);
-
-  return 0;
+  return peer_ptr->peer_connection->SendAudioFrame(audio_frame, stream_id);
 }
 
 int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
@@ -221,7 +227,7 @@ int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
   return 0;
 }
 
-int SendVideoFrameToPeer(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
+int SendVideoFrameToPeer(PeerPtr* peer_ptr, const MiniRtcVideoFrame* video_frame,
                          const char* stream_id, const char* remote_peer_id,
                          size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
@@ -240,7 +246,8 @@ int SendVideoFrameToPeer(PeerPtr* peer_ptr, const XVideoFrame* video_frame,
   return 0;
 }
 
-int SendAudioFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,
+int SendAudioFrameToPeer(PeerPtr* peer_ptr,
+                         const MiniRtcAudioFrame* audio_frame,
                          const char* stream_id, const char* remote_peer_id,
                          size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
@@ -248,10 +255,13 @@ int SendAudioFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,
     return -1;
   }
 
-  peer_ptr->peer_connection->SendAudioFrameToPeer(
-      data, size, stream_id, remote_peer_id, remote_peer_id_size);
+  if (!IsValidAudioFrameInput(audio_frame)) {
+    LOG_ERROR("Invalid audio frame");
+    return -1;
+  }
 
-  return 0;
+  return peer_ptr->peer_connection->SendAudioFrameToPeer(
+      audio_frame, stream_id, remote_peer_id, remote_peer_id_size);
 }
 
 int SendDataFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,

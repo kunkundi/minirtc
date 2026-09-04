@@ -614,13 +614,13 @@ bool IceTransportController::CheckSteamContext(
   return true;
 }
 
-int IceTransportController::SendVideo(const XVideoFrame* video_frame,
+int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
                                       const std::string& channel_name) {
   if (!is_running_.load()) {
     return -1;
   }
 
-  const XNativeVideoFrame* native_frame =
+  const MiniRtcNativeVideoFrame* native_frame =
       GetNativeVideoFrameInput(video_frame);
   size_t required_cpu_size = 0;
   const bool valid_cpu_frame =
@@ -1521,9 +1521,10 @@ int IceTransportController::OnVideoEncoded(
   return context->transceiver->SendVideo(encoded_frame);
 }
 
-int IceTransportController::SendAudio(const char* data, size_t size,
+int IceTransportController::SendAudio(const MiniRtcAudioFrame* audio_frame,
                                       const std::string& channel_name) {
-  if (!is_running_.load()) {
+  if (!is_running_.load() || !audio_frame || !audio_frame->data ||
+      audio_frame->size == 0) {
     return -1;
   }
 
@@ -1541,9 +1542,12 @@ int IceTransportController::SendAudio(const char* data, size_t size,
     return -1;
   }
 
-  const int64_t captured_timestamp_us = clock_->CurrentTimeUs();
+  const int64_t captured_timestamp_us =
+      audio_frame->captured_timestamp != 0
+          ? static_cast<int64_t>(audio_frame->captured_timestamp)
+          : clock_->CurrentTimeUs();
   int ret = context->codec->Encode(
-      (uint8_t*)data, size,
+      reinterpret_cast<const uint8_t*>(audio_frame->data), audio_frame->size,
       [this, channel_name, context,
        captured_timestamp_us](char* encoded_audio_buffer,
                               size_t size) -> int {
@@ -1809,16 +1813,16 @@ void IceTransportController::OnReceiveCompleteFrame(
             return;
           }
 
-          XVideoFrame x_video_frame{};
-          x_video_frame.data = (const char*)decoded_frame->Buffer();
-          x_video_frame.width = decoded_frame->DecodedWidth();
-          x_video_frame.height = decoded_frame->DecodedHeight();
-          x_video_frame.size = decoded_frame->Size();
-          x_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
-          x_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
-          x_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
-          x_video_frame.native_frame = decoded_frame->NativeFrame();
-          on_receive_video(&x_video_frame, remote_user_id.data(),
+          MiniRtcVideoFrame minirtc_video_frame{};
+          minirtc_video_frame.data = (const char*)decoded_frame->Buffer();
+          minirtc_video_frame.width = decoded_frame->DecodedWidth();
+          minirtc_video_frame.height = decoded_frame->DecodedHeight();
+          minirtc_video_frame.size = decoded_frame->Size();
+          minirtc_video_frame.captured_timestamp = decoded_frame->CapturedTimestamp();
+          minirtc_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
+          minirtc_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
+          minirtc_video_frame.native_frame = decoded_frame->NativeFrame();
+          on_receive_video(&minirtc_video_frame, remote_user_id.data(),
                            remote_user_id.size(), channel_name.data(),
                            channel_name.size(), user_data);
         });

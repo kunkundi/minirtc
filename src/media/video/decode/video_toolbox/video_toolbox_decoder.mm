@@ -504,12 +504,12 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
   const uint32_t height = static_cast<uint32_t>(CVPixelBufferGetHeight(pixel_buffer));
 
   DecodedFrame decoded_frame;
-  XNativeVideoFrame native_frame{};
+  MiniRtcNativeVideoFrame native_frame{};
   if (impl->native_video_output_) {
     // All Apple consumers can present the IOSurface-backed image directly.
     // The descriptor remains borrowed and is valid only during this callback.
     native_frame.struct_size = sizeof(native_frame);
-    native_frame.type = XNativeVideoFrameCVPixelBuffer;
+    native_frame.type = MiniRtcNativeVideoFrameCVPixelBuffer;
     native_frame.width = width;
     native_frame.height = height;
     native_frame.payload.cv_pixel_buffer = pixel_buffer;

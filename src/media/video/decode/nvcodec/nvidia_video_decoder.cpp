@@ -42,7 +42,7 @@ class NvidiaNativeNv12Frame final {
         std::move(state), frame, width, height, pitch);
   }
 
-  XNativeVideoFrame* Descriptor() { return &descriptor_; }
+  MiniRtcNativeVideoFrame* Descriptor() { return &descriptor_; }
 
   void AddRef() { references_.fetch_add(1, std::memory_order_relaxed); }
 
@@ -58,7 +58,7 @@ class NvidiaNativeNv12Frame final {
                          uint32_t pitch)
       : state_(std::move(state)), frame_(frame) {
     descriptor_.struct_size = sizeof(descriptor_);
-    descriptor_.type = XNativeVideoFrameCudaNv12;
+    descriptor_.type = MiniRtcNativeVideoFrameCudaNv12;
     descriptor_.width = width;
     descriptor_.height = height;
     descriptor_.payload.cuda_nv12 = {
@@ -132,7 +132,7 @@ class NvidiaNativeNv12Frame final {
   std::atomic<uint32_t> references_{1};
   std::shared_ptr<NvidiaVideoDecoderState> state_;
   uint8_t* frame_ = nullptr;
-  XNativeVideoFrame descriptor_{};
+  MiniRtcNativeVideoFrame descriptor_{};
 };
 
 }  // namespace

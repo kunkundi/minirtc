@@ -58,11 +58,11 @@ enum TurnMode : uint8_t {
   TurnForceTcp,      // Relay-only candidates using TURN/TCP.
 };
 
-enum XNativeVideoFrameType : uint32_t {
-  XNativeVideoFrameNone = 0,
-  XNativeVideoFrameCpuNv12 = 1,
-  XNativeVideoFrameCudaNv12 = 2,
-  XNativeVideoFrameCVPixelBuffer = 3,
+enum MiniRtcNativeVideoFrameType : uint32_t {
+  MiniRtcNativeVideoFrameNone = 0,
+  MiniRtcNativeVideoFrameCpuNv12 = 1,
+  MiniRtcNativeVideoFrameCudaNv12 = 2,
+  MiniRtcNativeVideoFrameCVPixelBuffer = 3,
 };
 
 #ifdef __cplusplus
@@ -74,7 +74,7 @@ typedef struct {
   const uint8_t* uv_plane;
   uint32_t y_stride;
   uint32_t uv_stride;
-} XCpuNv12Frame;
+} MiniRtcCpuNv12Frame;
 
 typedef struct {
   uint64_t y_device_pointer;
@@ -82,13 +82,13 @@ typedef struct {
   uint32_t y_stride;
   uint32_t uv_stride;
   void* context;
-} XCudaNv12Frame;
+} MiniRtcCudaNv12Frame;
 
 typedef union {
-  XCpuNv12Frame cpu_nv12;
-  XCudaNv12Frame cuda_nv12;
+  MiniRtcCpuNv12Frame cpu_nv12;
+  MiniRtcCudaNv12Frame cuda_nv12;
   void* cv_pixel_buffer;
-} XNativeVideoFramePayload;
+} MiniRtcNativeVideoFramePayload;
 
 // A tagged, ref-counted video-frame descriptor. NV12 data is interpreted as
 // video (limited) range by default. Exactly one payload member is active,
@@ -96,16 +96,16 @@ typedef union {
 // callback; retain owner before keeping a copy and release it after last use.
 typedef struct {
   uint32_t struct_size;
-  XNativeVideoFrameType type;
+  MiniRtcNativeVideoFrameType type;
   uint32_t width;
   uint32_t height;
-  XNativeVideoFramePayload payload;
+  MiniRtcNativeVideoFramePayload payload;
   void* owner;
   void (*retain)(void* owner);
   void (*release)(void* owner);
   int (*copy_to_nv12)(void* owner, uint8_t* destination,
                       size_t destination_size);
-} XNativeVideoFrame;
+} MiniRtcNativeVideoFrame;
 
 typedef struct {
   // Packed NV12 pixels. May be null when native_frame is provided.
@@ -121,30 +121,38 @@ typedef struct {
   // Optional platform-neutral capture or decoded frame descriptor. The pointer
   // is valid only for the duration of the API call or receive callback; follow
   // the descriptor's retain/release contract before keeping a copy.
-  const XNativeVideoFrame* native_frame;
-} XVideoFrame;
+  const MiniRtcNativeVideoFrame* native_frame;
+} MiniRtcVideoFrame;
+
+// A captured 10 ms PCM audio frame. The timestamp uses the same monotonic
+// microsecond clock as MiniRtcVideoFrame::captured_timestamp.
+typedef struct {
+  const char* data;
+  size_t size;
+  uint64_t captured_timestamp;
+} MiniRtcAudioFrame;
 
 typedef struct {
   uint32_t bitrate;
   uint32_t rtp_packet_count;
   float loss_rate;
-} XInboundStats;
+} MiniRtcInboundStats;
 
 typedef struct {
   uint32_t bitrate;
   uint32_t rtp_packet_count;
-} XOutboundStats;
+} MiniRtcOutboundStats;
 
 typedef struct {
-  XInboundStats video_inbound_stats;
-  XOutboundStats video_outbound_stats;
-  XInboundStats audio_inbound_stats;
-  XOutboundStats audio_outbound_stats;
-  XInboundStats data_inbound_stats;
-  XOutboundStats data_outbound_stats;
-  XInboundStats total_inbound_stats;
-  XOutboundStats total_outbound_stats;
-} XNetTrafficStats;
+  MiniRtcInboundStats video_inbound_stats;
+  MiniRtcOutboundStats video_outbound_stats;
+  MiniRtcInboundStats audio_inbound_stats;
+  MiniRtcOutboundStats audio_outbound_stats;
+  MiniRtcInboundStats data_inbound_stats;
+  MiniRtcOutboundStats data_outbound_stats;
+  MiniRtcInboundStats total_inbound_stats;
+  MiniRtcOutboundStats total_outbound_stats;
+} MiniRtcNetTrafficStats;
 
 typedef struct Peer PeerPtr;
 
@@ -154,7 +162,7 @@ typedef void (*OnReceiveBuffer)(const char* data, size_t size,
                                 const char* source_id,
                                 const size_t source_id_size, void* user_data);
 
-typedef void (*OnReceiveVideoFrame)(const XVideoFrame* video_frame,
+typedef void (*OnReceiveVideoFrame)(const MiniRtcVideoFrame* video_frame,
                                     const char* remote_peer_id,
                                     const size_t remote_peer_id_size,
                                     const char* source_id,
@@ -174,7 +182,7 @@ typedef void (*OnConnectionStatus)(ConnectionStatus status,
 
 typedef void (*OnNetStatusReport)(const char* peer_id,
                                   const size_t peer_id_size, TraversalMode mode,
-                                  const XNetTrafficStats* stats,
+                                  const MiniRtcNetTrafficStats* stats,
                                   const char* remote_peer_id,
                                   const size_t remote_peer_id_size,
                                   void* user_data);
@@ -193,8 +201,8 @@ typedef struct {
   char turn_server_password[256];
   char log_path[256];
   bool hardware_acceleration;
-  // Prefer XVideoFrame::native_frame instead of copying decoded pixels into
-  // XVideoFrame::data. Decoders that cannot expose a descriptor ignore this
+  // Prefer MiniRtcVideoFrame::native_frame instead of copying decoded pixels into
+  // MiniRtcVideoFrame::data. Decoders that cannot expose a descriptor ignore this
   // option and continue to provide CPU data.
   bool native_video_output;
   bool av1_encoding;
@@ -246,7 +254,7 @@ MINIRTC_API int AddDataStream(PeerPtr* peer_ptr, const char* stream_id,
 
 // Send media/data frames to all peers
 MINIRTC_API int SendVideoFrame(PeerPtr* peer_ptr,
-                               const XVideoFrame* video_frame,
+                               const MiniRtcVideoFrame* video_frame,
                                const char* stream_id);
 
 MINIRTC_API int RequestVideoKeyFrame(PeerPtr* peer_ptr,
@@ -254,7 +262,8 @@ MINIRTC_API int RequestVideoKeyFrame(PeerPtr* peer_ptr,
 
 MINIRTC_API int RequestAllVideoKeyFrames(PeerPtr* peer_ptr);
 
-MINIRTC_API int SendAudioFrame(PeerPtr* peer_ptr, const char* data, size_t size,
+MINIRTC_API int SendAudioFrame(PeerPtr* peer_ptr,
+                               const MiniRtcAudioFrame* audio_frame,
                                const char* stream_id);
 
 MINIRTC_API int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
@@ -265,13 +274,14 @@ MINIRTC_API int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data,
 
 // Send media/data frames to peer
 MINIRTC_API int SendVideoFrameToPeer(PeerPtr* peer_ptr,
-                                     const XVideoFrame* video_frame,
+                                     const MiniRtcVideoFrame* video_frame,
                                      const char* stream_id,
                                      const char* remote_peer_id,
                                      size_t remote_peer_id_size);
 
-MINIRTC_API int SendAudioFrameToPeer(PeerPtr* peer_ptr, const char* data,
-                                     size_t size, const char* stream_id,
+MINIRTC_API int SendAudioFrameToPeer(PeerPtr* peer_ptr,
+                                     const MiniRtcAudioFrame* audio_frame,
+                                     const char* stream_id,
                                      const char* remote_peer_id,
                                      size_t remote_peer_id_size);
 

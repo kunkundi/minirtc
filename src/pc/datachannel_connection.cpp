@@ -86,7 +86,7 @@ int DataChannelConnection::ReleaseAllIceTransmission() {
   return 0;
 }
 
-int DataChannelConnection::SendVideoFrame(const XVideoFrame* video_frame,
+int DataChannelConnection::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                                           const char* stream_id) {
   if (!dc_ready_) {
     return -1;
@@ -118,7 +118,7 @@ int DataChannelConnection::RequestAllVideoKeyFrames() {
   return 0;
 }
 
-int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
+int DataChannelConnection::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                                           const char* stream_id) {
   if (!dc_ready_) {
     return -1;
@@ -128,7 +128,8 @@ int DataChannelConnection::SendAudioFrame(const char* data, size_t size,
     return -1;
   }
 
-  return dc_transport_->SendAudioFrame(data, size, stream_id);
+  return dc_transport_->SendAudioFrame(audio_frame,
+                                       stream_id ? stream_id : "");
 }
 
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,

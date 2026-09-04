@@ -241,8 +241,8 @@ int NvidiaVideoEncoder::Encode(
 #endif
 
   const NvEncInputFrame* encoder_inputframe = encoder_->GetNextInputFrame();
-  const XNativeVideoFrame* native_frame = raw_frame.NativeFrame();
-  if (native_frame && native_frame->type == XNativeVideoFrameCpuNv12) {
+  const MiniRtcNativeVideoFrame* native_frame = raw_frame.NativeFrame();
+  if (native_frame && native_frame->type == MiniRtcNativeVideoFrameCpuNv12) {
     const auto& nv12 = native_frame->payload.cpu_nv12;
     NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
         cuda_context_, nv12.y_plane, nv12.y_stride, nv12.uv_plane,

@@ -1,7 +1,5 @@
 #include "audio_channel_send.h"
 
-#include <chrono>
-
 #include "common.h"
 #include "log.h"
 
@@ -53,14 +51,6 @@ void AudioChannelSend::Destroy() {
   if (rtp_audio_sender_) {
     rtp_audio_sender_->Stop();
   }
-}
-
-int AudioChannelSend::SendAudio(char* data, size_t size) {
-  const int64_t captured_timestamp_us =
-      std::chrono::duration_cast<std::chrono::microseconds>(
-          std::chrono::steady_clock::now().time_since_epoch())
-          .count();
-  return SendAudio(data, size, captured_timestamp_us);
 }
 
 int AudioChannelSend::SendAudio(char* data, size_t size,

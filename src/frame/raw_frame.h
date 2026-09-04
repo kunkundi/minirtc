@@ -22,7 +22,7 @@ class RawFrame : public VideoFrame {
       : VideoFrame(size, width, height) {}
   RawFrame(size_t size) : VideoFrame(size) {}
   RawFrame(const uint8_t *buffer, size_t size) : VideoFrame(buffer, size) {}
-  explicit RawFrame(const XNativeVideoFrame& native_frame)
+  explicit RawFrame(const MiniRtcNativeVideoFrame& native_frame)
       : native_frame_(&native_frame) {
     if (const auto* frame = native_frame_.Get()) {
       size_t size = 0;
@@ -45,7 +45,7 @@ class RawFrame : public VideoFrame {
     captured_timestamp_us_ = captured_timestamp_us;
   }
 
-  const XNativeVideoFrame* NativeFrame() const {
+  const MiniRtcNativeVideoFrame* NativeFrame() const {
     return native_frame_.Get();
   }
 

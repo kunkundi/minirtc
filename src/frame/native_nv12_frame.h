@@ -44,7 +44,7 @@ class NativeNv12FramePool final
 
 class NativeNv12Frame final {
  public:
-  XNativeVideoFrame* Descriptor() { return &descriptor_; }
+  MiniRtcNativeVideoFrame* Descriptor() { return &descriptor_; }
   uint8_t* YPlane() { return storage_.data(); }
   uint8_t* UvPlane() {
     return storage_.data() + static_cast<size_t>(width_) * height_;
@@ -73,7 +73,7 @@ class NativeNv12Frame final {
   std::vector<uint8_t> storage_;
   uint32_t width_ = 0;
   uint32_t height_ = 0;
-  XNativeVideoFrame descriptor_{};
+  MiniRtcNativeVideoFrame descriptor_{};
 };
 
 }  // namespace minirtc

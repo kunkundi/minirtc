@@ -605,7 +605,7 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id) {
 
   std::shared_ptr<ConnectionInterface> connection;
   if (remote_user_id.find("web") == std::string::npos) {
-    connection = std::make_shared<MiniRTCConnection>(
+    connection = std::make_shared<MiniRtcConnection>(
         clock_, ws_transport_, connection_info_, media_stream_ids_, callbacks);
   } else {
     connection = std::make_shared<DataChannelConnection>(
@@ -708,7 +708,7 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
   }
 }
 
-int PeerConnection::SendVideoFrame(const XVideoFrame* video_frame,
+int PeerConnection::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                                    const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
@@ -746,12 +746,12 @@ int PeerConnection::RequestAllVideoKeyFrames() {
   return ret;
 }
 
-int PeerConnection::SendAudioFrame(const char* data, size_t size,
+int PeerConnection::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                                    const char* stream_id) {
   std::shared_lock lock(peer_connection_map_mutex_);
   for (auto& peer_connection : peer_connection_map_) {
     if (peer_connection.second) {
-      peer_connection.second->SendAudioFrame(data, size, stream_id);
+      peer_connection.second->SendAudioFrame(audio_frame, stream_id);
     }
   }
 
@@ -782,7 +782,7 @@ int PeerConnection::SendReliableDataFrame(const char* data, size_t size,
   return 0;
 }
 
-int PeerConnection::SendVideoFrameToPeer(const XVideoFrame* video_frame,
+int PeerConnection::SendVideoFrameToPeer(const MiniRtcVideoFrame* video_frame,
                                          const char* stream_id,
                                          const char* remote_peer_id,
                                          size_t remote_peer_id_size) {
@@ -800,7 +800,7 @@ int PeerConnection::SendVideoFrameToPeer(const XVideoFrame* video_frame,
   return 0;
 }
 
-int PeerConnection::SendAudioFrameToPeer(const char* data, size_t size,
+int PeerConnection::SendAudioFrameToPeer(const MiniRtcAudioFrame* audio_frame,
                                          const char* stream_id,
                                          const char* remote_peer_id,
                                          size_t remote_peer_id_size) {
@@ -808,7 +808,7 @@ int PeerConnection::SendAudioFrameToPeer(const char* data, size_t size,
   auto it = peer_connection_map_.find(
       std::string(remote_peer_id, remote_peer_id_size));
   if (it != peer_connection_map_.end() && it->second) {
-    it->second->SendAudioFrame(data, size, stream_id);
+    it->second->SendAudioFrame(audio_frame, stream_id);
   } else {
     LOG_WARN("SendAudioFrame to remote peer [{}] failed, peer not found",
              std::string(remote_peer_id, remote_peer_id_size));
@@ -945,7 +945,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           password = "";
         }
 
-        XNetTrafficStats net_traffic_stats;
+        MiniRtcNetTrafficStats net_traffic_stats;
         memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
         on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),

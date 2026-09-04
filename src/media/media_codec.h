@@ -134,7 +134,7 @@ class MediaCodec {
   virtual bool SupportsDynamicEncodingSpeedPriority() const { return false; }
 
   virtual bool SupportsNativeFrameInput(
-      XNativeVideoFrameType frame_type) const {
+      MiniRtcNativeVideoFrameType frame_type) const {
     (void)frame_type;
     return false;
   }

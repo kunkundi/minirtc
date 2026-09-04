@@ -234,12 +234,12 @@ int IceTransport::InitIceTransmission(std::string& stun_ip, int stun_port,
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
         if (on_receive_net_status_report_) {
-          XNetTrafficStats xnet_traffic_stats;
-          memcpy(&xnet_traffic_stats, &net_traffic_stats,
-                 sizeof(XNetTrafficStats));
+          MiniRtcNetTrafficStats minirtc_net_traffic_stats;
+          memcpy(&minirtc_net_traffic_stats, &net_traffic_stats,
+                 sizeof(MiniRtcNetTrafficStats));
           on_receive_net_status_report_(
               user_id_.data(), user_id_.size(), TraversalMode(traversal_type_),
-              &xnet_traffic_stats, remote_user_id_.data(),
+              &minirtc_net_traffic_stats, remote_user_id_.data(),
               remote_user_id_.size(), user_data_);
         }
       });
@@ -381,7 +381,7 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     LOG_INFO("Traversal using p2p");
     traversal_type_ = TraversalType::TP2P;
   }
-  XNetTrafficStats net_traffic_stats;
+  MiniRtcNetTrafficStats net_traffic_stats;
   memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
   on_receive_net_status_report_(user_id_.data(), user_id_.size(),
@@ -1316,7 +1316,7 @@ std::vector<rtp::PAYLOAD_TYPE> IceTransport::GetNegotiatedCapabilities() {
   return {negotiated_video_pt_, negotiated_audio_pt_, negotiated_data_pt_};
 }
 
-int IceTransport::SendVideoFrame(const XVideoFrame* video_frame,
+int IceTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                                  const std::string& stream_name) {
   if (!component_state_tracker_.IsUsable()) {
     const NiceComponentState state = state_.load();
@@ -1350,7 +1350,7 @@ int IceTransport::RequestAllVideoKeyFrames() {
   return 0;
 }
 
-int IceTransport::SendAudioFrame(const char* data, size_t size,
+int IceTransport::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                                  const std::string& stream_name) {
   if (!component_state_tracker_.IsUsable()) {
     const NiceComponentState state = state_.load();
@@ -1360,7 +1360,7 @@ int IceTransport::SendAudioFrame(const char* data, size_t size,
   }
 
   if (ice_transport_controller_) {
-    return ice_transport_controller_->SendAudio(data, size, stream_name);
+    return ice_transport_controller_->SendAudio(audio_frame, stream_name);
   }
 
   return -1;

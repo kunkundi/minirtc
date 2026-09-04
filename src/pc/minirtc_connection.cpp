@@ -7,7 +7,7 @@ namespace minirtc {
 
 using nlohmann::json;
 
-MiniRTCConnection::MiniRTCConnection(std::shared_ptr<SystemClock> clock,
+MiniRtcConnection::MiniRtcConnection(std::shared_ptr<SystemClock> clock,
                                      std::shared_ptr<WsClient> ws,
                                      const ConnectionInfo& info,
                                      const MediaStreamIds& media_stream_ids,
@@ -18,9 +18,9 @@ MiniRTCConnection::MiniRTCConnection(std::shared_ptr<SystemClock> clock,
       media_stream_ids_(media_stream_ids),
       callbacks_(callbacks) {}
 
-MiniRTCConnection::~MiniRTCConnection() {}
+MiniRtcConnection::~MiniRtcConnection() {}
 
-int MiniRTCConnection::Init() {
+int MiniRtcConnection::Init() {
   on_ice_status_change_ = [this](std::string ice_status,
                                  const std::string& user_id) {
     if ("connecting" == ice_status) {
@@ -94,7 +94,7 @@ int MiniRTCConnection::Init() {
   return 0;
 }
 
-int MiniRTCConnection::SendVideoFrame(const XVideoFrame* video_frame,
+int MiniRtcConnection::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                                       const char* stream_id) {
   if (!ice_transport_) {
     return -1;
@@ -105,7 +105,7 @@ int MiniRTCConnection::SendVideoFrame(const XVideoFrame* video_frame,
   return 0;
 }
 
-int MiniRTCConnection::RequestVideoKeyFrame(const char* stream_id) {
+int MiniRtcConnection::RequestVideoKeyFrame(const char* stream_id) {
   if (!ice_transport_) {
     return -1;
   }
@@ -113,7 +113,7 @@ int MiniRTCConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ice_transport_->RequestVideoKeyFrame(stream_id ? stream_id : "");
 }
 
-int MiniRTCConnection::RequestAllVideoKeyFrames() {
+int MiniRtcConnection::RequestAllVideoKeyFrames() {
   if (!ice_transport_) {
     return -1;
   }
@@ -121,7 +121,7 @@ int MiniRTCConnection::RequestAllVideoKeyFrames() {
   return ice_transport_->RequestAllVideoKeyFrames();
 }
 
-int MiniRTCConnection::ReleaseAllIceTransmission() {
+int MiniRtcConnection::ReleaseAllIceTransmission() {
   if (ice_transport_) {
     ice_transport_->DestroyIceTransmission();
   }
@@ -130,7 +130,7 @@ int MiniRTCConnection::ReleaseAllIceTransmission() {
   return 0;
 }
 
-int MiniRTCConnection::SendAudioFrame(const char* data, size_t size,
+int MiniRtcConnection::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                                       const char* stream_id) {
   if (!ice_transport_) {
     return -1;
@@ -140,12 +140,12 @@ int MiniRTCConnection::SendAudioFrame(const char* data, size_t size,
     return -1;
   }
 
-  ice_transport_->SendAudioFrame(data, size, stream_id);
+  ice_transport_->SendAudioFrame(audio_frame, stream_id ? stream_id : "");
 
   return 0;
 }
 
-int MiniRTCConnection::SendDataFrame(const char* data, size_t size,
+int MiniRtcConnection::SendDataFrame(const char* data, size_t size,
                                      const char* stream_id) {
   if (!ice_transport_) {
     return -1;
@@ -160,7 +160,7 @@ int MiniRTCConnection::SendDataFrame(const char* data, size_t size,
   return 0;
 }
 
-int MiniRTCConnection::SendReliableDataFrame(const char* data, size_t size,
+int MiniRtcConnection::SendReliableDataFrame(const char* data, size_t size,
                                              const char* stream_id) {
   if (!ice_transport_) {
     return -1;
@@ -175,7 +175,7 @@ int MiniRTCConnection::SendReliableDataFrame(const char* data, size_t size,
   return 0;
 }
 
-void MiniRTCConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
+void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
   switch (msg.type) {
     case IceWorkMsg::Type::Login: {
       break;

@@ -53,9 +53,9 @@ class DecodedFrame : public VideoFrame {
     decoded_height_ = decoded_height;
   }
 
-  const XNativeVideoFrame* NativeFrame() const { return native_frame_; }
+  const MiniRtcNativeVideoFrame* NativeFrame() const { return native_frame_; }
 
-  void SetNativeFrame(const XNativeVideoFrame* native_frame) {
+  void SetNativeFrame(const MiniRtcNativeVideoFrame* native_frame) {
     native_frame_ = native_frame;
   }
 
@@ -65,7 +65,7 @@ class DecodedFrame : public VideoFrame {
   int64_t decoded_timestamp_us_ = 0;
   uint32_t decoded_width_ = 0;
   uint32_t decoded_height_ = 0;
-  const XNativeVideoFrame* native_frame_ = nullptr;
+  const MiniRtcNativeVideoFrame* native_frame_ = nullptr;
 };
 }  // namespace minirtc
 

@@ -406,10 +406,10 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
   const int raw_height = static_cast<int>(raw_frame.Height());
   const uint64_t expected_size =
       static_cast<uint64_t>(raw_frame.Width()) * raw_frame.Height() * 3 / 2;
-  const XNativeVideoFrame* native_frame = raw_frame.NativeFrame();
+  const MiniRtcNativeVideoFrame* native_frame = raw_frame.NativeFrame();
   const bool has_native_pixel_buffer =
       native_frame &&
-      native_frame->type == XNativeVideoFrameCVPixelBuffer &&
+      native_frame->type == MiniRtcNativeVideoFrameCVPixelBuffer &&
       native_frame->payload.cv_pixel_buffer;
   if (raw_width <= 0 || raw_height <= 0 || raw_width % 2 != 0 ||
       raw_height % 2 != 0 ||

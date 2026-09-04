@@ -29,8 +29,8 @@ class ResolutionAdapter {
   int GetResolution(int target_bitrate, int current_width, int current_height,
                     int* target_width, int* target_height);
 
-  int ResolutionDowngrade(const XVideoFrame* video_frame, int target_width,
-                          int target_height, XVideoFrame* scaled_frame);
+  int ResolutionDowngrade(const MiniRtcVideoFrame* video_frame, int target_width,
+                          int target_height, MiniRtcVideoFrame* scaled_frame);
 
   int ResolutionDowngrade(const RawFrame& video_frame, int target_width,
                           int target_height, RawFrame& scaled_frame);

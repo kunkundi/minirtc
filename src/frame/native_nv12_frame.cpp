@@ -104,7 +104,7 @@ NativeNv12Frame::NativeNv12Frame(std::shared_ptr<NativeNv12FramePool> pool,
       width_(width),
       height_(height) {
   descriptor_.struct_size = sizeof(descriptor_);
-  descriptor_.type = XNativeVideoFrameCpuNv12;
+  descriptor_.type = MiniRtcNativeVideoFrameCpuNv12;
   descriptor_.width = width_;
   descriptor_.height = height_;
   descriptor_.payload.cpu_nv12 = {YPlane(), UvPlane(), width_, width_};

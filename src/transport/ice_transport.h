@@ -73,7 +73,7 @@ class IceTransport {
 
   void SetOnReceiveNetStatusReportFunc(
       std::function<void(const char*, const size_t, TraversalMode,
-                         const XNetTrafficStats*, const char*, const size_t,
+                         const MiniRtcNetTrafficStats*, const char*, const size_t,
                          void*)>
           on_receive_net_status_report) {
     on_receive_net_status_report_ = on_receive_net_status_report;
@@ -83,14 +83,14 @@ class IceTransport {
 
   int SetTransmissionId(const std::string& transmission_id);
 
-  int SendVideoFrame(const XVideoFrame* video_frame,
+  int SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                      const std::string& stream_name);
 
   int RequestVideoKeyFrame(const std::string& stream_name);
 
   int RequestAllVideoKeyFrames();
 
-  int SendAudioFrame(const char* data, size_t size,
+  int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                      const std::string& stream_name);
 
   int SendDataFrame(const char* data, size_t size,
@@ -247,7 +247,7 @@ class IceTransport {
       nullptr;
 
   std::function<void(const char*, const size_t, TraversalMode,
-                     const XNetTrafficStats*, const char*, const size_t, void*)>
+                     const MiniRtcNetTrafficStats*, const char*, const size_t, void*)>
       on_receive_net_status_report_ = nullptr;
 
  private:

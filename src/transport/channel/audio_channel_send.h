@@ -36,7 +36,6 @@ class AudioChannelSend : public MediaChannel {
     return 0;
   }
 
-  int SendAudio(char* data, size_t size) override;
   int SendAudio(char* data, size_t size,
                 int64_t captured_timestamp_us) override;
 

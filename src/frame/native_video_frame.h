@@ -29,8 +29,8 @@ inline bool GetNv12FrameSize(uint32_t width, uint32_t height, size_t* size) {
   return true;
 }
 
-inline const XNativeVideoFrame* GetNativeVideoFrame(
-    const XNativeVideoFrame* frame) {
+inline const MiniRtcNativeVideoFrame* GetNativeVideoFrame(
+    const MiniRtcNativeVideoFrame* frame) {
   size_t frame_size = 0;
   if (!frame ||
       frame->struct_size < static_cast<uint32_t>(sizeof(*frame)) ||
@@ -43,14 +43,14 @@ inline const XNativeVideoFrame* GetNativeVideoFrame(
   }
 
   switch (frame->type) {
-    case XNativeVideoFrameCpuNv12:
+    case MiniRtcNativeVideoFrameCpuNv12:
       return frame->payload.cpu_nv12.y_plane &&
                      frame->payload.cpu_nv12.uv_plane &&
                      frame->payload.cpu_nv12.y_stride >= frame->width &&
                      frame->payload.cpu_nv12.uv_stride >= frame->width
                  ? frame
                  : nullptr;
-    case XNativeVideoFrameCudaNv12:
+    case MiniRtcNativeVideoFrameCudaNv12:
       return frame->payload.cuda_nv12.y_device_pointer != 0 &&
                      frame->payload.cuda_nv12.uv_device_pointer != 0 &&
                      frame->payload.cuda_nv12.y_stride >= frame->width &&
@@ -58,17 +58,17 @@ inline const XNativeVideoFrame* GetNativeVideoFrame(
                      frame->payload.cuda_nv12.context
                  ? frame
                  : nullptr;
-    case XNativeVideoFrameCVPixelBuffer:
+    case MiniRtcNativeVideoFrameCVPixelBuffer:
       return frame->payload.cv_pixel_buffer ? frame : nullptr;
-    case XNativeVideoFrameNone:
+    case MiniRtcNativeVideoFrameNone:
     default:
       return nullptr;
   }
 }
 
-inline const XNativeVideoFrame* GetNativeVideoFrameInput(
-    const XVideoFrame* frame) {
-  const XNativeVideoFrame* native_frame =
+inline const MiniRtcNativeVideoFrame* GetNativeVideoFrameInput(
+    const MiniRtcVideoFrame* frame) {
+  const MiniRtcNativeVideoFrame* native_frame =
       GetNativeVideoFrame(frame ? frame->native_frame : nullptr);
   return native_frame && frame->width == native_frame->width &&
                  frame->height == native_frame->height
@@ -76,7 +76,7 @@ inline const XNativeVideoFrame* GetNativeVideoFrameInput(
              : nullptr;
 }
 
-inline bool IsValidVideoFrameInput(const XVideoFrame* frame) {
+inline bool IsValidVideoFrameInput(const MiniRtcVideoFrame* frame) {
   if (GetNativeVideoFrameInput(frame)) {
     return true;
   }
@@ -90,7 +90,7 @@ class NativeVideoFrameRef {
  public:
   NativeVideoFrameRef() = default;
 
-  explicit NativeVideoFrameRef(const XNativeVideoFrame* frame) {
+  explicit NativeVideoFrameRef(const MiniRtcNativeVideoFrame* frame) {
     frame = GetNativeVideoFrame(frame);
     if (frame) {
       frame_ = *frame;
@@ -128,14 +128,14 @@ class NativeVideoFrameRef {
     std::swap(valid_, other.valid_);
   }
 
-  const XNativeVideoFrame* Get() const {
+  const MiniRtcNativeVideoFrame* Get() const {
     return valid_ ? &frame_ : nullptr;
   }
 
   explicit operator bool() const { return valid_; }
 
  private:
-  XNativeVideoFrame frame_{};
+  MiniRtcNativeVideoFrame frame_{};
   bool valid_ = false;
 };
 
