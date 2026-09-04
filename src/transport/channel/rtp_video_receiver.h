@@ -107,7 +107,12 @@ class RtpVideoReceiver : public ThreadBase {
   void DropFrameAssembly(uint32_t timestamp);
   bool IsFrameTimestampObsolete(uint32_t timestamp);
   void MarkFrameDiscardedLocked(uint32_t timestamp);
-  std::pair<int64_t, int64_t> FrameRecoveryDeadlinesMs();
+  struct FrameRecoveryTiming {
+    int64_t soft_deadline_ms;
+    int64_t soft_fir_confirmation_delay_ms;
+    int64_t hard_deadline_ms;
+  };
+  FrameRecoveryTiming GetFrameRecoveryTiming();
   void MaybeLogRecoveryStats(bool force = false);
   void MaybeRetryKeyFrameRequest();
   void OnCompleteKeyFrame(int64_t now_ms);
@@ -155,6 +160,7 @@ class RtpVideoReceiver : public ThreadBase {
     bool is_keyframe = false;
     std::optional<uint16_t> last_sequence_number;
     bool recovery_escalated = false;
+    bool soft_fir_requested = false;
   };
   struct RtpTimestampLess {
     bool operator()(uint32_t lhs, uint32_t rhs) const {
@@ -229,6 +235,8 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<uint64_t> recovery_fir_sent_{0};
   std::atomic<uint64_t> recovery_fir_suppressed_{0};
   std::atomic<uint64_t> recovery_fir_failed_{0};
+  std::atomic<uint64_t> recovery_soft_fir_sent_{0};
+  std::atomic<uint64_t> recovery_soft_fir_avoided_{0};
   std::atomic<uint64_t> recovery_fir_responses_{0};
   std::atomic<uint64_t> recovery_fir_response_total_ms_{0};
   std::atomic<uint64_t> recovery_fir_response_max_ms_{0};

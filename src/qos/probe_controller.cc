@@ -299,6 +299,46 @@ void ProbeController::EnableRepeatedInitialProbing(bool enable) {
   }
 }
 
+void ProbeController::SetRelayPath(bool relay_path) {
+  if (relay_path_ == relay_path) {
+    return;
+  }
+
+  relay_path_ = relay_path;
+  config_ = ProbeControllerConfig();
+  if (relay_path_) {
+    // Starting from 1.5 Mbps, probe at 3 and 6 Mbps rather than the direct
+    // path's 7.5 and 15 Mbps. Continue in 1.5x steps only after receiving at
+    // least 85% of the preceding target, and stop repeating bootstrap probes
+    // sooner. This reduces the chance that padding competes with the first
+    // keyframes on a lossy TURN allocation.
+    config_.first_exponential_probe_scale = 2.0;
+    config_.second_exponential_probe_scale = 4.0;
+    config_.further_exponential_probe_scale = 1.5;
+    config_.further_probe_threshold = 0.85;
+    config_.repeated_initial_probing_time_period = TimeDelta::Seconds(3);
+    config_.initial_probe_duration = TimeDelta::Millis(80);
+
+    // Apply the same restraint to later allocation and ALR probes so the
+    // relay is not hit by a second abrupt burst immediately after startup.
+    config_.alr_probing_interval = TimeDelta::Seconds(8);
+    config_.alr_probe_scale = 1.5;
+    config_.second_allocation_probe_scale = 1.5;
+    config_.allocation_probe_limit_by_current_scale = 1.5;
+    config_.loss_limited_probe_scale = 1.25;
+  }
+
+  LOG_INFO(
+      "Bandwidth probe profile updated: path={} initial_scales={}/{} "
+      "further_scale={} further_threshold={} repeated_window_ms={}",
+      relay_path_ ? "relay" : "direct",
+      config_.first_exponential_probe_scale,
+      config_.second_exponential_probe_scale,
+      config_.further_exponential_probe_scale,
+      config_.further_probe_threshold,
+      config_.repeated_initial_probing_time_period.ms());
+}
+
 void ProbeController::SetAlrStartTimeMs(
     std::optional<int64_t> alr_start_time_ms) {
   if (alr_start_time_ms) {

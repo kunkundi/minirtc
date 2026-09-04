@@ -137,6 +137,11 @@ class ProbeController {
   // SetBitrates.
   void EnableRepeatedInitialProbing(bool enable);
 
+  // TURN relays are more sensitive to bursty padding and large probe jumps.
+  // Keep the default WebRTC profile for direct paths and select a gentler
+  // profile only after ICE confirms that the active pair is relayed.
+  void SetRelayPath(bool relay_path);
+
   void SetAlrStartTimeMs(std::optional<int64_t> alr_start_time);
   void SetAlrEndedTimeMs(int64_t alr_end_time);
 
@@ -175,6 +180,7 @@ class ProbeController {
 
   bool network_available_;
   bool repeated_initial_probing_enabled_ = false;
+  bool relay_path_ = false;
   Timestamp last_allowed_repeated_initial_probe_ = Timestamp::MinusInfinity();
   BandwidthLimitedCause bandwidth_limited_cause_ =
       BandwidthLimitedCause::kDelayBasedLimited;

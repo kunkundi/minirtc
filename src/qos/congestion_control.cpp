@@ -23,6 +23,9 @@ constexpr float kDefaultPaceMultiplier = 2.5f;
 // However, if we actually are overusing, we want to drop to something slightly
 // below the current throughput estimate to drain the network queues.
 constexpr double kProbeDropThroughputFraction = 0.85;
+
+constexpr DataRate kDirectStartingRate = DataRate::BitsPerSec(2500000);
+constexpr DataRate kRelayStartingRate = DataRate::BitsPerSec(1500000);
 }  // namespace
 
 BandwidthLimitedCause GetBandwidthLimitedCause(LossBasedState loss_based_state,
@@ -85,7 +88,7 @@ CongestionControl::CongestionControl()
   config.constraints.min_data_rate = DataRate::BitsPerSec(300000);
   config.constraints.max_data_rate =
       DataRate::BitsPerSec(kDefaultMaxNetworkBitrateBps);
-  config.constraints.starting_rate = DataRate::BitsPerSec(2500000);
+  config.constraints.starting_rate = kDirectStartingRate;
 
   config.stream_based_config.at_time = Timestamp::PlusInfinity();
   config.stream_based_config.requests_alr_probing = true;
@@ -108,8 +111,54 @@ void CongestionControl::SetRepeatedInitialProbing(bool enable) {
   probe_controller_->EnableRepeatedInitialProbing(enable);
 }
 
+NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
+                                                     Timestamp at_time) {
+  NetworkControlUpdate update;
+  if (relay_path_ == relay_path) {
+    return update;
+  }
+
+  relay_path_ = relay_path;
+  probe_controller_->SetRelayPath(relay_path);
+  const DataRate desired_starting_rate =
+      relay_path_ ? kRelayStartingRate : kDirectStartingRate;
+
+  if (initial_config_) {
+    initial_config_->constraints.starting_rate = desired_starting_rate;
+    LOG_INFO("Congestion-control startup profile updated: path={} "
+             "starting_bitrate_bps={}",
+             relay_path_ ? "relay" : "direct",
+             desired_starting_rate.bps());
+    return update;
+  }
+
+  // Lower an established controller immediately when ICE moves onto a relay.
+  // Do not force a mid-session upward jump when a direct pair replaces TURN;
+  // the estimator can ramp up safely using the restored direct probe profile.
+  if (!relay_path_ && network_available_) {
+    LOG_INFO("Congestion-control probe profile updated: path=direct "
+             "starting_bitrate_unchanged_bps={}",
+             bandwidth_estimation_->target_rate().bps());
+    return update;
+  }
+
+  TargetRateConstraints constraints;
+  constraints.at_time = at_time;
+  constraints.min_data_rate = min_data_rate_;
+  constraints.max_data_rate = max_data_rate_;
+  constraints.starting_rate = desired_starting_rate;
+  update.probe_cluster_configs = ResetConstraints(constraints);
+  MaybeTriggerOnNetworkChanged(&update, at_time);
+  LOG_INFO("Congestion-control startup profile applied: path={} "
+           "starting_bitrate_bps={}",
+           relay_path_ ? "relay" : "direct",
+           desired_starting_rate.bps());
+  return update;
+}
+
 NetworkControlUpdate CongestionControl::OnNetworkAvailability(
     NetworkAvailability msg) {
+  network_available_ = msg.network_available;
   NetworkControlUpdate update;
   update.probe_cluster_configs = probe_controller_->OnNetworkAvailability(msg);
   return update;

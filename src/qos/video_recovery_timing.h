@@ -37,6 +37,15 @@ constexpr int64_t SoftFrameRecoveryDeadlineMs(int64_t rtt_ms) {
   return std::clamp<int64_t>(2 * rtt_ms + 30, 100, 500);
 }
 
+constexpr int64_t SoftFirConfirmationDelayMs(int64_t rtt_ms) {
+  // A soft deadline is an early warning, not proof that recovery has failed.
+  // Leave enough time for the next aggressive NACK/RTX exchange to complete
+  // before requesting a large key frame.  Bound the delay so low-RTT paths do
+  // not emit FIR for a packet that was already in flight, while high-RTT paths
+  // still retain useful time before the hard deadline.
+  return std::clamp<int64_t>(rtt_ms, 75, 150);
+}
+
 constexpr int64_t HardFrameRecoveryDeadlineMs(int64_t rtt_ms) {
   // The measured-RTT retry schedule sends at approximately 0x, 1x, 2x and 4x
   // RTT.  Reserve one more RTT plus processing margin for the final RTX to

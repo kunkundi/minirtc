@@ -39,6 +39,8 @@ class CongestionControl {
 
   void SetRepeatedInitialProbing(bool enable);
 
+  NetworkControlUpdate SetRelayPath(bool relay_path, Timestamp at_time);
+
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
 
@@ -97,6 +99,8 @@ class CongestionControl {
   DataRate max_padding_rate_;
 
   bool previously_in_alr_ = false;
+  bool network_available_ = false;
+  bool relay_path_ = false;
 
   std::optional<DataSize> current_data_window_;
 };

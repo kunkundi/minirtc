@@ -126,6 +126,13 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
       std::make_shared<TaskQueueLockFree>("transport feedback adapter");
 
   controller_ = std::make_unique<CongestionControl>();
+  const int relay_path_state =
+      relay_path_state_.load(std::memory_order_acquire);
+  if (relay_path_state >= 0) {
+    controller_->SetRelayPath(
+        relay_path_state == 1,
+        webrtc::Timestamp::Millis(webrtc_clock_->TimeInMilliseconds()));
+  }
   paced_sender_ = std::make_shared<PacedSender>(ice_agent_, webrtc_clock_,
                                                 task_queue_pacer_);
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
@@ -1652,6 +1659,22 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
     dtls_ready_.store(false);
   }
   UpdateMediaTransportState();
+}
+
+void IceTransportController::SetRelayPath(bool relay_path) {
+  relay_path_state_.store(relay_path ? 1 : 0, std::memory_order_release);
+  if (!task_queue_cc_ || !controller_) {
+    return;
+  }
+
+  task_queue_cc_->PostTask([this, relay_path]() mutable {
+    if (!controller_) {
+      return;
+    }
+    const webrtc::Timestamp now = webrtc::Timestamp::Millis(
+        webrtc_clock_->TimeInMilliseconds());
+    PostUpdates(controller_->SetRelayPath(relay_path, now));
+  });
 }
 
 bool IceTransportController::CanProbeWithoutMedia() {

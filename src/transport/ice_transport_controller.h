@@ -115,6 +115,7 @@ class IceTransportController
   void FullIntraRequestAllVideoStreams();
 
   void UpdateNetworkAvaliablity(bool network_available);
+  void SetRelayPath(bool relay_path);
 
   bool DecryptIncomingPacket(uint8_t* buffer, int* size, uint32_t* out_ssrc);
 
@@ -378,6 +379,8 @@ class IceTransportController
   std::atomic<bool> ice_ready_{false};
   std::atomic<bool> dtls_ready_{false};
   std::atomic<bool> media_transport_ready_{false};
+  // -1 means ICE has not selected a pair yet, 0 direct, 1 relay.
+  std::atomic<int> relay_path_state_{-1};
   VideoQuality video_quality_;
 
   std::vector<uint8_t> local_key_;

@@ -436,6 +436,10 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     LOG_INFO("Traversal using p2p");
     traversal_type_ = TraversalType::TP2P;
   }
+  if (ice_transport_controller_) {
+    ice_transport_controller_->SetRelayPath(traversal_type_ ==
+                                             TraversalType::TRelay);
+  }
   MiniRtcNetTrafficStats net_traffic_stats;
   memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
 
