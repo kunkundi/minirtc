@@ -51,6 +51,7 @@ class ProbeBitrateEstimator {
     int target_probes = 0;
     DataSize target_size = DataSize::Zero();
     bool result_reported = false;
+    const char* rejection_reason = nullptr;
   };
 
   std::map<int, AggregatedCluster> clusters_;

@@ -114,6 +114,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   if (send_interval <= TimeDelta::Zero() || send_interval > kMaxProbeInterval ||
       receive_interval <= TimeDelta::Zero() ||
       receive_interval > kMaxProbeInterval) {
+    cluster->rejection_reason = "invalid_interval";
     LOG_DEBUG(
         "Probe feedback rejected: id={} reason=invalid_interval "
         "actual_packets={} target_packets={} actual_bytes={} "
@@ -138,6 +139,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
 
   double ratio = receive_rate / send_rate;
   if (ratio > kMaxValidRatio) {
+    cluster->rejection_reason = "receive_send_ratio";
     LOG_DEBUG(
         "Probe feedback rejected: id={} reason=receive_send_ratio "
         "actual_packets={} target_packets={} actual_bytes={} "
@@ -156,6 +158,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
         cluster->size_total.bytes(), cluster->target_size.bytes(),
         send_rate.bps(), receive_rate.bps());
     cluster->result_reported = true;
+    cluster->rejection_reason = nullptr;
   }
 
   DataRate res = std::min(send_rate, receive_rate);
@@ -181,12 +184,26 @@ void ProbeBitrateEstimator::RemoveExpiredClusters(Timestamp timestamp) {
   for (auto it = clusters_.begin(); it != clusters_.end();) {
     if (it->second.last_receive + kMaxClusterHistory < timestamp) {
       if (!it->second.result_reported) {
-        LOG_WARN(
-            "Probe feedback expired: id={} reason=insufficient_feedback "
+        const int min_probes = static_cast<int>(
+            it->second.target_probes * kMinReceivedProbesRatio);
+        const DataSize min_size =
+            it->second.target_size * kMinReceivedBytesRatio;
+        const bool insufficient_feedback =
+            it->second.num_probes < min_probes ||
+            it->second.size_total < min_size;
+        const char* reason =
+            insufficient_feedback
+                ? "insufficient_feedback"
+                : (it->second.rejection_reason
+                       ? it->second.rejection_reason
+                       : "no_valid_estimate");
+        LOG_INFO(
+            "Probe feedback expired without estimate: id={} reason={} "
             "actual_packets={} target_packets={} actual_bytes={} "
             "target_bytes={}",
-            it->first, it->second.num_probes, it->second.target_probes,
-            it->second.size_total.bytes(), it->second.target_size.bytes());
+            it->first, reason, it->second.num_probes,
+            it->second.target_probes, it->second.size_total.bytes(),
+            it->second.target_size.bytes());
       }
       if (!max_expired_cluster_id_ ||
           it->first > *max_expired_cluster_id_) {

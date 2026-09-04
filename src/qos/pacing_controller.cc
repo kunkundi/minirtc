@@ -110,11 +110,16 @@ void PacingController::Pause() {
 }
 
 void PacingController::Resume() {
+  const Timestamp now = CurrentTime();
   if (paused_) {
     LOG_INFO("PacedSender resumed.");
+    // Time spent deliberately paused must not be treated as a delayed pacer
+    // invocation. Resetting the accounting origin also avoids granting a
+    // burst-sized media budget on resume.
+    last_process_time_ = now;
   }
   paused_ = false;
-  packet_queue_.SetPauseState(false, CurrentTime());
+  packet_queue_.SetPauseState(false, now);
 }
 
 bool PacingController::IsPaused() const { return paused_; }

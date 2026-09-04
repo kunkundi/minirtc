@@ -195,11 +195,15 @@ std::vector<uint16_t> NackRequester::GetNackBatch(NackFilterOptions options) {
     }
     bool delay_timed_out = now - it->second.created_at_time >= send_nack_delay_;
     TimeDelta retry_delay = rtt_;
-    if (!has_rtt_sample_ && it->second.retries > 0) {
-      // Until Karn-safe RTT data exists, back repeated NACKs off from the
-      // 100 ms bootstrap value instead of injecting one duplicate RTX every
-      // 100 ms on a high-latency path.
-      const int backoff_shift = std::min(it->second.retries, 3);
+    if (it->second.retries > 0) {
+      // One RTT is enough for the first retry when a measured RTT is
+      // available. Back later retries off to two and four RTTs so an RTX
+      // packet delayed behind a TURN burst does not trigger a train of
+      // duplicate retransmissions. Retain the more conservative bootstrap
+      // behavior until a Karn-safe RTT sample exists.
+      const int backoff_shift =
+          has_rtt_sample_ ? std::min(it->second.retries - 1, 2)
+                          : std::min(it->second.retries, 3);
       retry_delay = rtt_ * (1 << backoff_shift);
     }
     bool nack_on_rtt_passed =

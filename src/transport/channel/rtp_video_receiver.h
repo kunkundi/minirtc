@@ -7,6 +7,7 @@
 #include <mutex>
 #include <optional>
 #include <set>
+#include <string>
 #include <unordered_map>
 #include <utility>
 
@@ -46,6 +47,10 @@ class RtpVideoReceiver : public ThreadBase {
   void SetAbsoluteSendTimeExtensionId(
       std::optional<uint8_t> extension_id) {
     abs_send_time_ext_id_ = extension_id;
+  }
+
+  void SetLogContext(std::string log_context) {
+    log_context_ = std::move(log_context);
   }
 
   void SetMediaConfig(uint32_t remote_ssrc, uint32_t rtx_ssrc,
@@ -100,8 +105,13 @@ class RtpVideoReceiver : public ThreadBase {
                                                      size_t size,
                                                      uint32_t timestamp);
   void DropFrameAssembly(uint32_t timestamp);
+  bool IsFrameTimestampObsolete(uint32_t timestamp);
+  void MarkFrameDiscardedLocked(uint32_t timestamp);
   std::pair<int64_t, int64_t> FrameRecoveryDeadlinesMs();
-  void SendKeyFrameRequest(bool enter_awaiting_state);
+  void MaybeLogRecoveryStats(bool force = false);
+  void MaybeRetryKeyFrameRequest();
+  void OnCompleteKeyFrame(int64_t now_ms);
+  bool SendKeyFrameRequest(bool enter_awaiting_state);
   bool RtxEnabled() const { return rtx_ssrc_.load() != 0; }
 
  private:
@@ -154,6 +164,7 @@ class RtpVideoReceiver : public ThreadBase {
   std::map<uint32_t, PendingFrame, RtpTimestampLess> pending_frames_;
   std::mutex pending_frames_mtx_;
   bool awaiting_keyframe_ = false;
+  std::optional<uint32_t> last_discarded_frame_ts_;
 
  private:
   std::shared_ptr<IOStatistics> io_statistics_ = nullptr;
@@ -186,7 +197,10 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<bool> rtcp_stop_ = false;
   int rtcp_rr_interval_ms_ = 5000;
   int rtcp_scheduler_interval_ms_ = 200;
-  int64_t last_keyframe_request_ms_ = 0;
+  std::atomic<bool> keyframe_request_pending_{false};
+  std::atomic<int64_t> keyframe_request_started_ms_{0};
+  std::atomic<int64_t> next_keyframe_request_ms_{0};
+  int64_t last_recovery_stats_log_ms_ = 0;
   std::atomic<bool> is_running_;
 
  private:
@@ -194,6 +208,7 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<uint32_t> remote_ssrc_{0};
   std::atomic<uint32_t> rtx_ssrc_{0};
   rtp::PAYLOAD_TYPE media_payload_type_ = rtp::PAYLOAD_TYPE::H264;
+  std::string log_context_ = "video";
   std::optional<uint8_t> abs_send_time_ext_id_;
   RtpTimestampMapper rtp_timestamp_mapper_;
   std::shared_ptr<SystemClock> system_clock_;
@@ -203,6 +218,20 @@ class RtpVideoReceiver : public ThreadBase {
 
   std::unique_ptr<RtcpSender> rtcp_sender_;
   std::unique_ptr<NackRequester> nack_;
+
+  std::atomic<uint64_t> recovery_completed_frames_{0};
+  std::atomic<uint64_t> recovery_discarded_frames_{0};
+  std::atomic<uint64_t> recovery_soft_stalls_{0};
+  std::atomic<uint64_t> recovery_hard_timeouts_{0};
+  std::atomic<uint64_t> recovery_obsolete_packets_{0};
+  std::atomic<uint64_t> recovery_accepted_rtx_packets_{0};
+  std::atomic<uint64_t> recovery_late_rtx_packets_{0};
+  std::atomic<uint64_t> recovery_fir_sent_{0};
+  std::atomic<uint64_t> recovery_fir_suppressed_{0};
+  std::atomic<uint64_t> recovery_fir_failed_{0};
+  std::atomic<uint64_t> recovery_fir_responses_{0};
+  std::atomic<uint64_t> recovery_fir_response_total_ms_{0};
+  std::atomic<uint64_t> recovery_fir_response_max_ms_{0};
 
   uint8_t fraction_lost_ = 0;
   int32_t cumulative_lost_ = 0;

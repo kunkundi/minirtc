@@ -88,6 +88,7 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
       nack_(std::make_unique<NackRequester>(clock_)) {
   SetPeriod(std::chrono::milliseconds(5));
   SetThreadName("RtpVideoReceiver");
+  last_recovery_stats_log_ms_ = clock_->CurrentTime().ms();
   rtcp_thread_ = std::thread(&RtpVideoReceiver::RtcpThread, this);
 
 #ifdef SAVE_RTP_RECV_STREAM
@@ -101,6 +102,7 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
 RtpVideoReceiver::~RtpVideoReceiver() {
   StopRtcp();
   Stop();
+  MaybeLogRecoveryStats(true);
 
   SSRCManager::Instance().DeleteSsrc(ssrc_);
 
@@ -272,22 +274,26 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
       return;
     }
     media_packet = &restored_media_packet;
+  }
 
-    bool is_late_recovery = false;
-    {
-      std::lock_guard<std::mutex> lock(pending_frames_mtx_);
-      is_late_recovery =
-          last_complete_frame_ts_.has_value() &&
-          !webrtc::AheadOf(media_packet->Timestamp(),
-                           *last_complete_frame_ts_);
-    }
-    if (is_late_recovery) {
+  const rtp::PAYLOAD_TYPE payload_type = media_packet->PayloadType();
+  const bool is_media_payload = payload_type == media_payload_type_;
+  if (is_media_payload &&
+      IsFrameTimestampObsolete(media_packet->Timestamp())) {
+    recovery_obsolete_packets_.fetch_add(1, std::memory_order_relaxed);
+    if (is_recovered) {
+      // A late RTX packet still satisfies its NACK even though its frame has
+      // deliberately been abandoned. Retiring the sequence number prevents
+      // needless retries without allowing the old frame to be resurrected.
       std::lock_guard<std::mutex> lock(nack_mtx_);
       nack_->OnReceivedPacket(media_packet->SequenceNumber(), true);
-      LOG_WARN("Dropping late RTX packet OSN {} timestamp {}",
-               media_packet->SequenceNumber(), media_packet->Timestamp());
-      return;
+      recovery_late_rtx_packets_.fetch_add(1, std::memory_order_relaxed);
     }
+    return;
+  }
+  if (is_recovered) {
+    recovery_accepted_rtx_packets_.fetch_add(1,
+                                             std::memory_order_relaxed);
   }
 
   webrtc::RtpPacketReceived rtp_packet_received;
@@ -381,8 +387,6 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
     }
   }
 
-  const rtp::PAYLOAD_TYPE payload_type = media_packet->PayloadType();
-  const bool is_media_payload = payload_type == media_payload_type_;
   const bool is_media_padding =
       !is_recovered &&
       static_cast<uint8_t>(payload_type) == padding_payload_type;
@@ -858,6 +862,132 @@ void RtpVideoReceiver::OnRttUpdate(int64_t rtt_ms) {
   }
 }
 
+void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
+  constexpr int64_t kRecoveryStatsIntervalMs = 5000;
+  const int64_t now_ms = clock_->CurrentTime().ms();
+  const int64_t interval_ms = now_ms - last_recovery_stats_log_ms_;
+  if (!force && interval_ms < kRecoveryStatsIntervalMs) {
+    return;
+  }
+  last_recovery_stats_log_ms_ = now_ms;
+
+  const auto take = [](std::atomic<uint64_t>& counter) {
+    return counter.exchange(0, std::memory_order_relaxed);
+  };
+  const uint64_t completed_frames = take(recovery_completed_frames_);
+  const uint64_t discarded_frames = take(recovery_discarded_frames_);
+  const uint64_t soft_stalls = take(recovery_soft_stalls_);
+  const uint64_t hard_timeouts = take(recovery_hard_timeouts_);
+  const uint64_t obsolete_packets = take(recovery_obsolete_packets_);
+  const uint64_t accepted_rtx_packets =
+      take(recovery_accepted_rtx_packets_);
+  const uint64_t late_rtx_packets = take(recovery_late_rtx_packets_);
+  const uint64_t fir_sent = take(recovery_fir_sent_);
+  const uint64_t fir_suppressed = take(recovery_fir_suppressed_);
+  const uint64_t fir_failed = take(recovery_fir_failed_);
+  const uint64_t fir_responses = take(recovery_fir_responses_);
+  const uint64_t fir_response_total_ms =
+      take(recovery_fir_response_total_ms_);
+  const uint64_t fir_response_max_ms =
+      take(recovery_fir_response_max_ms_);
+  const int64_t fir_response_avg_ms =
+      fir_responses != 0
+          ? static_cast<int64_t>(fir_response_total_ms / fir_responses)
+          : -1;
+
+  const bool has_recovery_activity =
+      discarded_frames != 0 || soft_stalls != 0 || hard_timeouts != 0 ||
+      obsolete_packets != 0 || accepted_rtx_packets != 0 || fir_sent != 0 ||
+      fir_suppressed != 0 || fir_failed != 0 || fir_responses != 0;
+  if (!has_recovery_activity) {
+    return;
+  }
+
+  const auto [soft_deadline_ms, hard_deadline_ms] =
+      FrameRecoveryDeadlinesMs();
+  int64_t rtt_ms = -1;
+  {
+    std::lock_guard<std::mutex> lock(nack_mtx_);
+    if (nack_ && nack_->HasRttSample()) {
+      rtt_ms = nack_->RttMs();
+    }
+  }
+
+  if (hard_timeouts != 0) {
+    LOG_WARN(
+        "Video recovery degraded: channel={} media_ssrc={} interval_ms={} "
+        "rtt_ms={} soft_deadline_ms={} hard_deadline_ms={} completed_frames={} "
+        "discarded_frames={} soft_stalls={} hard_timeouts={} "
+        "obsolete_packets={} accepted_rtx_packets={} late_rtx_packets={} "
+        "fir_pending={} fir_sent={} fir_suppressed={} fir_failed={} "
+        "fir_response_count={} fir_response_avg_ms={} fir_response_max_ms={}",
+        log_context_, remote_ssrc_.load(), interval_ms, rtt_ms,
+        soft_deadline_ms, hard_deadline_ms, completed_frames,
+        discarded_frames, soft_stalls, hard_timeouts, obsolete_packets,
+        accepted_rtx_packets, late_rtx_packets,
+        keyframe_request_pending_.load(std::memory_order_relaxed), fir_sent,
+        fir_suppressed, fir_failed, fir_responses, fir_response_avg_ms,
+        fir_response_max_ms);
+  } else {
+    LOG_INFO(
+        "Video recovery activity: channel={} media_ssrc={} interval_ms={} "
+        "rtt_ms={} soft_deadline_ms={} hard_deadline_ms={} completed_frames={} "
+        "discarded_frames={} soft_stalls={} hard_timeouts={} "
+        "obsolete_packets={} accepted_rtx_packets={} late_rtx_packets={} "
+        "fir_pending={} fir_sent={} fir_suppressed={} fir_failed={} "
+        "fir_response_count={} fir_response_avg_ms={} fir_response_max_ms={}",
+        log_context_, remote_ssrc_.load(), interval_ms, rtt_ms,
+        soft_deadline_ms, hard_deadline_ms, completed_frames,
+        discarded_frames, soft_stalls, hard_timeouts, obsolete_packets,
+        accepted_rtx_packets, late_rtx_packets,
+        keyframe_request_pending_.load(std::memory_order_relaxed), fir_sent,
+        fir_suppressed, fir_failed, fir_responses, fir_response_avg_ms,
+        fir_response_max_ms);
+  }
+}
+
+void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
+  bool awaiting_keyframe = false;
+  {
+    std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+    awaiting_keyframe = awaiting_keyframe_;
+  }
+  if (!awaiting_keyframe) {
+    return;
+  }
+
+  const int64_t now_ms = clock_->CurrentTime().ms();
+  if (now_ms >=
+      next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
+    SendKeyFrameRequest(false);
+  }
+}
+
+void RtpVideoReceiver::OnCompleteKeyFrame(int64_t now_ms) {
+  if (!keyframe_request_pending_.exchange(false,
+                                           std::memory_order_acq_rel)) {
+    return;
+  }
+
+  const int64_t request_started_ms =
+      keyframe_request_started_ms_.exchange(0, std::memory_order_relaxed);
+  if (request_started_ms <= 0 || now_ms < request_started_ms) {
+    return;
+  }
+
+  const uint64_t response_ms =
+      static_cast<uint64_t>(now_ms - request_started_ms);
+  recovery_fir_responses_.fetch_add(1, std::memory_order_relaxed);
+  recovery_fir_response_total_ms_.fetch_add(response_ms,
+                                             std::memory_order_relaxed);
+  uint64_t previous_max =
+      recovery_fir_response_max_ms_.load(std::memory_order_relaxed);
+  while (previous_max < response_ms &&
+         !recovery_fir_response_max_ms_.compare_exchange_weak(
+             previous_max, response_ms, std::memory_order_relaxed)) {
+  }
+}
+
 void RtpVideoReceiver::DropFrameAssembly(uint32_t timestamp) {
   std::lock_guard<std::mutex> lock(frame_assembly_mtx_);
   ClearFrameMarkers(timestamp);
@@ -880,12 +1010,32 @@ void RtpVideoReceiver::DropFrameAssembly(uint32_t timestamp) {
   }
 }
 
+bool RtpVideoReceiver::IsFrameTimestampObsolete(uint32_t timestamp) {
+  std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+  const bool already_completed =
+      last_complete_frame_ts_.has_value() &&
+      !webrtc::AheadOf(timestamp, *last_complete_frame_ts_);
+  const bool already_discarded =
+      last_discarded_frame_ts_.has_value() &&
+      !webrtc::AheadOf(timestamp, *last_discarded_frame_ts_);
+  return already_completed || already_discarded;
+}
+
+void RtpVideoReceiver::MarkFrameDiscardedLocked(uint32_t timestamp) {
+  if (!last_discarded_frame_ts_.has_value() ||
+      webrtc::AheadOf(timestamp, *last_discarded_frame_ts_)) {
+    last_discarded_frame_ts_ = timestamp;
+  }
+}
+
 bool RtpVideoReceiver::Process() {
   if (!is_running_.load()) {
     return false;
   }
 
   ProcessPendingNacks();
+  MaybeLogRecoveryStats();
+  MaybeRetryKeyFrameRequest();
 
   const auto [soft_deadline_ms, hard_deadline_ms] =
       FrameRecoveryDeadlinesMs();
@@ -894,8 +1044,8 @@ bool RtpVideoReceiver::Process() {
     uint32_t dropped_timestamp = 0;
     bool dropped_frame = false;
     bool recovery_timed_out = false;
-    bool request_keyframe = false;
     bool escalate_recovery = false;
+    bool completed_keyframe = false;
     const int64_t now_ms = clock_->CurrentTime().ms();
 
     {
@@ -949,15 +1099,16 @@ bool RtpVideoReceiver::Process() {
           nack_->ClearUpTo(*it->second.last_sequence_number);
         }
         last_complete_frame_ts_ = it->first;
+        completed_keyframe = true;
         completed_frame = std::move(it->second.frame);
         pending_frames_.erase(it);
       } else if (it->second.is_complete && awaiting_keyframe_) {
         dropped_timestamp = it->first;
         dropped_frame = true;
-        request_keyframe = true;
         pending_frames_.erase(it);
       } else if (it->second.is_complete && !has_blocking_nacks) {
         last_complete_frame_ts_ = it->first;
+        completed_keyframe = it->second.is_keyframe;
         completed_frame = std::move(it->second.frame);
         pending_frames_.erase(it);
       } else if (frame_age_ms > hard_deadline_ms) {
@@ -983,38 +1134,50 @@ bool RtpVideoReceiver::Process() {
       } else {
         break;
       }
+
+      if (recovery_timed_out) {
+        // A hard timeout is an explicit decision to abandon this timestamp.
+        // Remember it before releasing the lock so late fragments cannot
+        // recreate the same pending frame and time out a second time.
+        MarkFrameDiscardedLocked(dropped_timestamp);
+      }
     }
 
     if (dropped_frame) {
+      recovery_discarded_frames_.fetch_add(1, std::memory_order_relaxed);
       DropFrameAssembly(dropped_timestamp);
     }
 
     if (recovery_timed_out) {
-      LOG_WARN("Frame timestamp {} exceeded RTX recovery window {} ms",
-               dropped_timestamp, hard_deadline_ms);
-      RequestKeyFrame();
+      recovery_hard_timeouts_.fetch_add(1, std::memory_order_relaxed);
+      if (now_ms >=
+          next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
+        SendKeyFrameRequest(false);
+      }
       return false;
     }
 
     if (escalate_recovery) {
-      LOG_WARN(
-          "Frame recovery stalled at {} ms; requesting a key frame while "
-          "retaining RTX until {} ms",
-          soft_deadline_ms, hard_deadline_ms);
-      SendKeyFrameRequest(false);
+      recovery_soft_stalls_.fetch_add(1, std::memory_order_relaxed);
+      if (now_ms >=
+          next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
+        SendKeyFrameRequest(false);
+      }
       return false;
-    }
-
-    if (request_keyframe) {
-      RequestKeyFrame();
     }
 
     if (dropped_frame) {
       continue;
     }
 
-    if (on_receive_complete_frame_) {
-      on_receive_complete_frame_(std::move(completed_frame));
+    if (completed_frame) {
+      if (completed_keyframe) {
+        OnCompleteKeyFrame(now_ms);
+      }
+      recovery_completed_frames_.fetch_add(1, std::memory_order_relaxed);
+      if (on_receive_complete_frame_) {
+        on_receive_complete_frame_(std::move(completed_frame));
+      }
     }
   }
 
@@ -1186,7 +1349,7 @@ void RtpVideoReceiver::SendPreparedNackBatch(
   }
 }
 
-void RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
+bool RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
   if (enter_awaiting_state) {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     awaiting_keyframe_ = true;
@@ -1194,12 +1357,16 @@ void RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
 
   std::lock_guard<std::mutex> lock(rtcp_sender_mtx_);
   const int64_t now_ms = clock_->CurrentTime().ms();
-  constexpr int64_t kMinFirIntervalMs = 500;
-  if (last_keyframe_request_ms_ != 0 &&
-      now_ms - last_keyframe_request_ms_ < kMinFirIntervalMs) {
-    return;
+  constexpr int64_t kFirRetryIntervalMs = 1000;
+  constexpr int64_t kFailedFirRetryIntervalMs = 500;
+  if (now_ms <
+      next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
+    recovery_fir_suppressed_.fetch_add(1, std::memory_order_relaxed);
+    return false;
   }
-  last_keyframe_request_ms_ = now_ms;
+
+  const bool request_already_pending =
+      keyframe_request_pending_.load(std::memory_order_acquire);
 
   ++sequence_number_fir_;
   webrtc::rtcp::Fir fir;
@@ -1208,8 +1375,21 @@ void RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
 
   rtcp_sender_->AppendPacket(fir);
   if (!rtcp_sender_->Send()) {
+    next_keyframe_request_ms_.store(now_ms + kFailedFirRetryIntervalMs,
+                                    std::memory_order_relaxed);
+    recovery_fir_failed_.fetch_add(1, std::memory_order_relaxed);
     LOG_WARN("Failed sending FIR for media SSRC {}", remote_ssrc_.load());
+    return false;
   }
+
+  if (!request_already_pending) {
+    keyframe_request_started_ms_.store(now_ms, std::memory_order_relaxed);
+    keyframe_request_pending_.store(true, std::memory_order_release);
+  }
+  next_keyframe_request_ms_.store(now_ms + kFirRetryIntervalMs,
+                                  std::memory_order_relaxed);
+  recovery_fir_sent_.fetch_add(1, std::memory_order_relaxed);
+  return true;
 }
 
 void RtpVideoReceiver::RequestKeyFrame() { SendKeyFrameRequest(true); }
