@@ -426,7 +426,7 @@ uint32_t IceTransportController::AddAudioSendChannel(
   }
   if (!context->transceiver) {
     context->transceiver = std::make_shared<AudioChannelSend>(
-        channel_name, ice_agent_, ice_io_statistics_);
+        channel_name, clock_, ice_agent_, ice_io_statistics_);
     if (!context->transceiver) {
       LOG_ERROR("Audio stream sender [{}] create failed", channel_name);
       return -1;
@@ -537,7 +537,7 @@ uint32_t IceTransportController::AddAudioReceiveChannel(
   if (!context->transceiver) {
     std::weak_ptr<IceTransportController> weak_self = shared_from_this();
     context->transceiver = std::make_shared<AudioChannelReceive>(
-        channel_name, ssrc, ice_agent_, ice_io_statistics_,
+        channel_name, ssrc, clock_, ice_agent_, ice_io_statistics_,
         [this, weak_self, channel_name](const char* data, size_t size) {
           if (auto self = weak_self.lock()) {
             OnReceiveCompleteAudio(data, size, channel_name);
@@ -1542,13 +1542,19 @@ int IceTransportController::SendAudio(const MiniRtcAudioFrame* audio_frame,
     return -1;
   }
 
+  const int64_t captured_timestamp_us =
+      audio_frame->captured_timestamp != 0
+          ? static_cast<int64_t>(audio_frame->captured_timestamp)
+          : clock_->CurrentTimeUs();
   int ret = context->codec->Encode(
       reinterpret_cast<const uint8_t*>(audio_frame->data), audio_frame->size,
-      [this, channel_name, context](char* encoded_audio_buffer, size_t size,
-                                    uint32_t samples_per_channel) -> int {
+      [this, channel_name, context, captured_timestamp_us](
+          char* encoded_audio_buffer, size_t size,
+          uint32_t samples_per_channel) -> int {
         context->last_active_time = clock_->CurrentTimeMs();
         return context->transceiver->SendAudio(
-            encoded_audio_buffer, size, samples_per_channel);
+            encoded_audio_buffer, size, samples_per_channel,
+            captured_timestamp_us);
       });
 
   return ret;

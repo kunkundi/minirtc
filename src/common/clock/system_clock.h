@@ -8,35 +8,39 @@
 #define _SYSTEM_CLOCK_H_
 
 #include <cstdint>
-#include <memory>
 
 namespace minirtc {
 
-static const int64_t kNtpEpochOffset = 2208988800LL;
-
 class SystemClock {
  public:
-  SystemClock() = default;
+  SystemClock();
   ~SystemClock() = default;
 
-  int64_t CurrentTime();
-  int64_t CurrentTimeUs();
-  int64_t CurrentTimeMs();
-  int64_t CurrentTimeNs();
+  int64_t CurrentTime() const;
+  int64_t CurrentTimeUs() const;
+  int64_t CurrentTimeMs() const;
+  int64_t CurrentTimeNs() const;
 
-  int64_t CurrentNtpTime();
-  int64_t CurrentNtpTimeMs();
+  // NTP timestamps use the RFC 3550 32.32 fixed-point representation: the
+  // upper 32 bits are seconds since 1900-01-01 and the lower 32 bits are the
+  // fractional part of a second.
+  uint64_t CurrentNtpTime() const;
+  uint64_t MonotonicTimeUsToNtp(int64_t monotonic_time_us) const;
+  int64_t NtpToUtcTimeUs(uint64_t ntp_time) const;
+  int64_t NtpToMonotonicTimeUs(uint64_t ntp_time) const;
 
-  int64_t CurrentUtcTime();
-  int64_t CurrentUtcTimeMs();
-  int64_t CurrentUtcTimeUs();
-  int64_t CurrentUtcTimeNs();
+  static uint32_t CompactNtp(uint64_t ntp_time);
+  static int64_t CompactNtpIntervalToMilliseconds(uint32_t interval);
 
-  int64_t ConvertToNtpTime(int64_t time_us);
+  int64_t CurrentUtcTime() const;
+  int64_t CurrentUtcTimeMs() const;
+  int64_t CurrentUtcTimeUs() const;
+  int64_t CurrentUtcTimeNs() const;
 
-  int64_t NtpToUtc(int64_t ntp_time);
+ private:
+  uint64_t UtcTimeUsToNtp(int64_t utc_time_us) const;
 
-  int64_t CurrentNtpInMilliseconds() { return CurrentNtpTimeMs(); }
+  const int64_t monotonic_to_utc_offset_us_;
 };
 }  // namespace minirtc
 

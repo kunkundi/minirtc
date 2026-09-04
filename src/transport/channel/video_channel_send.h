@@ -83,6 +83,7 @@ class VideoChannelSend : public MediaChannel {
  private:
   int32_t ReSendPacket(uint16_t packet_id);
   void ProcessPendingNacks();
+  void MaybeSendSenderReport(const webrtc::RtpPacketToSend& packet);
 
  private:
   std::string channel_name_;
@@ -103,6 +104,10 @@ class VideoChannelSend : public MediaChannel {
   std::unordered_set<uint16_t> pending_nack_sequence_numbers_;
   bool nack_task_scheduled_ = false;
   std::atomic<bool> history_shutdown_{false};
+  std::mutex sender_report_mtx_;
+  int64_t last_sender_report_time_us_ = 0;
+  uint32_t sender_packet_count_ = 0;
+  uint32_t sender_octet_count_ = 0;
   // Keep the queue after the state it operates on: members are destroyed in
   // reverse declaration order, so the worker is stopped before packet history
   // is released even if Destroy() was not called explicitly.

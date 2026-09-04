@@ -11,12 +11,14 @@ AudioChannelSend::AudioChannelSend()
 AudioChannelSend::~AudioChannelSend() {}
 
 AudioChannelSend::AudioChannelSend(
-    const std::string &channel_name, std::shared_ptr<IceAgent> ice_agent,
+    const std::string &channel_name, std::shared_ptr<SystemClock> clock,
+    std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics)
     : channel_name_(channel_name),
       ice_agent_(ice_agent),
       ice_io_statistics_(ice_io_statistics),
-      rtp_audio_sender_(std::make_unique<RtpAudioSender>(ice_io_statistics)),
+      rtp_audio_sender_(
+          std::make_unique<RtpAudioSender>(clock, ice_io_statistics)),
       rtp_timestamp_generator_(GenerateRandomRtpTimestamp()) {}
 
 void AudioChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
@@ -52,15 +54,16 @@ void AudioChannelSend::Destroy() {
 }
 
 int AudioChannelSend::SendAudio(char* data, size_t size,
-                                uint32_t samples_per_channel) {
+                                uint32_t samples_per_channel,
+                                int64_t captured_timestamp_us) {
   if (rtp_audio_sender_ && rtp_packetizer_) {
-    const uint32_t rtp_timestamp =
-        rtp_timestamp_generator_.NextTimestamp(samples_per_channel);
+    const auto timestamp_sample = rtp_timestamp_generator_.NextTimestamp(
+        samples_per_channel, captured_timestamp_us);
     std::vector<std::unique_ptr<RtpPacket>> rtp_packets =
         rtp_packetizer_->Build((uint8_t *)data, (uint32_t)size,
-                               rtp_timestamp, true);
+                               timestamp_sample.rtp_timestamp, true);
     // paced_sender_->EnqueueRtpPackets(rtp_packets, 0);
-    rtp_audio_sender_->Enqueue(rtp_packets);
+    rtp_audio_sender_->Enqueue(rtp_packets, timestamp_sample.media_time_us);
   }
 
   return 0;

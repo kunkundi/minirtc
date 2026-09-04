@@ -7,11 +7,14 @@
 #ifndef _RTP_AUDIO_RECEIVER_H_
 #define _RTP_AUDIO_RECEIVER_H_
 
+#include <atomic>
 #include <functional>
 
+#include "clock/system_clock.h"
 #include "io_statistics.h"
 #include "receiver_report.h"
 #include "rtp_packet.h"
+#include "rtp_timestamp.h"
 #include "sender_report.h"
 
 namespace minirtc {
@@ -19,7 +22,8 @@ namespace minirtc {
 class RtpAudioReceiver {
  public:
   RtpAudioReceiver();
-  RtpAudioReceiver(std::shared_ptr<IOStatistics> io_statistics);
+  RtpAudioReceiver(uint32_t remote_ssrc, std::shared_ptr<SystemClock> clock,
+                   std::shared_ptr<IOStatistics> io_statistics);
   ~RtpAudioReceiver();
 
  public:
@@ -34,7 +38,7 @@ class RtpAudioReceiver {
   uint32_t GetSsrc() { return ssrc_; }
   uint32_t GetRemoteSsrc() { return remote_ssrc_; }
 
-  void OnSenderReport(const SenderReport& sender_report) {}
+  void OnSenderReport(const SenderReport& sender_report);
 
  private:
   bool CheckIsTimeSendRR();
@@ -46,6 +50,9 @@ class RtpAudioReceiver {
 
  private:
   std::shared_ptr<IOStatistics> io_statistics_ = nullptr;
+  std::shared_ptr<SystemClock> clock_ = nullptr;
+  RtpTimestampMapper rtp_timestamp_mapper_{48'000};
+  std::atomic<int64_t> last_mapped_capture_time_us_{0};
   uint32_t last_recv_bytes_ = 0;
   uint32_t total_rtp_payload_recv_ = 0;
   uint32_t total_rtp_packets_recv_ = 0;
@@ -56,6 +63,7 @@ class RtpAudioReceiver {
   uint32_t remote_ssrc_ = 0;
 
   uint32_t last_sr_ = 0;
+  uint32_t last_sender_report_arrival_ntp_ = 0;
   uint32_t last_delay_ = 0;
 };
 }  // namespace minirtc

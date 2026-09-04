@@ -533,28 +533,22 @@ bool IceTransport::ParseRtcpPacket(const uint8_t* buffer, size_t size,
 void IceTransport::HandleReportBlock(const RtcpReportBlock& rtcp_report_block,
                                      RtcpPacketInfo* packet_information,
                                      uint32_t remote_ssrc) {
-  int64_t now = clock_->CurrentTime();
+  const int64_t now_us = clock_->CurrentTimeUs();
+  const uint64_t now_ntp = clock_->MonotonicTimeUsToNtp(now_us);
 
   RtcpReportBlock report_block_data;
 
-  int64_t now_ntp = clock_->ConvertToNtpTime(now);
-  // Number of seconds since 1900 January 1 00:00 GMT (see
-  // https://tools.ietf.org/html/rfc868).
   report_block_data.SetReportBlock(remote_ssrc, rtcp_report_block,
-                                   clock_->NtpToUtc(now_ntp), now);
+                                   clock_->NtpToUtcTimeUs(now_ntp), now_us);
 
   uint32_t send_time_ntp = rtcp_report_block.LastSr();
   if (send_time_ntp != 0) {
     uint32_t delay_ntp = rtcp_report_block.DelaySinceLastSr();
-    // Local NTP time.
-    constexpr uint64_t kNtpFractionalUnit = 0x100000000;
-    uint32_t seconds = now_ntp / kNtpFractionalUnit;
-    uint32_t fractions = now_ntp % kNtpFractionalUnit;
-    uint32_t receive_time_ntp = (seconds << 16) | (fractions >> 16);
+    const uint32_t receive_time_ntp = SystemClock::CompactNtp(now_ntp);
     // RTT in 1/(2^16) seconds.
     uint32_t rtt_ntp = receive_time_ntp - delay_ntp - send_time_ntp;
-    // Convert to 1/1000 seconds (milliseconds).
-    int64_t rtt = static_cast<int64_t>((rtt_ntp * 1000) / (1 << 16));
+    const int64_t rtt =
+        SystemClock::CompactNtpIntervalToMilliseconds(rtt_ntp);
     report_block_data.AddRoundTripTimeSample(rtt);
     packet_information->rtt = rtt;
   }

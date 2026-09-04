@@ -6,12 +6,21 @@ namespace minirtc {
 
 RtpAudioReceiver::RtpAudioReceiver() {}
 
-RtpAudioReceiver::RtpAudioReceiver(std::shared_ptr<IOStatistics> io_statistics)
-    : io_statistics_(io_statistics) {}
+RtpAudioReceiver::RtpAudioReceiver(
+    uint32_t remote_ssrc, std::shared_ptr<SystemClock> clock,
+    std::shared_ptr<IOStatistics> io_statistics)
+    : io_statistics_(io_statistics),
+      clock_(clock),
+      remote_ssrc_(remote_ssrc) {}
 
 RtpAudioReceiver::~RtpAudioReceiver() {}
 
 void RtpAudioReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
+  if (clock_) {
+    last_mapped_capture_time_us_.store(rtp_timestamp_mapper_.ToLocalTimeUs(
+        rtp_packet.Timestamp(), clock_->CurrentTimeUs()));
+  }
+
   last_recv_bytes_ = (uint32_t)rtp_packet.Size();
   total_rtp_payload_recv_ += (uint32_t)rtp_packet.PayloadSize();
   total_rtp_packets_recv_++;
@@ -56,6 +65,20 @@ void RtpAudioReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
     on_receive_data_((const char*)rtp_packet.Payload(),
                      rtp_packet.PayloadSize());
   }
+}
+
+void RtpAudioReceiver::OnSenderReport(const SenderReport& sender_report) {
+  if (!clock_ || sender_report.SenderSsrc() != remote_ssrc_ ||
+      sender_report.NtpTimestamp() == 0) {
+    return;
+  }
+
+  rtp_timestamp_mapper_.UpdateFromSenderReport(
+      sender_report.Timestamp(),
+      clock_->NtpToMonotonicTimeUs(sender_report.NtpTimestamp()));
+  last_sr_ = sender_report.CompactNtpTimestamp();
+  last_sender_report_arrival_ntp_ =
+      SystemClock::CompactNtp(clock_->CurrentNtpTime());
 }
 
 void RtpAudioReceiver::SetSendDataFunc(

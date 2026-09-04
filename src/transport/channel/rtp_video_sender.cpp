@@ -2,13 +2,14 @@
 
 #include <chrono>
 
-#include "api/clock/clock.h"
+#include "api/units/timestamp.h"
 #include "common.h"
 #include "log.h"
+#include "rtp_timestamp.h"
 
 // #define SAVE_RTP_SENT_STREAM
 
-#define RTCP_SR_INTERVAL 1000
+constexpr int64_t kRtcpSenderReportIntervalUs = 1'000'000;
 
 namespace minirtc {
 
@@ -17,8 +18,8 @@ RtpVideoSender::RtpVideoSender() {}
 RtpVideoSender::RtpVideoSender(std::shared_ptr<SystemClock> clock,
                                std::shared_ptr<IOStatistics> io_statistics)
     : ssrc_(GenerateUniqueSsrc()),
-      io_statistics_(io_statistics),
-      clock_(webrtc::Clock::GetWebrtcClockShared(clock)) {
+      clock_(clock),
+      io_statistics_(io_statistics) {
   SetPeriod(std::chrono::milliseconds(5));
   SetThreadName("RtpVideoSender");
 #ifdef SAVE_RTP_SENT_STREAM
@@ -48,7 +49,8 @@ void RtpVideoSender::Enqueue(
   for (auto& rtp_packet : rtp_packets) {
     std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet_to_send(
         static_cast<webrtc::RtpPacketToSend*>(rtp_packet.release()));
-    rtp_packet_to_send->set_capture_time(clock_->CurrentTime());
+    rtp_packet_to_send->set_capture_time(
+        webrtc::Timestamp::Micros(captured_timestamp_us));
     rtp_packet_to_send->set_transport_sequence_number(transport_seq_++);
     rtp_packet_to_send->set_packet_type(webrtc::RtpPacketMediaType::kVideo);
     // rtp_packet_queue_.push(std::move(rtp_packet_to_send));
@@ -81,7 +83,8 @@ int RtpVideoSender::SendRtpPacket(
     return -1;
   }
 
-  last_rtp_timestamp_ = rtp_packet_to_send->capture_time().ms();
+  last_rtp_timestamp_ = rtp_packet_to_send->Timestamp();
+  last_frame_capture_time_ = rtp_packet_to_send->capture_time().us();
 
   int ret = data_send_func_((const char*)rtp_packet_to_send->Buffer().data(),
                             rtp_packet_to_send->Size());
@@ -108,12 +111,12 @@ int RtpVideoSender::SendRtpPacket(
     SenderReport rtcp_sr;
     rtcp_sr.SetSenderSsrc(ssrc_);
 
-    uint32_t rtp_timestamp =
-        last_rtp_timestamp_ +
-        ((clock_->CurrentTime().us() + 500) / 1000 - last_frame_capture_time_) *
-            rtp::kVideoPayloadTypeFrequency;
+    const int64_t now_us = clock_->CurrentTimeUs();
+    const uint32_t rtp_timestamp = ExtrapolateRtpTimestamp(
+        last_rtp_timestamp_, last_frame_capture_time_, now_us,
+        rtp::kVideoPayloadTypeFrequency);
     rtcp_sr.SetTimestamp(rtp_timestamp);
-    rtcp_sr.SetNtpTimestamp((uint64_t)clock_->CurrentNtpTime());
+    rtcp_sr.SetNtpTimestamp(clock_->MonotonicTimeUsToNtp(now_us));
     rtcp_sr.SetSenderPacketCount(total_rtp_packets_sent_);
     rtcp_sr.SetSenderOctetCount(total_rtp_payload_sent_);
 
@@ -146,13 +149,11 @@ int RtpVideoSender::SendRtcpSR(SenderReport& rtcp_sr) {
 }
 
 bool RtpVideoSender::CheckIsTimeSendSR() {
-  uint32_t now_ts = static_cast<uint32_t>(
-      std::chrono::duration_cast<std::chrono::milliseconds>(
-          std::chrono::system_clock::now().time_since_epoch())
-          .count());
-
-  if (now_ts - last_send_rtcp_sr_packet_ts_ >= RTCP_SR_INTERVAL) {
-    last_send_rtcp_sr_packet_ts_ = now_ts;
+  const int64_t now_us = clock_->CurrentTimeUs();
+  if (last_send_rtcp_sr_time_us_ == 0 ||
+      now_us - last_send_rtcp_sr_time_us_ >=
+          kRtcpSenderReportIntervalUs) {
+    last_send_rtcp_sr_time_us_ = now_us;
     return true;
   } else {
     return false;

@@ -4,7 +4,6 @@
 #include <iterator>
 #include <vector>
 
-#include "api/ntp/ntp_time_util.h"
 #include "common.h"
 #include "fir.h"
 #include "log.h"
@@ -68,6 +67,7 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
       is_running_(true),
       ssrc_(GenerateUniqueSsrc()),
       rtp_timestamp_mapper_(rtp::kVideoPayloadTypeFrequency),
+      system_clock_(clock),
       clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
       receive_side_congestion_controller_(
           clock_,
@@ -1051,7 +1051,8 @@ void RtpVideoReceiver::ReviseFrequencyAndJitter(int payload_type_frequency) {
 }
 
 void RtpVideoReceiver::SendRR() {
-  uint32_t now = CompactNtp(clock_->CurrentNtpTime());
+  const uint32_t now =
+      SystemClock::CompactNtp(system_clock_->CurrentNtpTime());
   ReceiverReport rtcp_rr;
   RtcpReportBlock report;
 
@@ -1082,8 +1083,10 @@ void RtpVideoReceiver::SendRR() {
       cumulative_lost_ = 0x7fffff;
     }
 
-    uint32_t receive_time = last_arrival_ntp_timestamp;
-    uint32_t delay_since_last_sr = now - receive_time;
+    const uint32_t delay_since_last_sr =
+        last_remote_ntp_timestamp != 0
+            ? now - last_arrival_ntp_timestamp
+            : 0;
 
     report.SetMediaSsrc(remote_ssrc_.load());
     report.SetFractionLost(fraction_lost_);
@@ -1209,33 +1212,24 @@ void RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
 
 void RtpVideoReceiver::RequestKeyFrame() { SendKeyFrameRequest(true); }
 
-inline uint32_t DivideRoundToNearest(int64_t dividend, int64_t divisor) {
-  if (dividend < 0) {
-    int64_t half_of_divisor = divisor / 2;
-    int64_t quotient = dividend / divisor;
-    int64_t remainder = dividend % divisor;
-    if (-remainder > half_of_divisor) {
-      --quotient;
-    }
-    return quotient;
-  }
-
-  int64_t half_of_divisor = (divisor - 1) / 2;
-  int64_t quotient = dividend / divisor;
-  int64_t remainder = dividend % divisor;
-  if (remainder > half_of_divisor) {
-    ++quotient;
-  }
-  return quotient;
-}
-
 void RtpVideoReceiver::OnSenderReport(const SenderReport& sender_report) {
+  if (!system_clock_ || sender_report.SenderSsrc() != remote_ssrc_.load() ||
+      sender_report.NtpTimestamp() == 0) {
+    return;
+  }
+
+  const uint64_t ntp_timestamp = sender_report.NtpTimestamp();
+  rtp_timestamp_mapper_.UpdateFromSenderReport(
+      sender_report.Timestamp(),
+      system_clock_->NtpToMonotonicTimeUs(ntp_timestamp));
+
   std::lock_guard<std::mutex> stats_lock(receiver_stats_mtx_);
   remote_ssrc = sender_report.SenderSsrc();
-  last_remote_ntp_timestamp = sender_report.NtpTimestamp();
+  last_remote_ntp_timestamp = sender_report.CompactNtpTimestamp();
   last_remote_rtp_timestamp = sender_report.Timestamp();
   last_arrival_timestamp = clock_->CurrentTime().ms();
-  last_arrival_ntp_timestamp = webrtc::CompactNtp(clock_->CurrentNtpTime());
+  last_arrival_ntp_timestamp =
+      SystemClock::CompactNtp(system_clock_->CurrentNtpTime());
   packets_sent = sender_report.SenderPacketCount();
   bytes_sent = sender_report.SenderOctetCount();
   reports_count++;

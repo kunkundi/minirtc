@@ -190,6 +190,7 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<uint32_t> rtx_ssrc_{0};
   rtp::PAYLOAD_TYPE media_payload_type_ = rtp::PAYLOAD_TYPE::H264;
   RtpTimestampMapper rtp_timestamp_mapper_;
+  std::shared_ptr<SystemClock> system_clock_;
   std::shared_ptr<webrtc::Clock> clock_;
   ReceiveSideCongestionController receive_side_congestion_controller_;
   RtcpFeedbackSenderInterface* active_remb_module_ = nullptr;

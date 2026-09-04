@@ -3,7 +3,6 @@
 
 #include <functional>
 
-#include "api/clock/clock.h"
 #include "clock/system_clock.h"
 #include "io_statistics.h"
 #include "receiver_report.h"
@@ -59,10 +58,10 @@ class RtpVideoSender : public ThreadBase {
 
  private:
   uint32_t ssrc_ = 0;
-  std::shared_ptr<webrtc::Clock> clock_ = nullptr;
+  std::shared_ptr<SystemClock> clock_ = nullptr;
   std::shared_ptr<IOStatistics> io_statistics_ = nullptr;
   uint32_t last_send_bytes_ = 0;
-  uint32_t last_send_rtcp_sr_packet_ts_ = 0;
+  int64_t last_send_rtcp_sr_time_us_ = 0;
   uint32_t total_rtp_payload_sent_ = 0;
   uint32_t total_rtp_packets_sent_ = 0;
 

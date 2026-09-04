@@ -6,6 +6,11 @@
 
 // #define SAVE_RTP_SENT_STREAM
 namespace minirtc {
+namespace {
+
+constexpr int64_t kSenderReportIntervalUs = 1'000'000;
+
+}  // namespace
 
 VideoChannelSend::VideoChannelSend(
     const std::string& channel_name, std::shared_ptr<SystemClock> clock,
@@ -59,6 +64,12 @@ void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
 
 void VideoChannelSend::OnSentRtpPacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+  if (!packet) {
+    return;
+  }
+
+  MaybeSendSenderReport(*packet);
+
   if (!task_queue_history_ || history_shutdown_.load()) {
     return;
   }
@@ -71,6 +82,44 @@ void VideoChannelSend::OnSentRtpPacket(
                                        clock_->CurrentTime());
     }
   });
+}
+
+void VideoChannelSend::MaybeSendSenderReport(
+    const webrtc::RtpPacketToSend& packet) {
+  if (!clock_ || !ice_agent_ || packet.Ssrc() != ssrc_ ||
+      packet.retransmitted_sequence_number().has_value() ||
+      packet.packet_type() != webrtc::RtpPacketMediaType::kVideo) {
+    return;
+  }
+
+  const int64_t now_us = clock_->CurrentTimeUs();
+  uint32_t packet_count = 0;
+  uint32_t octet_count = 0;
+  {
+    std::lock_guard<std::mutex> lock(sender_report_mtx_);
+    ++sender_packet_count_;
+    sender_octet_count_ += static_cast<uint32_t>(packet.payload_size());
+    if (last_sender_report_time_us_ != 0 &&
+        now_us - last_sender_report_time_us_ < kSenderReportIntervalUs) {
+      return;
+    }
+    last_sender_report_time_us_ = now_us;
+    packet_count = sender_packet_count_;
+    octet_count = sender_octet_count_;
+  }
+
+  SenderReport sender_report;
+  sender_report.SetSenderSsrc(ssrc_);
+  sender_report.SetNtpTimestamp(clock_->MonotonicTimeUsToNtp(now_us));
+  sender_report.SetTimestamp(
+      rtp_timestamp_generator_.TimestampForPaddingTimeUs(now_us));
+  sender_report.SetSenderPacketCount(packet_count);
+  sender_report.SetSenderOctetCount(octet_count);
+  if (!sender_report.Build() ||
+      ice_agent_->Send(reinterpret_cast<const char*>(sender_report.Buffer()),
+                       sender_report.Size()) < 0) {
+    LOG_WARN("Failed sending video RTCP sender report for SSRC {}", ssrc_);
+  }
 }
 
 void VideoChannelSend::OnRtpPacketSendFailed(

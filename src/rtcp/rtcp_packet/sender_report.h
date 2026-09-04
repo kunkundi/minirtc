@@ -44,7 +44,6 @@
 
 #include <vector>
 
-#include "api/ntp/ntp_time.h"
 #include "rtcp_common_header.h"
 #include "rtcp_report_block.h"
 
@@ -70,10 +69,8 @@ class SenderReport {
     sender_info_.sender_ssrc = ssrc;
   }
   void SetNtpTimestamp(uint64_t ntp_timestamp) {
-    sender_info_.ntp_ts_msw =
-        ntp_timestamp / webrtc::NtpTime::kFractionsPerSecond;
-    sender_info_.ntp_ts_lsw =
-        ntp_timestamp % webrtc::NtpTime::kFractionsPerSecond;
+    sender_info_.ntp_ts_msw = static_cast<uint32_t>(ntp_timestamp >> 32);
+    sender_info_.ntp_ts_lsw = static_cast<uint32_t>(ntp_timestamp);
   }
   void SetTimestamp(uint32_t timestamp) { sender_info_.rtp_ts = timestamp; }
   void SetSenderPacketCount(uint32_t packet_count) {
@@ -86,8 +83,13 @@ class SenderReport {
   void SetReportBlocks(std::vector<RtcpReportBlock> &rtcp_report_blocks);
 
   uint32_t SenderSsrc() const { return sender_ssrc_; }
-  uint32_t NtpTimestamp() const {
-    return (sender_info_.ntp_ts_msw << 16) | sender_info_.ntp_ts_lsw >> 16;
+  uint64_t NtpTimestamp() const {
+    return (static_cast<uint64_t>(sender_info_.ntp_ts_msw) << 32) |
+           sender_info_.ntp_ts_lsw;
+  }
+  uint32_t CompactNtpTimestamp() const {
+    return (sender_info_.ntp_ts_msw << 16) |
+           (sender_info_.ntp_ts_lsw >> 16);
   }
   uint32_t Timestamp() const { return sender_info_.rtp_ts; }
   uint32_t SenderPacketCount() const {

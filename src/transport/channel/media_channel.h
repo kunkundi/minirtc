@@ -51,7 +51,8 @@ class MediaChannel {
   }
 
   virtual int SendAudio(char* data, size_t size,
-                        uint32_t samples_per_channel) {
+                        uint32_t samples_per_channel,
+                        int64_t captured_timestamp_us) {
     LOG_INFO("SendAudio() default implementation");
     return 0;
   }

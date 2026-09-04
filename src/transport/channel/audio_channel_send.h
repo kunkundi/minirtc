@@ -7,6 +7,7 @@
 #ifndef _AUDIO_CHANNEL_SEND_H_
 #define _AUDIO_CHANNEL_SEND_H_
 
+#include "clock/system_clock.h"
 #include "ice_agent.h"
 #include "media_channel.h"
 #include "paced_sender.h"
@@ -20,6 +21,7 @@ class AudioChannelSend : public MediaChannel {
  public:
   AudioChannelSend();
   AudioChannelSend(const std::string& channel_name,
+                   std::shared_ptr<SystemClock> clock,
                    std::shared_ptr<IceAgent> ice_agent,
                    std::shared_ptr<IOStatistics> ice_io_statistics);
   virtual ~AudioChannelSend();
@@ -37,7 +39,8 @@ class AudioChannelSend : public MediaChannel {
   }
 
   int SendAudio(char* data, size_t size,
-                uint32_t samples_per_channel) override;
+                uint32_t samples_per_channel,
+                int64_t captured_timestamp_us) override;
 
   void OnReceiverReport(const ReceiverReport& receiver_report) override {}
 

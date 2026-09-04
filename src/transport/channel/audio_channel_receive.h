@@ -7,6 +7,7 @@
 #ifndef _AUDIO_CHANNEL_RECEIVE_H_
 #define _AUDIO_CHANNEL_RECEIVE_H_
 
+#include "clock/system_clock.h"
 #include "ice_agent.h"
 #include "media_channel.h"
 #include "rtp_audio_receiver.h"
@@ -18,6 +19,7 @@ class AudioChannelReceive : public MediaChannel {
   AudioChannelReceive();
   AudioChannelReceive(
       const std::string &channel_name, uint32_t ssrc,
+      std::shared_ptr<SystemClock> clock,
       std::shared_ptr<IceAgent> ice_agent,
       std::shared_ptr<IOStatistics> ice_io_statistics,
       std::function<void(const char *, size_t)> on_receive_audio);
@@ -38,6 +40,7 @@ class AudioChannelReceive : public MediaChannel {
  private:
   std::string channel_name_;
   uint32_t ssrc_ = 0;
+  std::shared_ptr<SystemClock> clock_ = nullptr;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpAudioReceiver> rtp_audio_receiver_ = nullptr;
