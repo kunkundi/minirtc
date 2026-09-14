@@ -566,7 +566,7 @@ uint32_t GetRtpSsrc(const char* buffer, size_t size) {
 void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
                                    guint component_id, guint size,
                                    gchar* buffer, gpointer user_ptr) {
-  if (is_closed_) {
+  if (is_closed_ || !buffer) {
     return;
   }
 
@@ -578,6 +578,11 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
   if (CheckIsRtcpPacket(buffer, size)) {
     RtcpPacketInfo info;
     ParseRtcpPacket(data, size, &info);
+    return;
+  }
+
+  // RTCP can be shorter than the fixed RTP header, so check after demux.
+  if (size < kFixedHeaderSize) {
     return;
   }
 

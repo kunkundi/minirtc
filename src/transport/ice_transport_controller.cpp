@@ -143,9 +143,12 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           : 2000));
   paced_sender_->SetAllowProbeWithoutMediaPacket(false);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
+  // The pacer serializes this callback, and Send consumes its buffer before
+  // returning, so the callback can retain and reuse its SRTP scratch space.
   paced_sender_->SetOnSentPacketFunc(
-      [weak_this](std::unique_ptr<webrtc::RtpPacketToSend> packet,
-                  const webrtc::PacedPacketInfo& pacing_info) {
+      [weak_this, protected_packet = std::vector<uint8_t>()](
+          std::unique_ptr<webrtc::RtpPacketToSend> packet,
+          const webrtc::PacedPacketInfo& pacing_info) mutable {
         if (auto self = weak_this.lock()) {
           auto notify_send_failure = [&]() {
             if (!packet || !packet->packet_type().has_value() ||
@@ -184,14 +187,16 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
             }
           }
 
-          std::vector<uint8_t> protected_packet;
           const char* send_buffer = nullptr;
           size_t send_size = 0;
 
           if (self->enable_srtp_) {
             int len = packet->Size();
 
-            protected_packet.resize(len + 16);
+            const size_t protected_size = packet->Size() + 16;
+            if (protected_packet.size() < protected_size) {
+              protected_packet.resize(protected_size);
+            }
             memcpy(protected_packet.data(), packet->Buffer().data(), len);
 
             auto srtp_it =
