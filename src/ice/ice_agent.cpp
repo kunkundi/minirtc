@@ -1064,8 +1064,7 @@ int IceAgent::StartDtls(bool is_client) {
 
   if (enable_srtp_ &&
       SSL_CTX_set_tlsext_use_srtp(ssl_ctx_,
-                                "SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_"
-                                "80:SRTP_AES128_CM_SHA1_32") != 0) {
+                                "SRTP_AEAD_AES_128_GCM") != 0) {
     LOG_ERROR("SSL_CTX_set_tlsext_use_srtp failed");
     return -1;
   }
@@ -1578,8 +1577,7 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
     salt_len = 14;
   }
 
-  const size_t block = key_len + salt_len;
-  const size_t total = 2 * block;
+  const size_t total = 2 * (key_len + salt_len);
 
   std::vector<uint8_t> material(total);
   static const char kLabel[] = "EXTRACTOR-dtls_srtp";
@@ -1589,10 +1587,11 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
     return false;
   }
 
+  // RFC 5764 section 4.2: client key, server key, client salt, server salt.
   const uint8_t* client_key = material.data();
-  const uint8_t* client_salt = material.data() + key_len;
-  const uint8_t* server_key = material.data() + block;
-  const uint8_t* server_salt = material.data() + block + key_len;
+  const uint8_t* server_key = material.data() + key_len;
+  const uint8_t* client_salt = material.data() + 2 * key_len;
+  const uint8_t* server_salt = material.data() + 2 * key_len + salt_len;
 
   const uint8_t* local_k = local_is_client_sender ? client_key : server_key;
   const uint8_t* local_s = local_is_client_sender ? client_salt : server_salt;
