@@ -4,17 +4,17 @@
 
 namespace minirtc {
 
-static std::atomic<bool> g_srtp_inited{false};
-
 void SrtpEngine::GlobalInit() {
-  bool expected = false;
-  if (g_srtp_inited.compare_exchange_strong(expected, true)) {
-    srtp_err_status_t st = srtp_init();
-    if (st != srtp_err_status_ok) {
-      g_srtp_inited = false;
-      LOG_ERROR("srtp_init failed");
+  static const bool initialized = []() {
+    const auto status = srtp_init();
+    if (status != srtp_err_status_ok) {
+      throw std::runtime_error(
+          std::string("srtp_init failed: ") + ErrToStr(status));
     }
-  }
+    return true;
+  }();
+
+  (void)initialized;
 }
 
 std::vector<uint8_t> SrtpEngine::BuildMasterKeyGcm(const uint8_t key16[16],
@@ -95,9 +95,7 @@ void SrtpEngine::FillGcmPolicy(srtp_policy_t& pol) {
 }
 
 srtp_t SrtpEngine::CreateSessionInternal(const Params& p) {
-  if (!g_srtp_inited.load()) {
-    throw std::logic_error("SrtpEngine::GlobalInit must be called first");
-  }
+  GlobalInit();
 
   auto mk = BuildMasterKeyGcm(p.key, p.salt);  // 28 bytes
   srtp_policy_t pol;

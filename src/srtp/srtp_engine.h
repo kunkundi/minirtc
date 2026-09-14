@@ -1,15 +1,14 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2025-09-15
- * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
-#ifndef _SRTP_H_
-#define _SRTP_H_
+#ifndef _SRTP_ENGINE_H_
+#define _SRTP_ENGINE_H_
 
 #include <srtp2/srtp.h>
 
-#include <atomic>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -75,7 +74,8 @@ class SrtpEngine {
     srtp_t session_ = nullptr;
   };
 
-  // One-time global init. Safe to call multiple times.
+  // Thread-safe global init, also called automatically when creating sessions.
+  // Throws std::runtime_error on failure; a later call can retry.
   static void GlobalInit();
 
   // Create a sender SrtpSession bound to a specific SSRC.
