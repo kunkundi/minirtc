@@ -10,6 +10,7 @@
 #include "ice_server_resolver.h"
 #include "ice_utils.h"
 #include "log.h"
+#include "nice/punch.h"
 
 // #define SAVE_IO_STREAM
 
@@ -79,7 +80,8 @@ IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
       turn_mode_(turn_mode),
       enable_srtp_(enable_srtp),
       ice_config_(ice_config),
-      controlling_(offer_peer) {}
+      controlling_(offer_peer),
+      punch_offer_peer_(offer_peer) {}
 
 IceAgent::~IceAgent() {
   if (!destroyed_.load()) {
@@ -92,8 +94,6 @@ IceAgent::~IceAgent() {
   if (agent != nullptr) {
     g_object_unref(agent);
   }
-  g_free(ice_ufrag_);
-  g_free(ice_password_);
 
 #ifdef SAVE_IO_STREAM
   if (file_in_) {
@@ -135,9 +135,17 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   agent_closed_.store(false);
   send_disabled_.store(false);
   p2p_enhancement_enabled_.store(false);
+  punch_remote_supported_ = false;
+  punch_negotiated_once_ = false;
+  punch_attempted_ = false;
+  punch_relay_ready_ms_ = 0;
+  punch_original_deadline_ms_ = 0;
+  ++punch_epoch_;  // Invalidates all observation/handle work from an earlier
+                   // Create.
   {
     std::lock_guard<std::mutex> lock(nat_mutex_);
     nat_samples_.clear();
+    punch_snapshots_.clear();
   }
   {
     std::lock_guard<std::mutex> lock(prediction_mutex_);
@@ -230,6 +238,9 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       exit_nice_thread_ = true;
       return;
     }
+
+    // Allow room for multi-interface candidates and promoted punch sockets.
+    g_object_set(agent, "max-connectivity-checks", 512u, nullptr);
 
     if (g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
                                      "relay-upgrade-timeout") == nullptr) {
@@ -387,6 +398,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
 gboolean IceAgent::CloseNiceAgentStatic(gpointer data) {
   auto* self = static_cast<IceAgent*>(data);
   NiceAgent* agent = self->agent_.load();
+  self->StopPunch();
 
   if (self->nice_inited_.load() && agent != nullptr &&
       self->stream_id_ != 0) {
@@ -538,7 +550,24 @@ std::string IceAgent::GenerateLocalSdp() {
       local_sdp_ += std::string(kP2pEnhancementAttribute) + "\r\n";
     }
   }
+  if (CanAdvertiseUdpPunch()) {
+    local_sdp_ += std::string(kUdpPunchAttribute) + "\r\n" +
+                  kUdpPunchFingerprintAttribute + "sha-256 " +
+                  dtls_fingerprint_ + "\r\n";
+  }
   return local_sdp_;
+}
+
+bool IceAgent::CanAdvertiseUdpPunch() const {
+  auto* agent = agent_.load();
+  return agent && !destroyed_ &&
+         PunchEligible(punch_config_, PunchPlatformSupported(),
+                       nice_agent_punch_get_v1_abi(), use_reliable_ice_,
+                       turn_mode_ == TurnMode::TurnAutoUdpTcp, n_components_) &&
+         g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
+                                      "relay-upgrade-timeout") &&
+         g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
+                                      "stun-servers");
 }
 
 std::string IceAgent::GetLocalStreamSdp(uint32_t stream_id) {
@@ -584,7 +613,22 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
     return -1;
   }
 
-  std::string sdp_no_fingerprint = ExtractAndStripFingerprint(remote_sdp);
+  const std::string remote_ufrag = GetIceUsername(remote_sdp);
+  if (remote_ufrag.empty() ||
+      (!punch_remote_ufrag_.empty() && punch_remote_ufrag_ != remote_ufrag)) {
+    return -1;
+  }
+  const auto fingerprints = SplitIceFingerprint(remote_sdp);
+  if (!fingerprints || fingerprints->sdp.empty()) return -1;
+  const auto& fingerprint = fingerprints->fingerprint.empty()
+                                ? fingerprints->punch_fingerprint
+                                : fingerprints->fingerprint;
+  if (!remote_fingerprint_.empty() && remote_fingerprint_ != fingerprint)
+    return -1;
+  remote_fingerprint_ = fingerprint;
+  // Only the standard media fingerprint requests SRTP. The punch fingerprint
+  // authenticates DTLS independently and preserves legacy RTP fallback.
+  if (fingerprints->fingerprint.empty()) enable_srtp_ = false;
   // Both peers must agree to keep checking after the first regular nomination.
   // An unmodified peer continues to use the standard libnice behavior.
   const bool has_upgrade_extension =
@@ -604,12 +648,21 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
   LOG_INFO("ICE relay upgrade peer_support={} forced_relay={} reliable={} window_ms={}",
            SupportsRelayUpgrade(remote_sdp), IsTurnForced(turn_mode_),
            use_reliable_ice_, upgrade ? 30000 : 0);
-  int ret = nice_agent_parse_remote_sdp(agent_, sdp_no_fingerprint.c_str());
+  // Parsing candidates can make ICE READY on its context immediately. Publish
+  // the independent DTLS requirement before that callback can run.
+  punch_remote_supported_ =
+      upgrade && CanAdvertiseUdpPunch() && SupportsUdpPunch(remote_sdp) &&
+      !remote_fingerprint_.empty() &&
+      (enable_srtp_ || !fingerprints->punch_fingerprint.empty());
+  int ret = nice_agent_parse_remote_sdp(agent_, fingerprints->sdp.c_str());
   if (ret >= 0) {
+    if (punch_remote_ufrag_.empty()) punch_remote_ufrag_ = remote_ufrag;
+    if (punch_remote_supported_) punch_negotiated_once_ = true;
     ProbePredictedRemoteCandidates();
     return 0;
   } else {
-    LOG_ERROR("Failed to parse remote sdp: [{}]", sdp_no_fingerprint);
+    punch_remote_supported_ = false;
+    LOG_ERROR("Failed to parse remote sdp: [{}]", fingerprints->sdp);
     return -1;
   }
 }
@@ -681,6 +734,34 @@ void IceAgent::OnStunMappingStatic(NiceAgent*, NiceCandidate* sample,
         {server_ip, static_cast<uint16_t>(server_port), mapped,
          static_cast<uint16_t>(nice_address_get_port(&sample->addr)),
          sequence});
+    if (self->punch_config_.enabled() && PunchPlatformSupported()) {
+      auto& snapshot = self->punch_snapshots_[key];
+      if (!snapshot.socket) {
+        snapshot.socket = ++self->punch_snapshot_id_;
+        snapshot.generation = self->punch_epoch_;
+        snapshot.local_ip = base;
+        snapshot.local_port = nice_address_get_port(&sample->base_addr);
+        snapshot.component = sample->component_id;
+        // The STUN result's foundation describes srflx. Resolve its actual
+        // original host foundation, so later base-lifetime checks compare host.
+        GSList* candidates = nice_agent_get_local_candidates(
+            self->agent_, sample->stream_id, sample->component_id);
+        for (auto* i = candidates; i; i = i->next) {
+          const auto* c = static_cast<NiceCandidate*>(i->data);
+          if (c->type == NICE_CANDIDATE_TYPE_HOST &&
+              c->transport == NICE_CANDIDATE_TRANSPORT_UDP &&
+              nice_address_equal(&c->addr, &sample->base_addr))
+            snapshot.foundation = c->foundation;
+        }
+        g_slist_free_full(
+            candidates, reinterpret_cast<GDestroyNotify>(nice_candidate_free));
+      }
+      snapshot.samples.push_back(
+          {snapshot.socket, snapshot.generation, server_ip, mapped,
+           static_cast<uint16_t>(server_port),
+           static_cast<uint16_t>(nice_address_get_port(&sample->addr)),
+           g_get_monotonic_time() / 1000, sequence});
+    }
     analysis = AnalyzeNatMappings(samples);
   }
   LOG_INFO(
@@ -727,7 +808,8 @@ void IceAgent::ProbePredictedRemoteCandidates() {
       char ip[NICE_ADDRESS_STRING_LEN] = {}, base[NICE_ADDRESS_STRING_LEN] = {};
       nice_address_to_string(&candidate->addr, ip);
       if (!IsPublicIpv4ForPrediction(ip)) continue;
-      nice_address_to_string(&candidate->base_addr, base);
+      if (nice_address_is_valid(&candidate->base_addr))
+        nice_address_to_string(&candidate->base_addr, base);
       const std::string group =
           std::string(ip) + "/" + base + ":" +
           std::to_string(nice_address_get_port(&candidate->base_addr));
@@ -882,6 +964,9 @@ void IceAgent::CleanupDtls() {
   bio_ = nullptr;
   dtls_started_ = false;
   dtls_handshake_done_ = false;
+  dtls_peer_verified_ = false;
+  punch_remote_ufrag_.clear();
+  remote_fingerprint_.clear();
 
   {
     std::lock_guard<std::mutex> lk(dtls_mutex_);
@@ -900,14 +985,17 @@ bool IceAgent::IsDtlsRecord(const uint8_t* data, size_t len) {
 }
 
 BIO_METHOD* IceAgent::BIO_s_nice() {
-  static BIO_METHOD* m = nullptr;
-  if (m) return m;
-  m = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "libnice-bio");
-  BIO_meth_set_write(m, &IceAgent::bio_nice_write);
-  BIO_meth_set_read(m, &IceAgent::bio_nice_read);
-  BIO_meth_set_create(m, &IceAgent::bio_nice_new);
-  BIO_meth_set_destroy(m, &IceAgent::bio_nice_free);
-  BIO_meth_set_ctrl(m, &IceAgent::bio_nice_ctrl);
+  static BIO_METHOD* m = [] {
+    BIO_METHOD* method = BIO_meth_new(BIO_TYPE_SOURCE_SINK, "libnice-bio");
+    if (method) {
+      BIO_meth_set_write(method, &IceAgent::bio_nice_write);
+      BIO_meth_set_read(method, &IceAgent::bio_nice_read);
+      BIO_meth_set_create(method, &IceAgent::bio_nice_new);
+      BIO_meth_set_destroy(method, &IceAgent::bio_nice_free);
+      BIO_meth_set_ctrl(method, &IceAgent::bio_nice_ctrl);
+    }
+    return method;
+  }();
   return m;
 }
 
@@ -962,7 +1050,7 @@ long IceAgent::bio_nice_ctrl(BIO* b, int cmd, long num, void* ptr) {
 }
 
 int IceAgent::StartDtls(bool is_client) {
-  if (dtls_started_ || !enable_srtp_) return 0;
+  if (dtls_started_ || !ShouldUseDtls()) return 0;
 
   SSL_library_init();
   SSL_load_error_strings();
@@ -974,9 +1062,10 @@ int IceAgent::StartDtls(bool is_client) {
     return -1;
   }
 
-  if (SSL_CTX_set_tlsext_use_srtp(ssl_ctx_,
-                                  "SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_"
-                                  "80:SRTP_AES128_CM_SHA1_32") != 0) {
+  if (enable_srtp_ &&
+      SSL_CTX_set_tlsext_use_srtp(ssl_ctx_,
+                                "SRTP_AEAD_AES_128_GCM:SRTP_AES128_CM_SHA1_"
+                                "80:SRTP_AES128_CM_SHA1_32") != 0) {
     LOG_ERROR("SSL_CTX_set_tlsext_use_srtp failed");
     return -1;
   }
@@ -1022,11 +1111,7 @@ int IceAgent::StartDtls(bool is_client) {
 
   int ret = SSL_do_handshake(ssl_);
   if (ret == 1) {
-    dtls_handshake_done_ = true;
-    const SRTP_PROTECTION_PROFILE* prof = SSL_get_selected_srtp_profile(ssl_);
-    LOG_INFO("DTLS handshake completed immediately. SRTP profile: {}",
-             prof ? prof->name : "(none)");
-    return 0;
+    return CompleteDtlsHandshake() ? 0 : -1;
   }
   int err = SSL_get_error(ssl_, ret);
   if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
@@ -1155,34 +1240,9 @@ std::string IceAgent::ComputeFingerprint(X509* cert) {
   return oss.str();
 }
 
-std::string IceAgent::ExtractAndStripFingerprint(const std::string& sdp) {
-  if (!remote_fingerprint_.empty()) {
-    return sdp;
-  }
-
-  std::size_t pos = sdp.rfind("a=fingerprint:");
-  if (pos != std::string::npos) {
-    std::size_t space_pos = sdp.find(' ', pos);
-    if (space_pos != std::string::npos) {
-      remote_fingerprint_ = sdp.substr(space_pos + 1);
-
-      while (!remote_fingerprint_.empty() &&
-             (remote_fingerprint_.back() == '\r' ||
-              remote_fingerprint_.back() == '\n')) {
-        remote_fingerprint_.pop_back();
-      }
-    }
-
-    std::size_t cut_pos =
-        (pos > 0 && (sdp[pos - 1] == '\n' || sdp[pos - 1] == '\r')) ? pos - 1
-                                                                    : pos;
-    LOG_INFO("Got fingerprint");
-    return sdp.substr(0, cut_pos);
-  } else {
-    enable_srtp_ = false;
-  }
-
-  return sdp;
+bool IceAgent::ShouldUseDtls() const {
+  return !remote_fingerprint_.empty() &&
+         (enable_srtp_ || punch_remote_supported_);
 }
 
 void IceAgent::OnNiceRecvStatic(NiceAgent* agent, guint stream_id,
@@ -1199,9 +1259,20 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
   if (file_in_) fwrite(buffer, 1, size, file_in_);
 #endif
 
+  if (punch_remote_supported_ && dtls_peer_verified_) MaybeStartPunch();
+  if (punch_negotiated_once_ &&
+      punch::IsMagic(reinterpret_cast<uint8_t*>(buffer), size)) {
+    if (punch_runtime_ && !send_disabled_)
+      punch_runtime_->Control(reinterpret_cast<uint8_t*>(buffer), size,
+                              g_get_monotonic_time() / 1000);
+    return;  // Includes relay-carried PROBE: never forward to
+             // DTLS/SRTP/business.
+  }
+
   const bool looks_dtls =
       IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
-  if (enable_srtp_ && looks_dtls) {
+  const bool use_dtls = ShouldUseDtls();
+  if (use_dtls && looks_dtls) {
     if (dtls_started_) {
       {
         std::lock_guard<std::mutex> lk(dtls_mutex_);
@@ -1221,44 +1292,27 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
         }
       }
 
-      if (SSL_is_init_finished(ssl_) && !dtls_handshake_done_) {
-        dtls_handshake_done_ = true;
-
-        const SRTP_PROTECTION_PROFILE* prof =
-            SSL_get_selected_srtp_profile(ssl_);
-        LOG_INFO("DTLS handshake done. SRTP profile: {}",
-                 prof ? prof->name : "(none)");
-
-        bool verified = false;
-        X509* peer = SSL_get_peer_certificate(ssl_);
-        if (peer) {
-          std::string fp = ComputeFingerprint(peer);
-          X509_free(peer);
-
-          if (fp != remote_fingerprint_) {
-            LOG_ERROR("DTLS fingerprint mismatch! expected {} got {}",
-                      remote_fingerprint_, fp);
-          } else {
-            LOG_INFO("DTLS peer fingerprint verified");
-            verified = true;
-          }
-        } else {
-          LOG_ERROR("Peer certificate missing");
-        }
-
-        if (verified && on_cb_dtls_done_) {
-          on_cb_dtls_done_(user_ptr_);
-        }
-      }
+      if (SSL_is_init_finished(ssl_) && !dtls_handshake_done_)
+        CompleteDtlsHandshake();
       return;
     }
 
-    LOG_WARN("Received DTLS record before the local handshake started");
+    // The peer can reach READY and send ClientHello while our selected relay
+    // is still CONNECTED. Keep a bounded flight for StartDtls() on our READY
+    // callback, instead of losing the only ClientHello. This uses the same
+    // DTLS session and does not change the ICE upgrade deadline.
+    if (!remote_fingerprint_.empty() && !send_disabled_ && size <= 2048) {
+      std::lock_guard<std::mutex> lock(dtls_mutex_);
+      if (dtls_incoming_.size() < 4) {
+        dtls_incoming_.emplace(reinterpret_cast<uint8_t*>(buffer),
+                               reinterpret_cast<uint8_t*>(buffer) + size);
+      }
+    }
     return;
   }
 
-  if (!enable_srtp_ && looks_dtls) {
-    LOG_WARN("Ignoring DTLS record because SRTP is disabled");
+  if (!use_dtls && looks_dtls) {
+    LOG_WARN("Ignoring DTLS record because DTLS was not negotiated");
     return;
   }
 
@@ -1283,7 +1337,17 @@ void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
     return;
   }
   if (state == NICE_COMPONENT_STATE_READY) {
-    if (!dtls_started_ && !remote_fingerprint_.empty() && enable_srtp_) {
+    int64_t no_ready = 0;
+    punch_relay_ready_ms_.compare_exchange_strong(
+        no_ready, g_get_monotonic_time() / 1000);
+    // The backend's deadline query is READY-only. Remember its actual deadline
+    // before late candidates can temporarily return ICE to CONNECTED; never
+    // derive a fresh window from the time at which READY is restored.
+    if (CanAdvertiseUdpPunch() && punch_remote_supported_ &&
+        !punch_original_deadline_ms_)
+      punch_original_deadline_ms_ =
+          nice_agent_punch_get_deadline(agent_, stream_id_, 1) / 1000;
+    if (!dtls_started_ && ShouldUseDtls()) {
       if (StartDtls(controlling_) != 0) {
         LOG_ERROR("StartDtls failed");
       } else {
@@ -1291,9 +1355,198 @@ void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
       }
     }
   }
+  if (state == NICE_COMPONENT_STATE_READY) MaybeStartPunch();
   if (on_state_changed_) {
     on_state_changed_(agent_, stream_id, component_id, state, user_ptr_);
   }
+}
+
+bool IceAgent::CompleteDtlsHandshake() {
+  if (dtls_handshake_done_) return dtls_peer_verified_;
+  dtls_handshake_done_ = true;
+  X509* peer = SSL_get_peer_certificate(ssl_);
+  if (!peer) {
+    LOG_ERROR("DTLS peer certificate missing");
+    return false;
+  }
+  const std::string fingerprint = ComputeFingerprint(peer);
+  X509_free(peer);
+  if (remote_fingerprint_.empty() || fingerprint != remote_fingerprint_) {
+    LOG_ERROR("DTLS peer fingerprint mismatch");
+    return false;
+  }
+  dtls_peer_verified_ = true;
+  MaybeStartPunch();
+  LOG_INFO("DTLS peer fingerprint verified");
+  if (on_cb_dtls_done_) on_cb_dtls_done_(user_ptr_);
+  return true;
+}
+
+void IceAgent::MaybeStartPunch() {
+  if (!gcontext_ || !g_main_context_is_owner(gcontext_)) return;
+  if (!CanAdvertiseUdpPunch() || !punch_remote_supported_ ||
+      !dtls_peer_verified_ || send_disabled_ || punch_source_ ||
+      punch_attempted_ || !punch_relay_ready_ms_)
+    return;
+  NiceCandidate *local = nullptr, *remote = nullptr;
+  if (!nice_agent_get_selected_pair(agent_, stream_id_, 1, &local, &remote) ||
+      !local || !remote ||
+      (local->type != NICE_CANDIDATE_TYPE_RELAYED &&
+       remote->type != NICE_CANDIDATE_TYPE_RELAYED))
+    return;
+  punch_packet_handler_ = g_signal_connect(
+      agent_, "punch-packet", G_CALLBACK(OnPunchPacketStatic), this);
+  punch_source_ = g_timeout_source_new(10);
+  g_source_set_callback(punch_source_, PunchTickStatic, this, nullptr);
+  g_source_attach(punch_source_, gcontext_);
+}
+void IceAgent::StopPunch() {
+  punch_attempted_ = true;
+  if (punch_source_) {
+    g_source_destroy(punch_source_);
+    g_source_unref(punch_source_);
+    punch_source_ = nullptr;
+  }
+  if (punch_packet_handler_ && agent_) {
+    g_signal_handler_disconnect(agent_, punch_packet_handler_);
+    punch_packet_handler_ = 0;
+  }
+  if (punch_runtime_) {
+    punch_runtime_->Stop("disconnect", false);
+    punch_runtime_.reset();
+  }
+}
+gboolean IceAgent::PunchTickStatic(gpointer data) {
+  auto* self = static_cast<IceAgent*>(data);
+  const auto now = g_get_monotonic_time() / 1000;
+  bool keep = false;
+  if (!self->destroyed_ && !self->send_disabled_ &&
+      self->dtls_peer_verified_ && self->punch_remote_supported_) {
+    if (self->punch_runtime_)
+      keep = self->punch_runtime_->Tick(now);
+    else if (now - self->punch_relay_ready_ms_ <
+             self->punch_config_.trigger_delay_ms)
+      keep = true;
+    else if (now < self->punch_original_deadline_ms_ &&
+             nice_agent_get_component_state(self->agent_, self->stream_id_,
+                                            1) ==
+                 NICE_COMPONENT_STATE_CONNECTED) {
+      // An established relay can remain usable during a normal ICE recheck.
+      // Wait only within the original window; no probing/opening is permitted
+      // until the backend is READY again and validates that window itself.
+      keep = true;
+    } else {
+      self->punch_attempted_ = true;
+      const auto deadline =
+          nice_agent_punch_get_deadline(self->agent_, self->stream_id_, 1) /
+          1000;
+      punch::Keys keys;
+      punch::Id generation{};
+      char selected_ip[NICE_ADDRESS_STRING_LEN] = {};
+      uint16_t selected_port = 0;
+      NiceCandidate *local = nullptr, *remote = nullptr;
+      if (nice_agent_get_selected_pair(self->agent_, self->stream_id_, 1,
+                                       &local, &remote) &&
+          local) {
+        // A srflx/relay address is public. Its base identifies the interface
+        // that actually carries the selected connection, including TURN/TCP
+        // where the observed UDP base may have a different local port.
+        const auto& base = nice_address_is_valid(&local->base_addr)
+                               ? local->base_addr
+                               : local->addr;
+        if (nice_address_is_valid(&base)) {
+          nice_address_to_string(&base, selected_ip);
+          selected_port = nice_address_get_port(&base);
+        }
+      }
+      std::vector<PunchMappingSnapshot> snapshots;
+      {
+        std::lock_guard<std::mutex> lock(self->nat_mutex_);
+        for (const auto& entry : self->punch_snapshots_)
+          snapshots.push_back(entry.second);
+      }
+      auto chosen = SelectPunchMapping(
+          snapshots, selected_ip, selected_port, self->punch_epoch_, now,
+          self->punch_config_.mapping_sample_max_age_ms);
+      if (deadline > now && chosen && self->ExportPunchKeys(keys, generation)) {
+        self->punch_runtime_ = std::make_unique<PunchRuntime>(
+            self->agent_, self->stream_id_, self->punch_offer_peer_,
+            self->punch_epoch_, self->punch_config_, keys, generation,
+            std::move(*chosen), deadline);
+        keep = self->punch_runtime_->Begin(now);
+      }
+    }
+  }
+  if (!keep) {
+    if (self->punch_runtime_) self->punch_runtime_->Stop("state-change", false);
+    if (self->punch_source_) {
+      g_source_unref(self->punch_source_);
+      self->punch_source_ = nullptr;
+    }
+    if (self->punch_packet_handler_) {
+      g_signal_handler_disconnect(self->agent_, self->punch_packet_handler_);
+      self->punch_packet_handler_ = 0;
+    }
+    return G_SOURCE_REMOVE;
+  }
+  return G_SOURCE_CONTINUE;
+}
+void IceAgent::OnPunchPacketStatic(NiceAgent*, guint stream, guint component,
+                                   guint64 epoch, guint64 handle,
+                                   NiceCandidate* packet, GBytes* data,
+                                   gpointer value) {
+  auto* self = static_cast<IceAgent*>(value);
+  if (!self->punch_runtime_ || self->destroyed_ || self->send_disabled_ ||
+      stream != self->stream_id_ || component != 1)
+    return;
+  gsize size = 0;
+  const auto* bytes =
+      static_cast<const uint8_t*>(g_bytes_get_data(data, &size));
+  self->punch_runtime_->Direct(epoch, handle, packet, bytes, size,
+                               g_get_monotonic_time() / 1000);
+}
+
+punch::Bytes IceAgent::PunchGenerationContext() const {
+  auto* agent = agent_.load();
+  if (!agent || destroyed_ || !stream_id_ || punch_remote_ufrag_.empty())
+    return {};
+  // The backend owns credentials from add_stream onward, including before an
+  // answerer generates SDP. Read the current scope for the exporter;
+  // never rely on an uninitialized or previous-generation credential cache.
+  gchar *local_ufrag = nullptr, *password = nullptr;
+  const bool found = nice_agent_get_local_credentials(agent, stream_id_,
+                                                      &local_ufrag, &password);
+  const std::string local = found && local_ufrag ? local_ufrag : "";
+  g_free(local_ufrag);
+  g_free(password);
+  return punch::GenerationContext(
+      punch_offer_peer_ ? local : punch_remote_ufrag_,
+      punch_offer_peer_ ? punch_remote_ufrag_ : local);
+}
+
+bool IceAgent::ExportPunchKeys(punch::Keys& keys, punch::Id& generation) const {
+  keys.Clear();
+  generation = {};
+  auto* context = gcontext_.load();
+  if (!context || !g_main_context_is_owner(context) || !agent_ || destroyed_ ||
+      send_disabled_ || !punch_remote_supported_ || !dtls_peer_verified_ || !ssl_)
+    return false;
+  const auto scope = PunchGenerationContext();
+  if (scope.empty()) return false;
+  std::array<uint8_t, 128> material{};
+  constexpr char label[] = "EXPORTER-MiniRTC-UDP-Punch-v1";
+  const int result = SSL_export_keying_material(
+      ssl_, material.data(), material.size(), label, sizeof(label) - 1,
+      scope.data(), scope.size(), 1);
+  if (result == 1) {
+    std::copy_n(material.begin(), 32, keys.offer_control.begin());
+    std::copy_n(material.begin() + 32, 32, keys.answer_control.begin());
+    std::copy_n(material.begin() + 64, 32, keys.offer_probe.begin());
+    std::copy_n(material.begin() + 96, 32, keys.answer_probe.begin());
+    generation = punch::GenerationId(scope);
+  }
+  OPENSSL_cleanse(material.data(), material.size());
+  return result == 1;
 }
 
 bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
@@ -1301,8 +1554,8 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
                               std::vector<uint8_t>& remote_key,
                               std::vector<uint8_t>& remote_salt,
                               bool local_is_client_sender) const {
-  if (!dtls_handshake_done_ || !ssl_) {
-    LOG_ERROR("DTLS handshake not done");
+  if (!dtls_peer_verified_ || !ssl_) {
+    LOG_ERROR("DTLS peer not verified");
     return false;
   }
 

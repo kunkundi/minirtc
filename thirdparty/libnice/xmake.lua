@@ -12,6 +12,9 @@ package("libnice")
         "87e061a6d41c322827bbe7138707df546cd70b9c228d689d0edf5462370df578")
     add_patches("0.1.24", path.join(os.scriptdir(), "patches", "multi_stun_0.1.24.patch"),
         "a098c4e52379bb8f3067f4c65c1a48748b6dfb515f667a1d1d931744062e381b")
+    add_patches("0.1.24", path.join(os.scriptdir(), "patches", "udp_punch_0.1.24.patch"),
+        "569870d7fb948c1696bb93cf89cbbd8a189eac6df7631c4b87333e344f7c29e0")
+    add_configs("udp_punch_revision", {description = "MiniRTC bounded UDP punch backend", default = "1", type = "string", readonly = true})
     add_configs("turn_close_receive", {description = "Receive TURN replies while closing streams", default = true, type = "boolean", readonly = true})
     -- Include the extension in the package identity to invalidate old binaries.
     add_configs("relay_upgrade", {description = "MiniRTC negotiated relay upgrade extension", default = true, type = "boolean", readonly = true})

@@ -870,6 +870,7 @@ int IceTransport::SetRemoteSdp(const std::string& remote_sdp) {
       !SupportsP2pEnhancement(media_stream_sdp)) {
     media_stream_sdp += "\r\n" + std::string(kP2pEnhancementAttribute) + "\r\n";
   }
+  media_stream_sdp = PreserveUdpPunchCapability(remote_sdp, media_stream_sdp);
   if (ice_agent_->SetRemoteSdp(media_stream_sdp.c_str()) != 0) {
     return -1;
   }
@@ -1269,6 +1270,8 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
 }
 
 std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
+  const auto fingerprints = SplitIceFingerprint(remote_sdp);
+  if (!fingerprints) return {};
   std::string media_stream_sdp;
 
   std::size_t video_start = remote_sdp.find("m=video");
@@ -1282,8 +1285,6 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   std::map<std::string, uint32_t> video_rtx_ssrc_map;
   std::map<std::string, uint32_t> audio_ssrc_map;
   std::map<std::string, uint32_t> data_ssrc_map;
-
-  std::string fingerprint_line;
 
   if (video_start != std::string::npos) {
     std::size_t video_end = std::min(
@@ -1323,21 +1324,20 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
     media_stream_sdp += remote_sdp.substr(candidate_start);
   }
 
-  std::size_t fingerprint_pos = remote_sdp.rfind("a=fingerprint");
-  if (fingerprint_pos != std::string::npos) {
-    std::string fingerprint_line = remote_sdp.substr(fingerprint_pos);
-    std::size_t newline_pos = fingerprint_line.find('\n');
-    if (newline_pos != std::string::npos) {
-      fingerprint_line = fingerprint_line.substr(0, newline_pos);
-    }
-
-    if (!media_stream_sdp.empty() && media_stream_sdp.back() == '\n') {
-      media_stream_sdp += fingerprint_line;
-    } else {
-      media_stream_sdp += "\n" + fingerprint_line;
-    }
+  // Preserve both fingerprints from the full SDP even when their media
+  // section is discarded, and validate duplicates before normalizing them.
+  const auto media_fingerprints = SplitIceFingerprint(media_stream_sdp);
+  if (!media_fingerprints) return {};
+  media_stream_sdp = media_fingerprints->sdp;
+  if (!fingerprints->fingerprint.empty()) {
+    media_stream_sdp +=
+        "a=fingerprint:sha-256 " + fingerprints->fingerprint + "\r\n";
   } else {
     enable_srtp_ = false;
+  }
+  if (!fingerprints->punch_fingerprint.empty()) {
+    media_stream_sdp += std::string(kUdpPunchFingerprintAttribute) +
+                        "sha-256 " + fingerprints->punch_fingerprint + "\r\n";
   }
 
   if (!remote_capabilities_got_) {

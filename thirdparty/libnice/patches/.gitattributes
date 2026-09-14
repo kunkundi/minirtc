@@ -1,0 +1,2 @@
+# Unified diff context must retain upstream whitespace for exact application.
+*.patch -whitespace

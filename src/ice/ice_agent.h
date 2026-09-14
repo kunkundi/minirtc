@@ -27,6 +27,9 @@
 #include "minirtc.h"
 #include "nat_traversal.h"
 #include "nice/agent.h"
+#include "punch_config.h"
+#include "punch_protocol.h"
+#include "punch_runtime.h"
 
 namespace minirtc {
 
@@ -136,8 +139,6 @@ class IceAgent {
 
   gboolean exit_nice_thread_ = false;
   bool controlling_ = false;
-  gchar* ice_ufrag_ = nullptr;
-  gchar* ice_password_ = nullptr;
   uint32_t stream_id_ = 0;
   uint32_t n_components_ = 1;
   std::string local_sdp_ = "";
@@ -179,7 +180,32 @@ class IceAgent {
   std::string dtls_fingerprint_;
   std::atomic<bool> dtls_started_{false};
   std::atomic<bool> dtls_handshake_done_{false};
+  std::atomic<bool> dtls_peer_verified_{false};
   std::string remote_fingerprint_;
+  std::string punch_remote_ufrag_;
+  const PunchConfig punch_config_ = ProcessPunchConfig();
+  const bool punch_offer_peer_;
+  std::atomic<bool> punch_remote_supported_{false};
+  std::atomic<bool> punch_negotiated_once_{false};
+  std::map<std::string, PunchMappingSnapshot> punch_snapshots_;
+  uint64_t punch_epoch_ = 1, punch_snapshot_id_ = 0;
+  std::unique_ptr<PunchRuntime> punch_runtime_;
+  GSource* punch_source_ = nullptr;
+  gulong punch_packet_handler_ = 0;
+  std::atomic<int64_t> punch_relay_ready_ms_{0};
+  int64_t punch_original_deadline_ms_ = 0;
+  bool punch_attempted_ = false;
+  // Only the owning Nice/DTLS context can export. No keys before fingerprint
+  // verification; output is cleared even on failure.
+  bool ExportPunchKeys(punch::Keys& keys, punch::Id& generation) const;
+  bool CanAdvertiseUdpPunch() const;
+
+  punch::Bytes PunchGenerationContext() const;
+  void MaybeStartPunch();
+  void StopPunch();
+  static gboolean PunchTickStatic(gpointer data);
+  static void OnPunchPacketStatic(NiceAgent*, guint, guint, guint64, guint64,
+                                  NiceCandidate*, GBytes*, gpointer);
 
   static void OnNiceRecvStatic(NiceAgent* agent, guint stream_id,
                                guint component_id, guint size, gchar* buffer,
@@ -206,7 +232,7 @@ class IceAgent {
 
   void GenerateDtlsCertificate(int days_valid = 365 * 30);
   std::string ComputeFingerprint(X509* cert);
-  std::string ExtractAndStripFingerprint(const std::string& sdp);
+  bool ShouldUseDtls() const;
 
   std::mutex dtls_mutex_;
   std::mutex destroy_mutex_;
@@ -214,6 +240,7 @@ class IceAgent {
   std::queue<std::vector<uint8_t>> dtls_incoming_;
 
   void CleanupDtls();
+  bool CompleteDtlsHandshake();
 };
 
 }  // namespace minirtc

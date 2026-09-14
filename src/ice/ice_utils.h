@@ -20,6 +20,43 @@ namespace minirtc {
 inline constexpr char kRelayUpgradeAttribute[] = "a=x-minirtc-relay-upgrade:1";
 inline constexpr char kP2pEnhancementAttribute[] =
     "a=x-minirtc-p2p-enhancement:1";
+inline constexpr char kUdpPunchAttribute[] = "a=x-minirtc-udp-punch:1";
+// A separate fingerprint advertises DTLS authentication without requesting
+// SRTP from peers that use the standard fingerprint as their media switch.
+inline constexpr char kUdpPunchFingerprintAttribute[] =
+    "a=x-minirtc-udp-punch-fingerprint:";
+
+// The entire SDP is the authority. Duplicates and unknown versions disable
+// this extension, including a conflicting declaration in a discarded section.
+inline bool SupportsUdpPunch(const std::string& sdp) {
+  std::istringstream lines(sdp);
+  std::string line;
+  unsigned count = 0;
+  bool supported = false;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.rfind("a=x-minirtc-udp-punch:", 0) == 0) {
+      ++count;
+      supported = line == kUdpPunchAttribute;
+    }
+  }
+  return count == 1 && supported;
+}
+
+inline std::string PreserveUdpPunchCapability(const std::string& full,
+                                              const std::string& extracted) {
+  if (full.find("a=x-minirtc-udp-punch:") == std::string::npos &&
+      extracted.find("a=x-minirtc-udp-punch:") == std::string::npos)
+    return extracted;
+  std::istringstream lines(extracted);
+  std::string line, result;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line.rfind("a=x-minirtc-udp-punch:", 0) != 0) result += line + "\n";
+  }
+  if (SupportsUdpPunch(full)) result += std::string(kUdpPunchAttribute) + "\n";
+  return result;
+}
 
 inline bool HasIceAttribute(const std::string& sdp,
                             const std::string& attribute) {
@@ -57,6 +94,46 @@ inline std::string GetIceUsername(const std::string& sdp) {
     }
   }
   return {};
+}
+
+struct IceFingerprintSdp {
+  std::string sdp, fingerprint, punch_fingerprint;
+};
+inline std::optional<IceFingerprintSdp> SplitIceFingerprint(
+    const std::string& sdp) {
+  IceFingerprintSdp result;
+  std::istringstream lines(sdp);
+  std::string line;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const bool punch = line.rfind(kUdpPunchFingerprintAttribute, 0) == 0;
+    if (!punch && line.rfind("a=fingerprint:", 0) != 0) {
+      result.sdp += line + "\n";
+      continue;
+    }
+    const std::string prefix =
+        std::string(punch ? kUdpPunchFingerprintAttribute : "a=fingerprint:") +
+        "sha-256 ";
+    if (line.rfind(prefix, 0) != 0) return {};
+    std::string value = line.substr(prefix.size());
+    if (value.size() != 95) return {};
+    for (size_t i = 0; i < value.size(); ++i) {
+      if (i % 3 == 2) {
+        if (value[i] != ':') return {};
+      } else {
+        const auto c = static_cast<unsigned char>(value[i]);
+        if (!std::isxdigit(c)) return {};
+        value[i] = static_cast<char>(std::toupper(c));
+      }
+    }
+    auto& fingerprint = punch ? result.punch_fingerprint : result.fingerprint;
+    if (!fingerprint.empty() && fingerprint != value) return {};
+    fingerprint = std::move(value);
+  }
+  if (!result.fingerprint.empty() && !result.punch_fingerprint.empty() &&
+      result.fingerprint != result.punch_fingerprint)
+    return {};
+  return result;
 }
 
 struct StunEndpoint {

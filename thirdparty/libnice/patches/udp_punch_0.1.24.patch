@@ -1,0 +1,524 @@
+--- a/agent/agent-priv.h
++++ b/agent/agent-priv.h
+@@ -156,6 +156,7 @@
+   guint stun_initial_timeout;     /* property: stun initial timeout, RTO */
+   guint stun_reliable_timeout;    /* property: stun reliable timeout */
+   NiceNominationMode nomination_mode; /* property: Nomination mode */
++  guint64 punch_next_id; /* handles never reused across stream restart */
+   guint relay_upgrade_timeout; /* negotiated MiniRTC extension, milliseconds */
+   gboolean support_renomination;  /* property: support RENOMINATION STUN attribute */
+   guint idle_timeout;             /* property: conncheck timeout before stop */
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -68,6 +68,7 @@
+ #include "discovery.h"
+ #include "agent.h"
+ #include "agent-priv.h"
++#include "punch-priv.h"
+ #include "iostream.h"
+ 
+ #include "stream.h"
+@@ -151,6 +152,7 @@
+   SIGNAL_NEW_CANDIDATE_FULL,
+   SIGNAL_NEW_REMOTE_CANDIDATE_FULL,
+ 
++  SIGNAL_PUNCH_PACKET,
+   SIGNAL_STUN_MAPPING,
+   N_SIGNALS,
+ };
+@@ -516,6 +518,10 @@
+       g_param_spec_string ("stun-servers", "STUN servers",
+           "Up to eight comma-separated host[:port] endpoints; overrides stun-server",
+           NULL, G_PARAM_READWRITE));
++  signals[SIGNAL_PUNCH_PACKET] = g_signal_new ("punch-packet",
++      G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST, 0,
++      NULL, NULL, NULL, G_TYPE_NONE, 6, G_TYPE_UINT, G_TYPE_UINT,
++      G_TYPE_UINT64, G_TYPE_UINT64, NICE_TYPE_CANDIDATE, G_TYPE_BYTES);
+   signals[SIGNAL_STUN_MAPPING] = g_signal_new ("stun-mapping",
+       G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST, 0,
+       NULL, NULL, NULL, G_TYPE_NONE, 4,
+@@ -2692,8 +2698,22 @@
+   nice_candidate_free (sample);
+ }
+ 
++void agent_signal_punch_packet (NiceAgent *a, NiceComponent *c,
++    guint64 generation, guint64 id, const NiceAddress *from,
++    const NiceAddress *bound, const guint8 *data, gsize size)
++{
++  NiceCandidate *packet = nice_candidate_new (NICE_CANDIDATE_TYPE_HOST);
++  GBytes *bytes = g_bytes_new (data, size);
++  packet->addr = *from; packet->base_addr = *bound;
++  packet->stream_id = c->stream_id; packet->component_id = c->id;
++  agent_queue_signal (a, signals[SIGNAL_PUNCH_PACKET], c->stream_id, c->id,
++      generation, id, packet, bytes);
++  g_bytes_unref (bytes); nice_candidate_free (packet);
++}
++
+ void agent_signal_new_candidate (NiceAgent *agent, NiceCandidate *candidate)
+ {
++  if (((NiceCandidateImpl *) candidate)->punch_internal) return;
+   agent_queue_signal (agent, signals[SIGNAL_NEW_CANDIDATE_FULL],
+       candidate);
+   agent_queue_signal (agent, signals[SIGNAL_NEW_CANDIDATE],
+@@ -5003,6 +5023,30 @@
+         "(fd %d) from [%s]:%u (%" G_GSSIZE_FORMAT " octets).", G_STRFUNC, agent,
+         nicesock, nicesock->fileno ? g_socket_get_fd (nicesock->fileno) : -1, tmpbuf,
+         nice_address_get_port (message->from), message->length);
++  }
++
++  /* Examine RAW UDP only, before TURN can rewrite source/socket. Even a
++   * bare magic packet from a configured TURN server is not a direct hit. */
++  if (component->punch_endpoints && nicesock->type == NICE_SOCKET_TYPE_UDP_BSD) {
++    GList *turn; gboolean from_turn = FALSE;
++    for (turn = component->turn_servers; turn; turn = turn->next) {
++      TurnServer *server = turn->data;
++      if (nice_address_equal (&server->server, message->from)) from_turn = TRUE;
++    }
++    /* A peer's TURN allocation can also send plain UDP to our host socket.
++     * It is still relayed even though our own TURN parser is not involved. */
++    for (GSList *i = component->remote_candidates; i; i = i->next) {
++      NiceCandidate *remote = i->data;
++      if (remote->type == NICE_CANDIDATE_TYPE_RELAYED &&
++          nice_address_equal (&remote->addr, message->from)) from_turn = TRUE;
++    }
++    if (!from_turn) {
++      gsize len; guint8 *data = compact_input_message (message, &len);
++      gboolean consumed = nice_punch_recv (agent, component, nicesock,
++          message->from, data, len);
++      g_free (data);
++      if (consumed) { retval = RECV_OOB; goto done; }
++    }
+   }
+ 
+   is_turn = _agent_recv_turn_message_unlocked (agent, stream, component, &nicesock,
+--- a/agent/candidate-priv.h
++++ b/agent/candidate-priv.h
+@@ -121,6 +121,7 @@
+   TurnServer *turn;
+   NiceSocket *sockptr;
+   guint64 keepalive_next_tick; /* next tick timestamp */
++  gboolean punch_internal; /* never emit ordinary candidate signalling */
+   NiceAddress *stun_server;
+ };
+ 
+--- a/agent/component.c
++++ b/agent/component.c
+@@ -56,6 +56,7 @@
+ #include "debug.h"
+ 
+ #include "component.h"
++#include "punch-priv.h"
+ #include "discovery.h"
+ #include "agent-priv.h"
+ 
+@@ -499,6 +500,9 @@
+   GSList *i;
+   IncomingCheck *c;
+ 
++  nice_punch_stop_unlocked (agent, cmp, 0, TRUE);
++  /* Selected endpoints keep their socket and quota with receiving disabled. */
++
+   for (i = cmp->remote_candidates; i; i = i->next) {
+     NiceCandidate *candidate = i->data;
+ 
+@@ -775,6 +779,7 @@
+   component->socket_sources_age++;
+ 
+   socket_source_free (socket_source);
++  nice_punch_forget_socket (component, nicesock);
+   if (socket_source_freed) {
+     *socket_source_freed = TRUE;
+   }
+@@ -807,6 +812,7 @@
+ 
+   g_slist_free_full (component->socket_sources,
+       (GDestroyNotify) socket_source_free);
++  nice_punch_clear (component);
+   component->socket_sources = NULL;
+   component->socket_sources_age++;
+ 
+--- a/agent/component.h
++++ b/agent/component.h
+@@ -173,6 +173,7 @@
+   guint socket_sources_age;    /* incremented when socket_sources changes */
+   GQueue incoming_checks;     /* list of IncomingCheck objs */
+   GList *turn_servers;             /* List of TurnServer objs */
++  GSList *punch_endpoints; /* owned registry, sockets owned by sources */
+   gint64 relay_upgrade_deadline; /* zero until first relay selection */
+   gint64 relay_upgrade_next_retry;
+   CandidatePair selected_pair; /* independent from checklists, 
+--- a/agent/conncheck.c
++++ b/agent/conncheck.c
+@@ -56,6 +56,7 @@
+ #include "agent.h"
+ #include "agent-priv.h"
+ #include "conncheck.h"
++#include "punch-priv.h"
+ #include "discovery.h"
+ #include "socket-priv.h"
+ #include "stun/stun5389.h"
+@@ -824,8 +825,10 @@
+     NiceComponent *component = i->data;
+     gboolean nominate_pending = FALSE;
+     gboolean retry;
+-    if (!priv_relay_upgrade_active (agent, component))
++    if (!priv_relay_upgrade_active (agent, component)) {
++      nice_punch_stop_unlocked (agent, component, 0, TRUE);
+       continue;
++    }
+     keep_timer_going = TRUE;
+     retry = now >= component->relay_upgrade_next_retry;
+     if (retry)
+@@ -2520,7 +2523,8 @@
+ 
+   pair = priv_add_new_check_pair (agent, stream_id, component,
+       (NiceCandidateImpl *) local, (NiceCandidateImpl *) remote, initial_state);
+-  if (pair) {
++  if (pair && !(component->punch_endpoints && component->state == NICE_COMPONENT_STATE_READY &&
++      priv_relay_upgrade_active (agent, component))) {
+     if (component->state == NICE_COMPONENT_STATE_CONNECTED ||
+         component->state == NICE_COMPONENT_STATE_READY) {
+       agent_signal_component_state_change (agent,
+@@ -3552,7 +3556,13 @@
+   for (i = component->local_candidates; i; i = i->next) {
+     NiceCandidate *cand = i->data;
+ 
++    /* UDP mappings may be reused across different local sockets (including
++     * a newly promoted punch endpoint). Only the socket which completed this
++     * authenticated check owns the resulting valid pair. Matching a mapped
++     * address alone can nominate an unchecked old socket and close the hit. */
+     if (nice_address_equal (&mapped, &cand->addr) &&
++        (sockptr->type != NICE_SOCKET_TYPE_UDP_BSD ||
++         ((NiceCandidateImpl *) cand)->sockptr == sockptr) &&
+         local_candidate_and_socket_compatible (agent, cand, sockptr)) {
+       local_cand = cand;
+       break;
+@@ -5153,7 +5163,8 @@
+     l = next;
+   }
+ 
+-  if (pair_failed) {
++  if (pair_failed && !(component->punch_endpoints && component->selected_pair.local &&
++      !selected_pair_failed && component->state == NICE_COMPONENT_STATE_READY)) {
+     if (p_count == 0)
+       agent_signal_component_state_change (agent,
+         stream->id, component->id, NICE_COMPONENT_STATE_FAILED);
+--- a/agent/discovery.c
++++ b/agent/discovery.c
+@@ -1099,6 +1099,8 @@
+   candidate->component_id = component_id;
+   candidate->addr = *address;
+   c->sockptr = base_socket;
++  /* A reflexive alias retains the internal endpoint's signalling policy. */
++  c->punch_internal = local && ((NiceCandidateImpl *) local)->punch_internal;
+   candidate->base_addr = base_socket->addr;
+   /* We don't ensure priority uniqueness in this case, since the
+    * discovered candidate receives the same priority than its
+--- a/agent/interfaces.h
++++ b/agent/interfaces.h
+@@ -37,7 +37,7 @@
+  */
+ 
+ #include <glib.h>
+-#include <address.h>
++#include "address.h"
+ 
+ G_BEGIN_DECLS
+ 
+--- a/agent/meson.build
++++ b/agent/meson.build
+@@ -5,6 +5,7 @@
+   'debug.h',
+   'interfaces.h',
+   'pseudotcp.h',
++  'punch.h',
+ ])
+ install_headers(agent_headers, subdir : 'nice')
+ agent_include = include_directories('.')
+@@ -22,6 +23,7 @@
+   'iostream.c',
+   'outputstream.c',
+   'pseudotcp.c',
++  'punch.c',
+   'stream.c',
+ ])
+ 
+--- /dev/null
++++ b/agent/punch-priv.h
+@@ -0,0 +1,13 @@
++/* MiniRTC UDP punch internals, LGPL-2.1-or-later. Agent lock required. */
++#ifndef NICE_PUNCH_PRIV_H
++#define NICE_PUNCH_PRIV_H
++#include "agent-priv.h"
++#include "component.h"
++void nice_punch_forget_socket (NiceComponent *, NiceSocket *);
++void nice_punch_clear (NiceComponent *);
++void nice_punch_stop_unlocked (NiceAgent *, NiceComponent *, guint64, gboolean);
++gboolean nice_punch_recv (NiceAgent *, NiceComponent *, NiceSocket *,
++    const NiceAddress *, const guint8 *, gsize);
++void agent_signal_punch_packet (NiceAgent *, NiceComponent *, guint64, guint64,
++    const NiceAddress *, const NiceAddress *, const guint8 *, gsize);
++#endif
+--- /dev/null
++++ b/agent/punch.c
+@@ -0,0 +1,216 @@
++/* MiniRTC UDP punch extension, LGPL-2.1-or-later. */
++#include "config.h"
++#include "punch.h"
++#include "punch-priv.h"
++#include "conncheck.h"
++#include "udp-bsd.h"
++
++typedef struct {
++  guint64 id, generation;
++  NiceSocket *socket;
++  NiceAddress base;
++  gboolean extra, promoted, receiving;
++} PunchEndpoint;
++static gint live_sockets;
++
++guint nice_agent_punch_get_v1_abi (void) { return NICE_PUNCH_V1_ABI; }
++
++static gboolean active (NiceAgent *a, NiceComponent *c) {
++  CandidatePair *p = &c->selected_pair;
++  return a->compatibility == NICE_COMPATIBILITY_RFC5245 &&
++      !a->force_relay && !a->reliable && a->use_ice_udp &&
++      a->relay_upgrade_timeout && a->support_renomination &&
++      a->nomination_mode == NICE_NOMINATION_MODE_REGULAR &&
++      c->state == NICE_COMPONENT_STATE_READY &&
++      c->relay_upgrade_deadline > g_get_monotonic_time () &&
++      p->local && p->remote &&
++      (p->local->c.type == NICE_CANDIDATE_TYPE_RELAYED ||
++       p->remote->c.type == NICE_CANDIDATE_TYPE_RELAYED);
++}
++static PunchEndpoint *lookup (NiceComponent *c, guint64 generation, guint64 id) {
++  GSList *i;
++  for (i = c->punch_endpoints; i; i = i->next) {
++    PunchEndpoint *e = i->data;
++    if (e->id == id && e->generation == generation) return e;
++  }
++  return NULL;
++}
++void nice_punch_forget_socket (NiceComponent *c, NiceSocket *s) {
++  GSList *i = c->punch_endpoints;
++  while (i) {
++    GSList *next = i->next;
++    PunchEndpoint *e = i->data;
++    if (e->socket == s) {
++      if (e->extra) g_atomic_int_add (&live_sockets, -1);
++      g_free (e);
++      c->punch_endpoints = g_slist_delete_link (c->punch_endpoints, i);
++    }
++    i = next;
++  }
++}
++void nice_punch_clear (NiceComponent *c) {
++  while (c->punch_endpoints) {
++    PunchEndpoint *e = c->punch_endpoints->data;
++    nice_punch_forget_socket (c, e->socket);
++  }
++}
++void nice_punch_stop_unlocked (NiceAgent *a, NiceComponent *c,
++    guint64 generation, gboolean finish) {
++  GSList *i = c->punch_endpoints;
++  while (i) {
++    GSList *next = i->next;
++    PunchEndpoint *e = i->data;
++    if (!generation || e->generation == generation) {
++      e->receiving = FALSE;
++      if (!e->extra) {
++        nice_punch_forget_socket (c, e->socket);
++      } else if ((!e->promoted || finish) &&
++          (!c->selected_pair.local || c->selected_pair.local->sockptr != e->socket)) {
++        /* Removes transactions/triggered queue before candidates and socket.
++         * The detach hook returns the process quota only at actual close. */
++        nice_component_remove_socket (a, c, e->socket);
++      }
++    }
++    i = next;
++  }
++}
++gint64 nice_agent_punch_get_deadline (NiceAgent *a, guint sid, guint cid) {
++  NiceComponent *c; gint64 result = 0;
++  agent_lock (a);
++  if (agent_find_component (a, sid, cid, NULL, &c) && active (a, c))
++    result = c->relay_upgrade_deadline;
++  agent_unlock_and_emit (a);
++  return result;
++}
++guint64 nice_agent_punch_open_v1 (NiceAgent *a, guint sid, guint cid,
++    guint64 generation, const NiceAddress *base, gboolean extra, NiceAddress *bound) {
++  NiceComponent *c; NiceSocket *s = NULL; GSList *i;
++  PunchEndpoint *e; guint64 result = 0; GError *error = NULL;
++  g_return_val_if_fail (g_main_context_is_owner (a->main_context), 0);
++  if (!generation || !base || !bound || nice_address_ip_version (base) != 4)
++    return 0;
++  agent_lock (a);
++  if (!agent_find_component (a, sid, cid, NULL, &c) || !active (a, c)) goto done;
++  /* Endpoints share a bounded pool,
++   * all in one generation, role and original host base. */
++  if (g_slist_length (c->punch_endpoints) >= (extra ? 128 : 1) ||
++      a->punch_next_id == G_MAXUINT64) goto done;
++  for (i = c->punch_endpoints; i; i = i->next) {
++    PunchEndpoint *existing = i->data;
++    if (existing->generation != generation || existing->extra != extra ||
++        !existing->receiving || !nice_address_equal (&existing->base, base)) goto done;
++  }
++  for (i = c->local_candidates; i; i = i->next) {
++    NiceCandidateImpl *local = i->data;
++    if (local->c.type == NICE_CANDIDATE_TYPE_HOST &&
++        local->c.transport == NICE_CANDIDATE_TRANSPORT_UDP &&
++        local->sockptr->type == NICE_SOCKET_TYPE_UDP_BSD &&
++        nice_address_equal (&local->c.addr, base)) { s = local->sockptr; break; }
++  }
++  if (!s) goto done;
++  if (extra) {
++    gint used; NiceAddress address = *base;
++    do {
++      used = g_atomic_int_get (&live_sockets);
++      if (used >= 256) goto done;
++    } while (!g_atomic_int_compare_and_exchange (&live_sockets, used, used + 1));
++    nice_address_set_port (&address, 0);
++    s = nice_udp_bsd_socket_new (a->main_context, &address, a->recv_tos, &error);
++    if (!s) {
++      g_clear_error (&error); g_atomic_int_add (&live_sockets, -1); goto done;
++    }
++    _priv_set_socket_tos (a, s, agent_find_stream (a, sid)->tos);
++    nice_component_attach_socket (c, s);
++  }
++  e = g_new0 (PunchEndpoint, 1);
++  e->id = ++a->punch_next_id;
++  e->generation = generation; e->socket = s; e->extra = extra; e->base = *base;
++  e->receiving = TRUE;
++  c->punch_endpoints = g_slist_append (c->punch_endpoints, e);
++  *bound = s->addr; result = e->id;
++done:
++  agent_unlock_and_emit (a); return result;
++}
++static gboolean probe_shape (const guint8 *bytes, gsize len) {
++  return bytes && len == 80 && bytes[0] == 0xf3 && bytes[1] == 0x4d &&
++      bytes[2] == 0x50 && bytes[3] == 0x31 && bytes[4] == 1 &&
++      (bytes[5] == 0x20 || bytes[5] == 0x21) && bytes[6] == 0 && bytes[7] == 20;
++}
++gint nice_agent_punch_send (NiceAgent *a, guint sid, guint cid,
++    guint64 generation, guint64 handle, const NiceAddress *to,
++    const guint8 *bytes, gsize len) {
++  NiceComponent *c; PunchEndpoint *e; gint result = -1;
++  g_return_val_if_fail (g_main_context_is_owner (a->main_context), -1);
++  if (!to || nice_address_ip_version (to) != 4 ||
++      !nice_address_get_port (to) || !probe_shape (bytes, len)) return -1;
++  agent_lock (a);
++  if (agent_find_component (a, sid, cid, NULL, &c) && active (a, c) &&
++      (e = lookup (c, generation, handle)) && e->receiving)
++    result = nice_socket_send (e->socket, to, len, (const gchar *) bytes);
++  agent_unlock_and_emit (a); return result;
++}
++gboolean nice_agent_punch_promote (NiceAgent *a, guint sid, guint cid,
++    guint64 generation, guint64 handle, const NiceAddress *remote) {
++  NiceComponent *c; PunchEndpoint *e; GSList *i; NiceCandidate *rc = NULL;
++  NiceCandidateImpl *lc; gboolean result = FALSE;
++  g_return_val_if_fail (g_main_context_is_owner (a->main_context), FALSE);
++  if (!remote) return FALSE;
++  agent_lock (a);
++  if (!agent_find_component (a, sid, cid, NULL, &c) || !active (a, c) ||
++      !(e = lookup (c, generation, handle)) || !e->extra || !e->receiving) goto done;
++  if (e->promoted) { result = TRUE; goto done; }
++  guint promoted = 0;
++  for (i = c->punch_endpoints; i; i = i->next)
++    if (((PunchEndpoint *) i->data)->promoted) ++promoted;
++  if (promoted >= 8) goto done;
++  for (i = c->remote_candidates; i; i = i->next) {
++    NiceCandidate *candidate = i->data;
++    if (candidate->type != NICE_CANDIDATE_TYPE_RELAYED &&
++        candidate->transport == NICE_CANDIDATE_TRANSPORT_UDP &&
++        nice_address_equal (&candidate->addr, remote)) { rc = candidate; break; }
++  }
++  if (!rc) goto done;
++  lc = (NiceCandidateImpl *) nice_candidate_new (NICE_CANDIDATE_TYPE_HOST);
++  lc->c.stream_id = sid; lc->c.component_id = cid;
++  lc->c.transport = NICE_CANDIDATE_TRANSPORT_UDP;
++  lc->c.addr = lc->c.base_addr = e->socket->addr;
++  lc->sockptr = e->socket; lc->punch_internal = TRUE;
++  lc->c.priority = nice_candidate_ice_priority (&lc->c, FALSE, FALSE);
++  /* Internal foundation is unique to this base port, never signalled. */
++  g_snprintf (lc->c.foundation, NICE_CANDIDATE_MAX_FOUNDATION,
++      "punch-%" G_GUINT64_FORMAT, handle);
++  c->local_candidates = g_slist_append (c->local_candidates, lc);
++  if (!conn_check_add_for_candidate_pair (a, sid, c, &lc->c, rc)) {
++    c->local_candidates = g_slist_remove (c->local_candidates, lc);
++    nice_candidate_free (&lc->c); goto done;
++  }
++  e->promoted = TRUE; result = TRUE;
++done:
++  agent_unlock_and_emit (a); return result;
++}
++void nice_agent_punch_stop (NiceAgent *a, guint sid, guint cid,
++    guint64 generation, gboolean finish) {
++  NiceComponent *c;
++  g_return_if_fail (g_main_context_is_owner (a->main_context));
++  if (!generation) return;
++  agent_lock (a);
++  if (agent_find_component (a, sid, cid, NULL, &c))
++    nice_punch_stop_unlocked (a, c, generation, finish);
++  agent_unlock_and_emit (a);
++}
++gboolean nice_punch_recv (NiceAgent *a, NiceComponent *c, NiceSocket *s,
++    const NiceAddress *from, const guint8 *bytes, gsize len) {
++  GSList *i;
++  if (s->type != NICE_SOCKET_TYPE_UDP_BSD) return FALSE;
++  for (i = c->punch_endpoints; i; i = i->next) {
++    PunchEndpoint *e = i->data;
++    if (e->socket != s) continue;
++    if (e->receiving && active (a, c) && probe_shape (bytes, len)) {
++      agent_signal_punch_packet (a, c, e->generation, e->id, from, &s->addr, bytes, len);
++      return TRUE;
++    }
++    /* Before promotion do not accept STUN or deliver application packets. */
++    return e->extra && !e->promoted;
++  }
++  return FALSE;
++}
+--- /dev/null
++++ b/agent/punch.h
+@@ -0,0 +1,29 @@
++/* MiniRTC UDP punch API, LGPL-2.1-or-later.
++ * Call on the agent main context.
++ * The caller must verify DTLS and authorize the exact peer endpoint first.
++ * Handles are agent-local, never file descriptors. No automatic scheduling.
++ */
++#ifndef NICE_PUNCH_H
++#define NICE_PUNCH_H
++#include "agent.h"
++G_BEGIN_DECLS
++#define NICE_PUNCH_V1_ABI 2
++/* Identifies the bounded pool backend required by the v1 protocol. */
++guint nice_agent_punch_get_v1_abi (void);
++guint64 nice_agent_punch_open_v1 (NiceAgent *, guint, guint, guint64 generation,
++    const NiceAddress *base, gboolean extra, NiceAddress *bound);
++gint64 nice_agent_punch_get_deadline (NiceAgent *, guint, guint);
++gint nice_agent_punch_send (NiceAgent *, guint, guint, guint64 generation,
++    guint64 handle, const NiceAddress *to, const guint8 *, gsize);
++gboolean nice_agent_punch_promote (NiceAgent *, guint, guint, guint64 generation,
++    guint64 handle, const NiceAddress *remote);
++/* finish=FALSE stops discovery, preserving checks. TRUE prunes unselected
++ * checks before closing. Selected sockets survive both operations. */
++void nice_agent_punch_stop (NiceAgent *, guint, guint, guint64 generation,
++    gboolean finish);
++/* punch-packet signal: stream, component, generation, handle,
++ * NiceCandidate (addr=raw source, base_addr=actual bound address), GBytes.
++ * Emitted outside the agent lock. Caller must reject stale scope and verify
++ * packet authentication; receiving a packet does NOT validate an ICE pair. */
++G_END_DECLS
++#endif
+--- a/nice/libnice.sym
++++ b/nice/libnice.sym
+@@ -174,3 +174,9 @@
+ stun_usage_turn_create_refresh
+ stun_usage_turn_process
+ stun_usage_turn_refresh_process
++nice_agent_punch_get_deadline
++nice_agent_punch_send
++nice_agent_punch_promote
++nice_agent_punch_stop
++nice_agent_punch_get_v1_abi
++nice_agent_punch_open_v1
