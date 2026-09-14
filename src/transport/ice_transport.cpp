@@ -593,10 +593,14 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
 
     // do not decrypt audio and data packet because they are not encrypted now
     if (!is_audio && !is_data) {
-      if (!ice_transport_controller_->DecryptIncomingPacket(
-              reinterpret_cast<uint8_t*>(buffer), &len, &ssrc)) {
+      const int result = ice_transport_controller_->DecryptIncomingPacket(
+          reinterpret_cast<uint8_t*>(buffer), &len, &ssrc);
+      if (result < 0) {
         uint8_t payload_type = buffer[1] & 0x7F;
-        LOG_ERROR("Unknown packet [{} {}]", payload_type, size);
+        LOG_ERROR("SRTP unprotect failed for SSRC {} [{} {}]: {} ({})", ssrc,
+                  payload_type, size,
+                  SrtpEngine::ErrToStr(static_cast<srtp_err_status_t>(-result)),
+                  -result);
         return;
       }
       size = static_cast<guint>(len);

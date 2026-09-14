@@ -48,12 +48,12 @@ class SrtpEngine {
 
     // buf: full RTP packet (header + plaintext payload)
     // len: in/out length. On protect, grows by 16 (GCM tag).
-    // Returns 0 on success, <0 on failure.
+    // Returns 0 on success, otherwise the negative libsrtp error code.
     int protectRtp(uint8_t* buf, int* len) const;
 
     // buf: full SRTP packet (header + ciphertext + tag)
     // len: in/out length. On unprotect, shrinks by 16.
-    // Returns 0 on success, <0 on failure.
+    // Returns 0 on success, otherwise the negative libsrtp error code.
     int unprotectRtp(uint8_t* buf, int* len) const;
 
     bool valid() const { return session_ != nullptr; }

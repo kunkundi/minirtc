@@ -77,6 +77,12 @@ const char* SrtpEngine::ErrToStr(srtp_err_status_t e) {
       return "semaphore_err";
     case srtp_err_status_pfkey_err:
       return "pfkey_err";
+    case srtp_err_status_bad_mki:
+      return "bad_mki";
+    case srtp_err_status_pkt_idx_old:
+      return "pkt_idx_old";
+    case srtp_err_status_pkt_idx_adv:
+      return "pkt_idx_adv";
     default:
       return "unknown";
   }
@@ -110,7 +116,7 @@ srtp_t SrtpEngine::CreateSessionInternal(const Params& p) {
     pol.ssrc.value = p.ssrc;
   }
   pol.key = mk.data();
-  pol.window_size = 128;
+  pol.window_size = 1200; // Set the replay window size for SRTP packets
   pol.allow_repeat_tx = 0;
   pol.enc_xtn_hdr_count = 0;
   pol.next = nullptr;
@@ -151,28 +157,26 @@ SrtpEngine::SrtpSession SrtpEngine::CreateReceiver(const Params& p) {
 
 int SrtpEngine::SrtpSession::protectRtp(uint8_t* buf, int* len) const {
   if (!session_) {
-    return -1;
+    return -static_cast<int>(srtp_err_status_no_ctx);
   }
 
   if (!buf || !len || *len <= 0) {
-    return -2;
+    return -static_cast<int>(srtp_err_status_bad_param);
   }
 
   // Caller must ensure tailroom >= 16 for GCM tag.
-  srtp_err_status_t st = srtp_protect(session_, buf, len);
-  return (st == srtp_err_status_ok) ? 0 : -3;
+  return -static_cast<int>(srtp_protect(session_, buf, len));
 }
 
 int SrtpEngine::SrtpSession::unprotectRtp(uint8_t* buf, int* len) const {
   if (!session_) {
-    return -1;
+    return -static_cast<int>(srtp_err_status_no_ctx);
   }
 
   if (!buf || !len || *len <= 0) {
-    return -2;
+    return -static_cast<int>(srtp_err_status_bad_param);
   }
 
-  srtp_err_status_t st = srtp_unprotect(session_, buf, len);
-  return (st == srtp_err_status_ok) ? 0 : -3;
+  return -static_cast<int>(srtp_unprotect(session_, buf, len));
 }
 }  // namespace minirtc

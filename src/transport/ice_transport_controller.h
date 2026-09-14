@@ -117,7 +117,7 @@ class IceTransportController
   void UpdateNetworkAvaliablity(bool network_available);
   void SetRelayPath(bool relay_path);
 
-  bool DecryptIncomingPacket(uint8_t* buffer, int* size, uint32_t* out_ssrc);
+  int DecryptIncomingPacket(uint8_t* buffer, int* size, uint32_t* out_ssrc);
 
   int OnReceiveVideoRtpPacket(const char* data, size_t size, uint32_t ssrc);
   int OnReceiveAudioRtpPacket(const char* data, size_t size, uint32_t ssrc);
@@ -152,12 +152,13 @@ class IceTransportController
  private:
   struct PacketFeedbackRegistration {
     int64_t send_time_ms = 0;
+    size_t send_size = 0;  // Includes SRTP overhead when the packet is protected.
     bool tracked = false;
   };
 
   PacketFeedbackRegistration RegisterPacketForFeedback(
       const webrtc::RtpPacketToSend& packet,
-      const webrtc::PacedPacketInfo& pacing_info);
+      const webrtc::PacedPacketInfo& pacing_info, size_t send_size);
   void RollbackPacketFeedback(
       const webrtc::RtpPacketToSend& packet,
       const PacketFeedbackRegistration& registration);

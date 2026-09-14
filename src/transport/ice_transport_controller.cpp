@@ -207,8 +207,14 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
               notify_send_failure();
               return;
             }
-            if (srtp_it->second->protectRtp(protected_packet.data(), &len) < 0) {
-              LOG_ERROR("SRTP protect failed for stream [{}]", packet->Ssrc());
+            const int result =
+                srtp_it->second->protectRtp(protected_packet.data(), &len);
+            if (result < 0) {
+              LOG_ERROR("SRTP protect failed for stream [{}]: {} ({})",
+                        packet->Ssrc(),
+                        SrtpEngine::ErrToStr(
+                            static_cast<srtp_err_status_t>(-result)),
+                        -result);
               notify_send_failure();
               return;
             }
@@ -226,7 +232,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           // feedback. The previous asynchronous registration allowed a fast
           // loopback peer to report the packet before it existed in history.
           const PacketFeedbackRegistration feedback_registration =
-              self->RegisterPacketForFeedback(*packet, pacing_info);
+              self->RegisterPacketForFeedback(*packet, pacing_info, send_size);
           const int send_result =
               self->ice_agent_->Send(send_buffer, send_size);
           if (send_result < 0) {
@@ -1732,16 +1738,15 @@ void IceTransportController::UpdateMediaTransportState() {
   }
 }
 
-bool IceTransportController::DecryptIncomingPacket(uint8_t* buffer, int* size,
-                                                   uint32_t* out_ssrc) {
+int IceTransportController::DecryptIncomingPacket(uint8_t* buffer, int* size,
+                                                  uint32_t* out_ssrc) {
   if (!buffer || !size || *size < 12) {
-    return false;
+    return -static_cast<int>(srtp_err_status_bad_param);
   }
 
   uint8_t version = (buffer[0] >> 6) & 0x03;
   if (version != 2) {
-    LOG_WARN("Invalid RTP version {}", version);
-    return false;
+    return -static_cast<int>(srtp_err_status_bad_param);
   }
 
   uint32_t ssrc = (static_cast<uint32_t>(buffer[8]) << 24) |
@@ -1755,18 +1760,17 @@ bool IceTransportController::DecryptIncomingPacket(uint8_t* buffer, int* size,
   auto it = ssrc_to_srtp_receiver_.find(ssrc);
   if (it == ssrc_to_srtp_receiver_.end() || !it->second ||
       !it->second->valid()) {
-    LOG_WARN("No SRTP receiver session for SSRC {}", ssrc);
-    return false;
+    return -static_cast<int>(srtp_err_status_no_ctx);
   }
 
   int len = *size;
-  if (it->second->unprotectRtp(buffer, &len) < 0) {
-    LOG_ERROR("SRTP unprotect failed for SSRC {}", ssrc);
-    return false;
+  const int result = it->second->unprotectRtp(buffer, &len);
+  if (result < 0) {
+    return result;
   }
 
   *size = len;
-  return true;
+  return 0;
 }
 
 int IceTransportController::OnReceiveVideoRtpPacket(const char* data,
@@ -2301,9 +2305,10 @@ void IceTransportController::OnReceiveNack(
 IceTransportController::PacketFeedbackRegistration
 IceTransportController::RegisterPacketForFeedback(
     const webrtc::RtpPacketToSend& packet,
-    const webrtc::PacedPacketInfo& pacing_info) {
+    const webrtc::PacedPacketInfo& pacing_info, size_t send_size) {
   PacketFeedbackRegistration registration;
   registration.send_time_ms = clock_->CurrentTimeMs();
+  registration.send_size = send_size;
   const std::optional<int64_t> transport_seq =
       packet.transport_sequence_number();
   registration.tracked = transport_seq.has_value();
@@ -2316,13 +2321,13 @@ IceTransportController::RegisterPacketForFeedback(
   sent_packet.send_time_ms = registration.send_time_ms;
   sent_packet.info.included_in_feedback = true;
   sent_packet.info.included_in_allocation = true;
-  sent_packet.info.packet_size_bytes = packet.size();
+  sent_packet.info.packet_size_bytes = send_size;
   sent_packet.info.packet_type = rtc::PacketType::kData;
 
   {
     std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
     transport_feedback_adapter_.AddPacket(
-        packet, pacing_info, /*overhead_bytes=*/0,
+        packet, pacing_info, send_size - packet.size(),
         webrtc::Timestamp::Millis(registration.send_time_ms));
     transport_feedback_adapter_.ProcessSentPacket(sent_packet);
   }
@@ -2353,7 +2358,7 @@ void IceTransportController::OnSentPacket(
     sent_packet.send_time_ms = registration.send_time_ms;
     sent_packet.info.included_in_feedback = false;
     sent_packet.info.included_in_allocation = true;
-    sent_packet.info.packet_size_bytes = packet.size();
+    sent_packet.info.packet_size_bytes = registration.send_size;
     sent_packet.info.packet_type = rtc::PacketType::kData;
 
     std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
@@ -2361,7 +2366,7 @@ void IceTransportController::OnSentPacket(
   }
 
   if (task_queue_cc_) {
-    const size_t packet_size = packet.size();
+    const size_t packet_size = registration.send_size;
     const webrtc::Timestamp sent_time =
         webrtc::Timestamp::Millis(registration.send_time_ms);
     task_queue_cc_->PostTask([this, packet_size, sent_time]() mutable {
