@@ -142,89 +142,91 @@ CongestionControlFeedback ::CongestionControlFeedback(
 bool CongestionControlFeedback::Create(uint8_t* buffer, size_t* position,
                                        size_t max_length,
                                        PacketReadyCallback callback) const {
-  // Ensure there is enough room for this packet.
-  while (*position + BlockLength() > max_length) {
-    if (!OnBufferFull(buffer, position, callback)) return false;
-  }
-  const size_t position_end = *position + BlockLength();
+  constexpr size_t kFeedbackHeaderLength =
+      kHeaderLength + kSenderSsrcLength + kTimestampLength;
+  constexpr size_t kMinReportBlockLength = kHeaderPerMediaSssrcLength + 4;
+  constexpr size_t kMaxReportsPerSsrc = 16384;
+  constexpr size_t kMaxRtcpPacketLength = 0xffff * 4;
+  const size_t min_packet_length =
+      kFeedbackHeaderLength + (packets_.empty() ? 0 : kMinReportBlockLength);
+  if (*position > max_length) return false;
 
-  //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //    |V=2|P| FMT=11  |   PT = 205    |          length |
-  //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //    |                 SSRC of RTCP packet sender |
-  //    +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  CreateHeader(kFeedbackMessageType, kPacketType, HeaderLength(), buffer,
-               position);
-  ByteWriter<uint32_t>::WriteBigEndian(&buffer[*position], sender_ssrc());
-  *position += 4;
-
-  //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //   |                   SSRC of nth RTP Stream                      |
-  //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //   |          begin_seq            |          num_reports          |
-  //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //   |R|ECN|  Arrival time offset    | ...                           .
-  //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //   .                                                               .
-  auto write_report_for_ssrc = [&](rtc::ArrayView<const PacketInfo> packets) {
-    // SSRC of nth RTP stream.
-    ByteWriter<uint32_t>::WriteBigEndian(&buffer[*position], packets[0].ssrc);
-    *position += 4;
-
-    // begin_seq
-    ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position],
-                                         packets[0].sequence_number);
-    *position += 2;
-    // num_reports
-    uint16_t num_reports = packets.size();
-
-    // Each report block MUST NOT include more than 16384 packet
-    // metric blocks (i.e., it MUST NOT report on more than one
-    // quarter of the sequence number space in a single report).
-    if (num_reports > 16384) {
-      LOG_ERROR("Unexpected number of reports:{}", num_reports);
-      return;
+  size_t packet_index = 0;
+  do {
+    while (max_length - *position < min_packet_length) {
+      if (!OnBufferFull(buffer, position, callback)) return false;
     }
-    ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position], num_reports);
-    *position += 2;
 
-    for (const PacketInfo& packet : packets) {
-      bool received = packet.arrival_time_offset.IsFinite();
-      uint16_t packet_info = 0;
-      if (received) {
-        packet_info = 0x8000 | To2BitEcn(packet.ecn) |
-                      To13bitAto(packet.arrival_time_offset);
+    // Each fragment is a complete CCFB packet, including its own timestamp.
+    // Keep room for the timestamp and round down to a 32-bit boundary even
+    // when the caller supplies an unaligned datagram size limit.
+    const size_t fragment_start = *position;
+    const size_t fragment_capacity =
+        std::min((max_length - *position) / 4 * 4, kMaxRtcpPacketLength);
+    const size_t fragment_end = fragment_start + fragment_capacity;
+    *position += kHeaderLength + kSenderSsrcLength;
+
+    while (packet_index < packets_.size() &&
+           fragment_end - *position >=
+               kMinReportBlockLength + kTimestampLength) {
+      const uint32_t ssrc = packets_[packet_index].ssrc;
+      const size_t max_reports =
+          std::min((fragment_end - *position - kTimestampLength -
+                    kHeaderPerMediaSssrcLength) /
+                       4 * 2,
+                   kMaxReportsPerSsrc);
+      size_t num_reports = 0;
+      while (num_reports < max_reports &&
+             packet_index + num_reports < packets_.size() &&
+             packets_[packet_index + num_reports].ssrc == ssrc) {
+        ++num_reports;
       }
-      ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position], packet_info);
-      *position += 2;
-    }
-    // 32bit align per SSRC block.
-    if (num_reports % 2 != 0) {
-      ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position], 0);
-      *position += 2;
-    }
-  };
 
-  rtc::ArrayView<const PacketInfo> remaining(packets_);
-  while (!remaining.empty()) {
-    int number_of_packets_for_ssrc = 0;
-    uint32_t ssrc = remaining[0].ssrc;
-    for (const PacketInfo& packet_info : remaining) {
-      if (packet_info.ssrc != ssrc) {
+      ByteWriter<uint32_t>::WriteBigEndian(&buffer[*position], ssrc);
+      ByteWriter<uint16_t>::WriteBigEndian(
+          &buffer[*position + 4], packets_[packet_index].sequence_number);
+      ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position + 6],
+                                           static_cast<uint16_t>(num_reports));
+      *position += kHeaderPerMediaSssrcLength;
+
+      for (size_t i = 0; i < num_reports; ++i) {
+        const PacketInfo& packet = packets_[packet_index++];
+        uint16_t packet_info = 0;
+        if (packet.arrival_time_offset.IsFinite()) {
+          packet_info = 0x8000 | To2BitEcn(packet.ecn) |
+                        To13bitAto(packet.arrival_time_offset);
+        }
+        ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position], packet_info);
+        *position += 2;
+      }
+      if (num_reports % 2 != 0) {
+        ByteWriter<uint16_t>::WriteBigEndian(&buffer[*position], 0);
+        *position += 2;
+      }
+
+      // Continue this SSRC in the next packet if its block hit the size or
+      // 16384-report limit. Other SSRCs may share the current fragment.
+      if (packet_index < packets_.size() &&
+          packets_[packet_index].ssrc == ssrc) {
         break;
       }
-      ++number_of_packets_for_ssrc;
     }
-    write_report_for_ssrc(remaining.subview(0, number_of_packets_for_ssrc));
-    remaining = remaining.subview(number_of_packets_for_ssrc);
-  }
 
-  //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  //   |                 Report Timestamp (32 bits)                    |
-  //   +-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+-+
-  ByteWriter<uint32_t>::WriteBigEndian(&buffer[*position],
-                                       report_timestamp_compact_ntp_);
-  *position += 4;
+    ByteWriter<uint32_t>::WriteBigEndian(&buffer[*position],
+                                         report_timestamp_compact_ntp_);
+    *position += kTimestampLength;
+    size_t header_position = fragment_start;
+    CreateHeader(kFeedbackMessageType, kPacketType,
+                 (*position - fragment_start) / 4 - 1, buffer,
+                 &header_position);
+    ByteWriter<uint32_t>::WriteBigEndian(&buffer[header_position],
+                                         sender_ssrc());
+
+    if (packet_index < packets_.size() &&
+        !OnBufferFull(buffer, position, callback)) {
+      return false;
+    }
+  } while (packet_index < packets_.size());
 
   return true;
 }
