@@ -701,6 +701,13 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     return -1;
   }
 
+  // ICE can become usable before DTLS has installed the SRTP sessions. Do not
+  // copy, encode or queue video while the pacer is unable to send it. Keep
+  // pending key-frame requests intact for the first frame after readiness.
+  if (!media_transport_ready_.load()) {
+    return 0;
+  }
+
   if (task_queue_encode_) {
     context->capture_input_frame_total.fetch_add(1,
                                                  std::memory_order_relaxed);
@@ -790,6 +797,13 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         auto self = weak_self.lock();
         auto context = weak_context.lock();
         if (!self || !context || !self->is_running_.load()) {
+          return;
+        }
+
+        // The transport may have become unavailable after frame admission.
+        // Restore the request consumed above so the next frame can resync.
+        if (!self->media_transport_ready_.load()) {
+          self->FullIntraRequest(channel_name);
           return;
         }
 
@@ -1553,6 +1567,13 @@ int IceTransportController::OnVideoEncoded(
     return -1;
   }
 
+  // Asynchronous encoders can finish after the transport has stopped. Avoid
+  // putting their output into a paused pacer or continuing its reference chain.
+  if (!media_transport_ready_.load()) {
+    FullIntraRequest(channel_name);
+    return 0;
+  }
+
   if (measure_encode_delay) {
     MaybeDegradeResolutionOnEncodeTime(channel_name, queue_delay_ms,
                                        encoded_frame);
@@ -1702,6 +1723,11 @@ void IceTransportController::UpdateMediaTransportState() {
       ice_ready_.load() && (!enable_srtp_ || dtls_ready_.load());
   const bool allow_probe_without_media =
       transport_ready && CanProbeWithoutMedia();
+  if (transport_ready && !media_transport_ready_.load()) {
+    // Arm every video stream before publishing readiness to capture threads.
+    // Repeated ICE READY notifications must not request extra key frames.
+    FullIntraRequestAllVideoStreams();
+  }
   const bool was_transport_ready =
       media_transport_ready_.exchange(transport_ready);
 
