@@ -20,6 +20,9 @@ namespace minirtc {
 inline constexpr char kRelayUpgradeAttribute[] = "a=x-minirtc-relay-upgrade:1";
 inline constexpr char kP2pEnhancementAttribute[] =
     "a=x-minirtc-p2p-enhancement:1";
+// Advertise rfc5764 support; legacy or an absent attribute uses the old layout.
+inline constexpr char kSrtpKeyLayoutAttribute[] =
+    "a=x-minirtc-srtp-key-layout:rfc5764";
 inline constexpr char kUdpPunchAttribute[] = "a=x-minirtc-udp-punch:1";
 // A separate fingerprint advertises DTLS authentication without requesting
 // SRTP from peers that use the standard fingerprint as their media switch.

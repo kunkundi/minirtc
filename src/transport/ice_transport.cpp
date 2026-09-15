@@ -879,6 +879,10 @@ int IceTransport::SetRemoteSdp(const std::string& remote_sdp) {
       !SupportsP2pEnhancement(media_stream_sdp)) {
     media_stream_sdp += "\r\n" + std::string(kP2pEnhancementAttribute) + "\r\n";
   }
+  if (HasIceAttribute(remote_sdp, kSrtpKeyLayoutAttribute) &&
+      !HasIceAttribute(media_stream_sdp, kSrtpKeyLayoutAttribute)) {
+    media_stream_sdp += "\r\n" + std::string(kSrtpKeyLayoutAttribute) + "\r\n";
+  }
   media_stream_sdp = PreserveUdpPunchCapability(remote_sdp, media_stream_sdp);
   if (ice_agent_->SetRemoteSdp(media_stream_sdp.c_str()) != 0) {
     return -1;

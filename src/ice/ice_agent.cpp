@@ -625,7 +625,15 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
                                 : fingerprints->fingerprint;
   if (!remote_fingerprint_.empty() && remote_fingerprint_ != fingerprint)
     return -1;
+  const bool standard_srtp_key_layout =
+      HasIceAttribute(remote_sdp, kSrtpKeyLayoutAttribute);
+  if (!punch_remote_ufrag_.empty() &&
+      remote_standard_srtp_key_layout_ != standard_srtp_key_layout) {
+    LOG_ERROR("Changed SRTP key layout requires a new ICE transport");
+    return -1;
+  }
   remote_fingerprint_ = fingerprint;
+  remote_standard_srtp_key_layout_ = standard_srtp_key_layout;
   // Only the standard media fingerprint requests SRTP. The punch fingerprint
   // authenticates DTLS independently and preserves legacy RTP fallback.
   if (fingerprints->fingerprint.empty()) enable_srtp_ = false;
@@ -965,6 +973,7 @@ void IceAgent::CleanupDtls() {
   dtls_started_ = false;
   dtls_handshake_done_ = false;
   dtls_peer_verified_ = false;
+  remote_standard_srtp_key_layout_ = false;
   punch_remote_ufrag_.clear();
   remote_fingerprint_.clear();
 
@@ -1220,7 +1229,8 @@ void IceAgent::GenerateDtlsCertificate(int days_valid) {
 }
 
 std::string IceAgent::AppendFingerprintLine(const std::string& sdp) {
-  return sdp + "a=fingerprint:sha-256 " + dtls_fingerprint_ + "\r\n";
+  return sdp + kSrtpKeyLayoutAttribute + "\r\n" +
+         "a=fingerprint:sha-256 " + dtls_fingerprint_ + "\r\n";
 }
 
 std::string IceAgent::ComputeFingerprint(X509* cert) {
@@ -1592,6 +1602,13 @@ bool IceAgent::ExportSrtpKeys(std::vector<uint8_t>& local_key,
   const uint8_t* server_key = material.data() + key_len;
   const uint8_t* client_salt = material.data() + 2 * key_len;
   const uint8_t* server_salt = material.data() + 2 * key_len + salt_len;
+
+  // Peers declaring legacy (or v1.5.0 without an attribute) split client
+  // key/salt before server key/salt. Both peers must advertise rfc5764 to use it.
+  if (!remote_standard_srtp_key_layout_) {
+    client_salt = material.data() + key_len;
+    server_key = material.data() + key_len + salt_len;
+  }
 
   const uint8_t* local_k = local_is_client_sender ? client_key : server_key;
   const uint8_t* local_s = local_is_client_sender ? client_salt : server_salt;

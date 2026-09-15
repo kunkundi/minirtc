@@ -181,6 +181,7 @@ class IceAgent {
   std::atomic<bool> dtls_started_{false};
   std::atomic<bool> dtls_handshake_done_{false};
   std::atomic<bool> dtls_peer_verified_{false};
+  std::atomic<bool> remote_standard_srtp_key_layout_{false};
   std::string remote_fingerprint_;
   std::string punch_remote_ufrag_;
   const PunchConfig punch_config_ = ProcessPunchConfig();
