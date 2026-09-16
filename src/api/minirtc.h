@@ -218,6 +218,7 @@ typedef struct {
   MiniRtcOutboundStats data_outbound_stats;
   MiniRtcInboundStats total_inbound_stats;
   MiniRtcOutboundStats total_outbound_stats;
+  bool srtp_active;
 } MiniRtcNetTrafficStats;
 
 /// Opaque owned handle. Create with CreatePeer; release only with DestroyPeer.

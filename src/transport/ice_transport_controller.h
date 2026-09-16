@@ -82,6 +82,8 @@ class IceTransportController
   // Create() starts the media pipelines. Keep the controller in sync when the
   // remote peer does not advertise a DTLS fingerprint.
   void SetSrtpEnabled(bool enable_srtp) { enable_srtp_ = enable_srtp; }
+  // DTLS readiness is published only after the SRTP sessions are installed.
+  bool IsSrtpActive() const { return dtls_ready_.load(); }
 
   uint32_t AddVideoSendChannel(const std::string& channel_name);
   uint32_t GetVideoRtxSsrc(const std::string& channel_name);

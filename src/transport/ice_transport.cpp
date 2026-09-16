@@ -4,6 +4,7 @@
 #include <cctype>
 #include <charconv>
 #include <chrono>
+#include <cstddef>
 #include <cstring>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -324,9 +325,16 @@ int IceTransport::InitIceTransmission(
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
         if (on_receive_net_status_report_) {
-          MiniRtcNetTrafficStats minirtc_net_traffic_stats;
+          MiniRtcNetTrafficStats minirtc_net_traffic_stats{};
+          // IOStatistics contains counters only; transport state is appended
+          // to the public report and must not be copied from that buffer.
+          static_assert(offsetof(MiniRtcNetTrafficStats, srtp_active) ==
+                        sizeof(IOStatistics::NetTrafficStats));
           memcpy(&minirtc_net_traffic_stats, &net_traffic_stats,
-                 sizeof(MiniRtcNetTrafficStats));
+                 sizeof(net_traffic_stats));
+          minirtc_net_traffic_stats.srtp_active =
+              ice_transport_controller_ &&
+              ice_transport_controller_->IsSrtpActive();
           on_receive_net_status_report_(
               user_id_.data(), user_id_.size(), TraversalMode(traversal_type_),
               &minirtc_net_traffic_stats, remote_user_id_.data(),
@@ -536,6 +544,8 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
   }
   MiniRtcNetTrafficStats net_traffic_stats;
   memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
+  net_traffic_stats.srtp_active = ice_transport_controller_ &&
+                                ice_transport_controller_->IsSrtpActive();
 
   if (on_receive_net_status_report_) {
     on_receive_net_status_report_(user_id_.data(), user_id_.size(),
