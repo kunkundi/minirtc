@@ -6,6 +6,7 @@
 
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
 #define _ICE_TRANSPORT_CONTROLLER_H_
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <deque>
@@ -195,14 +196,39 @@ class IceTransportController
     int source_width = 0;   // original capture width  (aspect-ratio anchor)
     int source_height = 0;  // original capture height (aspect-ratio anchor)
     std::optional<int64_t> last_active_time;
+    std::optional<int64_t> last_capture_time;
     std::optional<int> desired_target_bitrate;
     std::optional<int> applied_target_bitrate;
     bool bitrate_update_queued = false;
+    bool startup_resolution_attempted = false;
+    bool startup_keyframe_pending = false;
+    int startup_keyframe_retry_count = 0;
+    int64_t startup_keyframe_started_ms = 0;
+    size_t regular_keyframe_size_budget_bytes = 0;
+    size_t keyframe_size_budget_bytes = 0;
+    bool awaiting_budget_keyframe = false;
+    int keyframe_budget_retry_count = 0;
+    int64_t discarded_keyframe_capture_us = 0;
+    bool keyframe_limited_upgrade = false;
+    int64_t keyframe_failed_pixels = 0;
+    size_t keyframe_failed_bytes = 0;
+    int64_t keyframe_failure_ms = 0;
+    bool keyframe_same_resolution_retry = false;
+    struct KeyframeResolutionRecovery {
+      int width;
+      int height;
+      int64_t expires_ms;
+      double projected_bytes = 0;
+    };
+    std::optional<KeyframeResolutionRecovery> keyframe_resolution_recovery;
+    bool initial_resolution_recovery = true;
+    bool native_resolution_probe_attempted = false;
     int encode_exceed_count = 0;
     int encode_below_threshold_count = 0;
     bool encoding_speed_priority_enabled = false;
     std::optional<int> mapped_target_width;
     std::optional<int> mapped_target_height;
+    bool resolution_upgrade_network_blocked = false;
     bool freeze_resolution = false;
     bool static_content_candidate = false;
     bool static_content_candidate_initialized = false;
@@ -212,14 +238,25 @@ class IceTransportController
     std::optional<int> pending_mapped_height;
     int mapping_stability_count = 0;
     int64_t pending_mapped_since_ms = 0;
+    struct BandwidthResolutionCandidate {
+      int width;
+      int height;
+      int64_t since_ms;
+    };
+    // Increasing sizes and their uninterrupted support times. Retain only
+    // the short confirmation window plus its oldest still-supported size.
+    std::deque<BandwidthResolutionCandidate> pending_mapped_candidates;
     int64_t last_resolution_change_ms = 0;
     bool resolution_upgrade_probe_active = false;
+    bool resolution_upgrade_probe_fast = false;
     int resolution_upgrade_probe_base_width = 0;
     int resolution_upgrade_probe_base_height = 0;
     int resolution_upgrade_probe_target_width = 0;
     int resolution_upgrade_probe_target_height = 0;
     int resolution_upgrade_probe_sample_count = 0;
     int64_t resolution_upgrade_probe_started_ms = 0;
+    int64_t resolution_upgrade_probe_measurement_started_ms = 0;
+    uint64_t resolution_upgrade_probe_capture_start = 0;
     int resolution_upgrade_probe_failure_count = 0;
     int64_t next_resolution_upgrade_probe_ms = 0;
     int64_t encoded_frame_rate_window_started_ms = 0;
@@ -258,14 +295,40 @@ class IceTransportController
     int64_t critical_encode_backlog_since_ms = 0;
     int64_t post_upgrade_protection_until_ms = 0;
 
+    void FinishStartupKeyframe() {
+      startup_keyframe_pending = false;
+      keyframe_size_budget_bytes = regular_keyframe_size_budget_bytes;
+    }
+
+    void ResetPendingBandwidthMapping() {
+      pending_mapped_width.reset();
+      pending_mapped_height.reset();
+      mapping_stability_count = 0;
+      pending_mapped_since_ms = 0;
+      pending_mapped_candidates.clear();
+    }
+
     void ClearResolutionUpgradeProbe() {
       resolution_upgrade_probe_active = false;
+      resolution_upgrade_probe_fast = false;
       resolution_upgrade_probe_base_width = 0;
       resolution_upgrade_probe_base_height = 0;
       resolution_upgrade_probe_target_width = 0;
       resolution_upgrade_probe_target_height = 0;
       resolution_upgrade_probe_sample_count = 0;
       resolution_upgrade_probe_started_ms = 0;
+      resolution_upgrade_probe_measurement_started_ms = 0;
+      resolution_upgrade_probe_capture_start = 0;
+    }
+
+    int BackoffResolutionUpgrade(int64_t now_ms) {
+      ClearResolutionUpgradeProbe();
+      initial_resolution_recovery = false;
+      resolution_upgrade_probe_failure_count =
+          std::min(resolution_upgrade_probe_failure_count + 1, 3);
+      const int backoff_ms = 3000 << resolution_upgrade_probe_failure_count;
+      next_resolution_upgrade_probe_ms = now_ms + backoff_ms;
+      return backoff_ms;
     }
 
     void ResetResolutionUpgradeProbe() {
@@ -338,6 +401,10 @@ class IceTransportController
 
   bool CheckSteamContext(const std::string& channel_name,
                          const std::shared_ptr<StreamContext>& context);
+  bool PrepareStartupKeyframe(const std::shared_ptr<StreamContext>& context,
+                              int64_t frame_bitrate, bool* force_keyframe);
+  void NoteKeyframeBudgetFailure(const std::shared_ptr<StreamContext>& context,
+                                 int retry_width, int retry_height);
   int OnVideoEncoded(const std::string& channel_name,
                      const std::shared_ptr<StreamContext>& context,
                      int queue_delay_ms, bool measure_encode_delay,
@@ -382,6 +449,8 @@ class IceTransportController
   std::atomic<bool> media_transport_ready_{false};
   // -1 means ICE has not selected a pair yet, 0 direct, 1 relay.
   std::atomic<int> relay_path_state_{-1};
+  std::atomic<int64_t> video_transport_bitrate_bps_{MINIRTC_INIT_BITRATE};
+  std::optional<webrtc::NetworkEstimate> video_network_estimate_;
   VideoQuality video_quality_;
 
   std::vector<uint8_t> local_key_;

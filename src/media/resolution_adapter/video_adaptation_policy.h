@@ -7,6 +7,7 @@
 #ifndef _VIDEO_ADAPTATION_POLICY_H_
 #define _VIDEO_ADAPTATION_POLICY_H_
 
+#include <algorithm>
 #include <array>
 #include <cstddef>
 #include <cstdint>
@@ -31,6 +32,7 @@ public:
   };
 
   static constexpr int64_t kBandwidthMappingStabilityMs = 2000;
+  static constexpr int64_t kBandwidthMappingIncreaseStabilityMs = 500;
   static constexpr int64_t kBandwidthResolutionStartupGraceMs = 5000;
   static constexpr int64_t kBandwidthResolutionCooldownMs = 5000;
   static constexpr int64_t kStaticContentEnterHoldMs = 1000;
@@ -51,12 +53,19 @@ public:
   static constexpr int kMinimumPacerAdmissionSamples = 15;
   static constexpr size_t kLowFrameRateWindowCount = 3;
   static constexpr size_t kLowFrameRateRequiredWindows = 2;
+  static constexpr int kBalancedFrameRate = 30;
 
-  static int MinimumFrameRate(int configured_frame_rate) {
-    return configured_frame_rate <= 30 ? 25 : 45;
+  static int MinimumFrameRate(int configured_frame_rate,
+                              bool balanced = false) {
+    return balanced ? kBalancedFrameRate
+                    : (configured_frame_rate <= 30 ? 25 : 45);
   }
 
-  static int UpgradeFrameRate(int configured_frame_rate) {
+  static int UpgradeFrameRate(int configured_frame_rate,
+                              bool balanced = false) {
+    // Balanced mode trades excess frame rate for spatial detail, accepting
+    // the same 30 fps floor before and during a resolution upgrade.
+    if (balanced) return kBalancedFrameRate;
     // Keep substantially more headroom than the downgrade floor before
     // probing a higher spatial rung. A 60 fps stream that only just reaches
     // 45 fps at the lower resolution is very likely to fall below the floor
@@ -65,18 +74,21 @@ public:
   }
 
   static bool IsUpgradeFrameRateHealthy(int configured_frame_rate,
-                                        int measured_frame_rate) {
-    return measured_frame_rate >= UpgradeFrameRate(configured_frame_rate);
+                                        int measured_frame_rate,
+                                        bool balanced = false) {
+    return measured_frame_rate >=
+           UpgradeFrameRate(configured_frame_rate, balanced);
   }
 
   static size_t CountLowFrameRateWindows(
       int configured_frame_rate,
       const std::array<int, kLowFrameRateWindowCount>& frame_rates,
-      size_t valid_window_count) {
+      size_t valid_window_count, bool balanced = false) {
     const size_t count =
         valid_window_count < frame_rates.size() ? valid_window_count
                                                  : frame_rates.size();
-    const int minimum_frame_rate = MinimumFrameRate(configured_frame_rate);
+    const int minimum_frame_rate =
+        MinimumFrameRate(configured_frame_rate, balanced);
     size_t low_window_count = 0;
     for (size_t i = 0; i < count; ++i) {
       if (frame_rates[i] < minimum_frame_rate) {
@@ -89,23 +101,24 @@ public:
   static bool IsEncodedFrameRatePersistentlyLow(
       int configured_frame_rate,
       const std::array<int, kLowFrameRateWindowCount>& frame_rates,
-      size_t valid_window_count) {
+      size_t valid_window_count, bool balanced = false) {
     return valid_window_count >= kLowFrameRateWindowCount &&
            CountLowFrameRateWindows(configured_frame_rate, frame_rates,
-                                    valid_window_count) >=
-               kLowFrameRateRequiredWindows;
+                                    valid_window_count,
+                                    balanced) >= kLowFrameRateRequiredWindows;
   }
 
   static bool IsCaptureLimited(int configured_frame_rate,
                                bool admission_metrics_ready,
-                               int capture_frame_rate,
-                               int encoded_frame_rate) {
+                               int capture_frame_rate, int encoded_frame_rate,
+                               bool balanced = false) {
     // The independently sampled one-second windows can differ by 1-2 frames.
     // If encoding keeps up with a slow source, reducing encoded dimensions
     // cannot create the missing input frames.
     constexpr int kFrameRateMeasurementTolerance = 2;
     return admission_metrics_ready && capture_frame_rate > 0 &&
-           capture_frame_rate < MinimumFrameRate(configured_frame_rate) &&
+           capture_frame_rate <
+               MinimumFrameRate(configured_frame_rate, balanced) &&
            encoded_frame_rate + kFrameRateMeasurementTolerance >=
                capture_frame_rate;
   }
@@ -123,8 +136,9 @@ public:
       int configured_frame_rate, bool encoded_frame_rate_persistently_low,
       bool admission_metrics_ready, int capture_frame_rate,
       uint64_t capture_samples, uint64_t pacer_rejected_samples,
-      uint64_t encode_queue_dropped_samples) {
-    const int minimum_frame_rate = MinimumFrameRate(configured_frame_rate);
+      uint64_t encode_queue_dropped_samples, bool balanced = false) {
+    const int minimum_frame_rate =
+        MinimumFrameRate(configured_frame_rate, balanced);
     FrameHealthSignals signals;
     signals.encoded_frame_rate_low = encoded_frame_rate_persistently_low;
     signals.capture_frame_rate_low =

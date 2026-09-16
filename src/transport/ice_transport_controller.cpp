@@ -1,6 +1,7 @@
 #include "ice_transport_controller.h"
 
 #include <algorithm>
+#include <cmath>
 #include <memory>
 #include <vector>
 
@@ -25,6 +26,20 @@ namespace {
 
 constexpr int64_t kDesktopPacerQueueLimitMs = 100;
 constexpr int64_t kDesktopFrameAdmissionQueueMs = 80;
+// At the normal 2.5x pacing rate this occupies at most 72 ms of the queue,
+// leaving room for RTP overhead and recovery within the 350 ms deadline.
+constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
+// Only the initial keyframe may borrow extra queue time (at most 240 ms at
+// normal 2.5x pacing). Admission still pauses following frames as it drains.
+constexpr int64_t kStartupKeyFrameBudgetMs = 600;
+constexpr size_t kStartupKeyFrameMaxBytes = 128 * 1024;
+constexpr int64_t kStartupKeyFrameTimeoutMs = 1500;
+
+bool UsesBoundedVideoQueue(const MediaCodecConfig& config) {
+  return config.video_content_type == VideoContentType::ScreenContent &&
+         config.video_degradation_preference !=
+             VideoDegradationPreference::MaintainResolution;
+}
 
 }  // namespace
 
@@ -133,8 +148,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
         relay_path_state == 1,
         webrtc::Timestamp::Millis(webrtc_clock_->TimeInMilliseconds()));
   }
-  paced_sender_ = std::make_shared<PacedSender>(ice_agent_, webrtc_clock_,
-                                                task_queue_pacer_);
+  paced_sender_ = std::make_shared<PacedSender>(
+      ice_agent_, webrtc_clock_, task_queue_pacer_,
+      UsesBoundedVideoQueue(media_config_));
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(
@@ -687,7 +703,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     return -1;
   }
 
-  std::shared_lock lock(stream_senders_mutex_);
+  std::unique_lock lock(stream_senders_mutex_);
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
     if (!is_running_.load()) {
@@ -700,6 +716,8 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
   if (!CheckSteamContext(channel_name, context)) {
     return -1;
   }
+
+  context->last_capture_time = clock_->CurrentTimeMs();
 
   // ICE can become usable before DTLS has installed the SRTP sessions. Do not
   // copy, encode or queue video while the pacer is unable to send it. Keep
@@ -751,13 +769,21 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     if (context->source_width <= 0 || context->source_height <= 0 ||
         context->source_width != raw_frame.Width() ||
         context->source_height != raw_frame.Height()) {
+      if (context->startup_keyframe_pending) {
+        context->FinishStartupKeyframe();
+      }
       context->source_width = raw_frame.Width();
       context->source_height = raw_frame.Height();
       context->source_resolution_initialized_ms = clock_->CurrentTimeMs();
-      context->pending_mapped_width.reset();
-      context->pending_mapped_height.reset();
-      context->mapping_stability_count = 0;
-      context->pending_mapped_since_ms = 0;
+      context->initial_resolution_recovery = true;
+      context->native_resolution_probe_attempted = false;
+      context->keyframe_limited_upgrade = false;
+      context->keyframe_failed_pixels = 0;
+      context->keyframe_failed_bytes = 0;
+      context->keyframe_failure_ms = 0;
+      context->keyframe_same_resolution_retry = false;
+      context->keyframe_resolution_recovery.reset();
+      context->ResetPendingBandwidthMapping();
       context->ResetResolutionUpgradeProbe();
       context->ResetEncodedFrameRateTracking();
       context->ResetEncoderQualityTracking();
@@ -778,6 +804,54 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       if (it_force != force_i_frame_streams_.end()) {
         force_i_frame = true;
         force_i_frame_streams_.erase(it_force);
+      }
+    }
+
+    if (UsesBoundedVideoQueue(media_config_)) {
+      int video_count = 0;
+      bool has_data = false;
+      const int64_t now_ms = clock_->CurrentTimeMs();
+      for (const auto& [_, sender] : stream_senders_) {
+        if (!sender) continue;
+        if (sender->type == StreamType::kVideo && sender->codec &&
+            (sender == context ||
+             (sender->last_capture_time &&
+              now_ms - *sender->last_capture_time < 100))) {
+          ++video_count;
+        }
+        has_data |= sender->type == StreamType::kData &&
+                    sender->last_active_time &&
+                    now_ms - *sender->last_active_time < 100;
+      }
+      const int64_t transport_bitrate = video_transport_bitrate_bps_.load();
+      const int64_t video_bitrate =
+          has_data ? transport_bitrate * 9 / 10 : transport_bitrate;
+      // Count captured streams even before their first encoded output, but do
+      // not reserve startup bandwidth for configured, idle displays.
+      const int64_t stream_bitrate = video_bitrate / std::max(1, video_count);
+      const int64_t frame_bitrate = std::max<int64_t>(
+          1, std::min<int64_t>(
+                 stream_bitrate,
+                 context->desired_target_bitrate.value_or(stream_bitrate)));
+      const bool startup_keyframe =
+          PrepareStartupKeyframe(context, frame_bitrate, &force_i_frame);
+
+      if (!startup_keyframe && force_i_frame && resolution_adapter_) {
+        int width = 0;
+        int height = 0;
+        if (resolution_adapter_->GetResolution(
+                static_cast<int>(frame_bitrate), context->source_width,
+                context->source_height, &width, &height) == 0 &&
+            width < context->target_width.value_or(context->source_width) &&
+            height < context->target_height.value_or(context->source_height)) {
+          NoteKeyframeBudgetFailure(context, width, height);
+          // This limits the next keyframe, not the confirmed network ceiling.
+          context->last_resolution_change_ms = clock_->CurrentTimeMs();
+          context->ResetEncodedFrameRateTracking();
+          context->ResetEncoderQualityTracking();
+          context->ResetEncodeQueueDelayTracking();
+          context->post_upgrade_protection_until_ms = 0;
+        }
       }
     }
 
@@ -875,6 +949,82 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
   return 0;
 }
 
+bool IceTransportController::PrepareStartupKeyframe(
+    const std::shared_ptr<StreamContext>& context, int64_t frame_bitrate,
+    bool* force_keyframe) {
+  // Called under stream_senders_mutex_, after frame admission and transport
+  // readiness. Stream lifetime, rather than source size changes, owns this
+  // one startup opportunity.
+  frame_bitrate = std::max<int64_t>(1, frame_bitrate);
+  context->regular_keyframe_size_budget_bytes =
+      std::max<int64_t>(MINIRTC_MAX_PAYLOAD_SIZE,
+                        frame_bitrate * kDesktopKeyFrameBudgetMs / 8000);
+  context->keyframe_size_budget_bytes =
+      context->regular_keyframe_size_budget_bytes;
+  const int64_t now_ms = clock_->CurrentTimeMs();
+  if (!context->startup_resolution_attempted) {
+    context->startup_resolution_attempted = true;
+    int width = 0, height = 0;
+    if (media_config_.video_content_type == VideoContentType::ScreenContent &&
+        media_config_.video_degradation_preference ==
+            VideoDegradationPreference::Balanced &&
+        !context->resolution_upgrade_network_blocked && resolution_adapter_ &&
+        resolution_adapter_->GetStartupResolution(context->source_width,
+                                                  context->source_height,
+                                                  &width, &height) == 0) {
+      context->target_width = width;
+      context->target_height = height;
+      context->startup_keyframe_pending = true;
+      context->startup_keyframe_started_ms = now_ms;
+      context->awaiting_budget_keyframe = true;
+      *force_keyframe = true;
+    }
+  }
+  if (!context->startup_keyframe_pending) return false;
+  if (context->resolution_upgrade_network_blocked ||
+      now_ms - context->startup_keyframe_started_ms >=
+          kStartupKeyFrameTimeoutMs) {
+    context->FinishStartupKeyframe();
+    *force_keyframe = true;
+    return false;
+  }
+  context->keyframe_size_budget_bytes = std::max<size_t>(
+      context->regular_keyframe_size_budget_bytes,
+      std::min<int64_t>(kStartupKeyFrameMaxBytes,
+                        frame_bitrate * kStartupKeyFrameBudgetMs / 8000));
+  return true;
+}
+
+void IceTransportController::NoteKeyframeBudgetFailure(
+    const std::shared_ptr<StreamContext>& context, int retry_width,
+    int retry_height) {
+  // The caller holds stream_senders_mutex_. A budget retry may resize several
+  // times, but it is one failed trial and must retain the original backoff.
+  const bool probing = context->resolution_upgrade_probe_active;
+  const int failed_width =
+      context->target_width.value_or(context->source_width);
+  const int failed_height =
+      context->target_height.value_or(context->source_height);
+  context->target_width = std::min(retry_width, failed_width);
+  context->target_height = std::min(retry_height, failed_height);
+  if (probing) {
+    context->target_width = std::min(
+        *context->target_width, context->resolution_upgrade_probe_base_width);
+    context->target_height = std::min(
+        *context->target_height, context->resolution_upgrade_probe_base_height);
+  }
+  if ((!context->awaiting_budget_keyframe ||
+       context->keyframe_same_resolution_retry) &&
+      (probing || context->mapped_target_width.has_value())) {
+    context->BackoffResolutionUpgrade(clock_->CurrentTimeMs());
+  } else {
+    context->ClearResolutionUpgradeProbe();
+  }
+  context->keyframe_limited_upgrade = true;
+  context->keyframe_same_resolution_retry = false;
+  context->awaiting_budget_keyframe = true;
+}
+
 void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     const std::string& channel_name, int queue_delay_ms,
     const EncodedFrame& encoded_frame) {
@@ -886,33 +1036,32 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       VideoDegradationPreference::MaintainResolution;
   const bool balanced = media_config_.video_degradation_preference ==
                         VideoDegradationPreference::Balanced;
+  const int minimum_frame_rate = VideoAdaptationPolicy::MinimumFrameRate(
+      media_config_.max_frame_rate, balanced);
+  const int minimum_upgrade_frame_rate =
+      VideoAdaptationPolicy::UpgradeFrameRate(media_config_.max_frame_rate,
+                                              balanced);
+  // Balanced output may intentionally coalesce 60 fps input into 30 fps.
+  // Judge queue pressure against that output budget, while retaining the
+  // separate absolute critical-delay limit below.
   const int frame_budget_ms =
-      std::max(1, 1000 / std::max(1, media_config_.max_frame_rate));
+      std::max(1, 1000 / std::max(1, balanced ? minimum_upgrade_frame_rate
+                                              : media_config_.max_frame_rate));
   const int delay_threshold_ms =
       maintain_frame_rate
           ? std::max(2, frame_budget_ms / 3)
           : (balanced ? std::max(4, frame_budget_ms / 2) : 8);
-  const int minimum_frame_rate =
-      VideoAdaptationPolicy::MinimumFrameRate(media_config_.max_frame_rate);
-  // A lower spatial rung must have enough temporal margin to absorb the next
-  // resolution step. For 60 fps streams, 45 fps remains the downgrade floor
-  // while 55 fps is required before an upgrade is attempted.
-  const int minimum_upgrade_frame_rate =
-      VideoAdaptationPolicy::UpgradeFrameRate(media_config_.max_frame_rate);
+  const bool balanced_screen_content =
+      balanced &&
+      media_config_.video_content_type == VideoContentType::ScreenContent;
   constexpr int kCriticalFrameRate = 20;
-  constexpr int kFrameRateWindowMs = 1000;
-  constexpr int kFrameRateHealthyDurationMs = 2000;
-  constexpr int kUpgradeProbeMinDurationMs = 2000;
-  constexpr int kPostUpgradeProtectionMs = 2000;
+  constexpr int kUpgradeProbeInputWaitMs = 5000;
   constexpr int kQueueDelayWindowMs = 1000;
   constexpr int kQueueBacklogSustainMs = 500;
   constexpr int kCriticalQueueBacklogSustainMs = 250;
   constexpr int kCriticalQueueDelayMs = 100;
   constexpr float kMaxNormalizedQpForUpgrade = 0.60f;
   constexpr float kQpEwmaAlpha = 0.10f;
-  constexpr int kUpgradeProbeBackoffBaseMs = 3000;
-  constexpr int kMaxUpgradeProbeBackoffMs = 24000;
-  constexpr int upgrade_cooldown_ms = 3000;
   const int downgrade_cooldown_ms =
       maintain_frame_rate ? 750 : (balanced ? 1500 : 3000);
 
@@ -923,6 +1072,75 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) return;
   std::shared_ptr<StreamContext> context = it->second;
+  const int64_t now_ms = clock_->CurrentTimeMs();
+  if (context->keyframe_resolution_recovery &&
+      now_ms >= context->keyframe_resolution_recovery->expires_ms) {
+    context->keyframe_resolution_recovery.reset();
+  }
+  bool keyframe_recovery = false;
+  if (balanced_screen_content && context->keyframe_resolution_recovery &&
+      resolution_adapter_) {
+    const auto& recovery = *context->keyframe_resolution_recovery;
+    int budget_width = 0, budget_height = 0;
+    const int bitrate = static_cast<int>(std::min<int64_t>(
+        std::numeric_limits<int>::max(),
+        static_cast<int64_t>(context->keyframe_size_budget_bytes) * 8000 /
+            kDesktopKeyFrameBudgetMs));
+    keyframe_recovery =
+        recovery.projected_bytes > 0 &&
+        recovery.projected_bytes <= context->keyframe_size_budget_bytes &&
+        context->mapped_target_width.value_or(0) >= recovery.width &&
+        context->mapped_target_height.value_or(0) >= recovery.height &&
+        static_cast<int64_t>(context->target_width.value_or(0)) *
+                context->target_height.value_or(0) <
+            static_cast<int64_t>(recovery.width) * recovery.height &&
+        resolution_adapter_->GetResolution(
+            bitrate, context->source_width, context->source_height,
+            &budget_width, &budget_height) == 0 &&
+        budget_width >= recovery.width && budget_height >= recovery.height;
+  }
+  const bool initial_fast_recovery =
+      balanced_screen_content && context->initial_resolution_recovery &&
+      now_ms - context->source_resolution_initialized_ms <= 30000;
+  // Native output skips scaling. Give it one direct trial even if bandwidth
+  // confirmation arrives after the initial fast window or a smaller trial
+  // failed. A prior native attempt, failure backoff, quality and send budget
+  // still constrain this opportunity.
+  bool late_native_recovery = false;
+  if (balanced_screen_content && !initial_fast_recovery &&
+      !context->native_resolution_probe_attempted && resolution_adapter_ &&
+      context->source_width > 0 && context->source_height > 0 &&
+      context->mapped_target_width.value_or(0) >= context->source_width &&
+      context->mapped_target_height.value_or(0) >= context->source_height &&
+      (context->target_width != context->source_width ||
+       context->target_height != context->source_height)) {
+    int admission_bitrate = std::numeric_limits<int>::max();
+    if (context->keyframe_limited_upgrade &&
+        context->keyframe_size_budget_bytes > 0) {
+      admission_bitrate = static_cast<int>(std::min<int64_t>(
+          admission_bitrate,
+          static_cast<int64_t>(context->keyframe_size_budget_bytes) * 8000 /
+              kDesktopKeyFrameBudgetMs));
+    }
+    int width = 0, height = 0;
+    late_native_recovery = resolution_adapter_->GetResolution(
+                               admission_bitrate, context->source_width,
+                               context->source_height, &width, &height) == 0 &&
+                           width == context->source_width &&
+                           height == context->source_height;
+  }
+  const bool fast_recovery = initial_fast_recovery || late_native_recovery ||
+                             keyframe_recovery ||
+                             context->resolution_upgrade_probe_fast;
+  const int kFrameRateWindowMs = fast_recovery ? 500 : 1000;
+  const int kFrameRateHealthyDurationMs = fast_recovery ? 500 : 2000;
+  const int kUpgradeProbeMinDurationMs =
+      context->resolution_upgrade_probe_fast ? 1000 : 2000;
+  // A completed trial already observes output at the new size.
+  const int kPostUpgradeProtectionMs =
+      fast_recovery ? 200 : (balanced_screen_content ? 1000 : 2000);
+  const int upgrade_cooldown_ms =
+      fast_recovery ? 200 : (balanced_screen_content ? 1000 : 3000);
   context->last_encoder_quality_stats = encoded_frame.QualityStats();
   if (context->last_encoder_quality_stats.HasQp()) {
     const float normalized_qp = std::clamp(
@@ -934,7 +1152,6 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
                   normalized_qp * kQpEwmaAlpha;
   }
 
-  const int64_t now_ms = clock_->CurrentTimeMs();
   const uint64_t capture_input_total =
       context->capture_input_frame_total.load(std::memory_order_acquire);
   const uint64_t pacer_rejected_total =
@@ -994,7 +1211,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   bool encoded_frame_rate_window_updated = false;
   if (context->encoded_frame_rate_window_started_ms == 0) {
     context->encoded_frame_rate_window_started_ms = now_ms;
-    context->encoded_frame_rate_window_frame_count = 1;
+    // This frame is the interval boundary; count subsequent arrivals only.
+    context->encoded_frame_rate_window_frame_count = 0;
   } else {
     ++context->encoded_frame_rate_window_frame_count;
     const int64_t frame_rate_window_ms =
@@ -1021,9 +1239,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
             context->measured_encoded_frame_rate;
       }
       encoded_frame_rate_window_updated = true;
-      if (VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
-              media_config_.max_frame_rate,
-              context->measured_encoded_frame_rate)) {
+      if (context->measured_encoded_frame_rate >= minimum_upgrade_frame_rate) {
         if (context->encoded_frame_rate_healthy_since_ms == 0) {
           context->encoded_frame_rate_healthy_since_ms = now_ms;
         }
@@ -1041,18 +1257,18 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   const bool encoded_frame_rate_persistently_low =
       VideoAdaptationPolicy::IsEncodedFrameRatePersistentlyLow(
           media_config_.max_frame_rate, context->encoded_frame_rate_windows,
-          context->encoded_frame_rate_valid_window_count);
+          context->encoded_frame_rate_valid_window_count, balanced);
   const auto frame_health = VideoAdaptationPolicy::EvaluateFrameHealth(
       media_config_.max_frame_rate, encoded_frame_rate_persistently_low,
       context->frame_admission_metrics_ready,
       context->measured_capture_input_frame_rate,
       context->frame_admission_capture_samples,
       context->frame_admission_pacer_rejected_samples,
-      context->frame_admission_encode_queue_dropped_samples);
+      context->frame_admission_encode_queue_dropped_samples, balanced);
   const bool capture_limited = VideoAdaptationPolicy::IsCaptureLimited(
       media_config_.max_frame_rate, context->frame_admission_metrics_ready,
       context->measured_capture_input_frame_rate,
-      context->measured_encoded_frame_rate);
+      context->measured_encoded_frame_rate, balanced);
   const bool startup_critical_encode_backlog_candidate =
       queue_delay_ms >= kCriticalQueueDelayMs &&
       (!context->encoded_frame_rate_ready ||
@@ -1156,7 +1372,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         VideoAdaptationPolicy::CountLowFrameRateWindows(
             media_config_.max_frame_rate,
             context->encoded_frame_rate_windows,
-            context->encoded_frame_rate_valid_window_count);
+            context->encoded_frame_rate_valid_window_count, balanced);
     LOG_INFO(
         "Video frame health: channel={} encoded_fps={} low_windows={}/{} "
         "capture_fps={} pacer_reject_percent={} "
@@ -1172,8 +1388,19 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->p95_encode_queue_delay_ms, encoded_frame.EncodedWidth(),
         encoded_frame.EncodedHeight());
   }
-  if (context->resolution_upgrade_probe_active) {
-    ++context->resolution_upgrade_probe_sample_count;
+  if (context->resolution_upgrade_probe_active &&
+      static_cast<int>(encoded_frame.EncodedWidth()) ==
+          context->resolution_upgrade_probe_target_width &&
+      static_cast<int>(encoded_frame.EncodedHeight()) ==
+          context->resolution_upgrade_probe_target_height) {
+    if (context->resolution_upgrade_probe_measurement_started_ms == 0) {
+      // Measure capture and output over the same interval, starting after the
+      // encoder has applied the new size and produced its first key frame.
+      context->resolution_upgrade_probe_measurement_started_ms = now_ms;
+      context->resolution_upgrade_probe_capture_start = capture_input_total;
+    } else {
+      ++context->resolution_upgrade_probe_sample_count;
+    }
   }
 
   // Resolution-priority mode intentionally accepts a lower temporal rate.
@@ -1236,9 +1463,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       balanced && !context->resolution_upgrade_probe_active &&
       context->encoding_speed_priority_enabled &&
       context->encoded_frame_rate_ready &&
-      VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
-          media_config_.max_frame_rate,
-          context->measured_encoded_frame_rate) &&
+      context->measured_encoded_frame_rate >= minimum_upgrade_frame_rate &&
       context->encoded_frame_rate_healthy_since_ms > 0 &&
       now_ms - context->encoded_frame_rate_healthy_since_ms >=
           kFrameRateHealthyDurationMs &&
@@ -1277,8 +1502,21 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   };
 
   if (context->resolution_upgrade_probe_active) {
+    const bool measurement_started =
+        context->resolution_upgrade_probe_measurement_started_ms > 0;
     const int64_t probe_duration_ms =
-        now_ms - context->resolution_upgrade_probe_started_ms;
+        measurement_started
+            ? now_ms - context->resolution_upgrade_probe_measurement_started_ms
+            : 0;
+    const bool probe_start_timed_out =
+        !measurement_started &&
+        now_ms - context->resolution_upgrade_probe_started_ms >=
+            kUpgradeProbeInputWaitMs;
+    const uint64_t probe_capture_samples =
+        measurement_started
+            ? capture_input_total -
+                  context->resolution_upgrade_probe_capture_start
+            : 0;
     const int probe_frame_rate =
         probe_duration_ms > 0
             ? static_cast<int>(
@@ -1289,20 +1527,28 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
                   probe_duration_ms)
             : 0;
     const bool probe_backlogged =
-        sustained_severe_encode_backlog ||
-        sustained_critical_encode_backlog ||
+        sustained_severe_encode_backlog || sustained_critical_encode_backlog ||
+        // A one-second trial finishes before the ordinary pressure sustain
+        // timer; inspect its full queue window before accepting the new size.
+        (context->resolution_upgrade_probe_fast &&
+         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
+         severe_queue_pressure) ||
         (startup_critical_encode_backlog &&
          probe_duration_ms >= downgrade_cooldown_ms);
+    const bool insufficient_capture =
+        balanced_screen_content &&
+        probe_capture_samples <
+            VideoAdaptationPolicy::kMinimumPacerAdmissionSamples;
     const bool probe_frame_rate_too_low =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
-        !VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
-            media_config_.max_frame_rate, probe_frame_rate);
+        !insufficient_capture && probe_frame_rate < minimum_upgrade_frame_rate;
     const bool probe_qp_too_high =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
         context->normalized_qp_ewma >= 0.0f &&
         context->normalized_qp_ewma > kMaxNormalizedQpForUpgrade;
 
-    if (probe_backlogged || probe_frame_rate_too_low || probe_qp_too_high) {
+    if (probe_start_timed_out || probe_backlogged || probe_frame_rate_too_low ||
+        probe_qp_too_high) {
       const int rollback_width =
           context->resolution_upgrade_probe_base_width;
       const int rollback_height =
@@ -1311,21 +1557,18 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
           context->resolution_upgrade_probe_target_width;
       const int failed_height =
           context->resolution_upgrade_probe_target_height;
-      context->resolution_upgrade_probe_failure_count = std::min(
-          context->resolution_upgrade_probe_failure_count + 1, 3);
-      const int backoff_ms = std::min(
-          kMaxUpgradeProbeBackoffMs,
-          kUpgradeProbeBackoffBaseMs
-              << context->resolution_upgrade_probe_failure_count);
+      const int backoff_ms = context->BackoffResolutionUpgrade(now_ms);
 
       LOG_INFO(
           "Resolution upgrade probe failed: channel={} reason={} fps={} "
           "required_fps={} delay_avg_ms={} delay_p95_ms={} qp={} "
           "target={}x{} rollback={}x{} backoff_ms={}",
           channel_name,
-          probe_backlogged
-              ? "encode_backlog"
-              : (probe_frame_rate_too_low ? "low_frame_rate" : "high_qp"),
+          probe_start_timed_out
+              ? "resolution_not_applied"
+              : (probe_backlogged
+                     ? "encode_backlog"
+                     : (probe_frame_rate_too_low ? "low_frame_rate" : "high_qp")),
           probe_frame_rate, minimum_upgrade_frame_rate,
           context->average_encode_queue_delay_ms,
           context->p95_encode_queue_delay_ms,
@@ -1334,10 +1577,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       context->target_width = rollback_width;
       context->target_height = rollback_height;
       context->last_resolution_change_ms = now_ms;
-      context->next_resolution_upgrade_probe_ms = now_ms + backoff_ms;
       context->encode_exceed_count = 0;
       context->encode_below_threshold_count = 0;
-      context->ClearResolutionUpgradeProbe();
       context->ResetEncodedFrameRateTracking();
       context->ResetEncoderQualityTracking();
       context->ResetEncodeQueueDelayTracking();
@@ -1345,6 +1586,19 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       return;
     }
 
+    if (probe_duration_ms >= kUpgradeProbeMinDurationMs &&
+        insufficient_capture) {
+      if (probe_duration_ms < kUpgradeProbeInputWaitMs) return;
+      // Sparse input cannot establish encoder capacity. Keep the trial size,
+      // then require fresh frame health before another step; do not attribute
+      // the missing input to the encoder or increase its failure backoff.
+      context->ClearResolutionUpgradeProbe();
+      context->next_resolution_upgrade_probe_ms = now_ms + upgrade_cooldown_ms;
+      context->last_resolution_change_ms = now_ms;
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncodeQueueDelayTracking();
+      return;
+    }
     if (probe_duration_ms >= kUpgradeProbeMinDurationMs) {
       LOG_INFO(
           "Resolution upgrade probe succeeded: channel={} target={}x{} "
@@ -1356,11 +1610,19 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
           context->average_encode_queue_delay_ms,
           context->p95_encode_queue_delay_ms, probe_duration_ms,
           context->resolution_upgrade_probe_sample_count);
+      if (context->target_width == context->source_width &&
+          context->target_height == context->source_height) {
+        context->initial_resolution_recovery = false;
+      }
       context->ResetResolutionUpgradeProbe();
       context->last_resolution_change_ms = now_ms;
       context->post_upgrade_protection_until_ms =
           now_ms + kPostUpgradeProtectionMs;
-      context->ResetEncodeQueueDelayTracking();
+      // Keep the successful trial's queue observations for the next recovery
+      // decision. Clearing them adds another warmup interval at every rung.
+      if (!balanced_screen_content) {
+        context->ResetEncodeQueueDelayTracking();
+      }
     }
     return;
   }
@@ -1387,49 +1649,136 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
   // Upgrade
   if (!should_downgrade) {
-    // Static-content hold blocks bandwidth-driven downgrades. Encode-time
-    // recovery is allowed only after the configured-frame-rate and QP health
-    // checks above, remains gradual, and is capped by mapped_target_* below.
-    if (!context->target_width || !context->target_height ||
-        !context->encoded_frame_rate_ready ||
-        !VideoAdaptationPolicy::IsUpgradeFrameRateHealthy(
-            media_config_.max_frame_rate,
-            context->measured_encoded_frame_rate) ||
-        context->encoded_frame_rate_healthy_since_ms == 0 ||
-        now_ms - context->encoded_frame_rate_healthy_since_ms <
-            kFrameRateHealthyDurationMs ||
-        (context->normalized_qp_ewma >= 0.0f &&
-         context->normalized_qp_ewma > kMaxNormalizedQpForUpgrade))
+    if (!context->target_width || !context->target_height) return;
+    if (!context->mapped_target_width || !context->mapped_target_height) {
       return;
+    }
+    if (context->resolution_upgrade_network_blocked) {
+      return;
+    }
     auto [bw, bh] = base();
-    if (now_ms - context->last_resolution_change_ms < upgrade_cooldown_ms)
-      return;
-    if (now_ms < context->next_resolution_upgrade_probe_ms) return;
-
     auto [nw, nh] = resolution_adapter_
                         ? resolution_adapter_->GetNextHigherResolution(
                               bw, bh, context->source_width,
                               context->source_height)
                         : std::pair<int, int>{-1, -1};
-    if (nw <= 0 || nh <= 0) return;
+    if (nw <= 0 || nh <= 0 || nw * nh <= bw * bh) {
+      return;
+    }
 
+    constexpr int64_t kFastRecoveryMaxPixels = 1280 * 720;
+    const bool can_skip_small_rung =
+        balanced_screen_content &&
+        static_cast<int64_t>(bw) * bh < kFastRecoveryMaxPixels &&
+        context->resolution_upgrade_probe_failure_count == 0 &&
+        context->frame_admission_metrics_ready &&
+        context->frame_admission_capture_samples >=
+            VideoAdaptationPolicy::kMinimumPacerAdmissionSamples &&
+        context->frame_admission_pacer_rejected_samples == 0 &&
+        context->frame_admission_encode_queue_dropped_samples * 100 <
+            context->frame_admission_capture_samples *
+                VideoAdaptationPolicy::kEncodeQueueDropThresholdPercent &&
+        context->encode_queue_delay_window_ready &&
+        context->average_encode_queue_delay_ms <
+            std::max(1, frame_budget_ms / 4) &&
+        context->p95_encode_queue_delay_ms < frame_budget_ms &&
+        context->normalized_qp_ewma >= 0.0f &&
+        context->normalized_qp_ewma <= 0.5f;
+    if (can_skip_small_rung) {
+      const auto second = resolution_adapter_->GetNextHigherResolution(
+          nw, nh, context->source_width, context->source_height);
+      const int64_t second_area =
+          static_cast<int64_t>(second.first) * second.second;
+      if (second.first > 0 && second.second > 0 &&
+          second_area <= kFastRecoveryMaxPixels &&
+          second_area <= static_cast<int64_t>(*context->mapped_target_width) *
+                             *context->mapped_target_height) {
+        nw = second.first;
+        nh = second.second;
+      }
+    }
+
+    if (fast_recovery) {
+      int quality_width = context->source_width,
+          quality_height = context->source_height;
+      if (resolution_adapter_->GetResolution(
+              std::numeric_limits<int>::max(), context->source_width,
+              context->source_height, &quality_width, &quality_height) == 0) {
+        nw = std::min(*context->mapped_target_width, quality_width);
+        nh = std::min(*context->mapped_target_height, quality_height);
+      }
+    }
+    if (keyframe_recovery) {
+      nw = context->keyframe_resolution_recovery->width;
+      nh = context->keyframe_resolution_recovery->height;
+    }
     if (context->mapped_target_width && context->mapped_target_height &&
         nw * nh > *context->mapped_target_width *
                       *context->mapped_target_height) {
       nw = *context->mapped_target_width;
       nh = *context->mapped_target_height;
     }
-    if (nw * nh <= bw * bh) return;
+    if (nw * nh <= bw * bh) {
+      return;
+    }
+    // Once a keyframe has demonstrated a budget limit, a preserved static
+    // ceiling must not repeatedly launch trials the current send budget cannot
+    // carry. Probing the network can raise this temporary admission ceiling.
+    if (context->keyframe_limited_upgrade &&
+        context->keyframe_size_budget_bytes > 0) {
+      int budget_width = 0, budget_height = 0;
+      const int bitrate = static_cast<int>(std::min<int64_t>(
+          std::numeric_limits<int>::max(),
+          static_cast<int64_t>(context->keyframe_size_budget_bytes) * 8000 /
+              kDesktopKeyFrameBudgetMs));
+      if (resolution_adapter_->GetResolution(
+              bitrate, context->source_width, context->source_height,
+              &budget_width, &budget_height) == 0 &&
+          static_cast<int64_t>(budget_width) * budget_height <
+              static_cast<int64_t>(nw) * nh) {
+        nw = budget_width;
+        nh = budget_height;
+      }
+      if (static_cast<int64_t>(nw) * nh <= static_cast<int64_t>(bw) * bh ||
+          (!keyframe_recovery &&
+           static_cast<int64_t>(nw) * nh >= context->keyframe_failed_pixels &&
+           context->keyframe_size_budget_bytes <
+               context->keyframe_failed_bytes &&
+           now_ms - context->keyframe_failure_ms < 30000)) {
+        return;
+      }
+    }
+    if (nw * nh <= bw * bh) {
+      return;
+    }
+    if (!context->encoded_frame_rate_ready ||
+        context->measured_encoded_frame_rate < minimum_upgrade_frame_rate ||
+        context->encoded_frame_rate_healthy_since_ms == 0 ||
+        now_ms - context->encoded_frame_rate_healthy_since_ms <
+            kFrameRateHealthyDurationMs ||
+        context->normalized_qp_ewma > kMaxNormalizedQpForUpgrade ||
+        now_ms < context->next_resolution_upgrade_probe_ms ||
+        now_ms - context->last_resolution_change_ms < upgrade_cooldown_ms) {
+      return;
+    }
 
     LOG_INFO("Resolution upgrade probe started: channel={} {}x{} -> {}x{}",
              channel_name, bw, bh, nw, nh);
+    // Consume the early return only when the trial starts. A failed trial must
+    // fall back to the ordinary budget hold and increasing retry backoff.
+    if (keyframe_recovery) context->keyframe_resolution_recovery.reset();
+    if (nw == context->source_width && nh == context->source_height) {
+      context->native_resolution_probe_attempted = true;
+    }
     context->resolution_upgrade_probe_active = true;
+    context->resolution_upgrade_probe_fast = fast_recovery;
     context->resolution_upgrade_probe_base_width = bw;
     context->resolution_upgrade_probe_base_height = bh;
     context->resolution_upgrade_probe_target_width = nw;
     context->resolution_upgrade_probe_target_height = nh;
     context->resolution_upgrade_probe_sample_count = 0;
     context->resolution_upgrade_probe_started_ms = now_ms;
+    context->resolution_upgrade_probe_measurement_started_ms = 0;
     context->target_width = nw;
     context->target_height = nh;
     context->encode_below_threshold_count = 0;
@@ -1499,7 +1848,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   context->target_height = nh;
   context->last_resolution_change_ms = now_ms;
   context->encode_exceed_count = 0;
-  context->ResetResolutionUpgradeProbe();
+  // A smaller output does not establish that the failed larger size works.
+  context->ClearResolutionUpgradeProbe();
   context->ResetEncodedFrameRateTracking();
   context->ResetEncoderQualityTracking();
   context->ResetEncodeQueueDelayTracking();
@@ -1574,6 +1924,154 @@ int IceTransportController::OnVideoEncoded(
     return 0;
   }
 
+  {
+    std::unique_lock lock(stream_senders_mutex_);
+    auto it = stream_senders_.find(channel_name);
+    if (it == stream_senders_.end() || it->second != context ||
+        !context->transceiver) {
+      return -1;
+    }
+    context->last_active_time = clock_->CurrentTimeMs();
+    const bool keyframe =
+        encoded_frame.FrameType() == VideoFrameType::kVideoFrameKey;
+    size_t budget = context->keyframe_size_budget_bytes;
+    if (context->discarded_keyframe_capture_us > 0 &&
+        encoded_frame.CapturedTimestamp() > 0 &&
+        encoded_frame.CapturedTimestamp() <=
+            context->discarded_keyframe_capture_us) {
+      return 0;
+    }
+    const int64_t now_ms = clock_->CurrentTimeMs();
+    if (context->startup_keyframe_pending &&
+        (context->resolution_upgrade_network_blocked ||
+         now_ms - context->startup_keyframe_started_ms >=
+             kStartupKeyFrameTimeoutMs)) {
+      context->FinishStartupKeyframe();
+      budget = context->keyframe_size_budget_bytes;
+    }
+    if (budget > 0 && keyframe && encoded_frame.Size() > budget) {
+      bool startup_retry = false;
+      if (context->startup_keyframe_pending) {
+        startup_retry = ++context->startup_keyframe_retry_count == 1;
+        if (!startup_retry) {
+          context->FinishStartupKeyframe();
+          budget = context->keyframe_size_budget_bytes;
+        }
+      }
+      // One modest overshoot at a proven healthy size can be scene-dependent.
+      // Discard it and request one fresh keyframe before changing resolution.
+      // Never send over budget or grant this retry to an unproven upgrade.
+      const bool retry_same_resolution =
+          media_config_.video_degradation_preference ==
+              VideoDegradationPreference::Balanced &&
+          media_config_.video_content_type == VideoContentType::ScreenContent &&
+          !context->resolution_upgrade_probe_active &&
+          !context->awaiting_budget_keyframe &&
+          !context->resolution_upgrade_network_blocked &&
+          context->keyframe_budget_retry_count == 0 &&
+          encoded_frame.EncodedWidth() == context->target_width &&
+          encoded_frame.EncodedHeight() == context->target_height &&
+          context->encoded_frame_rate_ready &&
+          context->measured_encoded_frame_rate >=
+              VideoAdaptationPolicy::UpgradeFrameRate(
+                  media_config_.max_frame_rate, true) &&
+          context->encoded_frame_rate_healthy_since_ms > 0 &&
+          now_ms - context->encoded_frame_rate_healthy_since_ms >= 2000 &&
+          now_ms - context->last_resolution_change_ms >= 2000 &&
+          context->encode_queue_delay_window_ready &&
+          context->p95_encode_queue_delay_ms <= 33 &&
+          context->normalized_qp_ewma >= 0 &&
+          context->normalized_qp_ewma <= 0.60f &&
+          static_cast<double>(encoded_frame.Size()) <= budget * 1.25;
+      if (retry_same_resolution) {
+        context->keyframe_resolution_recovery =
+            StreamContext::KeyframeResolutionRecovery{
+                static_cast<int>(encoded_frame.EncodedWidth()),
+                static_cast<int>(encoded_frame.EncodedHeight()),
+                now_ms + 30000};
+        context->keyframe_same_resolution_retry = true;
+        context->keyframe_budget_retry_count = 1;
+        context->awaiting_budget_keyframe = true;
+        context->discarded_keyframe_capture_us =
+            std::max(context->discarded_keyframe_capture_us,
+                     encoded_frame.CapturedTimestamp());
+        FullIntraRequest(channel_name);
+        return 0;
+      }
+      // Preserve the hard send budget, but a small first overshoot only needs
+      // a proportional resize. Repeated or large overshoots need more headroom
+      // because size does not scale exactly with area across key frames.
+      const bool small_first_overshoot =
+          context->keyframe_budget_retry_count == 0 &&
+          static_cast<double>(encoded_frame.Size()) <=
+              static_cast<double>(budget) * 1.10;
+      const double headroom = small_first_overshoot ? 0.98 : 0.8;
+      double scale = std::sqrt(headroom * static_cast<double>(budget) /
+                               encoded_frame.Size());
+      if (startup_retry) {
+        // The first screen gets one smaller attempt with its extra budget.
+        // Leave enough headroom to avoid spending startup on tiny resizes.
+        scale = std::min(scale, 0.75);
+      }
+      context->keyframe_budget_retry_count =
+          std::min(1000, context->keyframe_budget_retry_count + 1);
+      const int width = std::max(
+          2, static_cast<int>(encoded_frame.EncodedWidth() * scale) & ~1);
+      const int height = std::max(
+          2, static_cast<int>(encoded_frame.EncodedHeight() * scale) & ~1);
+      NoteKeyframeBudgetFailure(context, width, height);
+      context->keyframe_failed_pixels =
+          static_cast<int64_t>(encoded_frame.EncodedWidth()) *
+          encoded_frame.EncodedHeight();
+      context->keyframe_failed_bytes =
+          encoded_frame.Size() + encoded_frame.Size() / 20;
+      context->keyframe_failure_ms = clock_->CurrentTimeMs();
+      context->last_resolution_change_ms = clock_->CurrentTimeMs();
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      context->post_upgrade_protection_until_ms = 0;
+      context->discarded_keyframe_capture_us =
+          std::max(context->discarded_keyframe_capture_us,
+                   encoded_frame.CapturedTimestamp());
+      FullIntraRequest(channel_name);
+      return 0;
+    }
+    if (context->awaiting_budget_keyframe && !keyframe) {
+      // These frames may reference the key frame we discarded, including
+      // output already in flight in an asynchronous hardware encoder.
+      FullIntraRequest(channel_name);
+      return 0;
+    }
+    if (keyframe) {
+      if (context->startup_keyframe_pending) {
+        context->FinishStartupKeyframe();
+      }
+      if (context->keyframe_resolution_recovery) {
+        auto& recovery = *context->keyframe_resolution_recovery;
+        const int64_t pixels =
+            static_cast<int64_t>(encoded_frame.EncodedWidth()) *
+            encoded_frame.EncodedHeight();
+        const int64_t target_pixels =
+            static_cast<int64_t>(recovery.width) * recovery.height;
+        if (encoded_frame.EncodedWidth() == recovery.width &&
+            encoded_frame.EncodedHeight() == recovery.height) {
+          context->keyframe_resolution_recovery.reset();
+        } else if (pixels > 0 && pixels < target_pixels &&
+                   pixels * 2 >= target_pixels &&
+                   clock_->CurrentTimeMs() < recovery.expires_ms) {
+          // Only extrapolate from a nearby, successfully encoded size. Keep
+          // 25% margin and enforce the hard budget again at the trial size.
+          recovery.projected_bytes = static_cast<double>(encoded_frame.Size()) *
+                                     target_pixels / pixels * 1.25;
+        }
+      }
+      context->awaiting_budget_keyframe = false;
+      context->keyframe_same_resolution_retry = false;
+      context->keyframe_budget_retry_count = 0;
+    }
+  }
+
   if (measure_encode_delay) {
     MaybeDegradeResolutionOnEncodeTime(channel_name, queue_delay_ms,
                                        encoded_frame);
@@ -1590,7 +2088,6 @@ int IceTransportController::OnVideoEncoded(
     return -1;
   }
 
-  context->last_active_time = clock_->CurrentTimeMs();
   return context->transceiver->SendVideo(encoded_frame);
 }
 
@@ -2434,7 +2931,13 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                    : update.target_rate->target_rate.bps())
             : target_bitrate_;
     target_bitrate_ = available_transport_bitrate_;
+    video_transport_bitrate_bps_.store(available_transport_bitrate_);
+    video_network_estimate_ = update.target_rate->network_estimate;
+  }
 
+  // A stable estimate need not produce another target-rate notification.
+  // Advance confirmation timers on regular controller ticks as well.
+  if (video_network_estimate_) {
     std::unique_lock lock(stream_senders_mutex_);
     if (!stream_senders_.empty()) {
       // Count active video and data channels separately
@@ -2466,7 +2969,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
       // Allocate bandwidth to video channels
       if (video_count > 0) {
         int sub_target_bitrate = video_bitrate_total / video_count;
-        const auto& network_estimate = update.target_rate->network_estimate;
+        const auto& network_estimate = *video_network_estimate_;
         const bool maintain_frame_rate =
             media_config_.video_degradation_preference ==
             VideoDegradationPreference::MaintainFrameRate;
@@ -2477,7 +2980,9 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             media_config_.video_content_type ==
             VideoContentType::ScreenContent;
         const int64_t network_rtt_ms =
-            network_estimate.round_trip_time.ms();
+            network_estimate.round_trip_time.IsFinite()
+                ? network_estimate.round_trip_time.ms()
+                : std::numeric_limits<int64_t>::max();
         const bool static_content_candidate =
             VideoAdaptationPolicy::IsStaticContentCandidate(
                 is_screen_content, network_estimate.in_alr,
@@ -2486,7 +2991,9 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             VideoAdaptationPolicy::IsStaticContentNetworkCritical(
                 network_estimate.loss_rate_ratio, network_rtt_ms);
         for (auto& [channel_name, context] : stream_senders_) {
-          if (!context->codec || context->type != StreamType::kVideo) {
+          if (!context->codec || context->type != StreamType::kVideo ||
+              !context->last_active_time ||
+              clock_->CurrentTimeMs() - *context->last_active_time >= 100) {
             continue;
           }
 
@@ -2499,6 +3006,9 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
           }
 
           const int64_t now_ms = clock_->CurrentTimeMs();
+          context->resolution_upgrade_network_blocked =
+              allow_spatial_downgrade && is_screen_content &&
+              static_content_network_critical;
           const bool was_frozen = context->freeze_resolution;
           if (!context->static_content_candidate_initialized ||
               context->static_content_candidate != static_content_candidate) {
@@ -2528,48 +3038,48 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->freeze_resolution = false;
           }
 
+          int target_width = -1;
+          int target_height = -1;
+          if (resolution_adapter_->GetResolution(
+                  sub_target_bitrate, source_width, source_height,
+                  &target_width, &target_height) != 0) {
+            continue;
+          }
           // Do not apply a bandwidth downgrade while static-content entry is
           // being confirmed. This avoids a downgrade immediately followed by
           // a quality restoration and a forced key frame.
-          if (!context->freeze_resolution && static_content_candidate) {
+          if (!allow_spatial_downgrade && !context->freeze_resolution &&
+              static_content_candidate) {
             continue;
           }
 
-          if (context->freeze_resolution) {
-            if (allow_spatial_downgrade) {
-              // Static desktops produce too little traffic for bandwidth
-              // estimation. In frame-rate and balanced modes, pause bandwidth
-              // downgrades without replacing a previously established recovery
-              // ceiling with the configured quality maximum. If no stable
-              // ceiling exists yet, freeze recovery at the current resolution
-              // until non-ALR bandwidth mapping becomes available again.
-              const int current_width =
-                  context->target_width.value_or(source_width);
-              const int current_height =
-                  context->target_height.value_or(source_height);
-              if (!context->mapped_target_width.has_value() ||
-                  !context->mapped_target_height.has_value()) {
-                context->mapped_target_width = current_width;
-                context->mapped_target_height = current_height;
-              }
-
-              context->pending_mapped_width.reset();
-              context->pending_mapped_height.reset();
-              context->mapping_stability_count = 0;
-              context->pending_mapped_since_ms = 0;
-              if (!was_frozen) {
-                LOG_INFO(
-                    "Hold static-content bandwidth downgrades: channel={} "
-                    "policy={} current={}x{} recovery_ceiling={}x{}",
-                    channel_name,
-                    maintain_frame_rate ? "frame_rate" : "balanced",
-                    current_width, current_height,
-                    context->mapped_target_width.value(),
-                    context->mapped_target_height.value());
-              }
-              continue;
+          if (context->freeze_resolution && allow_spatial_downgrade) {
+            // Low traffic must not lower a static desktop's recovery ceiling.
+            // A sustained higher estimate can still raise it below, including
+            // estimates learned from probing while application-limited.
+            const int current_width =
+                context->target_width.value_or(source_width);
+            const int current_height =
+                context->target_height.value_or(source_height);
+            if (!context->mapped_target_width.has_value() ||
+                !context->mapped_target_height.has_value()) {
+              context->mapped_target_width = current_width;
+              context->mapped_target_height = current_height;
             }
 
+            if (!was_frozen) {
+              LOG_INFO(
+                  "Hold static-content bandwidth downgrades: channel={} "
+                  "policy={} current={}x{} recovery_ceiling={}x{}",
+                  channel_name,
+                  maintain_frame_rate ? "frame_rate" : "balanced",
+                  current_width, current_height,
+                  context->mapped_target_width.value(),
+                  context->mapped_target_height.value());
+            }
+          }
+
+          if (context->freeze_resolution && !allow_spatial_downgrade) {
             // Quality-priority static content can use the selected quality
             // ceiling even when its instantaneous bitrate is low. Still respect
             // Low/Medium caps instead of unconditionally restoring native.
@@ -2583,10 +3093,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
 
             context->mapped_target_width = quality_width;
             context->mapped_target_height = quality_height;
-            context->pending_mapped_width.reset();
-            context->pending_mapped_height.reset();
-            context->mapping_stability_count = 0;
-            context->pending_mapped_since_ms = 0;
+            context->ResetPendingBandwidthMapping();
 
             const bool use_native =
                 static_cast<int64_t>(quality_width) * quality_height >=
@@ -2623,7 +3130,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             continue;
           }
 
-          if (was_frozen) {
+          if (was_frozen && !context->freeze_resolution) {
             LOG_INFO(
                 "Leave static-content resolution hold: channel={} reason={}",
                 channel_name,
@@ -2632,10 +3139,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                     : (static_content_network_critical
                            ? "network_conditions"
                            : "alr_exit_hysteresis"));
-            context->pending_mapped_width.reset();
-            context->pending_mapped_height.reset();
-            context->mapping_stability_count = 0;
-            context->pending_mapped_since_ms = 0;
+            context->ResetPendingBandwidthMapping();
             // Until a new non-ALR bandwidth ceiling is stable, prevent an
             // encode-time upgrade from using the optimistic static ceiling.
             context->mapped_target_width =
@@ -2644,27 +3148,83 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
                 context->target_height.value_or(source_height);
           }
 
-          int target_width = -1;
-          int target_height = -1;
-          if (resolution_adapter_->GetResolution(
-                  sub_target_bitrate, source_width, source_height,
-                  &target_width, &target_height) != 0) {
+          const int ceiling_width = context->mapped_target_width.value_or(
+              context->target_width.value_or(source_width));
+          const int ceiling_height = context->mapped_target_height.value_or(
+              context->target_height.value_or(source_height));
+          const int64_t ceiling_area =
+              static_cast<int64_t>(ceiling_width) * ceiling_height;
+          const bool raising_ceiling =
+              static_cast<int64_t>(target_width) * target_height > ceiling_area;
+          if (raising_ceiling && context->resolution_upgrade_network_blocked) {
+            context->ResetPendingBandwidthMapping();
+            continue;
+          }
+          if (allow_spatial_downgrade &&
+              (context->freeze_resolution || static_content_candidate) &&
+              !raising_ceiling) {
+            context->ResetPendingBandwidthMapping();
             continue;
           }
 
-          // Controller updates may arrive only milliseconds apart. Require a
-          // duration, rather than a tick count, before accepting a bandwidth
-          // ceiling so startup probes and short estimate dips cannot blur the
-          // desktop immediately after connection.
-          if (!context->pending_mapped_width.has_value() ||
-              !context->pending_mapped_height.has_value() ||
-              context->pending_mapped_width.value() != target_width ||
-              context->pending_mapped_height.value() != target_height) {
+          // Confirm the full bandwidth-supported ceiling once. Actual size
+          // changes remain bounded by encode-time probes, so imposing a second
+          // spatial ladder here only delays recovery. Mild static-candidate
+          // changes must not reset confirmation while bandwidth still supports
+          // the pending size; severe network pressure is handled above.
+          const int64_t candidate_area =
+              static_cast<int64_t>(target_width) * target_height;
+          const int64_t pending_area =
+              static_cast<int64_t>(context->pending_mapped_width.value_or(0)) *
+              context->pending_mapped_height.value_or(0);
+          const bool candidate_supported =
+              pending_area > 0 &&
+              (raising_ceiling
+                   ? pending_area > ceiling_area &&
+                         candidate_area >= pending_area
+                   : context->pending_mapped_width == target_width &&
+                         context->pending_mapped_height == target_height);
+          if (!candidate_supported) {
+            context->ResetPendingBandwidthMapping();
             context->pending_mapped_width = target_width;
             context->pending_mapped_height = target_height;
             context->mapping_stability_count = 1;
             context->pending_mapped_since_ms = now_ms;
+            if (raising_ceiling) {
+              context->pending_mapped_candidates.push_back(
+                  {target_width, target_height, now_ms});
+            }
             continue;
+          }
+
+          const int64_t increase_hold_ms =
+              VideoAdaptationPolicy::kBandwidthMappingIncreaseStabilityMs;
+          if (raising_ceiling) {
+            auto& candidates = context->pending_mapped_candidates;
+            int64_t supported_since_ms = now_ms;
+            // Keep the original confirmation start while tracking which
+            // higher sizes have remained supported. A brief spike disappears
+            // on a retreat without erasing the lower candidate's progress.
+            while (!candidates.empty() &&
+                   static_cast<int64_t>(candidates.back().width) *
+                           candidates.back().height >
+                       candidate_area) {
+              // A larger supported size also proves support for this smaller
+              // one; carry that history through a partial retreat.
+              supported_since_ms = candidates.back().since_ms;
+              candidates.pop_back();
+            }
+            if (candidates.empty() || candidates.back().width != target_width ||
+                candidates.back().height != target_height) {
+              candidates.push_back(
+                  {target_width, target_height, supported_since_ms});
+            }
+            // The front is the largest size supported throughout the recent
+            // hold window. Older, smaller entries no longer affect admission.
+            while (candidates.size() > 1 &&
+                   now_ms - candidates[1].since_ms >= increase_hold_ms) {
+              candidates.pop_front();
+            }
           }
 
           ++context->mapping_stability_count;
@@ -2673,10 +3233,28 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             continue;
           }
 
+          if (raising_ceiling) {
+            const auto& supported = context->pending_mapped_candidates.front();
+            const bool latest_still_confirming =
+                candidate_area >
+                static_cast<int64_t>(supported.width) * supported.height;
+            // A late increase may extend confirmation by at most one short
+            // window. Continuous growth must not postpone all upgrades.
+            if (latest_still_confirming &&
+                now_ms - context->pending_mapped_since_ms <
+                    VideoAdaptationPolicy::kBandwidthMappingStabilityMs +
+                        increase_hold_ms) {
+              continue;
+            }
+            target_width = supported.width;
+            target_height = supported.height;
+          } else {
+            target_width = *context->pending_mapped_width;
+            target_height = *context->pending_mapped_height;
+          }
           context->mapped_target_width = target_width;
           context->mapped_target_height = target_height;
-          context->mapping_stability_count = 0;
-          context->pending_mapped_since_ms = 0;
+          context->ResetPendingBandwidthMapping();
 
           const int current_width =
               context->target_width.value_or(source_width);
@@ -2686,12 +3264,12 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
               static_cast<int64_t>(current_width) * current_height;
           const int64_t target_area =
               static_cast<int64_t>(target_width) * target_height;
-          if (VideoAdaptationPolicy::
-                  ShouldApplyBandwidthResolutionDowngrade(
-                      allow_spatial_downgrade, now_ms,
-                      context->source_resolution_initialized_ms,
-                      context->last_resolution_change_ms, current_area,
-                      target_area)) {
+          if (VideoAdaptationPolicy::ShouldApplyBandwidthResolutionDowngrade(
+                  allow_spatial_downgrade && !context->freeze_resolution &&
+                      !static_content_candidate,
+                  now_ms, context->source_resolution_initialized_ms,
+                  context->last_resolution_change_ms, current_area,
+                  target_area)) {
             // Network estimates cap the spatial ladder but only move one rung
             // at a time. Frame admission and the bounded pacer protect latency
             // while the estimate is confirmed.
@@ -2720,7 +3298,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
             context->last_resolution_change_ms = now_ms;
             context->encode_exceed_count = 0;
             context->encode_below_threshold_count = 0;
-            context->ResetResolutionUpgradeProbe();
+            context->ClearResolutionUpgradeProbe();
             context->ResetEncodedFrameRateTracking();
             context->ResetEncoderQualityTracking();
             context->ResetEncodeQueueDelayTracking();

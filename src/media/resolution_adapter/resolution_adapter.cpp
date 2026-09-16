@@ -253,6 +253,29 @@ std::vector<ResolutionBitrateLimits> ResolutionAdapter::GetBitrateLimits()
   return limits;
 }
 
+int ResolutionAdapter::GetStartupResolution(int source_width, int source_height,
+                                            int* target_width,
+                                            int* target_height) const {
+  if (!target_width || !target_height || source_width < 2 || source_height < 2)
+    return -1;
+  const int64_t source_pixels =
+      static_cast<int64_t>(source_width) * source_height;
+  const int max_pixels = static_cast<int>(std::min<int64_t>(
+      source_pixels, std::min(1280 * 720, GetMaxPixelsForQuality())));
+  if (BuildStrictAspectResolution(source_width, source_height, max_pixels,
+                                  std::min(320 * 180, max_pixels), max_pixels,
+                                  target_width, target_height)) {
+    return 0;
+  }
+  // Sizes such as 1366x768 cannot be reduced to exactly the same ratio with
+  // even dimensions. Round down by at most one NV12 pixel pair instead.
+  const double scale =
+      std::sqrt(static_cast<double>(max_pixels) / source_pixels);
+  *target_width = static_cast<int>(source_width * scale) & ~1;
+  *target_height = static_cast<int>(source_height * scale) & ~1;
+  return *target_width >= 2 && *target_height >= 2 ? 0 : -1;
+}
+
 int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
                                      int current_height, int* target_width,
                                      int* target_height) {

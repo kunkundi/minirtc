@@ -29,6 +29,11 @@ class ResolutionAdapter {
   int GetResolution(int target_bitrate, int current_width, int current_height,
                     int* target_width, int* target_height);
 
+  // Prefer 720p for the first desktop frame, respecting source and quality
+  // limits. Other aspect ratios use the same pixel budget without upscaling.
+  int GetStartupResolution(int source_width, int source_height,
+                           int* target_width, int* target_height) const;
+
   int ResolutionDowngrade(const MiniRtcVideoFrame* video_frame, int target_width,
                           int target_height, MiniRtcVideoFrame* scaled_frame);
 
