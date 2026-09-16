@@ -32,31 +32,21 @@ namespace {
 // Maximum waiting time from the time of initiating probing to getting
 // the measured results back.
 constexpr TimeDelta kMaxWaitingTimeForProbingResult = TimeDelta::Seconds(1);
+constexpr TimeDelta kPathProbeWindow = TimeDelta::Seconds(5);
+constexpr TimeDelta kPathProbeRetryInterval = TimeDelta::Seconds(1);
+constexpr int kMaxPathProbeAttempts = 3;
+constexpr TimeDelta kDropRecoveryWindow = TimeDelta::Seconds(10);
+constexpr TimeDelta kDropRecoveryInterval = TimeDelta::Seconds(1);
+constexpr int kMaxDropRecoveryAttempts = 3;
 
 // Default probing bitrate limit. Applied only when the application didn't
 // specify max bitrate.
 constexpr DataRate kDefaultMaxProbingBitrate =
     DataRate::BitsPerSec(kDefaultMaxNetworkBitrateBps);
 
-// If the bitrate drops to a factor `kBitrateDropThreshold` or lower
-// and we recover within `kBitrateDropTimeoutMs`, then we'll send
-// a probe at a fraction `kProbeFractionAfterDrop` of the original bitrate.
+// Recover a sharp drop with bounded probes at a fraction of the last rate.
 constexpr double kBitrateDropThreshold = 0.66;
-constexpr TimeDelta kBitrateDropTimeout = TimeDelta::Seconds(5);
 constexpr double kProbeFractionAfterDrop = 0.85;
-
-// Timeout for probing after leaving ALR. If the bitrate drops significantly,
-// (as determined by the delay based estimator) and we leave ALR, then we will
-// send a probe if we recover within `kLeftAlrTimeoutMs` ms.
-constexpr TimeDelta kAlrEndedTimeout = TimeDelta::Seconds(3);
-
-// The expected uncertainty of probe result (as a fraction of the target probe
-// This is a limit on how often probing can be done when there is a BW
-// drop detected in ALR.
-constexpr TimeDelta kMinTimeBetweenAlrProbes = TimeDelta::Seconds(5);
-
-// bitrate). Used to avoid probing if the probe bitrate is close to our current
-// estimate.
 constexpr double kProbeUncertainty = 0.05;
 
 // Use probing to recover faster after large bitrate estimate drops.
@@ -198,6 +188,9 @@ std::vector<ProbeClusterConfig> ProbeController::OnNetworkAvailability(
   network_available_ = msg.network_available;
 
   if (!network_available_) {
+    pending_drop_recovery_.reset();
+    drop_recovery_cooldown_ = Timestamp::MinusInfinity();
+    pending_path_probe_.reset();
     state_ = State::kInit;
     min_bitrate_to_probe_further_ = DataRate::PlusInfinity();
     last_allowed_repeated_initial_probe_ = Timestamp::Zero();
@@ -250,11 +243,27 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateExponentialProbing(
 
 std::vector<ProbeClusterConfig> ProbeController::SetEstimatedBitrate(
     DataRate bitrate, BandwidthLimitedCause bandwidth_limited_cause,
-    Timestamp at_time) {
+    Timestamp at_time, bool recovery_network_healthy) {
   bandwidth_limited_cause_ = bandwidth_limited_cause;
+  recovery_network_healthy_ = recovery_network_healthy;
+  if (pending_drop_recovery_) {
+    auto& recovery = *pending_drop_recovery_;
+    const DataRate expected = recovery.reference_rate *
+                              kProbeFractionAfterDrop * (1 - kProbeUncertainty);
+    if (bitrate >= expected) {
+      if (recovery.recovered_since.IsInfinite())
+        recovery.recovered_since = at_time;
+    } else {
+      recovery.recovered_since = Timestamp::PlusInfinity();
+    }
+  }
   if (bitrate < kBitrateDropThreshold * estimated_bitrate_) {
-    time_of_last_large_drop_ = at_time;
-    bitrate_before_last_large_drop_ = estimated_bitrate_;
+    if (network_available_ && !pending_drop_recovery_ &&
+        at_time >= drop_recovery_cooldown_) {
+      pending_drop_recovery_ =
+          DropRecovery{estimated_bitrate_, at_time + kDropRecoveryWindow,
+                       at_time + TimeDelta::Millis(500)};
+    }
   }
   estimated_bitrate_ = bitrate;
   if (state_ == State::kWaitingForProbingResult) {
@@ -305,6 +314,9 @@ void ProbeController::SetRelayPath(bool relay_path) {
   }
 
   relay_path_ = relay_path;
+  pending_path_probe_.reset();
+  pending_drop_recovery_.reset();
+  drop_recovery_cooldown_ = Timestamp::MinusInfinity();
   config_ = ProbeControllerConfig();
   if (relay_path_) {
     // Starting from 1.5 Mbps, probe at 3 and 6 Mbps rather than the direct
@@ -339,6 +351,60 @@ void ProbeController::SetRelayPath(bool relay_path) {
       config_.repeated_initial_probing_time_period.ms());
 }
 
+std::vector<ProbeClusterConfig> ProbeController::RequestProbeOnPathChange(
+    Timestamp at_time) {
+  pending_drop_recovery_.reset();
+  if (relay_path_ || !network_available_ || estimated_bitrate_.IsZero()) {
+    return {};
+  }
+  if (!pending_path_probe_) {
+    pending_path_probe_ =
+        PathProbe{at_time + kPathProbeWindow, Timestamp::MinusInfinity(),
+                  std::nullopt, 0};
+  }
+  return MaybeProbeNewPath(at_time);
+}
+
+void ProbeController::OnProbeResult(int cluster_id, Timestamp at_time) {
+  if (pending_path_probe_ && pending_path_probe_->cluster_id == cluster_id &&
+      at_time <= pending_path_probe_->deadline) {
+    pending_path_probe_.reset();
+  }
+}
+
+std::vector<ProbeClusterConfig> ProbeController::MaybeProbeNewPath(
+    Timestamp at_time) {
+  if (!pending_path_probe_) return {};
+  if (!network_available_ || relay_path_) {
+    pending_path_probe_.reset();
+    return {};
+  }
+  if (at_time >= pending_path_probe_->deadline) {
+    pending_path_probe_.reset();
+    return {};
+  }
+  if (estimated_bitrate_.IsZero() || state_ != State::kProbingComplete ||
+      at_time - pending_path_probe_->last_probe_time <
+          kPathProbeRetryInterval) {
+    return {};
+  }
+  if (pending_path_probe_->attempts >= kMaxPathProbeAttempts) {
+    pending_path_probe_.reset();
+    return {};
+  }
+
+  // One step above the current estimate; further steps require feedback.
+  // InitiateProbing also enforces congestion and configured bitrate limits.
+  auto probes = InitiateProbing(
+      at_time, {estimated_bitrate_ * config_.alr_probe_scale}, true);
+  if (!probes.empty()) {
+    pending_path_probe_->cluster_id = probes.front().id;
+    pending_path_probe_->last_probe_time = at_time;
+    ++pending_path_probe_->attempts;
+  }
+  return probes;
+}
+
 void ProbeController::SetAlrStartTimeMs(
     std::optional<int64_t> alr_start_time_ms) {
   if (alr_start_time_ms) {
@@ -353,35 +419,45 @@ void ProbeController::SetAlrEndedTimeMs(int64_t alr_end_time_ms) {
 
 std::vector<ProbeClusterConfig> ProbeController::RequestProbe(
     Timestamp at_time) {
-  // Called once we have returned to normal state after a large drop in
-  // estimated bandwidth. The current response is to initiate a single probe
-  // session (if not already probing) at the previous bitrate.
-  //
-  // If the probe session fails, the assumption is that this drop was a
-  // real one from a competing flow or a network change.
-  bool in_alr = alr_start_time_.has_value();
-  bool alr_ended_recently =
-      (alr_end_time_.has_value() &&
-       at_time - alr_end_time_.value() < kAlrEndedTimeout);
-  if (in_alr || alr_ended_recently) {
-    if (state_ == State::kProbingComplete) {
-      DataRate suggested_probe =
-          kProbeFractionAfterDrop * bitrate_before_last_large_drop_;
-      DataRate min_expected_probe_result =
-          (1 - kProbeUncertainty) * suggested_probe;
-      TimeDelta time_since_drop = at_time - time_of_last_large_drop_;
-      TimeDelta time_since_probe = at_time - last_bwe_drop_probing_time_;
-      if (min_expected_probe_result > estimated_bitrate_ &&
-          time_since_drop < kBitrateDropTimeout &&
-          time_since_probe > kMinTimeBetweenAlrProbes) {
-        LOG_DEBUG("Detected big bandwidth drop, start probing");
-        last_bwe_drop_probing_time_ = at_time;
-        LOG_DEBUG("Initiate probing after bandwidth drop");
-        return InitiateProbing(at_time, {suggested_probe}, false);
-      }
-    }
+  return MaybeProbeAfterDrop(at_time);
+}
+
+std::vector<ProbeClusterConfig> ProbeController::MaybeProbeAfterDrop(
+    Timestamp at_time) {
+  if (!pending_drop_recovery_) return {};
+  auto& recovery = *pending_drop_recovery_;
+  // The estimator may revise the same cluster after more feedback arrives.
+  // Confirm the adopted media rate, not the first optimistic packet result.
+  if (recovery_network_healthy_ &&
+      bandwidth_limited_cause_ == BandwidthLimitedCause::kDelayBasedLimited &&
+      recovery.recovered_since.IsFinite() &&
+      at_time - recovery.recovered_since >= TimeDelta::Seconds(1)) {
+    pending_drop_recovery_.reset();
+    return {};
   }
-  return std::vector<ProbeClusterConfig>();
+  if (!network_available_ || at_time >= recovery.deadline ||
+      (recovery.attempts >= kMaxDropRecoveryAttempts &&
+       at_time >= recovery.next_attempt &&
+       recovery.recovered_since.IsInfinite())) {
+    pending_drop_recovery_.reset();
+    drop_recovery_cooldown_ = at_time + kDropRecoveryWindow;
+    return {};
+  }
+  if (!recovery_network_healthy_ ||
+      bandwidth_limited_cause_ != BandwidthLimitedCause::kDelayBasedLimited ||
+      recovery.recovered_since.IsFinite() || pending_path_probe_ ||
+      state_ != State::kProbingComplete || at_time < recovery.next_attempt) {
+    return {};
+  }
+  // Probe capacity rather than raising the media rate without evidence. The
+  // normal congestion and configured-rate limits still apply to this burst.
+  auto probes = InitiateProbing(
+      at_time, {recovery.reference_rate * kProbeFractionAfterDrop}, false);
+  recovery.next_attempt = at_time + kDropRecoveryInterval;
+  if (!probes.empty()) {
+    ++recovery.attempts;
+  }
+  return probes;
 }
 
 void ProbeController::SetNetworkStateEstimate(
@@ -390,6 +466,10 @@ void ProbeController::SetNetworkStateEstimate(
 }
 
 void ProbeController::Reset(Timestamp at_time) {
+  pending_path_probe_.reset();
+  pending_drop_recovery_.reset();
+  drop_recovery_cooldown_ = Timestamp::MinusInfinity();
+  recovery_network_healthy_ = true;
   bandwidth_limited_cause_ = BandwidthLimitedCause::kDelayBasedLimited;
   state_ = State::kInit;
   min_bitrate_to_probe_further_ = DataRate::PlusInfinity();
@@ -398,11 +478,7 @@ void ProbeController::Reset(Timestamp at_time) {
   network_estimate_ = std::nullopt;
   start_bitrate_ = DataRate::Zero();
   max_bitrate_ = kDefaultMaxProbingBitrate;
-  Timestamp now = at_time;
-  last_bwe_drop_probing_time_ = now;
   alr_end_time_.reset();
-  time_of_last_large_drop_ = now;
-  bitrate_before_last_large_drop_ = DataRate::Zero();
 }
 
 bool ProbeController::TimeForAlrProbe(Timestamp at_time) const {
@@ -473,6 +549,9 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
     }
   }
 
+  auto path_probes = MaybeProbeNewPath(at_time);
+  if (!path_probes.empty()) return path_probes;
+  if (pending_drop_recovery_) return MaybeProbeAfterDrop(at_time);
   if (estimated_bitrate_.IsZero() || state_ != State::kProbingComplete) {
     return {};
   }

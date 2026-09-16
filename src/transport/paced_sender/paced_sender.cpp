@@ -8,13 +8,17 @@
 namespace minirtc {
 namespace {
 
-webrtc::PacingController::Configuration LowLatencyPacingConfiguration() {
+webrtc::PacingController::Configuration LowLatencyPacingConfiguration(
+    bool bounded_video_queue) {
   auto configuration =
       webrtc::PacingController::DefaultConfiguration();
   // A fresh key frame supersedes queued desktop deltas. Flushing those older
   // packets prevents a recovery frame from sitting behind content that can no
   // longer be decoded usefully.
   configuration.keyframe_flushing = true;
+  // Frame admission and key-frame size limits bound desktop queues. Draining
+  // them faster than the configured pacing rate would undo those budgets.
+  configuration.drain_large_queues = !bounded_video_queue;
   return configuration;
 }
 
@@ -24,10 +28,12 @@ const int PacedSender::kNoPacketHoldback = -1;
 
 PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
                          std::shared_ptr<webrtc::Clock> clock,
-                         std::shared_ptr<TaskQueue> task_queue)
+                         std::shared_ptr<TaskQueue> task_queue,
+                         bool bounded_video_queue)
     : ice_agent_(ice_agent),
       clock_(clock),
-      pacing_controller_(clock.get(), this, LowLatencyPacingConfiguration()),
+      pacing_controller_(clock.get(), this,
+                         LowLatencyPacingConfiguration(bounded_video_queue)),
       max_hold_back_window_(webrtc::TimeDelta::Millis(5)),
       max_hold_back_window_in_packets_(3),
       next_process_time_(webrtc::Timestamp::MinusInfinity()),

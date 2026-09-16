@@ -126,7 +126,7 @@ class ProbeController {
 
   std::vector<ProbeClusterConfig> SetEstimatedBitrate(
       DataRate bitrate, BandwidthLimitedCause bandwidth_limited_cause,
-      Timestamp at_time);
+      Timestamp at_time, bool recovery_network_healthy = true);
 
   void EnablePeriodicAlrProbing(bool enable);
 
@@ -141,6 +141,14 @@ class ProbeController {
   // Keep the default WebRTC profile for direct paths and select a gentler
   // profile only after ICE confirms that the active pair is relayed.
   void SetRelayPath(bool relay_path);
+
+  // Probe a newly selected direct path without changing the media target.
+  // Retry briefly if probing is blocked or a probe produces no valid feedback.
+  std::vector<ProbeClusterConfig> RequestProbeOnPathChange(Timestamp at_time);
+
+  // Only an actual, valid estimate for the outstanding cluster completes the
+  // path probe. Ordinary BWE updates or feedback for an older path do not.
+  void OnProbeResult(int cluster_id, Timestamp at_time);
 
   void SetAlrStartTimeMs(std::optional<int64_t> alr_start_time);
   void SetAlrEndedTimeMs(int64_t alr_end_time);
@@ -175,12 +183,31 @@ class ProbeController {
   bool TimeForAlrProbe(Timestamp at_time) const;
   bool TimeForNetworkStateProbe(Timestamp at_time) const;
   bool TimeForNextRepeatedInitialProbe(Timestamp at_time) const;
+  std::vector<ProbeClusterConfig> MaybeProbeNewPath(Timestamp at_time);
+  std::vector<ProbeClusterConfig> MaybeProbeAfterDrop(Timestamp at_time);
   ProbeClusterConfig CreateProbeClusterConfig(Timestamp at_time,
                                               DataRate bitrate);
 
   bool network_available_;
   bool repeated_initial_probing_enabled_ = false;
   bool relay_path_ = false;
+  struct PathProbe {
+    Timestamp deadline;
+    Timestamp last_probe_time = Timestamp::MinusInfinity();
+    std::optional<int> cluster_id;
+    int attempts = 0;
+  };
+  std::optional<PathProbe> pending_path_probe_;
+  struct DropRecovery {
+    DataRate reference_rate;
+    Timestamp deadline;
+    Timestamp next_attempt;
+    Timestamp recovered_since = Timestamp::PlusInfinity();
+    int attempts = 0;
+  };
+  std::optional<DropRecovery> pending_drop_recovery_;
+  Timestamp drop_recovery_cooldown_ = Timestamp::MinusInfinity();
+  bool recovery_network_healthy_ = true;
   Timestamp last_allowed_repeated_initial_probe_ = Timestamp::MinusInfinity();
   BandwidthLimitedCause bandwidth_limited_cause_ =
       BandwidthLimitedCause::kDelayBasedLimited;
@@ -191,12 +218,9 @@ class ProbeController {
   std::optional<webrtc::NetworkStateEstimate> network_estimate_;
   DataRate start_bitrate_ = DataRate::Zero();
   DataRate max_bitrate_ = DataRate::PlusInfinity();
-  Timestamp last_bwe_drop_probing_time_ = Timestamp::Zero();
   std::optional<Timestamp> alr_start_time_;
   std::optional<Timestamp> alr_end_time_;
   bool enable_periodic_alr_probing_;
-  Timestamp time_of_last_large_drop_ = Timestamp::MinusInfinity();
-  DataRate bitrate_before_last_large_drop_ = DataRate::Zero();
   DataRate max_total_allocated_bitrate_ = DataRate::Zero();
 
   int32_t next_probe_cluster_id_ = 1;

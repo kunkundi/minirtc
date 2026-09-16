@@ -36,6 +36,7 @@ constexpr TimeDelta kSendTimeGroupLength = TimeDelta::Millis(5);
 // This ssrc is used to fulfill the current API but will be removed
 // after the API has been changed.
 constexpr uint32_t kFixedSsrc = 0;
+
 }  // namespace
 
 constexpr char BweSeparateAudioPacketsSettings::kKey[];
@@ -97,6 +98,16 @@ DelayBasedBwe::Result DelayBasedBwe::IncomingPacketFeedbackVector(
   rate_control_.SetInApplicationLimitedRegion(in_alr);
   return MaybeUpdateEstimate(acked_bitrate, probe_bitrate,
                              recovered_from_overuse, in_alr, msg.feedback_time);
+}
+
+DelayBasedBwe::Result DelayBasedBwe::ApplyProbeResult(
+    DataRate bitrate, Timestamp at_time, std::optional<DataRate> acked_bitrate,
+    bool in_alr) {
+  if (active_delay_detector_->State() == BandwidthUsage::kBwOverusing) {
+    return Result();
+  }
+  rate_control_.SetInApplicationLimitedRegion(in_alr);
+  return MaybeUpdateEstimate(acked_bitrate, bitrate, false, in_alr, at_time);
 }
 
 void DelayBasedBwe::IncomingPacketFeedback(const PacketResult& packet_feedback,

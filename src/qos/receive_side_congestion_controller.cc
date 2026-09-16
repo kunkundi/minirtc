@@ -71,7 +71,14 @@ ReceiveSideCongestionController::ReceiveSideCongestionController(
     RembThrottler::RembSender remb_sender)
     : clock_(clock),
       remb_throttler_(std::move(remb_sender), clock.get()),
-      congestion_control_feedback_generator_(clock, feedback_sender),
+      feedback_sender_(std::move(feedback_sender)),
+      congestion_control_feedback_generator_(
+          clock,
+          [this](std::vector<std::unique_ptr<RtcpPacket>> packets) {
+            for (auto& packet : packets) {
+              pending_feedback_.push_back(std::move(packet));
+            }
+          }),
       // rbe_(std::make_unique<RemoteBitrateEstimatorSingleStream>(
       //     clock, &remb_throttler_)),
       rbe_(std::make_unique<RemoteBitrateEstimatorAbsSendTime>(
@@ -81,20 +88,47 @@ ReceiveSideCongestionController::ReceiveSideCongestionController(
 
 void ReceiveSideCongestionController::OnReceivedPacket(
     const RtpPacketReceived& packet, MediaType media_type) {
-  congestion_control_feedback_generator_.OnReceivedPacket(packet);
-  return;
+  {
+    std::lock_guard<std::mutex> lock(feedback_mutex_);
+    congestion_control_feedback_generator_.OnReceivedPacket(packet);
+  }
+  SendPendingFeedback();
 }
 
 void ReceiveSideCongestionController::OnBitrateChanged(int bitrate_bps) {
+  std::lock_guard<std::mutex> lock(feedback_mutex_);
   DataRate send_bandwidth_estimate = DataRate::BitsPerSec(bitrate_bps);
   congestion_control_feedback_generator_.OnSendBandwidthEstimateChanged(
       send_bandwidth_estimate);
 }
 
 TimeDelta ReceiveSideCongestionController::MaybeProcess() {
-  Timestamp now = clock_->CurrentTime();
-  TimeDelta time_until = congestion_control_feedback_generator_.Process(now);
+  TimeDelta time_until;
+  {
+    std::lock_guard<std::mutex> lock(feedback_mutex_);
+    time_until =
+        congestion_control_feedback_generator_.Process(clock_->CurrentTime());
+  }
+  SendPendingFeedback();
   return std::max(time_until, TimeDelta::Zero());
+}
+
+void ReceiveSideCongestionController::SendPendingFeedback() {
+  std::unique_lock<std::mutex> lock(feedback_mutex_);
+  if (sending_feedback_) {
+    return;
+  }
+  sending_feedback_ = true;
+  while (!pending_feedback_.empty()) {
+    std::vector<std::unique_ptr<RtcpPacket>> feedback;
+    feedback.swap(pending_feedback_);
+    // One drainer preserves report timestamp order. Other callers can keep
+    // recording arrivals while the transport runs, including reentrant calls.
+    lock.unlock();
+    feedback_sender_(std::move(feedback));
+    lock.lock();
+  }
+  sending_feedback_ = false;
 }
 
 void ReceiveSideCongestionController::SetMaxDesiredReceiveBitrate(
@@ -104,6 +138,7 @@ void ReceiveSideCongestionController::SetMaxDesiredReceiveBitrate(
 
 void ReceiveSideCongestionController::SetTransportOverhead(
     DataSize overhead_per_packet) {
+  std::lock_guard<std::mutex> lock(feedback_mutex_);
   congestion_control_feedback_generator_.SetTransportOverhead(
       overhead_per_packet);
 }

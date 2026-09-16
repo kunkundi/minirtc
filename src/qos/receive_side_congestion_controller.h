@@ -14,6 +14,7 @@
 #include <cstdint>
 #include <memory>
 #include <mutex>
+#include <vector>
 
 #include "api/media_types.h"
 #include "api/units/data_rate.h"
@@ -71,10 +72,17 @@ class ReceiveSideCongestionController : public CallStatsObserver {
 
  private:
   void PickEstimator();
+  void SendPendingFeedback();
 
   std::shared_ptr<Clock> clock_;
   RembThrottler remb_throttler_;
 
+  // RTP arrival and periodic RTCP processing can run on different threads.
+  // Collect feedback under this lock, then invoke the transport outside it.
+  std::mutex feedback_mutex_;
+  RtpTransportFeedbackGenerator::RtcpSender feedback_sender_;
+  std::vector<std::unique_ptr<RtcpPacket>> pending_feedback_;
+  bool sending_feedback_ = false;
   CongestionControlFeedbackGenerator congestion_control_feedback_generator_;
 
   mutable std::mutex mutex_;

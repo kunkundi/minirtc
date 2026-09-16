@@ -33,7 +33,8 @@ class ProbeBitrateEstimator {
   std::optional<DataRate> HandleProbeAndEstimateBitrate(
       const PacketResult& packet_feedback);
 
-  std::optional<DataRate> FetchAndResetLastEstimatedBitrate();
+  std::optional<DataRate> FetchAndResetLastEstimatedBitrate(
+      int* cluster_id = nullptr);
 
   // Removes incomplete probe feedback even if no further feedback arrives.
   void RemoveExpiredClusters(Timestamp timestamp);
@@ -60,6 +61,7 @@ class ProbeBitrateEstimator {
   // recreating a removed cluster without retaining an unbounded id set.
   std::optional<int> max_expired_cluster_id_;
   std::optional<DataRate> estimated_data_rate_;
+  int estimated_cluster_id_ = -1;
 };
 
 }  // namespace webrtc

@@ -33,7 +33,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
 
   PacedSender(std::shared_ptr<IceAgent> ice_agent,
               std::shared_ptr<webrtc::Clock> clock,
-              std::shared_ptr<TaskQueue> task_queue);
+              std::shared_ptr<TaskQueue> task_queue,
+              bool bounded_video_queue = false);
   ~PacedSender();
 
  public:

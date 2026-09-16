@@ -26,6 +26,8 @@ constexpr double kProbeDropThroughputFraction = 0.85;
 
 constexpr DataRate kDirectStartingRate = DataRate::BitsPerSec(2500000);
 constexpr DataRate kRelayStartingRate = DataRate::BitsPerSec(1500000);
+constexpr TimeDelta kProbeEstimateSettleTime = TimeDelta::Millis(100);
+
 }  // namespace
 
 BandwidthLimitedCause GetBandwidthLimitedCause(LossBasedState loss_based_state,
@@ -118,6 +120,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
     return update;
   }
 
+  pending_probe_.reset();
   relay_path_ = relay_path;
   probe_controller_->SetRelayPath(relay_path);
   const DataRate desired_starting_rate =
@@ -133,9 +136,10 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   }
 
   // Lower an established controller immediately when ICE moves onto a relay.
-  // Do not force a mid-session upward jump when a direct pair replaces TURN;
-  // the estimator can ramp up safely using the restored direct probe profile.
+  // On a new direct path, measure the available headroom before raising media.
   if (!relay_path_ && network_available_) {
+    update.probe_cluster_configs =
+        probe_controller_->RequestProbeOnPathChange(at_time);
     LOG_INFO("Congestion-control probe profile updated: path=direct "
              "starting_bitrate_unchanged_bps={}",
              bandwidth_estimation_->target_rate().bps());
@@ -159,6 +163,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
 NetworkControlUpdate CongestionControl::OnNetworkAvailability(
     NetworkAvailability msg) {
   network_available_ = msg.network_available;
+  if (!network_available_) pending_probe_.reset();
   NetworkControlUpdate update;
   update.probe_cluster_configs = probe_controller_->OnNetworkAvailability(msg);
   return update;
@@ -203,7 +208,74 @@ NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
   update.congestion_window = current_data_window_;
 
   MaybeTriggerOnNetworkChanged(&update, msg.at_time);
+  MaybeApplyPendingProbe(&update, msg.at_time);
   return update;
+}
+
+bool CongestionControl::ProbeNetworkHealthy() const {
+  const TimeDelta rtt = bandwidth_estimation_->round_trip_time();
+  return network_available_ &&
+         delay_based_bwe_->last_state() != BandwidthUsage::kBwOverusing &&
+         bandwidth_estimation_->fraction_loss() / 255.0 < 0.05 &&
+         rtt.IsFinite() && rtt < TimeDelta::Millis(300);
+}
+
+std::optional<DataRate> CongestionControl::FilterProbeResult(
+    DataRate bitrate, int probe_id, Timestamp at_time) {
+  if (pending_probe_ && pending_probe_->id != probe_id) {
+    pending_probe_.reset();
+  }
+  if (!ProbeNetworkHealthy()) {
+    pending_probe_.reset();
+    return bitrate;
+  }
+  const DataRate reference =
+      pending_probe_ ? pending_probe_->reference : last_loss_based_target_rate_;
+  // Compare against the capped media target, not a raw delay estimate that
+  // may exceed the configured maximum. Small revisions remain immediate.
+  if (probe_id <= last_settled_probe_id_ || reference <= DataRate::Zero() ||
+      bitrate >= reference * 0.90) {
+    pending_probe_.reset();
+    return bitrate;
+  }
+  if (pending_probe_) {
+    // Revisions update the candidate, never the original deadline.
+    pending_probe_->bitrate = bitrate;
+  } else {
+    pending_probe_ = PendingProbe{probe_id, bitrate, reference,
+                                  at_time + kProbeEstimateSettleTime};
+  }
+  return std::nullopt;
+}
+
+void CongestionControl::MaybeApplyPendingProbe(NetworkControlUpdate* update,
+                                               Timestamp at_time) {
+  if (!pending_probe_) return;
+  if (!ProbeNetworkHealthy()) {
+    pending_probe_.reset();
+    return;
+  }
+  if (at_time < pending_probe_->deadline) return;
+  if (at_time - pending_probe_->deadline > TimeDelta::Seconds(1)) {
+    pending_probe_.reset();
+    return;
+  }
+  const PendingProbe probe = *pending_probe_;
+  pending_probe_.reset();
+  last_settled_probe_id_ = probe.id;
+  // Ordinary delay/loss feedback continues throughout the settling window.
+  // Do not use an old candidate to undo a newer congestion-driven reduction.
+  if (bandwidth_estimation_->target_rate() < probe.bitrate) {
+    return;
+  }
+  const auto result = delay_based_bwe_->ApplyProbeResult(
+      probe.bitrate, at_time, acknowledged_bitrate_estimator_->bitrate(),
+      alr_detector_->GetApplicationLimitedRegionStartTime().has_value());
+  if (!result.updated || !result.probe) return;
+  bandwidth_estimation_->SetSendBitrate(result.target_bitrate, at_time);
+  bandwidth_estimation_->UpdateDelayBasedEstimate(at_time,
+                                                  result.target_bitrate);
+  MaybeTriggerOnNetworkChanged(update, at_time);
 }
 
 void CongestionControl::ClampConstraints() {
@@ -226,6 +298,7 @@ void CongestionControl::ClampConstraints() {
 
 std::vector<ProbeClusterConfig> CongestionControl::ResetConstraints(
     TargetRateConstraints new_constraints) {
+  pending_probe_.reset();
   min_target_rate_ = new_constraints.min_data_rate.value_or(DataRate::Zero());
   max_data_rate_ =
       new_constraints.max_data_rate.value_or(DataRate::PlusInfinity());
@@ -357,12 +430,19 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   for (const auto& feedback : report.SortedByReceiveTime()) {
     if (feedback.sent_packet.pacing_info.probe_cluster_id !=
         PacedPacketInfo::kNotAProbe) {
-      probe_bitrate_estimator_->HandleProbeAndEstimateBitrate(feedback);
+      auto probe_result =
+          probe_bitrate_estimator_->HandleProbeAndEstimateBitrate(feedback);
+      if (probe_result) {
+        probe_controller_->OnProbeResult(
+            feedback.sent_packet.pacing_info.probe_cluster_id,
+            report.feedback_time);
+      }
     }
   }
 
+  int probe_id = -1;
   std::optional<DataRate> probe_bitrate =
-      probe_bitrate_estimator_->FetchAndResetLastEstimatedBitrate();
+      probe_bitrate_estimator_->FetchAndResetLastEstimatedBitrate(&probe_id);
   if (limit_probes_lower_than_throughput_estimate_ && probe_bitrate &&
       acknowledged_bitrate) {
     // Limit the backoff to something slightly below the acknowledged
@@ -376,6 +456,11 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
         std::min(delay_based_bwe_->last_estimate(),
                  *acknowledged_bitrate * kProbeDropThroughputFraction);
     probe_bitrate = std::max(*probe_bitrate, limit);
+  }
+
+  if (probe_bitrate) {
+    probe_bitrate =
+        FilterProbeResult(*probe_bitrate, probe_id, report.feedback_time);
   }
 
   NetworkControlUpdate update;
@@ -398,12 +483,14 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   bandwidth_estimation_->UpdateLossBasedEstimator(
       report, result.delay_detector_state, probe_bitrate,
       alr_start_time.has_value());
+  if (!ProbeNetworkHealthy()) pending_probe_.reset();
   if (result.updated) {
     // Update the estimate in the ProbeController, in case we want to probe.
     MaybeTriggerOnNetworkChanged(&update, report.feedback_time);
   }
 
   recovered_from_overuse = result.recovered_from_overuse;
+  MaybeApplyPendingProbe(&update, report.feedback_time);
 
   if (recovered_from_overuse) {
     probe_controller_->SetAlrStartTimeMs(alr_start_time);
@@ -450,7 +537,11 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
       bandwidth_estimation_->GetEstimatedLinkCapacity();
   stable_target_rate = std::min(stable_target_rate, pushback_target_rate);
 
+  const bool in_alr =
+      alr_detector_->GetApplicationLimitedRegionStartTime().has_value();
+
   if ((loss_based_target_rate != last_loss_based_target_rate_) ||
+      in_alr != last_reported_in_alr_ ||
       (loss_based_state != last_loss_base_state_) ||
       (fraction_loss != last_estimated_fraction_loss_) ||
       (round_trip_time != last_estimated_round_trip_time_) ||
@@ -462,6 +553,7 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
     last_estimated_round_trip_time_ = round_trip_time;
     last_stable_target_rate_ = stable_target_rate;
     last_loss_base_state_ = loss_based_state;
+    last_reported_in_alr_ = in_alr;
 
     alr_detector_->SetEstimatedBitrate(loss_based_target_rate.bps());
 
@@ -481,11 +573,7 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
     target_rate_msg.network_estimate.round_trip_time = round_trip_time;
     target_rate_msg.network_estimate.loss_rate_ratio = fraction_loss / 255.0f;
     target_rate_msg.network_estimate.bwe_period = bwe_period;
-    {
-      std::optional<int64_t> alr_start_time =
-          alr_detector_->GetApplicationLimitedRegionStartTime();
-      target_rate_msg.network_estimate.in_alr = alr_start_time.has_value();
-    }
+    target_rate_msg.network_estimate.in_alr = in_alr;
 
     update->target_rate = target_rate_msg;
 
@@ -494,7 +582,9 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
         GetBandwidthLimitedCause(bandwidth_estimation_->loss_based_state(),
                                  bandwidth_estimation_->IsRttAboveLimit(),
                                  delay_based_bwe_->last_state()),
-        at_time);
+        at_time,
+        fraction_loss / 255.0 < 0.05 && round_trip_time.IsFinite() &&
+            round_trip_time < TimeDelta::Millis(300));
     update->probe_cluster_configs.insert(update->probe_cluster_configs.end(),
                                          probes.begin(), probes.end());
     update->pacer_config = GetPacingRates(at_time);

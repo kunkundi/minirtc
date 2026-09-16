@@ -49,6 +49,10 @@ class CongestionControl {
   std::vector<ProbeClusterConfig> ResetConstraints(
       TargetRateConstraints new_constraints);
   PacerConfig GetPacingRates(Timestamp at_time) const;
+  bool ProbeNetworkHealthy() const;
+  std::optional<DataRate> FilterProbeResult(DataRate bitrate, int probe_id,
+                                            Timestamp at_time);
+  void MaybeApplyPendingProbe(NetworkControlUpdate* update, Timestamp at_time);
 
  private:
   const bool packet_feedback_only_;
@@ -87,7 +91,7 @@ class CongestionControl {
   std::deque<int64_t> feedback_max_rtts_;
 
   DataRate last_loss_based_target_rate_;
-  DataRate last_pushback_target_rate_;
+  DataRate last_pushback_target_rate_ = DataRate::Zero();
   DataRate last_stable_target_rate_;
   LossBasedState last_loss_base_state_;
 
@@ -99,8 +103,18 @@ class CongestionControl {
   DataRate max_padding_rate_;
 
   bool previously_in_alr_ = false;
+  bool last_reported_in_alr_ = false;
   bool network_available_ = false;
   bool relay_path_ = false;
+
+  struct PendingProbe {
+    int id;
+    DataRate bitrate;
+    DataRate reference;
+    Timestamp deadline;
+  };
+  std::optional<PendingProbe> pending_probe_;
+  int last_settled_probe_id_ = -1;
 
   std::optional<DataSize> current_data_window_;
 };

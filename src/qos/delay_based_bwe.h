@@ -66,6 +66,9 @@ class DelayBasedBwe {
                                       std::optional<DataRate> probe_bitrate,
                                       bool in_alr);
   void OnRttUpdate(TimeDelta avg_rtt);
+  // Apply a settled probe without replaying packet feedback into the detector.
+  Result ApplyProbeResult(DataRate bitrate, Timestamp at_time,
+                          std::optional<DataRate> acked_bitrate, bool in_alr);
   bool LatestEstimate(std::vector<uint32_t>* ssrcs, DataRate* bitrate) const;
   void SetStartBitrate(DataRate start_bitrate);
   void SetMinBitrate(DataRate min_bitrate);

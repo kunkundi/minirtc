@@ -1332,14 +1332,22 @@ void RtpVideoReceiver::StopRtcp() {
 }
 
 void RtpVideoReceiver::RtcpThread() {
+  auto feedback_delay = std::chrono::milliseconds(25);
   while (!rtcp_stop_.load()) {
     std::unique_lock<std::mutex> lock(rtcp_mtx_);
-    if (rtcp_cv_.wait_for(
-        lock, std::chrono::milliseconds(rtcp_scheduler_interval_ms_),
-        [&]() { return rtcp_stop_.load(); })) {
+    if (rtcp_cv_.wait_for(lock, feedback_delay,
+                          [&]() { return rtcp_stop_.load(); })) {
       break;
     }
     lock.unlock();
+
+    // Flush the last packets of a short probe even if no more RTP arrives.
+    // Keep receiver reports on their existing cadence while honoring the
+    // congestion feedback generator's earlier deadline.
+    const auto next_feedback =
+        receive_side_congestion_controller_.MaybeProcess();
+    feedback_delay = std::chrono::milliseconds(std::clamp<int64_t>(
+        next_feedback.ms(), 1, rtcp_scheduler_interval_ms_));
 
     auto now = std::chrono::steady_clock::now();
     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(

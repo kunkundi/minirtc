@@ -169,12 +169,20 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     res = kTargetUtilizationFraction * receive_rate;
   }
 
-  estimated_data_rate_ = res;
-  return estimated_data_rate_;
+  // Late feedback may revise an older cluster after a newer one was consumed.
+  // Report that revision to its own observer, but never adopt it as the newest
+  // network estimate.
+  if (cluster_id >= estimated_cluster_id_) {
+    estimated_data_rate_ = res;
+    estimated_cluster_id_ = cluster_id;
+  }
+  return res;
 }
 
 std::optional<DataRate>
-ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate() {
+ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate(int* cluster_id) {
+  if (cluster_id)
+    *cluster_id = estimated_data_rate_ ? estimated_cluster_id_ : -1;
   std::optional<DataRate> estimated_data_rate = estimated_data_rate_;
   estimated_data_rate_.reset();
   return estimated_data_rate;
