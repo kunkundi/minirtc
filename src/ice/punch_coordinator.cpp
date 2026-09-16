@@ -70,15 +70,24 @@ void PunchNegotiation::Tick(int64_t now) {
     Stop("timeout");
     return;
   }
+  if (state_ == State::Allocating) {
+    const auto result = hooks_.poll_prepare();
+    if (state_ == State::Stopped) return;
+    if (result == Preparation::Failed)
+      Stop("resources");
+    else if (result == Preparation::Ready)
+      FinishPreparation(now);
+    return;
+  }
   if (pending_.empty() || now < retry_at_) return;
   if (retries_ == 3) {
     // Exhausting HELLO sends is not the ICE upgrade deadline. A peer may
     // still be finishing normal checks before it can begin negotiation.
     // Keep receiving authenticated messages, with the same snapshot, replay
     // window and original deadline; never allocate or send more on this timer.
-    if (pending_kind_ == Kind::Hello)
+    if (pending_kind_ == Kind::Hello) {
       pending_.clear();
-    else
+    } else
       Stop("timeout");
     return;
   }
@@ -93,6 +102,30 @@ void PunchNegotiation::Start(int64_t now) {
   if (state_ == State::Probing || state_ == State::Stopped) return;
   state_ = State::Probing;
   if (hooks_.start) hooks_.start(round_, plan_, now);
+}
+void PunchNegotiation::BeginPreparation(int64_t now) {
+  state_ = State::Allocating;
+  pending_.clear();
+  if (!hooks_.prepare(plan_)) {
+    Stop("resources");
+    return;
+  }
+  if (!hooks_.poll_prepare) FinishPreparation(now);
+}
+void PunchNegotiation::FinishPreparation(int64_t now) {
+  if (state_ != State::Allocating) return;
+  digest_ = Digest(ControlPayload(Kind::Prepare, plan_));
+  if (offer_) {
+    prepare_ = Make(Kind::Prepare, plan_);
+    state_ = State::Preparing;
+    Emit(hello_);
+    Pending(Kind::Prepare, prepare_, now);
+  } else {
+    ready_ =
+        Make(Kind::Ready, {{"digest", digest_}, {"budget", plan_["budget"]}});
+    state_ = State::Ready;
+    Pending(Kind::Ready, ready_, now);
+  }
 }
 void PunchNegotiation::Receive(const uint8_t* data, size_t size, int64_t now) {
   if (state_ == State::Idle || state_ == State::Stopped) return;
@@ -154,15 +187,7 @@ void PunchNegotiation::Receive(const uint8_t* data, size_t size, int64_t now) {
       Stop("resources", false);
       return;
     }
-    if (!hooks_.prepare(plan_)) {
-      Stop("resources");
-      return;
-    }
-    digest_ = Digest(ControlPayload(Kind::Prepare, plan_));
-    prepare_ = Make(Kind::Prepare, plan_);
-    state_ = State::Preparing;
-    Emit(hello_);
-    Pending(Kind::Prepare, prepare_, now);
+    BeginPreparation(now);
     return;
   }
   if (kind == Kind::Prepare && !offer_) {
@@ -185,15 +210,7 @@ void PunchNegotiation::Receive(const uint8_t* data, size_t size, int64_t now) {
       return;  // No peer-authorized arbitrary IP/budget.
     round_ = packet->round;
     plan_ = value;
-    if (!hooks_.prepare(plan_)) {
-      Stop("resources");
-      return;
-    }
-    digest_ = Digest(packet->payload);
-    ready_ =
-        Make(Kind::Ready, {{"digest", digest_}, {"budget", plan_["budget"]}});
-    state_ = State::Ready;
-    Pending(Kind::Ready, ready_, now);
+    BeginPreparation(now);
     return;
   }
   if (kind == Kind::Ready && offer_) {

@@ -89,7 +89,7 @@ Json PunchBudgetJson(const PunchConfig& c) {
 }
 std::optional<Json> PunchHello(const PunchMappingSnapshot& s,
                                const PunchConfig& c, uint64_t gen, int64_t now,
-                               int64_t remaining) {
+                               int64_t remaining, bool retry) {
   if (!c.enabled() || !c.Validate() || remaining <= 0 || remaining > 30000 ||
       ClassifyPunchMapping(s, gen, now, c.mapping_sample_max_age_ms) ==
           PunchMapping::Unknown)
@@ -129,7 +129,7 @@ std::optional<Json> PunchHello(const PunchMappingSnapshot& s,
                 {"samples", samples},
                 {"budget", PunchBudgetJson(c)},
                 {"remaining_ms", remaining},
-                {"mode", "pool-wide"}};
+                {"mode", retry ? "pool-wide-retry" : "pool-wide"}};
   if (ControlPayload(Kind::Hello, hello).empty()) return {};
   return hello;
 }

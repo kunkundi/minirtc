@@ -7,6 +7,7 @@
 #ifndef _PUNCH_SCHEDULER_H_
 #define _PUNCH_SCHEDULER_H_
 
+#include <algorithm>
 #include <set>
 
 #include "punch_config.h"
@@ -41,7 +42,8 @@ std::optional<PunchMappingSnapshot> SelectPunchMapping(
 punch::Json PunchBudgetJson(const PunchConfig&);
 std::optional<punch::Json> PunchHello(const PunchMappingSnapshot&,
                                       const PunchConfig&, uint64_t generation,
-                                      int64_t now_ms, int64_t remaining_ms);
+                                      int64_t now_ms, int64_t remaining_ms,
+                                      bool retry = false);
 // Inputs are already schema/authentication checked. Agreement is deterministic
 // from both HELLOs; each endpoint still enforces its own actual deadline.
 std::optional<punch::Json> MakePunchPlan(const punch::Json& offer,
@@ -70,22 +72,43 @@ class PunchTokenBucket {
 };
 class PunchProbeBudget {
  public:
-  PunchProbeBudget(const PunchConfig& c, int64_t now_ms)
+  static uint32_t ProbeLimit(const PunchConfig& c, uint32_t ack_reserve) {
+    return c.probe_packet_budget -
+           std::min(ack_reserve, c.probe_packet_budget / 8);
+  }
+  // Reserve ACK capacity inside each attempt's existing packet limit. The
+  // retry mode permits at most two such limits; rate tokens never reset.
+  PunchProbeBudget(const PunchConfig& c, int64_t now_ms, bool retry = false,
+                   uint32_t ack_reserve = 0)
       : bucket_(c.probe_pps, c.burst_packets, now_ms),
-        limit_(c.probe_packet_budget) {}
-  bool Take(int64_t now_ms) {
-    if (attempts_ >= limit_ || !bucket_.Take(now_ms)) return false;
+        limit_(c.probe_packet_budget),
+        probe_limit_(ProbeLimit(c, ack_reserve)),
+        max_rounds_(retry ? 2 : 1) {}
+  bool Take(int64_t now_ms, bool ack = false) {
+    if (!Ready(now_ms, ack) || !bucket_.Take(now_ms)) return false;
     ++attempts_;
+    if (!ack) ++probes_;
     return true;
   }
-  bool Ready(int64_t now_ms) {
-    return attempts_ < limit_ && bucket_.Available(now_ms);
+  bool Ready(int64_t now_ms, bool ack = false) {
+    return attempts_ < limit_ && (ack || probes_ < probe_limit_) &&
+           bucket_.Available(now_ms);
   }
-  bool exhausted() const { return attempts_ >= limit_; }
+  bool exhausted() const {
+    return attempts_ >= limit_ || probes_ >= probe_limit_;
+  }
+  bool NextAttempt() {
+    if (round_ >= max_rounds_) return false;
+    ++round_;
+    attempts_ = probes_ = 0;
+    return true;
+  }
+  uint32_t probe_limit() const { return probe_limit_; }
 
  private:
   PunchTokenBucket bucket_;
-  uint32_t attempts_ = 0, limit_;
+  uint32_t attempts_ = 0, probes_ = 0, limit_, probe_limit_;
+  uint32_t round_ = 1, max_rounds_;
 };
 // Peek/Commit permits ACKs to consume the shared budget before scheduled
 // probes.

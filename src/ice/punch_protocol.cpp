@@ -86,7 +86,7 @@ bool Schema(Kind kind, const Json& j) {
     case Kind::Hello: {
       if (!Fields(j, {"base", "samples", "budget", "remaining_ms", "mode"}) ||
           !Budget(j["budget"]) || !Number(j["remaining_ms"], 1, 30000) ||
-          j["mode"] != "pool-wide")
+          (j["mode"] != "pool-wide" && j["mode"] != "pool-wide-retry"))
         return false;
       const auto& base = j["base"];
       if (!Fields(base, {"ip", "port", "socket", "foundation", "component"}) ||

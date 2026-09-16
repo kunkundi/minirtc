@@ -165,6 +165,9 @@ class IceAgent {
                                   const gchar* server_ip, guint server_port,
                                   guint sequence, gpointer data);
   void ProbePredictedRemoteCandidates();
+  int64_t relay_selected_ms_ = 0;
+  static void OnNiceSelectedPairStatic(NiceAgent*, guint, guint, const char*,
+                                       const char*, gpointer);
   std::atomic<bool> p2p_enhancement_enabled_{false};
   std::mutex nat_mutex_;
   std::map<std::string, std::vector<NatMappingSample>> nat_samples_;
@@ -187,6 +190,7 @@ class IceAgent {
   const PunchConfig punch_config_ = ProcessPunchConfig();
   const bool punch_offer_peer_;
   std::atomic<bool> punch_remote_supported_{false};
+  std::atomic<bool> punch_retry_supported_{false};
   std::atomic<bool> punch_negotiated_once_{false};
   std::map<std::string, PunchMappingSnapshot> punch_snapshots_;
   uint64_t punch_epoch_ = 1, punch_snapshot_id_ = 0;
@@ -203,6 +207,7 @@ class IceAgent {
 
   punch::Bytes PunchGenerationContext() const;
   void MaybeStartPunch();
+  void MaybeStartDtls();
   void StopPunch();
   static gboolean PunchTickStatic(gpointer data);
   static void OnPunchPacketStatic(NiceAgent*, guint, guint, guint64, guint64,

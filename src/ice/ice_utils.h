@@ -24,6 +24,10 @@ inline constexpr char kP2pEnhancementAttribute[] =
 inline constexpr char kSrtpKeyLayoutAttribute[] =
     "a=x-minirtc-srtp-key-layout:rfc5764";
 inline constexpr char kUdpPunchAttribute[] = "a=x-minirtc-udp-punch:1";
+// Enables the authenticated pool-wide-retry mode: at most two attempts on
+// the same sockets, sharing the original ICE deadline and replay state.
+inline constexpr char kUdpPunchRetryAttribute[] =
+    "a=x-minirtc-udp-punch-retry:1";
 // A separate fingerprint advertises DTLS authentication without requesting
 // SRTP from peers that use the standard fingerprint as their media switch.
 inline constexpr char kUdpPunchFingerprintAttribute[] =
@@ -31,33 +35,51 @@ inline constexpr char kUdpPunchFingerprintAttribute[] =
 
 // The entire SDP is the authority. Duplicates and unknown versions disable
 // this extension, including a conflicting declaration in a discarded section.
-inline bool SupportsUdpPunch(const std::string& sdp) {
+inline bool SupportsUniqueIceAttribute(const std::string& sdp,
+                                       const std::string& prefix,
+                                       const std::string& expected) {
   std::istringstream lines(sdp);
   std::string line;
   unsigned count = 0;
   bool supported = false;
   while (std::getline(lines, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.rfind("a=x-minirtc-udp-punch:", 0) == 0) {
+    if (line.rfind(prefix, 0) == 0) {
       ++count;
-      supported = line == kUdpPunchAttribute;
+      supported = line == expected;
     }
   }
   return count == 1 && supported;
 }
 
+inline bool SupportsUdpPunch(const std::string& sdp) {
+  return SupportsUniqueIceAttribute(
+      sdp, "a=x-minirtc-udp-punch:", kUdpPunchAttribute);
+}
+inline bool SupportsUdpPunchRetry(const std::string& sdp) {
+  return SupportsUdpPunch(sdp) &&
+         SupportsUniqueIceAttribute(
+             sdp, "a=x-minirtc-udp-punch-retry:", kUdpPunchRetryAttribute);
+}
+
 inline std::string PreserveUdpPunchCapability(const std::string& full,
                                               const std::string& extracted) {
   if (full.find("a=x-minirtc-udp-punch:") == std::string::npos &&
-      extracted.find("a=x-minirtc-udp-punch:") == std::string::npos)
+      extracted.find("a=x-minirtc-udp-punch:") == std::string::npos &&
+      full.find("a=x-minirtc-udp-punch-retry:") == std::string::npos &&
+      extracted.find("a=x-minirtc-udp-punch-retry:") == std::string::npos)
     return extracted;
   std::istringstream lines(extracted);
   std::string line, result;
   while (std::getline(lines, line)) {
     if (!line.empty() && line.back() == '\r') line.pop_back();
-    if (line.rfind("a=x-minirtc-udp-punch:", 0) != 0) result += line + "\n";
+    if (line.rfind("a=x-minirtc-udp-punch:", 0) != 0 &&
+        line.rfind("a=x-minirtc-udp-punch-retry:", 0) != 0)
+      result += line + "\n";
   }
   if (SupportsUdpPunch(full)) result += std::string(kUdpPunchAttribute) + "\n";
+  if (SupportsUdpPunchRetry(full))
+    result += std::string(kUdpPunchRetryAttribute) + "\n";
   return result;
 }
 

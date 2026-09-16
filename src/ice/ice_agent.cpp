@@ -135,7 +135,9 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   agent_closed_.store(false);
   send_disabled_.store(false);
   p2p_enhancement_enabled_.store(false);
+  relay_selected_ms_ = 0;
   punch_remote_supported_ = false;
+  punch_retry_supported_ = false;
   punch_negotiated_once_ = false;
   punch_attempted_ = false;
   punch_relay_ready_ms_ = 0;
@@ -284,7 +286,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     g_signal_connect(agent, "candidate-gathering-done",
                      G_CALLBACK(on_gathering_done_), user_ptr_);
     g_signal_connect(agent, "new-selected-pair",
-                     G_CALLBACK(on_new_selected_pair_), user_ptr_);
+                     G_CALLBACK(OnNiceSelectedPairStatic), this);
     g_signal_connect(agent, "new-candidate-full", G_CALLBACK(on_new_candidate_),
                      user_ptr_);
     g_signal_connect(agent, "component-state-changed",
@@ -552,6 +554,7 @@ std::string IceAgent::GenerateLocalSdp() {
   }
   if (CanAdvertiseUdpPunch()) {
     local_sdp_ += std::string(kUdpPunchAttribute) + "\r\n" +
+                  kUdpPunchRetryAttribute + "\r\n" +
                   kUdpPunchFingerprintAttribute + "sha-256 " +
                   dtls_fingerprint_ + "\r\n";
   }
@@ -662,6 +665,8 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
       upgrade && CanAdvertiseUdpPunch() && SupportsUdpPunch(remote_sdp) &&
       !remote_fingerprint_.empty() &&
       (enable_srtp_ || !fingerprints->punch_fingerprint.empty());
+  punch_retry_supported_ =
+      punch_remote_supported_ && SupportsUdpPunchRetry(remote_sdp);
   int ret = nice_agent_parse_remote_sdp(agent_, fingerprints->sdp.c_str());
   if (ret >= 0) {
     if (punch_remote_ufrag_.empty()) punch_remote_ufrag_ = remote_ufrag;
@@ -670,6 +675,7 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
     return 0;
   } else {
     punch_remote_supported_ = false;
+    punch_retry_supported_ = false;
     LOG_ERROR("Failed to parse remote sdp: [{}]", fingerprints->sdp);
     return -1;
   }
@@ -1306,10 +1312,8 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
       return;
     }
 
-    // The peer can reach READY and send ClientHello while our selected relay
-    // is still CONNECTED. Keep a bounded flight for StartDtls() on our READY
-    // callback, instead of losing the only ClientHello. This uses the same
-    // DTLS session and does not change the ICE upgrade deadline.
+    // A ClientHello can race the selected-pair/state callback. Keep a bounded
+    // flight for StartDtls() once a usable ICE pair is available.
     if (!remote_fingerprint_.empty() && !send_disabled_ && size <= 2048) {
       std::lock_guard<std::mutex> lock(dtls_mutex_);
       if (dtls_incoming_.size() < 4) {
@@ -1340,6 +1344,21 @@ void IceAgent::OnNiceStateChangedStatic(NiceAgent* agent, guint stream_id,
   }
 }
 
+void IceAgent::MaybeStartDtls() {
+  if (dtls_started_ || !ShouldUseDtls() || send_disabled_ || destroyed_) return;
+  const auto state = nice_agent_get_component_state(agent_, stream_id_, 1);
+  if (state != NICE_COMPONENT_STATE_CONNECTED &&
+      state != NICE_COMPONENT_STATE_READY)
+    return;
+  NiceCandidate *local = nullptr, *remote = nullptr;
+  if (!nice_agent_get_selected_pair(agent_, stream_id_, 1, &local, &remote) ||
+      !local || !remote)
+    return;
+  // The selected pair is already usable in CONNECTED. Authenticate while the
+  // remaining ICE checks finish; punching still requires the READY backend.
+  if (StartDtls(controlling_) != 0) LOG_ERROR("StartDtls failed");
+}
+
 void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
                                   NiceComponentState state) {
   if (stream_id != stream_id_ || component_id != NICE_COMPONENT_TYPE_RTP) {
@@ -1356,14 +1375,8 @@ void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
         !punch_original_deadline_ms_)
       punch_original_deadline_ms_ =
           nice_agent_punch_get_deadline(agent_, stream_id_, 1) / 1000;
-    if (!dtls_started_ && ShouldUseDtls()) {
-      if (StartDtls(controlling_) != 0) {
-        LOG_ERROR("StartDtls failed");
-      } else {
-        LOG_INFO("DTLS handshake initiated");
-      }
-    }
   }
+  MaybeStartDtls();
   if (state == NICE_COMPONENT_STATE_READY) MaybeStartPunch();
   if (on_state_changed_) {
     on_state_changed_(agent_, stream_id, component_id, state, user_ptr_);
@@ -1391,6 +1404,28 @@ bool IceAgent::CompleteDtlsHandshake() {
   return true;
 }
 
+void IceAgent::OnNiceSelectedPairStatic(NiceAgent* agent, guint stream,
+                                        guint component, const char* local,
+                                        const char* remote, gpointer data) {
+  auto* self = static_cast<IceAgent*>(data);
+  if (stream == self->stream_id_ && component == NICE_COMPONENT_TYPE_RTP) {
+    NiceCandidate *selected_local = nullptr, *selected_remote = nullptr;
+    if (!self->relay_selected_ms_ &&
+        nice_agent_get_selected_pair(agent, stream, component, &selected_local,
+                                     &selected_remote) &&
+        selected_local && selected_remote &&
+        (selected_local->type == NICE_CANDIDATE_TYPE_RELAYED ||
+         selected_remote->type == NICE_CANDIDATE_TYPE_RELAYED)) {
+      // Start the trigger delay at relay selection, before READY/DTLS finish.
+      self->relay_selected_ms_ = g_get_monotonic_time() / 1000;
+    }
+    self->MaybeStartDtls();
+  }
+  if (self->on_new_selected_pair_)
+    self->on_new_selected_pair_(agent, stream, component, local, remote,
+                                self->user_ptr_);
+}
+
 void IceAgent::MaybeStartPunch() {
   if (!gcontext_ || !g_main_context_is_owner(gcontext_)) return;
   if (!CanAdvertiseUdpPunch() || !punch_remote_supported_ ||
@@ -1401,8 +1436,9 @@ void IceAgent::MaybeStartPunch() {
   if (!nice_agent_get_selected_pair(agent_, stream_id_, 1, &local, &remote) ||
       !local || !remote ||
       (local->type != NICE_CANDIDATE_TYPE_RELAYED &&
-       remote->type != NICE_CANDIDATE_TYPE_RELAYED))
+       remote->type != NICE_CANDIDATE_TYPE_RELAYED)) {
     return;
+  }
   punch_packet_handler_ = g_signal_connect(
       agent_, "punch-packet", G_CALLBACK(OnPunchPacketStatic), this);
   punch_source_ = g_timeout_source_new(10);
@@ -1433,8 +1469,9 @@ gboolean IceAgent::PunchTickStatic(gpointer data) {
       self->dtls_peer_verified_ && self->punch_remote_supported_) {
     if (self->punch_runtime_)
       keep = self->punch_runtime_->Tick(now);
-    else if (now - self->punch_relay_ready_ms_ <
-             self->punch_config_.trigger_delay_ms)
+    else if (!self->relay_selected_ms_ ||
+             now - self->relay_selected_ms_ <
+                 self->punch_config_.trigger_delay_ms)
       keep = true;
     else if (now < self->punch_original_deadline_ms_ &&
              nice_agent_get_component_state(self->agent_, self->stream_id_,
@@ -1481,7 +1518,7 @@ gboolean IceAgent::PunchTickStatic(gpointer data) {
         self->punch_runtime_ = std::make_unique<PunchRuntime>(
             self->agent_, self->stream_id_, self->punch_offer_peer_,
             self->punch_epoch_, self->punch_config_, keys, generation,
-            std::move(*chosen), deadline);
+            std::move(*chosen), deadline, self->punch_retry_supported_.load());
         keep = self->punch_runtime_->Begin(now);
       }
     }

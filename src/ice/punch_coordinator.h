@@ -16,7 +16,16 @@ namespace minirtc {
 // milliseconds; callbacks run synchronously on the owning ICE context.
 class PunchNegotiation {
  public:
-  enum class State { Idle, Hello, Preparing, Ready, Probing, Stopped };
+  enum class State {
+    Idle,
+    Hello,
+    Allocating,
+    Preparing,
+    Ready,
+    Probing,
+    Stopped
+  };
+  enum class Preparation { Pending, Ready, Failed };
   struct Hooks {
     std::function<void(const punch::Bytes&)> send;
     // Called once after authenticating the first remote HELLO, before prepare.
@@ -25,6 +34,9 @@ class PunchNegotiation {
                                              const punch::Json&)>
         plan;
     std::function<bool(const punch::Json&)> prepare;
+    // Optional incremental preparation. Called once per owning-context tick;
+    // PREPARE/READY are sent only after all local resources are ready.
+    std::function<Preparation()> poll_prepare;
     std::function<void(const punch::Id&, const punch::Json&, int64_t)> start;
     std::function<void(const std::string&)> stop;
     std::function<bool(punch::Id&)> random_round;
@@ -39,12 +51,13 @@ class PunchNegotiation {
   void Tick(int64_t now_ms);
   void Stop(const std::string& reason, bool notify = true);
   const punch::Id& round() const { return round_; }
-
  private:
   bool Emit(const punch::Bytes& bytes);
   punch::Bytes Make(punch::Kind kind, const punch::Json& value);
   void Pending(punch::Kind kind, const punch::Bytes& bytes, int64_t now_ms);
   void Start(int64_t now_ms);
+  void BeginPreparation(int64_t now_ms);
+  void FinishPreparation(int64_t now_ms);
   bool offer_;
   punch::Id generation_, round_{};
   punch::Key tx_{}, rx_{};
