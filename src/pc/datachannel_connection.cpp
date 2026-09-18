@@ -542,9 +542,7 @@ DataChannelConnection::CreateDataChannelConnection(
       std::string data_stream_id = data_stream_id_kv.first;
       dc_transport->AddDataStream(
           data_stream_id,
-          AddData(peer_connection, rtp::PAYLOAD_TYPE::DATA,
-                  GenerateUniqueSsrc(), "data-stream", data_stream_id,
-                  callbacks_,
+          AddData(peer_connection, remote_user_id, callbacks_,
                   [data_stream_id, wc = make_weak_ptr(dc_transport)]() {
                     LOG_INFO("Data stream {} opened", data_stream_id);
                   }));
@@ -655,8 +653,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddAudio(
 
 std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-    const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
-    const std::string cname, const std::string msid,
+    const std::string remote_user_id,
     const ConnectionCallbacks& callbacks,
     const std::function<void(void)> onOpen) {
   auto dc = peer_connection->createDataChannel("ping-pong");
@@ -664,15 +661,19 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
 
   dc->onClosed([dc]() { LOG_INFO("DataChannel closed: {}", dc->label()); });
 
-  dc->onMessage([msid, cname, wdc = std::weak_ptr(dc),
-                 callbacks](std::variant<::rtc::binary, std::string> msg) {
+  dc->onMessage([remote_user_id, callbacks](
+                    std::variant<::rtc::binary, std::string> msg) {
     if (callbacks.on_receive_data_buffer) {
       if (std::holds_alternative<std::string>(msg)) {
         const auto& str = std::get<std::string>(msg);
-        // LOG_INFO("[DataChannel receive: {}]", str);
-        callbacks.on_receive_data_buffer(str.data(), str.size(), msid.data(),
-                                         msid.size(), cname.data(),
-                                         cname.size(), callbacks.user_data);
+        // Legacy browsers send control JSON on whichever channel arrived last.
+        // Preserve the generic source instead of routing it as file/clipboard
+        // data, but always identify the authenticated remote peer correctly.
+        constexpr char source_id[] = "data-stream";
+        callbacks.on_receive_data_buffer(
+            str.data(), str.size(), remote_user_id.data(),
+            remote_user_id.size(), source_id, sizeof(source_id) - 1,
+            callbacks.user_data);
       }
     }
   });

@@ -66,8 +66,7 @@ class DataChannelConnection : public ConnectionInterface {
 
   std::shared_ptr<::rtc::DataChannel> AddData(
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-      const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
-      const std::string cname, const std::string msid,
+      const std::string remote_user_id,
       const ConnectionCallbacks& callbacks,
       const std::function<void(void)> onOpen);
 
