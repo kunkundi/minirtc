@@ -714,6 +714,15 @@ int PeerConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ret;
 }
 
+int PeerConnection::UpdateVideoSettings(const std::string& remote_id,
+                                        VideoQuality quality, int frame_rate,
+                                        VideoDegradationPreference preference) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  const auto it = peer_connection_map_.find(remote_id);
+  if (it == peer_connection_map_.end() || !it->second) return -1;
+  return it->second->UpdateVideoSettings(quality, frame_rate, preference);
+}
+
 int PeerConnection::RequestAllVideoKeyFrames() {
   std::shared_lock lock(peer_connection_map_mutex_);
   int ret = -1;

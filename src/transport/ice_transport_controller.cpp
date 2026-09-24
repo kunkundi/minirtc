@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <memory>
 #include <vector>
 
@@ -727,6 +728,9 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
   }
 
   if (task_queue_encode_) {
+    if (!video_frame_cadences_[channel_name].Accept(
+            clock_->CurrentTimeUs(), media_config_.max_frame_rate))
+      return 0;
     context->capture_input_frame_total.fetch_add(1,
                                                  std::memory_order_relaxed);
     if (media_config_.video_content_type == VideoContentType::ScreenContent &&
@@ -859,14 +863,15 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     std::weak_ptr<StreamContext> weak_context = context;
     std::shared_ptr<TaskQueueLockFree> encode_queue = task_queue_encode_;
 
+    const uint64_t settings_generation = context->video_settings_generation;
     const int target_width = context->target_width.value_or(0);
     const int target_height = context->target_height.value_or(0);
     auto post_encode = [weak_self, weak_context, encode_queue, channel_name,
-                        force_i_frame, target_width,
-                        target_height](RawFrame&& frame) mutable {
+                        force_i_frame, target_width, target_height,
+                        settings_generation](RawFrame&& frame) mutable {
       encode_queue->PostTask([weak_self, weak_context, encode_queue,
                               channel_name, force_i_frame, target_width,
-                              target_height,
+                              target_height, settings_generation,
                               frame = std::move(frame)]() mutable {
         auto self = weak_self.lock();
         auto context = weak_context.lock();
@@ -874,6 +879,10 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
           return;
         }
 
+        {
+          std::shared_lock lock(self->stream_senders_mutex_);
+          if (context->video_settings_generation != settings_generation) return;
+        }
         // The transport may have become unavailable after frame admission.
         // Restore the request consumed above so the next frame can resync.
         if (!self->media_transport_ready_.load()) {
@@ -926,19 +935,24 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         context->codec->Encode(
             std::move(frame),
             [weak_self, weak_context, channel_name, queue_delay_ms,
-             is_first_callback =
-                 true](const EncodedFrame& encoded_frame) mutable -> int {
+             settings_generation, is_first_callback = true](
+                const EncodedFrame& encoded_frame) mutable -> int {
               auto self = weak_self.lock();
               auto context = weak_context.lock();
               if (!self || !context || !self->is_running_.load()) {
                 return -1;
               }
 
+              {
+                std::shared_lock lock(self->stream_senders_mutex_);
+                if (context->video_settings_generation != settings_generation)
+                  return 0;
+              }
               const bool measure_encode_delay = is_first_callback;
               is_first_callback = false;
-              return self->OnVideoEncoded(channel_name, context,
-                                          static_cast<int>(queue_delay_ms),
-                                          measure_encode_delay, encoded_frame);
+              return self->OnVideoEncoded(
+                  channel_name, context, static_cast<int>(queue_delay_ms),
+                  measure_encode_delay, encoded_frame, settings_generation);
             });
       });
     };
@@ -1027,7 +1041,8 @@ void IceTransportController::NoteKeyframeBudgetFailure(
 
 void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     const std::string& channel_name, int queue_delay_ms,
-    const EncodedFrame& encoded_frame) {
+    const EncodedFrame& encoded_frame, uint64_t settings_generation) {
+  std::unique_lock lock(stream_senders_mutex_);
   const bool maintain_frame_rate =
       media_config_.video_degradation_preference ==
       VideoDegradationPreference::MaintainFrameRate;
@@ -1066,12 +1081,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       maintain_frame_rate ? 750 : (balanced ? 1500 : 3000);
 
   if (!is_running_.load()) return;
-
-  std::unique_lock lock(stream_senders_mutex_);
-  if (!is_running_.load()) return;
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) return;
   std::shared_ptr<StreamContext> context = it->second;
+  if (context->video_settings_generation != settings_generation) return;
   const int64_t now_ms = clock_->CurrentTimeMs();
   if (context->keyframe_resolution_recovery &&
       now_ms >= context->keyframe_resolution_recovery->expires_ms) {
@@ -1912,7 +1925,8 @@ void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
 int IceTransportController::OnVideoEncoded(
     const std::string& channel_name,
     const std::shared_ptr<StreamContext>& context, int queue_delay_ms,
-    bool measure_encode_delay, const EncodedFrame& encoded_frame) {
+    bool measure_encode_delay, const EncodedFrame& encoded_frame,
+    uint64_t settings_generation) {
   if (!is_running_.load()) {
     return -1;
   }
@@ -1928,7 +1942,8 @@ int IceTransportController::OnVideoEncoded(
     std::unique_lock lock(stream_senders_mutex_);
     auto it = stream_senders_.find(channel_name);
     if (it == stream_senders_.end() || it->second != context ||
-        !context->transceiver) {
+        !context->transceiver ||
+        context->video_settings_generation != settings_generation) {
       return -1;
     }
     context->last_active_time = clock_->CurrentTimeMs();
@@ -2074,7 +2089,7 @@ int IceTransportController::OnVideoEncoded(
 
   if (measure_encode_delay) {
     MaybeDegradeResolutionOnEncodeTime(channel_name, queue_delay_ms,
-                                       encoded_frame);
+                                       encoded_frame, settings_generation);
   }
 
   std::shared_lock lock(stream_senders_mutex_);
@@ -2084,7 +2099,8 @@ int IceTransportController::OnVideoEncoded(
 
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || it->second != context ||
-      !context->transceiver) {
+      !context->transceiver ||
+      context->video_settings_generation != settings_generation) {
     return -1;
   }
 
@@ -2524,9 +2540,133 @@ void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
   UpdateMediaTransportState();
 }
 
+int IceTransportController::UpdateVideoSettings(
+    VideoQuality quality, int frame_rate,
+    VideoDegradationPreference preference) {
+  if (!is_running_.load() || !task_queue_encode_) return -1;
+  auto completion = std::make_shared<std::promise<int>>();
+  auto result = completion->get_future();
+  std::weak_ptr<IceTransportController> weak = shared_from_this();
+  task_queue_encode_->PostTask([weak, quality, frame_rate, preference,
+                                completion] {
+    auto self = weak.lock();
+    if (!self || !self->is_running_.load()) {
+      completion->set_value(-1);
+      return;
+    }
+    // Release replaced hardware encoders outside the adaptation lock: their
+    // destructors wait for callbacks which acquire that same lock.
+    std::vector<std::shared_ptr<MediaCodec>> retired_encoders;
+    std::unique_lock lock(self->stream_senders_mutex_);
+    if (self->video_quality_ == quality &&
+        self->media_config_.max_frame_rate == frame_rate &&
+        self->media_config_.video_degradation_preference == preference) {
+      completion->set_value(0);
+      return;
+    }
+    auto config = self->media_config_;
+    config.max_frame_rate = frame_rate;
+    config.video_degradation_preference = preference;
+    ResolutionAdapter adapter(quality, frame_rate, config.video_content_type,
+                              preference);
+    std::unordered_map<std::string, std::shared_ptr<MediaCodec>> encoders;
+    for (auto& [name, context] : self->stream_senders_) {
+      if (!context || context->type != StreamType::kVideo || !context->codec)
+        continue;
+      config.init_width = context->target_width.value_or(config.init_width);
+      config.init_height = context->target_height.value_or(config.init_height);
+      config.init_bitrate =
+          context->applied_target_bitrate.value_or(MINIRTC_INIT_BITRATE);
+      if (context->source_width > 0 && context->source_height > 0) {
+        adapter.GetResolution(config.init_bitrate, context->source_width,
+                              context->source_height, &config.init_width,
+                              &config.init_height);
+      }
+      auto codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
+          self->clock_, config, self->video_encoder_hardware_,
+          self->video_codec_type_);
+      if (!codec) {
+        LOG_ERROR("Live video settings: encoder creation failed for [{}]",
+                  name);
+        completion->set_value(-1);
+        return;
+      }
+      encoders.emplace(name, std::move(codec));
+    }
+    self->media_config_.max_frame_rate = frame_rate;
+    self->media_config_.video_degradation_preference = preference;
+    self->video_quality_ = quality;
+    self->resolution_adapter_->SetPreferences(quality, frame_rate, preference);
+    self->video_frame_cadences_.clear();
+    for (auto& [name, codec] : encoders) {
+      auto& context = self->stream_senders_.at(name);
+      retired_encoders.push_back(std::move(context->codec));
+      context->codec = std::move(codec);
+      ++context->video_settings_generation;
+      context->encoding_speed_priority_enabled =
+          preference == VideoDegradationPreference::MaintainFrameRate &&
+          context->codec->SupportsDynamicEncodingSpeedPriority() &&
+          context->codec->SetPrioritizeEncodingSpeedOverQuality(true) == 0;
+      int width = 0, height = 0;
+      if (context->codec->GetResolution(&width, &height) == 0 && width > 0 &&
+          height > 0) {
+        context->target_width = width;
+        context->target_height = height;
+      }
+      context->bitrate_update_queued = false;
+      context->initial_resolution_recovery = true;
+      context->native_resolution_probe_attempted = false;
+      context->source_resolution_initialized_ms = self->clock_->CurrentTimeMs();
+      context->last_resolution_change_ms = self->clock_->CurrentTimeMs();
+      context->keyframe_resolution_recovery.reset();
+      context->keyframe_limited_upgrade = false;
+      context->keyframe_failed_pixels = 0;
+      context->keyframe_failed_bytes = 0;
+      context->keyframe_failure_ms = 0;
+      context->keyframe_same_resolution_retry = false;
+      context->startup_keyframe_pending = false;
+      context->mapped_target_width.reset();
+      context->mapped_target_height.reset();
+      context->ResetPendingBandwidthMapping();
+      context->ResetResolutionUpgradeProbe();
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      context->post_upgrade_protection_until_ms = 0;
+      context->awaiting_budget_keyframe = false;
+      context->keyframe_budget_retry_count = 0;
+      context->discarded_keyframe_capture_us = 0;
+      context->keyframe_size_budget_bytes = 0;
+      context->regular_keyframe_size_budget_bytes = 0;
+      context->resolution_upgrade_network_blocked = false;
+      self->FullIntraRequest(name);
+    }
+    if (self->paced_sender_) {
+      self->paced_sender_->SetDrainLargeQueues(
+          !UsesBoundedVideoQueue(self->media_config_));
+    }
+    lock.unlock();
+    retired_encoders.clear();
+    LOG_INFO("Live video settings: quality={}, fps={}, preference={}",
+             static_cast<int>(quality), frame_rate,
+             static_cast<int>(preference));
+    completion->set_value(0);
+  });
+  // PostTask may reject during shutdown. Drop our promise reference so a
+  // discarded task yields broken_promise rather than waiting forever.
+  completion.reset();
+  try {
+    return result.get();
+  } catch (const std::future_error&) {
+    return -1;
+  }
+}
+
 int IceTransportController::CreateStreamCodecs(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     VideoCodecType codec_type) {
+  video_codec_type_ = codec_type;
+  video_encoder_hardware_ = hardware_acceleration;
   bool video_sender_init_first_time = true;
   bool audio_sender_init_first_time = true;
   bool video_receiver_init_first_time = true;

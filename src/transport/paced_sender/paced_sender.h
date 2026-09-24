@@ -164,6 +164,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // a higher rate than what was configured via SetPacingRates() in order to
   // keep ExpectedQueueTimeMs() below `limit_ms` on average.
   void SetQueueTimeLimit(webrtc::TimeDelta limit) override;
+  void SetDrainLargeQueues(bool drain);
 
  protected:
   // Exposed as protected for test.

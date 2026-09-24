@@ -28,6 +28,7 @@
 #include "task_queue_lock_free.h"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
+#include "video_frame_cadence.h"
 
 namespace minirtc {
 
@@ -42,6 +43,8 @@ class Stream {
   std::shared_ptr<::rtc::RtcpSrReporter> sender_;
   std::shared_ptr<MediaCodec> codec_;
   std::mutex audio_encode_mutex_;
+  std::mutex video_admission_mutex_;
+  VideoFrameCadence video_frame_cadence_;
   uint64_t audio_sample_count_ = 0;
 };
 

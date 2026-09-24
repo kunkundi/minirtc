@@ -137,6 +137,15 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     LOG_ERROR("Encoder task queue not init");
     return -1;
   }
+  // Native capture is shared at 60 fps. Preserve the configured frame rate
+  // for browser connections too, even though they do not expose live settings.
+  {
+    std::lock_guard lock(stream->video_admission_mutex_);
+    if (!stream->video_frame_cadence_.Accept(clock_->CurrentTimeUs(),
+                                            media_config_.max_frame_rate)) {
+      return 0;
+    }
+  }
   if (task_queue_encode_->PendingTasks() > 0) {
     return 0;
   }

@@ -115,6 +115,14 @@ int MiniRtcConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ice_transport_->RequestVideoKeyFrame(stream_id ? stream_id : "");
 }
 
+int MiniRtcConnection::UpdateVideoSettings(
+    VideoQuality quality, int frame_rate,
+    VideoDegradationPreference preference) {
+  return ice_transport_ ? ice_transport_->UpdateVideoSettings(
+                              quality, frame_rate, preference)
+                        : -1;
+}
+
 int MiniRtcConnection::RequestAllVideoKeyFrames() {
   if (!ice_transport_) {
     return -1;

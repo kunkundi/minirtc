@@ -181,6 +181,7 @@ class PacingController {
   TimeDelta ExpectedQueueTime() const;
 
   void SetQueueTimeLimit(TimeDelta limit);
+  void SetDrainLargeQueues(bool drain) { drain_large_queues_ = drain; }
 
   // Enable bitrate probing. Enabled by default, mostly here to simplify
   // testing. Must be called before any packets are being sent to have an
@@ -236,7 +237,7 @@ class PacingController {
   Clock* const clock_;
   PacketSender* const packet_sender_;
 
-  const bool drain_large_queues_;
+  bool drain_large_queues_;
   const bool send_padding_if_silent_;
   const bool pace_audio_;
   const bool ignore_transport_overhead_;

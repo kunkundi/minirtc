@@ -1671,6 +1671,14 @@ int IceTransport::RequestVideoKeyFrame(const std::string& stream_name) {
   return 0;
 }
 
+int IceTransport::UpdateVideoSettings(VideoQuality quality, int frame_rate,
+                                      VideoDegradationPreference preference) {
+  return ice_transport_controller_
+             ? ice_transport_controller_->UpdateVideoSettings(
+                   quality, frame_rate, preference)
+             : -1;
+}
+
 int IceTransport::RequestAllVideoKeyFrames() {
   if (!ice_transport_controller_) {
     return -1;

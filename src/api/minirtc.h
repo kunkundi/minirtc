@@ -451,6 +451,18 @@ MINIRTC_API int SendVideoFrame(PeerPtr* peer_ptr,
 MINIRTC_API int RequestVideoKeyFrame(PeerPtr* peer_ptr,
                                      const char* stream_id);
 
+/** Apply live outgoing video settings to one connected peer without
+ * reconnecting. Returns 0 when applied, -1 for invalid settings, an unknown
+ * peer, an unsupported transport, or encoder initialization failure. Continue
+ * supplying frames (up to 60 fps). Waits for the encode queue; never call from
+ * an encoder or encoded-frame callback. Safe to call from the received-data
+ * callback.
+ */
+MINIRTC_API int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
+                                    size_t remote_id_size, VideoQuality quality,
+                                    int frame_rate,
+                                    VideoDegradationPreference preference);
+
 /// Request local key frames for all outgoing video streams on current peers.
 /// Return values and asynchronous behavior follow RequestVideoKeyFrame.
 MINIRTC_API int RequestAllVideoKeyFrames(PeerPtr* peer_ptr);

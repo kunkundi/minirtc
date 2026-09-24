@@ -104,6 +104,9 @@ class PeerConnection {
   int SendVideoFrame(const MiniRtcVideoFrame* video_frame, const char* stream_id);
   int RequestVideoKeyFrame(const char* stream_id);
   int RequestAllVideoKeyFrames();
+  int UpdateVideoSettings(const std::string& remote_id, VideoQuality quality,
+                          int frame_rate,
+                          VideoDegradationPreference preference);
   int SendAudioFrame(const MiniRtcAudioFrame* audio_frame, const char* stream_id);
   int SendDataFrame(const char* data, size_t size, const char* stream_id);
   int SendReliableDataFrame(const char* data, size_t size,

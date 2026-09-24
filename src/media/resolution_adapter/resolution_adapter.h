@@ -50,6 +50,15 @@ class ResolutionAdapter {
 
   int SetTargetBitrate(int bitrate);
 
+  // Call under the transport's adaptation lock. Scaling scratch buffers and
+  // the adapter lifetime remain untouched while the encoder queue uses them.
+  void SetPreferences(VideoQuality quality, int frame_rate,
+                      VideoDegradationPreference preference) {
+    video_quality_ = quality;
+    video_frame_rate_ = frame_rate;
+    video_degradation_preference_ = preference;
+  }
+
  private:
   // Compute bitrate limits for a single resolution tier.
   // |is_highest| marks the top tier whose max_bitrate is set to INT_MAX,

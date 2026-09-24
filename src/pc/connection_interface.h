@@ -94,6 +94,11 @@ class ConnectionInterface {
                              const char* stream_id) = 0;
   virtual int RequestVideoKeyFrame(const char* stream_id) = 0;
   virtual int RequestAllVideoKeyFrames() = 0;
+  // Legacy/web transports do not negotiate desktop live video settings.
+  virtual int UpdateVideoSettings(VideoQuality, int,
+                                  VideoDegradationPreference) {
+    return -1;
+  }
   virtual int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                              const char* stream_id) = 0;
   virtual int SendDataFrame(const char* data, size_t size,

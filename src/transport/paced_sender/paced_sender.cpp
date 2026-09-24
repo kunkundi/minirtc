@@ -249,6 +249,10 @@ void PacedSender::SetTransportOverhead(
   });
 }
 
+void PacedSender::SetDrainLargeQueues(bool drain) {
+  RunOrPost([this, drain] { pacing_controller_.SetDrainLargeQueues(drain); });
+}
+
 void PacedSender::SetQueueTimeLimit(webrtc::TimeDelta limit) {
   RunOrPost([this, limit] {
     pacing_controller_.SetQueueTimeLimit(limit);

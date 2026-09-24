@@ -13,6 +13,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <unordered_map>
 #include <unordered_set>
 
 #include "api/clock/clock.h"
@@ -40,6 +41,7 @@
 #include "video_channel_send.h"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
+#include "video_frame_cadence.h"
 
 typedef void (*OnReceiveVideo)(const MiniRtcVideoFrame*, const char*, const size_t,
                                const char*, const size_t, void*);
@@ -104,6 +106,9 @@ class IceTransportController
   int SendData(const char* data, size_t size, const std::string& channel_name);
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);
+
+  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
+                          VideoDegradationPreference preference);
 
   void FullIntraRequest();
   void FullIntraRequest(const std::string& channel_name) {
@@ -176,7 +181,8 @@ class IceTransportController
   std::optional<bool> GetCongestedStateUpdate() const;
   void MaybeDegradeResolutionOnEncodeTime(const std::string& channel_name,
                                           int queue_delay_ms,
-                                          const EncodedFrame& encoded_frame);
+                                          const EncodedFrame& encoded_frame,
+                                          uint64_t settings_generation);
 
  private:
   bool Process() override;
@@ -223,6 +229,7 @@ class IceTransportController
       double projected_bytes = 0;
     };
     std::optional<KeyframeResolutionRecovery> keyframe_resolution_recovery;
+    uint64_t video_settings_generation = 0;
     bool initial_resolution_recovery = true;
     bool native_resolution_probe_attempted = false;
     int encode_exceed_count = 0;
@@ -410,7 +417,8 @@ class IceTransportController
   int OnVideoEncoded(const std::string& channel_name,
                      const std::shared_ptr<StreamContext>& context,
                      int queue_delay_ms, bool measure_encode_delay,
-                     const EncodedFrame& encoded_frame);
+                     const EncodedFrame& encoded_frame,
+                     uint64_t settings_generation);
 
   std::map<std::string, std::shared_ptr<StreamContext>> stream_senders_;
   std::map<std::string, std::shared_ptr<StreamContext>> stream_receivers_;
@@ -483,6 +491,10 @@ class IceTransportController
   std::unordered_set<std::string> force_i_frame_streams_;
   bool video_codec_inited_;
   bool hardware_acceleration_;
+  VideoCodecType video_codec_type_ = VideoCodecType::H264;
+  bool video_encoder_hardware_ = false;
+  // Guarded by stream_senders_mutex_, separately for each display.
+  std::unordered_map<std::string, VideoFrameCadence> video_frame_cadences_;
   bool native_video_output_;
 
  private:

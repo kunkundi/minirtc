@@ -89,6 +89,8 @@ class IceTransport {
   int RequestVideoKeyFrame(const std::string& stream_name);
 
   int RequestAllVideoKeyFrames();
+  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
+                          VideoDegradationPreference preference);
 
   int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                      const std::string& stream_name);

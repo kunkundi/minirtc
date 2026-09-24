@@ -163,6 +163,18 @@ int RequestVideoKeyFrame(PeerPtr* peer_ptr, const char* stream_id) {
   return peer_ptr->peer_connection->RequestVideoKeyFrame(stream_id);
 }
 
+int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
+                        size_t remote_id_size, VideoQuality quality,
+                        int frame_rate, VideoDegradationPreference preference) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id ||
+      !remote_id_size || quality < QualityLow || quality > QualityHigh ||
+      (frame_rate != 30 && frame_rate != 60) ||
+      preference > VideoDegradationPreference::Balanced)
+    return -1;
+  return peer_ptr->peer_connection->UpdateVideoSettings(
+      std::string(remote_id, remote_id_size), quality, frame_rate, preference);
+}
+
 int RequestAllVideoKeyFrames(PeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
