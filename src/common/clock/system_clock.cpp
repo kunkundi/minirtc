@@ -13,7 +13,10 @@
 #include <mach/mach_time.h>
 #endif
 #if defined(_WIN32)
+// clang-format off: mmsystem.h requires Windows types declared by windows.h.
 #include <windows.h>
+#include <mmsystem.h>
+// clang-format on
 #endif
 
 namespace minirtc {
