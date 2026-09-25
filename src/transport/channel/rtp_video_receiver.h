@@ -25,6 +25,7 @@
 #include "receive_side_congestion_controller.h"
 #include "received_frame.h"
 #include "receiver_report.h"
+#include "remote_capture_time_estimator.h"
 #include "ringbuffer.h"
 #include "rtc_base/numerics/sequence_number_util.h"
 #include "rtcp_sender.h"
@@ -218,7 +219,7 @@ class RtpVideoReceiver : public ThreadBase {
   rtp::PAYLOAD_TYPE media_payload_type_ = rtp::PAYLOAD_TYPE::H264;
   std::string log_context_ = "video";
   std::optional<uint8_t> abs_send_time_ext_id_;
-  RtpTimestampMapper rtp_timestamp_mapper_;
+  RemoteCaptureTimeEstimator rtp_timestamp_mapper_;
   std::shared_ptr<SystemClock> system_clock_;
   std::shared_ptr<webrtc::Clock> clock_;
   ReceiveSideCongestionController receive_side_congestion_controller_;

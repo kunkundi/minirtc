@@ -1,14 +1,16 @@
 #include "video_toolbox_decoder.h"
-#include "minirtc.h"
 #include <CoreMedia/CoreMedia.h>
-#include <VideoToolbox/VideoToolbox.h>
 #include <TargetConditionals.h>
+#include <VideoToolbox/VideoToolbox.h>
 #include <arpa/inet.h>
 #include <atomic>
 #include <cstring>
 #include <memory>
+#include <mutex>
 #include <string>
+#include <unordered_map>
 #include <vector>
+#include "minirtc.h"
 
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_H264_STREAM
@@ -192,6 +194,13 @@ class VideoToolboxDecoder::Impl {
   std::atomic<uint64_t> submitted_frame_count_{0};
   std::atomic<uint64_t> decoded_frame_count_{0};
   std::atomic<bool> session_needs_recovery_{false};
+  struct FrameTimestamps {
+    int64_t captured_us;
+    int64_t received_us;
+  };
+  std::mutex timestamps_mutex_;
+  std::unordered_map<uintptr_t, FrameTimestamps> pending_timestamps_;
+  uintptr_t next_frame_id_ = 0;
 
   VTDecompressionSessionRef decompression_session_;
   CMVideoFormatDescriptionRef format_desc_;
@@ -361,7 +370,7 @@ int VideoToolboxDecoder::Impl::Decode(
   CMSampleBufferRef sample_buffer = nullptr;
   CMSampleTimingInfo timing = {};
   timing.duration = kCMTimeInvalid;
-  timing.presentationTimeStamp = CMTimeMake(received_frame->ReceivedTimestamp(), 1000);
+  timing.presentationTimeStamp = CMTimeMake(received_frame->ReceivedTimestamp(), 1'000'000);
   timing.decodeTimeStamp = kCMTimeInvalid;
   // A compressed video access unit is one sample. Supplying zero sample-size
   // entries creates a formally valid CMSampleBuffer whose sample size can be
@@ -386,9 +395,21 @@ int VideoToolboxDecoder::Impl::Decode(
                          is_keyframe ? kCFBooleanFalse : kCFBooleanTrue);
   }
 
+  uintptr_t frame_id;
+  {
+    std::lock_guard lock(timestamps_mutex_);
+    frame_id = ++next_frame_id_;
+    pending_timestamps_[frame_id] = {received_frame->CapturedTimestamp(),
+                                     received_frame->ReceivedTimestamp()};
+  }
+  VTDecodeInfoFlags decode_flags = 0;
   status = VTDecompressionSessionDecodeFrame(decompression_session_, sample_buffer,
                                              kVTDecodeFrame_EnableAsynchronousDecompression,
-                                             nullptr, nullptr);
+                                             reinterpret_cast<void*>(frame_id), &decode_flags);
+  if (status != noErr || (decode_flags & kVTDecodeInfo_FrameDropped)) {
+    std::lock_guard lock(timestamps_mutex_);
+    pending_timestamps_.erase(frame_id);
+  }
   CFRelease(sample_buffer);
   if (status != noErr) {
     session_needs_recovery_.store(true);
@@ -412,6 +433,10 @@ bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
     VTDecompressionSessionInvalidate(decompression_session_);
     CFRelease(decompression_session_);
     decompression_session_ = nullptr;
+  }
+  {
+    std::lock_guard lock(timestamps_mutex_);
+    pending_timestamps_.clear();
   }
   if (format_desc_) {
     CFRelease(format_desc_);
@@ -491,6 +516,17 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
   if (!impl) {
     LOG_ERROR("Decode callback received null decompression output ref con");
     return;
+  }
+
+  FrameTimestamps timestamps{};
+  {
+    std::lock_guard lock(impl->timestamps_mutex_);
+    const auto it =
+        impl->pending_timestamps_.find(reinterpret_cast<uintptr_t>(source_frame_ref_con));
+    if (it != impl->pending_timestamps_.end()) {
+      timestamps = it->second;
+      impl->pending_timestamps_.erase(it);
+    }
   }
 
   if (status != noErr) {
@@ -576,10 +612,9 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
   }
   decoded_frame.SetDecodedWidth(width);
   decoded_frame.SetDecodedHeight(height);
-  decoded_frame.SetDecodedTimestamp(
-      CMTIME_IS_NUMERIC(pts)
-          ? static_cast<int64_t>(CMTimeGetSeconds(pts) * 1'000'000)
-          : 0);
+  decoded_frame.SetCapturedTimestamp(timestamps.captured_us);
+  decoded_frame.SetReceivedTimestamp(timestamps.received_us);
+  decoded_frame.SetDecodedTimestamp(impl->clock_->CurrentTimeUs());
 
   const uint64_t frame_count = ++impl->decoded_frame_count_;
   if (frame_count == 1 || frame_count % 300 == 0) {

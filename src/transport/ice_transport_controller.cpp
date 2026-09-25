@@ -2858,6 +2858,15 @@ void IceTransportController::OnSenderReport(const SenderReport& sender_report) {
   }
 }
 
+void IceTransportController::OnTransportRtt(int64_t rtt_ms) {
+  if (rtt_ms < 0 || rtt_ms > 2000) return;
+  std::shared_lock lock(stream_receivers_mutex_);
+  for (const auto& [_, context] : stream_receivers_) {
+    if (context && context->type == StreamType::kVideo && context->transceiver)
+      context->transceiver->OnRttUpdate(rtt_ms);
+  }
+}
+
 void IceTransportController::OnReceiverReport(
     const std::vector<RtcpReportBlock>& report_block_datas) {
   webrtc::Timestamp now = webrtc_clock_->CurrentTime();
@@ -2891,15 +2900,7 @@ void IceTransportController::OnReceiverReport(
     }
   }
 
-  if (transport_rtt_ms.has_value()) {
-    std::shared_lock lock(stream_receivers_mutex_);
-    for (const auto& [_, context] : stream_receivers_) {
-      if (context && context->type == StreamType::kVideo &&
-          context->transceiver) {
-        context->transceiver->OnRttUpdate(*transport_rtt_ms);
-      }
-    }
-  }
+  if (transport_rtt_ms.has_value()) OnTransportRtt(*transport_rtt_ms);
 
   int total_packets_lost_delta = 0;
   int total_packets_delta = 0;

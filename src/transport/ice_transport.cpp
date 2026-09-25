@@ -285,9 +285,15 @@ IceTransport::IceTransport(
       remote_user_id_(remote_user_id),
       ice_ws_transport_(ice_ws_transmission),
       on_ice_status_change_(on_ice_status_change),
-      user_data_(user_data) {}
+      user_data_(user_data) {
+  receiver_rtt_ssrc_ = GenerateUniqueSsrc();
+}
 
-IceTransport::~IceTransport() {}
+IceTransport::~IceTransport() {
+  is_closed_ = true;
+  if (ice_io_statistics_) ice_io_statistics_->Stop();
+  SSRCManager::Instance().DeleteSsrc(receiver_rtt_ssrc_);
+}
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool native_video_output,
@@ -325,6 +331,15 @@ int IceTransport::InitIceTransmission(
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
+        // A receive-only peer cannot derive RTT from its own media SRs.
+        // Probe once per reporting interval, independent of audio/video sends.
+        if (!is_closed_ && ice_agent_) {
+          const int64_t now_us = clock_->CurrentTimeUs();
+          const auto probe = receiver_rtt_.Probe(
+              receiver_rtt_ssrc_, clock_->MonotonicTimeUsToNtp(now_us), now_us);
+          ice_agent_->Send(reinterpret_cast<const char*>(probe.data()),
+                           probe.size());
+        }
         if (on_receive_net_status_report_) {
           MiniRtcNetTrafficStats minirtc_net_traffic_stats{};
           // IOStatistics contains counters only; transport state is appended
@@ -664,6 +679,9 @@ bool IceTransport::ParseRtcpPacket(const uint8_t* buffer, size_t size,
     }
     bool block_valid = true;
     switch (rtcp_block.type()) {
+      case 207:  // RFC 3611 extended report.
+        block_valid = HandleExtendedReport(rtcp_block);
+        break;
       case RtcpPacket::RtcpPayloadType::SR:
         block_valid = HandleSenderReport(rtcp_block, rtcp_packet_info);
         break;
@@ -811,6 +829,27 @@ bool IceTransport::HandleFir(const RtcpCommonHeader& rtcp_block,
   }
 
   return false;
+}
+
+bool IceTransport::HandleExtendedReport(const RtcpCommonHeader& block) {
+  const int64_t arrival_us = clock_->CurrentTimeUs();
+  ReceiverRtt::Report report;
+  if (!ReceiverRtt::Parse(block.payload(), block.payload_size_bytes(), report))
+    return false;
+  if (report.reference_time && *report.reference_time != 0 && ice_agent_) {
+    const auto reply = ReceiverRtt::Reply(
+        receiver_rtt_ssrc_, report.sender_ssrc, *report.reference_time,
+        std::max<int64_t>(0, clock_->CurrentTimeUs() - arrival_us));
+    ice_agent_->Send(reinterpret_cast<const char*>(reply.data()), reply.size());
+  }
+  for (const auto& reply : report.replies) {
+    if (auto rtt =
+            receiver_rtt_.Receive(reply, receiver_rtt_ssrc_, arrival_us)) {
+      if (ice_transport_controller_)
+        ice_transport_controller_->OnTransportRtt((*rtt + 500) / 1000);
+    }
+  }
+  return true;
 }
 
 int IceTransport::DestroyIceTransmission() {

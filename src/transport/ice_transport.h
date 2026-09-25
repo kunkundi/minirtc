@@ -15,9 +15,10 @@
 #include "clock/system_clock.h"
 #include "ice_agent.h"
 #include "ice_component_state.h"
-#include "ice_utils.h"
 #include "ice_transport_controller.h"
+#include "ice_utils.h"
 #include "io_statistics.h"
+#include "receiver_rtt.h"
 #include "ringbuffer.h"
 #include "rtcp_packet_info.h"
 #include "rtp_packet.h"
@@ -168,6 +169,9 @@ class IceTransport {
 
   bool ParseRtcpPacket(const uint8_t* buffer, size_t size,
                        RtcpPacketInfo* rtcp_packet_info);
+  bool HandleExtendedReport(const RtcpCommonHeader& block);
+  ReceiverRtt receiver_rtt_;
+  uint32_t receiver_rtt_ssrc_ = 0;
 
   void HandleReportBlock(const RtcpReportBlock& rtcp_report_block,
                          RtcpPacketInfo* packet_information,
@@ -248,7 +252,7 @@ class IceTransport {
  private:
   std::shared_ptr<SystemClock> clock_;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
-  bool is_closed_ = false;
+  std::atomic<bool> is_closed_{false};
   std::shared_ptr<WsClient> ice_ws_transport_ = nullptr;
 
   OnReceiveVideo on_receive_video_ = nullptr;

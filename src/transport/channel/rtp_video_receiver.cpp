@@ -67,7 +67,6 @@ RtpVideoReceiver::RtpVideoReceiver(std::shared_ptr<SystemClock> clock,
     : io_statistics_(io_statistics),
       is_running_(true),
       ssrc_(GenerateUniqueSsrc()),
-      rtp_timestamp_mapper_(rtp::kVideoPayloadTypeFrequency),
       system_clock_(clock),
       clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
       receive_side_congestion_controller_(
@@ -248,10 +247,10 @@ void RtpVideoReceiver::EnsureFrameBufferCapacity(size_t required_capacity) {
 std::unique_ptr<ReceivedFrame> RtpVideoReceiver::CreateReceivedFrame(
     const uint8_t* data, size_t size, uint32_t timestamp) {
   auto frame = std::make_unique<ReceivedFrame>(data, size);
-  const int64_t received_time_us = clock_->CurrentTime().us();
+  const int64_t received_time_us = system_clock_->CurrentTimeUs();
   frame->SetReceivedTimestamp(received_time_us);
   frame->SetCapturedTimestamp(
-      rtp_timestamp_mapper_.ToLocalTimeUs(timestamp, received_time_us));
+      rtp_timestamp_mapper_.Estimate(timestamp, received_time_us).value_or(0));
   return frame;
 }
 
@@ -796,6 +795,10 @@ RtpVideoReceiver::GetFrameRecoveryTiming() {
 }
 
 void RtpVideoReceiver::OnRttUpdate(int64_t rtt_ms) {
+  if (rtt_ms >= 0 && rtt_ms <= 2000) {
+    rtp_timestamp_mapper_.UpdateRtt(rtt_ms * 1000,
+                                    system_clock_->CurrentTimeUs());
+  }
   if (!RtxEnabled()) {
     return;
   }
@@ -1414,9 +1417,9 @@ void RtpVideoReceiver::OnSenderReport(const SenderReport& sender_report) {
   }
 
   const uint64_t ntp_timestamp = sender_report.NtpTimestamp();
-  rtp_timestamp_mapper_.UpdateFromSenderReport(
-      sender_report.Timestamp(),
-      system_clock_->NtpToMonotonicTimeUs(ntp_timestamp));
+  rtp_timestamp_mapper_.UpdateSenderReport(
+      sender_report.Timestamp(), system_clock_->NtpToUtcTimeUs(ntp_timestamp),
+      system_clock_->CurrentTimeUs());
 
   std::lock_guard<std::mutex> stats_lock(receiver_stats_mtx_);
   remote_ssrc = sender_report.SenderSsrc();

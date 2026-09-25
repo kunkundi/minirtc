@@ -164,8 +164,9 @@ typedef struct {
   uint32_t width;  ///< Pixel width; must match a supplied native descriptor.
   uint32_t height; ///< Pixel height; must match a supplied native descriptor.
   /// Send: capture time from GetSystemTimeMicros(); zero selects send-time
-  /// fallback. Receive: may be an RTP-derived estimate in the receiver's local
-  /// clock domain, not the remote machine's original absolute capture time.
+  /// fallback. Native receive: RTP/RTCP-derived estimate in the local monotonic
+  /// clock, corrected using RTT/2 (symmetric-path assumption). Zero until clock
+  /// calibration is ready or when it expires. Not an absolute remote time.
   uint64_t captured_timestamp;
   /// Local receive/reassembly time, when supplied by the receive path.
   uint64_t received_timestamp;

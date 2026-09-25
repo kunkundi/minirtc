@@ -339,9 +339,9 @@ int WmfH264SoftwareDecoder::Decode(
   in_buf->SetCurrentLength((DWORD)size);
   in_sample->AddBuffer(in_buf.Get());
 
-  // Timestamps are optional for raw decoding.
-  // MF uses 100-nanosecond units.
-  LONGLONG sample_time = (LONGLONG)received_frame->CapturedTimestamp() * 10;
+  // Keep decoder timing independent of the optional remote clock estimate,
+  // which is unavailable during synchronization. MF uses 100-nanosecond units.
+  LONGLONG sample_time = (LONGLONG)received_frame->ReceivedTimestamp() * 10;
   in_sample->SetSampleTime(sample_time);
 
   hr = decoder_->ProcessInput(0, in_sample.Get(), 0);
