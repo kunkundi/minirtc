@@ -16,14 +16,16 @@
 #include <string>
 #include <vector>
 
+#ifndef SPDLOG_ACTIVE_LEVEL
+#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_INFO
+#endif
+
 #include "spdlog/common.h"
 #include "spdlog/logger.h"
 #include "spdlog/sinks/base_sink.h"
 #include "spdlog/sinks/rotating_file_sink.h"
 #include "spdlog/sinks/stdout_color_sinks.h"
 #include "spdlog/spdlog.h"
-
-#define SPDLOG_ACTIVE_LEVEL SPDLOG_LEVEL_INFO
 
 namespace minirtc {
 

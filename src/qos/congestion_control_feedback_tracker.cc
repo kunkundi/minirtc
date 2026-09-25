@@ -119,7 +119,7 @@ void CongestionControlFeedbackTracker::AddPacketsToFeedback(
         if (packet_it->ecn == EcnMarking::kCe) {
           ecn = EcnMarking::kCe;
         }
-        LOG_INFO("Received duplicate packet ssrc:{} seq:{} ecn:{}", ssrc,
+        LOG_DEBUG("Received duplicate packet ssrc:{} seq:{} ecn:{}", ssrc,
                  static_cast<uint16_t>(sequence_number), static_cast<int>(ecn));
         ++packet_it;
       }

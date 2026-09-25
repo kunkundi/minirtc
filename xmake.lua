@@ -43,6 +43,12 @@ add_rules("mode.release", "mode.debug")
 set_languages("c++17")
 set_encodings("utf-8")
 
+if is_mode("debug") then
+    add_defines("SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_DEBUG")
+else
+    add_defines("SPDLOG_ACTIVE_LEVEL=SPDLOG_LEVEL_INFO")
+end
+
 set_installdir("$(projectdir)/out")
 
 add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_PTR", 

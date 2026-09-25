@@ -66,20 +66,20 @@ void WsClient::Shutdown() {
   for (auto& thread : reconnect_threads) {
     JoinThread(thread);
   }
-  LOG_INFO("WebSocket reconnect workers stopped");
+  LOG_DEBUG("WebSocket reconnect workers stopped");
 
   // A reconnect that was already running may have restarted the heartbeat.
   running_ = false;
   cond_var_.notify_all();
   JoinThread(ping_thread_);
-  LOG_INFO("WebSocket heartbeat worker stopped");
+  LOG_DEBUG("WebSocket heartbeat worker stopped");
 
   if (m_endpoint_) {
     m_endpoint_->stop_perpetual();
     m_endpoint_->stop();
   }
   JoinThread(m_thread_);
-  LOG_INFO("WebSocket I/O worker stopped");
+  LOG_DEBUG("WebSocket I/O worker stopped");
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
@@ -127,7 +127,7 @@ void WsClient::ScheduleReconnect(int delay_seconds) {
   // ensure only one reconnect attempt is scheduled at a time.
   bool expected = false;
   if (!is_reconnecting_.compare_exchange_strong(expected, true)) {
-    LOG_INFO("Reconnect already in progress, skipping.");
+    LOG_DEBUG("Reconnect already in progress, skipping.");
     return;
   }
 
@@ -284,7 +284,7 @@ int WsClient::ReConnect() {
   }
 
   if (ws_status_ == WsReconnecting) {
-    LOG_INFO("Already reconnecting, ignore duplicate call.");
+    LOG_DEBUG("Already reconnecting, ignore duplicate call.");
     return 0;
   }
 

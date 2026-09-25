@@ -453,7 +453,7 @@ void IceTransport::OnNewLocalCandidate(NiceAgent* agent, NiceCandidate* cand) {
   g_free(sdp);
   if (!seen_local_candidate_sdps_.insert(candidate_sdp).second) return;
 
-  LOG_INFO("[{}->{}] local ICE candidate type={} transport={} address={} base={}",
+  LOG_DEBUG("[{}->{}] local ICE candidate type={} transport={} address={} base={}",
            user_id_, remote_user_id_, CandidateTypeName(cand->type),
            CandidateTransportName(cand->transport), CandidateAddress(cand->addr),
            CandidateAddress(cand->base_addr));
@@ -519,7 +519,7 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
                                      const char* lfoundation,
                                      const char* rfoundation,
                                      gpointer user_ptr) {
-  LOG_INFO("new selected pair: [{}] [{}]", lfoundation, rfoundation);
+  LOG_DEBUG("new selected pair: [{}] [{}]", lfoundation, rfoundation);
   NiceCandidate* local = nullptr;
   NiceCandidate* remote = nullptr;
   if (!nice_agent_get_selected_pair(agent, stream_id, component_id, &local,
@@ -1039,7 +1039,7 @@ int IceTransport::SendOffer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  LOG_INFO("Send offer with sdp:\n[\n{}]", local_sdp_.c_str());
+  LOG_DEBUG("Generated offer SDP: {} bytes", local_sdp_.size());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send offer", user_id_, remote_user_id_);
@@ -1061,7 +1061,7 @@ int IceTransport::SendAnswer() {
                   {"user_id", user_id_},
                   {"remote_user_id", remote_user_id_},
                   {"sdp", local_sdp_.c_str()}};
-  LOG_INFO("Send answer with sdp:\n[\n{}]", local_sdp_.c_str());
+  LOG_DEBUG("Generated answer SDP: {} bytes", local_sdp_.size());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
     LOG_INFO("[{}->{}] send answer", user_id_, remote_user_id_);
@@ -1529,7 +1529,7 @@ bool IceTransport::NegotiateVideoPayloadType(const std::string& remote_sdp) {
       remote_video_capabilities = remote_sdp.substr(pos3 + 1, end - pos3 - 1);
     }
   }
-  LOG_INFO("remote video capabilities [{}]", remote_video_capabilities.c_str());
+  LOG_DEBUG("remote video capabilities [{}]", remote_video_capabilities.c_str());
 
   for (size_t index = 0; index < support_video_payload_types_.size(); ++index) {
     if (index == support_video_payload_types_.size() - 1) {
@@ -1540,7 +1540,7 @@ bool IceTransport::NegotiateVideoPayloadType(const std::string& remote_sdp) {
           std::to_string(support_video_payload_types_[index]) + " ";
     }
   }
-  LOG_INFO("local video capabilities [{}]", local_video_capabilities.c_str());
+  LOG_DEBUG("local video capabilities [{}]", local_video_capabilities.c_str());
 
   std::size_t prefered_pt_start = 0;
 
@@ -1600,7 +1600,7 @@ bool IceTransport::NegotiateAudioPayloadType(const std::string& remote_sdp) {
       remote_audio_capabilities = remote_sdp.substr(pos3 + 1, end - pos3 - 1);
     }
   }
-  LOG_INFO("remote audio capabilities [{}]", remote_audio_capabilities.c_str());
+  LOG_DEBUG("remote audio capabilities [{}]", remote_audio_capabilities.c_str());
 
   std::size_t prefered_pt_start = 0;
 
@@ -1660,7 +1660,7 @@ bool IceTransport::NegotiateDataPayloadType(const std::string& remote_sdp) {
       remote_data_capabilities = remote_sdp.substr(pos3 + 1, end - pos3 - 1);
     }
   }
-  LOG_INFO("remote data capabilities [{}]", remote_data_capabilities.c_str());
+  LOG_DEBUG("remote data capabilities [{}]", remote_data_capabilities.c_str());
 
   std::size_t prefered_pt_start = 0;
 

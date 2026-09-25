@@ -27,7 +27,7 @@ bool AddTurnRelay(NiceAgent* agent, guint stream_id, const std::string& address,
   const char* transport = type == NICE_RELAY_TYPE_TURN_UDP ? "UDP" : "TCP";
 
   if (accepted) {
-    LOG_INFO("Registered TURN/{} relay [{}:{}]", transport, address, port);
+    LOG_DEBUG("Registered TURN/{} relay [{}:{}]", transport, address, port);
     return true;
   }
 
@@ -264,7 +264,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
         g_object_set(agent, "stun-servers", endpoints.c_str(), nullptr);
         g_signal_connect(agent, "stun-mapping", G_CALLBACK(OnStunMappingStatic),
                          this);
-        LOG_INFO("ICE same-socket STUN endpoints [{}]", endpoints);
+        LOG_DEBUG("ICE same-socket STUN endpoints [{}]", endpoints);
       } else {
         const auto& endpoint = stun_endpoints.front();
         g_object_set(agent, "stun-server", endpoint.host.c_str(),
@@ -280,7 +280,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     const bool enable_upnp = !IsTurnForced(turn_mode_);
     g_object_set(agent, "upnp", enable_upnp,
                  "upnp-timeout", 3000u, nullptr);
-    LOG_INFO("ICE UPnP mapping [{}], discovery timeout 3000 ms",
+    LOG_DEBUG("ICE UPnP mapping [{}], discovery timeout 3000 ms",
              enable_upnp);
 
     g_signal_connect(agent, "candidate-gathering-done",
@@ -393,7 +393,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   GenerateDtlsCertificate();
   // LOG_INFO("Generated DTLS fingerprint: {}", dtls_fingerprint_);
 
-  LOG_INFO("Nice agent init finish");
+  LOG_DEBUG("Nice agent init finish");
   return 0;
 }
 
@@ -430,7 +430,7 @@ void IceAgent::OnNiceAgentClosedStatic(
   }
 
   self->agent_closed_.store(true);
-  LOG_INFO("Nice agent closed");
+  LOG_DEBUG("Nice agent closed");
 
   GMainLoop* loop = self->gloop_.load();
   if (loop != nullptr) {
@@ -491,7 +491,7 @@ int IceAgent::DestroyIceAgent() {
 
   CleanupDtls();
 
-  LOG_INFO("Destroy nice agent success");
+  LOG_DEBUG("Destroy nice agent success");
   return 0;
 }
 
@@ -656,7 +656,7 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
     g_object_set(agent_.load(), "relay-upgrade-timeout", upgrade ? 30000u : 0u,
                  nullptr);
   }
-  LOG_INFO("ICE relay upgrade peer_support={} forced_relay={} reliable={} window_ms={}",
+  LOG_DEBUG("ICE relay upgrade peer_support={} forced_relay={} reliable={} window_ms={}",
            SupportsRelayUpgrade(remote_sdp), IsTurnForced(turn_mode_),
            use_reliable_ice_, upgrade ? 30000 : 0);
   // Parsing candidates can make ICE READY on its context immediately. Publish
@@ -708,7 +708,7 @@ int IceAgent::AddRemoteCandidate(const std::string& candidate_sdp) {
   if (added > 0) {
     char address[NICE_ADDRESS_STRING_LEN] = {};
     nice_address_to_string(&candidate->addr, address);
-    LOG_INFO("Remote ICE candidate type={} transport={} address={}:{} priority={}",
+    LOG_DEBUG("Remote ICE candidate type={} transport={} address={}:{} priority={}",
              nice_candidate_type_to_string(candidate->type),
              nice_candidate_transport_to_string(candidate->transport), address,
              nice_address_get_port(&candidate->addr), candidate->priority);
@@ -846,7 +846,7 @@ void IceAgent::ProbePredictedRemoteCandidates() {
         predicted = g_slist_prepend(predicted, hypothesis);
       }
       if (!ports.empty()) {
-        LOG_INFO("ICE bounded port prediction group={} new={} total={}/{}",
+        LOG_DEBUG("ICE bounded port prediction group={} new={} total={}/{}",
                  group, ports.size(), port_predictor_.predictions(),
                  RemotePortPredictor::kMaxPredictions);
       }
@@ -879,7 +879,7 @@ int IceAgent::SetRemoteCandidateGatheringDone() {
     return -1;
   }
 
-  LOG_INFO("Remote ICE candidate gathering is complete");
+  LOG_DEBUG("Remote ICE candidate gathering is complete");
   return 0;
 }
 

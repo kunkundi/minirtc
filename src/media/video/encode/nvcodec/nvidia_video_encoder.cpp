@@ -295,7 +295,7 @@ int NvidiaVideoEncoder::Encode(
   auto encode_time_cost = std::chrono::duration_cast<std::chrono::milliseconds>(
                               std::chrono::steady_clock::now() - start)
                               .count();
-  LOG_INFO("Encode time cost {}ms", encode_time_cost);
+  LOG_DEBUG("Encode time cost {}ms", encode_time_cost);
 #endif
 
   return 0;

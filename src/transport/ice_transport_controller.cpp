@@ -945,7 +945,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
             self->force_i_frame_streams_.insert(channel_name);
             LOG_ERROR("Failed to force I frame for stream [{}]", channel_name);
           } else {
-            LOG_INFO("Force I frame for stream [{}]", channel_name);
+            LOG_DEBUG("Force I frame for stream [{}]", channel_name);
           }
         }
         context->codec->Encode(
@@ -1402,7 +1402,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
             media_config_.max_frame_rate,
             context->encoded_frame_rate_windows,
             context->encoded_frame_rate_valid_window_count, balanced);
-    LOG_INFO(
+    LOG_DEBUG(
         "Video frame health: channel={} encoded_fps={} low_windows={}/{} "
         "capture_fps={} pacer_reject_percent={} "
         "encode_queue_drop_percent={} delay_avg_ms={} delay_p95_ms={} "
@@ -3585,7 +3585,7 @@ void IceTransportController::UpdateFecProtection() {
                 ? 0
                 : auxiliary->second
                       .sent_bps[static_cast<size_t>(FecPacketKind::kRepair)];
-        LOG_INFO("FEC control: stream={} mode={} reason={} samples={} loss={} "
+        LOG_DEBUG("FEC control: stream={} mode={} reason={} samples={} loss={} "
                  "rtt={} queue={} feedback_age={} ratio={} media_bps={} "
                  "fec_bps={} rtx_bps={} sent_media_bps={} sent_fec_bps={}",
                  item.first, int(mode), FecDecisionName(config.reason),
@@ -3618,7 +3618,7 @@ void IceTransportController::UpdateFecProtection() {
   }
   if (log) {
     fec_log_ms_ = now_ms;
-    LOG_INFO("FEC pacer: dropped={} media_bps={} fec_bps={}",
+    LOG_DEBUG("FEC pacer: dropped={} media_bps={} fec_bps={}",
              paced_sender_->FecDroppedPackets(), media_total, fec_total);
   }
   if (!publish)

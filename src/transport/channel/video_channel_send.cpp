@@ -152,7 +152,7 @@ void VideoChannelSend::OnSentRtpPacket(
     const int64_t now_ms = clock_->CurrentTimeMs();
     if (now_ms - last_fec_stats_ms_ >= 5000) {
       const auto& stats = fec_state_->sender.Stats();
-      LOG_INFO(
+      LOG_DEBUG(
           "FEC send: channel={} source={} repair={} budget_skips={} "
           "rejected={} codec_errors={}",
           channel_name_, stats.source_packets, stats.repair_packets,

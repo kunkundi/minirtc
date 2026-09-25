@@ -79,7 +79,7 @@ int LoadWindowsCertificateStore(X509_STORE* store, DWORD location_flag,
   }
 
   CertCloseStore(sys_store, 0);
-  LOG_INFO("Loaded {} Windows certificates from {}", imported_count,
+  LOG_DEBUG("Loaded {} Windows certificates from {}", imported_count,
            location_name);
   return imported_count;
 }
@@ -351,7 +351,7 @@ int LoadMacAnchorCertificates(X509_STORE* store) {
   int imported_count = LoadMacCertificatesFromArray(store, certs);
   CFRelease(certs);
 
-  LOG_INFO("Loaded {} anchor certificates from macOS default anchors",
+  LOG_DEBUG("Loaded {} anchor certificates from macOS default anchors",
            imported_count);
   return imported_count;
 }
@@ -380,7 +380,7 @@ int LoadMacTrustSettingsCertificates(X509_STORE* store,
   }
 
   CFRelease(certs);
-  LOG_INFO("Loaded {} trusted root certificates from macOS {} trust settings",
+  LOG_DEBUG("Loaded {} trusted root certificates from macOS {} trust settings",
            imported_count, domain_name);
   return imported_count;
 }
@@ -402,7 +402,7 @@ bool LoadMacSystemAnchorCertificates(SSL_CTX* ssl_ctx) {
   total_count += LoadMacTrustSettingsCertificates(
       store, kSecTrustSettingsDomainUser, "User");
 
-  LOG_INFO("Loaded {} certificates from macOS trust stores", total_count);
+  LOG_DEBUG("Loaded {} certificates from macOS trust stores", total_count);
   return total_count > 0;
 }
 #endif
@@ -457,7 +457,7 @@ void WsClient::LoadTlsSystemRootCertificates(SSL_CTX* ssl_ctx) {
   bool loaded_linux_bundle = false;
   for (const char* path : ca_bundle_paths) {
     if (SSL_CTX_load_verify_locations(ssl_ctx, path, nullptr) == 1) {
-      LOG_INFO("Loaded Linux system CA bundle from {}", path);
+      LOG_DEBUG("Loaded Linux system CA bundle from {}", path);
       loaded_linux_bundle = true;
       break;
     }

@@ -308,7 +308,7 @@ int SvtAv1Encoder::Encode(
   EbErrorType packet_ret =
       svt_av1_enc_get_packet(svt_av1_encoder_, &output_packet, 0);
   if (packet_ret == EB_NoErrorEmptyQueue) {
-    LOG_INFO("No packet available");
+    LOG_DEBUG("No packet available");
     return 0;
   }
   if (packet_ret != EB_ErrorNone) {

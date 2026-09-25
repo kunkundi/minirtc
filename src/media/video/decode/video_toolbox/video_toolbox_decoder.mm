@@ -417,7 +417,7 @@ int VideoToolboxDecoder::Impl::Decode(
   } else {
     const uint64_t frame_count = ++submitted_frame_count_;
     if (frame_count == 1 || frame_count % 300 == 0) {
-      LOG_INFO("VideoToolbox submitted frame {}, sample_size={}, keyframe={}",
+      LOG_DEBUG("VideoToolbox submitted frame {}, sample_size={}, keyframe={}",
                frame_count, sample_size, is_keyframe);
     }
   }
@@ -618,7 +618,7 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
 
   const uint64_t frame_count = ++impl->decoded_frame_count_;
   if (frame_count == 1 || frame_count % 300 == 0) {
-    LOG_INFO("VideoToolbox decoded frame {}, size={}x{}, pixel_format={}",
+    LOG_DEBUG("VideoToolbox decoded frame {}, size={}x{}, pixel_format={}",
              frame_count, width, height, pixel_format);
   }
 

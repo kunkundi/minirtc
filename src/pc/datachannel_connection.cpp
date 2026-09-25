@@ -28,25 +28,27 @@ DataChannelConnection::DataChannelConnection(
       callbacks_(callbacks) {
   // disable av1 encoding
   info_.av1_encoding = false;
-  InitLogger(::rtc::LogLevel::Verbose,
+  InitLogger(SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG ? ::rtc::LogLevel::Debug
+                                                    : ::rtc::LogLevel::Info,
              [](::rtc::LogLevel level, std::string message) {
                switch (level) {
                  case ::rtc::LogLevel::Verbose:
-                   LOG_TRACE(message);
+                   LOG_TRACE("{}", message);
                    break;
                  case ::rtc::LogLevel::Debug:
-                   LOG_DEBUG(message);
+                   LOG_DEBUG("{}", message);
                    break;
                  case ::rtc::LogLevel::Info:
-                   LOG_INFO(message);
+                   LOG_INFO("{}", message);
                    break;
                  case ::rtc::LogLevel::Warning:
-                   LOG_WARN(message);
+                   LOG_WARN("{}", message);
                    break;
                  case ::rtc::LogLevel::Error:
-                   LOG_ERROR(message);
+                   LOG_ERROR("{}", message);
+                   break;
                  case ::rtc::LogLevel::Fatal:
-                   LOG_FATAL(message);
+                   LOG_FATAL("{}", message);
                    break;
                  case ::rtc::LogLevel::None:
                    break;

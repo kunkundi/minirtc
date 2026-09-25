@@ -455,7 +455,6 @@ void SendSideBandwidthEstimation::UpdatePropagationRtt(
 
 void SendSideBandwidthEstimation::OnSentPacket(const SentPacket& sent_packet) {
   // Only feedback-triggering packets will be reported here.
-  LOG_ERROR("5");
   rtt_backoff_.last_packet_sent_ = sent_packet.send_time;
 }
 

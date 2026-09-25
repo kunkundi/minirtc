@@ -218,7 +218,7 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
     Timestamp feedback_receive_time) {
   PruneRecentlyAcknowledgedPackets(feedback_receive_time);
   if (feedback.packets().empty()) {
-    LOG_INFO("Empty congestion control feedback packet received.");
+    LOG_DEBUG("Empty congestion control feedback packet received.");
     return std::nullopt;
   }
   if (current_offset_.IsInfinite()) {
@@ -283,11 +283,11 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
         failed_lookups, (failed_lookups > 1 ? "s" : ""));
   }
   if (duplicate_feedbacks > 0) {
-    LOG_INFO("Ignoring {} duplicate packet feedback{}.", duplicate_feedbacks,
+    LOG_DEBUG("Ignoring {} duplicate packet feedback{}.", duplicate_feedbacks,
              (duplicate_feedbacks > 1 ? "s" : ""));
   }
   if (ignored_packets > 0) {
-    LOG_INFO("Ignoring {} packets because they were sent on a different route.",
+    LOG_DEBUG("Ignoring {} packets because they were sent on a different route.",
              ignored_packets);
   }
 

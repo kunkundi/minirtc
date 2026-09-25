@@ -205,7 +205,7 @@ void ProbeBitrateEstimator::RemoveExpiredClusters(Timestamp timestamp) {
                 : (it->second.rejection_reason
                        ? it->second.rejection_reason
                        : "no_valid_estimate");
-        LOG_INFO(
+        LOG_DEBUG(
             "Probe feedback expired without estimate: id={} reason={} "
             "actual_packets={} target_packets={} actual_bytes={} "
             "target_bytes={}",

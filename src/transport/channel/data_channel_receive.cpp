@@ -189,7 +189,7 @@ bool DataChannelReceive::InitKcp() {
       kcp_, kcp_mutex_, channel_name_, [this]() { this->TryReceiveKcpData(); });
   kcp_update_timer_->Start();
 
-  LOG_INFO("KCP initialized for data channel [{}], conv={}, ssrc={}",
+  LOG_DEBUG("KCP initialized for data channel [{}], conv={}, ssrc={}",
            channel_name_, conv, ssrc_);
   return true;
 }

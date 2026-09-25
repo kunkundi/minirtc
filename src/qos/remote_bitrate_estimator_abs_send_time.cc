@@ -85,7 +85,7 @@ void RemoteBitrateEstimatorAbsSendTime::MaybeAddCluster(
 RemoteBitrateEstimatorAbsSendTime::RemoteBitrateEstimatorAbsSendTime(
     std::shared_ptr<Clock> clock, RemoteBitrateObserver* observer)
     : clock_(clock), observer_(observer), remote_rate_() {
-  LOG_INFO("RemoteBitrateEstimatorAbsSendTime: Instantiating.");
+  LOG_DEBUG("RemoteBitrateEstimatorAbsSendTime: Instantiating.");
 }
 
 std::list<RemoteBitrateEstimatorAbsSendTime::Cluster>
@@ -137,7 +137,7 @@ RemoteBitrateEstimatorAbsSendTime::FindBestProbe(
         best = &cluster;
       }
     } else {
-      LOG_INFO(
+      LOG_DEBUG(
           "Probe failed, sent at {} bps, received at {} bps. Mean send delta: "
           "{} ms, mean recv delta: {} ms, num probes: {}",
           cluster.SendBitrate().bps(), cluster.RecvBitrate().bps(),
@@ -163,7 +163,7 @@ RemoteBitrateEstimatorAbsSendTime::ProcessClusters(Timestamp now) {
     // Make sure that a probe sent on a lower bitrate than our estimate can't
     // reduce the estimate.
     if (IsBitrateImproving(probe_bitrate)) {
-      LOG_INFO(
+      LOG_DEBUG(
           "Probe successful, sent at {} bps, received at {} bps. Mean send "
           "delta: {} ms, mean recv delta: {} ms, num probes: {}",
           best->SendBitrate().bps(), best->RecvBitrate().bps(),
@@ -257,7 +257,7 @@ void RemoteBitrateEstimatorAbsSendTime::IncomingPacket(
         send_delta = send_time - probes_.back().send_time;
         recv_delta = arrival_time - probes_.back().recv_time;
       }
-      LOG_INFO(
+      LOG_DEBUG(
           "Probe packet received: send time={} ms, recv time={} ms, send "
           "delta={} ms, recv delta= {} ms.",
           send_time.ms(), arrival_time.ms(), send_delta.ms(), recv_delta.ms());

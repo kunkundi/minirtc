@@ -35,30 +35,23 @@ BandwidthLimitedCause GetBandwidthLimitedCause(LossBasedState loss_based_state,
                                                BandwidthUsage bandwidth_usage) {
   if (bandwidth_usage == BandwidthUsage::kBwOverusing ||
       bandwidth_usage == BandwidthUsage::kBwUnderusing) {
-    LOG_ERROR("kDelayBasedLimitedDelayIncreased");
     return BandwidthLimitedCause::kDelayBasedLimitedDelayIncreased;
   } else if (is_rtt_above_limit) {
-    LOG_ERROR("kDelayBasedLimitedDelayIncreased");
     return BandwidthLimitedCause::kRttBasedBackOffHighRtt;
   }
   switch (loss_based_state) {
     case LossBasedState::kDecreasing:
       // Probes may not be sent in this state.
-      LOG_ERROR("kLossLimitedBwe");
       return BandwidthLimitedCause::kLossLimitedBwe;
     case webrtc::LossBasedState::kIncreaseUsingPadding:
       // Probes may not be sent in this state.
-      LOG_ERROR("kLossLimitedBwe");
       return BandwidthLimitedCause::kLossLimitedBwe;
     case LossBasedState::kIncreasing:
-      LOG_ERROR("kLossLimitedBweIncreasing");
       // Probes may be sent in this state.
       return BandwidthLimitedCause::kLossLimitedBweIncreasing;
     case LossBasedState::kDelayBasedEstimate:
-      // LOG_ERROR("kDelayBasedLimited");
       return BandwidthLimitedCause::kDelayBasedLimited;
     default:
-      LOG_ERROR("kLossLimitedBwe");
       return BandwidthLimitedCause::kLossLimitedBwe;
   }
 }

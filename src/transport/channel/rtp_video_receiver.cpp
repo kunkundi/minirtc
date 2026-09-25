@@ -820,7 +820,7 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
     std::lock_guard<std::mutex> lock(fec_mtx_);
     if (fec_receiver_) {
       const auto& fec = fec_receiver_->Stats();
-      LOG_INFO(
+      LOG_DEBUG(
           "FEC receive: channel={} source={} repair={} recovered={} expired={} "
           "rejected={} codec_errors={}",
           log_context_, fec.source_packets, fec.repair_packets,
@@ -893,7 +893,7 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
         fir_suppressed, fir_failed, soft_fir_sent, soft_fir_avoided,
         fir_responses, fir_response_avg_ms, fir_response_max_ms);
   } else {
-    LOG_INFO(
+    LOG_DEBUG(
         "Video recovery activity: channel={} media_ssrc={} interval_ms={} "
         "rtt_ms={} soft_deadline_ms={} soft_fir_delay_ms={} "
         "hard_deadline_ms={} completed_frames={} "
