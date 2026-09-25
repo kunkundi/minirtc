@@ -1,3 +1,9 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2023-11-15
+ * Copyright (c) 2023 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _RTP_VIDEO_RECEIVER_H_
 #define _RTP_VIDEO_RECEIVER_H_
 
@@ -13,7 +19,6 @@
 
 #include "api/clock/clock.h"
 #include "clock/system_clock.h"
-#include "fec_decoder.h"
 #include "h264_frame_assember.h"
 #include "io_statistics.h"
 #include "nack_requester.h"
@@ -23,6 +28,7 @@
 #include "ringbuffer.h"
 #include "rtc_base/numerics/sequence_number_util.h"
 #include "rtcp_sender.h"
+#include "rtp_fec.h"
 #include "rtp_packet_av1.h"
 #include "rtp_packet_h264.h"
 #include "rtp_rtcp_defines.h"
@@ -41,6 +47,7 @@ class RtpVideoReceiver : public ThreadBase {
 
  public:
   void InsertRtpPacket(RtpPacket& rtp_packet);
+  void SetFecEnabled(bool enabled);
 
   void SetSendDataFunc(std::function<int(const char*, size_t)> data_send_func);
 
@@ -79,6 +86,7 @@ class RtpVideoReceiver : public ThreadBase {
   void RequestKeyFrame();
 
  private:
+  void InsertMediaPacket(RtpPacket& packet, bool fec_recovered = false);
   void ProcessAv1RtpPacket(RtpPacketAv1& rtp_packet_av1);
   bool CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1);
 
@@ -182,14 +190,8 @@ class RtpVideoReceiver : public ThreadBase {
   std::function<int(const char*, size_t)> data_send_func_ = nullptr;
 
  private:
-  bool fec_enable_ = false;
-  FecDecoder fec_decoder_;
-  uint64_t last_packet_ts_ = 0;
-  // std::map<uint16_t, RtpPacket> incomplete_fec_frame_list_;
-  // std::map<uint32_t, std::map<uint16_t, RtpPacket>> fec_source_symbol_list_;
-  // std::map<uint32_t, std::map<uint16_t, RtpPacket>> fec_repair_symbol_list_;
-  std::set<uint64_t> incomplete_fec_frame_list_;
-  std::map<uint64_t, std::map<uint16_t, RtpPacket>> incomplete_fec_packet_list_;
+  std::mutex fec_mtx_;
+  std::unique_ptr<RtpFecReceiver> fec_receiver_;
   std::unordered_map<uint64_t, uint16_t> fua_end_sequence_numbers_;
   std::unordered_map<uint64_t, uint16_t> fua_start_sequence_numbers_;
   H264FrameAssembler h264_frame_assembler_;

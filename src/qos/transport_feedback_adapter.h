@@ -27,6 +27,7 @@
 #include "rtc_base/network_route.h"
 #include "rtc_base/numerics/sequence_number_unwrapper.h"
 #include "rtp_packet_to_send.h"
+#include "fec_adaptation_controller.h"
 
 namespace minirtc {
 namespace webrtc {
@@ -71,7 +72,7 @@ class TransportFeedbackAdapter {
  public:
   TransportFeedbackAdapter();
 
-  void AddPacket(const RtpPacketToSend& packet,
+  int64_t AddPacket(const RtpPacketToSend& packet,
                  const PacedPacketInfo& pacing_info, size_t overhead_bytes,
                  Timestamp creation_time);
 
@@ -89,6 +90,13 @@ class TransportFeedbackAdapter {
   void SetNetworkRoute(const rtc::NetworkRoute& network_route);
 
   DataSize GetOutstandingData() const;
+
+  void CommitFecSend(int64_t id) { fec_feedback_.Commit(id); }
+  void RemoveFecSend(int64_t id) { fec_feedback_.Remove(id); }
+  std::map<uint32_t, FecFeedbackSnapshot> FecFeedback(int64_t now_ms, int64_t rtt_ms) {
+    return fec_feedback_.Snapshot(now_ms, rtt_ms);
+  }
+  void ResetFecFeedback() { fec_feedback_.Reset(); }
 
  private:
   struct SsrcAndRtpSequencenumber {
@@ -152,6 +160,7 @@ class TransportFeedbackAdapter {
   std::deque<RecentlyAcknowledgedPacket>
       recently_acknowledged_packets_in_order_;
   uint64_t acknowledgment_generation_ = 0;
+  FecFeedbackTracker fec_feedback_;
 };
 
 }  // namespace webrtc

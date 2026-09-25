@@ -1,156 +1,122 @@
 #include "fec_encoder.h"
 
-#include "log.h"
+#include <algorithm>
+#include <cstdlib>
+#include <cstring>
+#include <memory>
+
+#include "openfec_session.h"
+#include "rs_small.h"
+
+extern "C" {
+#include "lib_common/of_openfec_api.h"
+}
 
 namespace minirtc {
+namespace {
+size_t LegacyTotal(size_t k) { return k * 1000 / 667; }
+size_t LegacyCount(size_t len) {
+  if (!len || len > FecEncoder::kMaxSymbols * FecEncoder::kMaxSymbolSize)
+    return 0;
+  const size_t k =
+      (len + FecEncoder::kMaxSymbolSize - 1) / FecEncoder::kMaxSymbolSize;
+  return LegacyTotal(k) <= FecEncoder::kMaxSymbols ? k : 0;
+}
+}  // namespace
 
-FecEncoder::FecEncoder() {}
-
-FecEncoder::~FecEncoder() {}
-
-int FecEncoder::Init() {
-  fec_codec_id_ = OF_CODEC_REED_SOLOMON_GF_2_M_STABLE;
-
-  fec_rs_params_ = (of_rs_2_m_parameters_t *)calloc(1, sizeof(*fec_rs_params_));
-  if (nullptr == fec_rs_params_) {
-    LOG_ERROR("Create FEC codec params failed");
-    return -1;
+bool FecEncoder::EncodeSymbols(const FecSymbols& sources, size_t repair_count,
+                               FecSymbols* repairs) const {
+  if (!repairs || repairs == &sources) return false;
+  const auto invalid = [&] {
+    repairs->clear();
+    return false;
+  };
+  const size_t k = sources.size();
+  if (!k || k > kMaxSymbols || repair_count > kMaxSymbols - k) return invalid();
+  const size_t size = sources.front().size();
+  if (!size || size > kMaxSymbolSize) return invalid();
+  for (const auto& source : sources)
+    if (source.size() != size) return invalid();
+  if (!repair_count) {
+    repairs->clear();
+    return true;
   }
-
-  fec_rs_params_->m = 8;
-  fec_params_ = (of_parameters_t *)fec_rs_params_;
-
-  if (OF_STATUS_OK !=
-      of_create_codec_instance(&fec_session_, fec_codec_id_, OF_ENCODER, 2)) {
-    LOG_ERROR("Create FEC codec instance failed");
-    return -1;
+  if (SupportsSmallRs(k, repair_count)) {
+    if (!EncodeSmallRs(sources, repair_count, repairs)) return invalid();
+    return true;
   }
+  repairs->clear();
 
-  return 0;
+  std::lock_guard<std::mutex> lock(OpenFecMutex());
+  of_session_t* raw = nullptr;
+  if (of_create_codec_instance(&raw, OF_CODEC_REED_SOLOMON_GF_2_M_STABLE,
+                               OF_ENCODER, 0) != OF_STATUS_OK) {
+    if (raw) of_release_codec_instance(raw);
+    return false;
+  }
+  std::unique_ptr<of_session_t, decltype(&of_release_codec_instance)> session(
+      raw, of_release_codec_instance);
+  of_rs_2_m_parameters_t params{};
+  params.m = 8;
+  params.nb_source_symbols = static_cast<uint32_t>(k);
+  params.nb_repair_symbols = static_cast<uint32_t>(repair_count);
+  params.encoding_symbol_length = static_cast<uint32_t>(size);
+  if (of_set_fec_parameters(raw, reinterpret_cast<of_parameters_t*>(&params)) !=
+      OF_STATUS_OK)
+    return false;
+
+  FecSymbols result(repair_count, std::vector<uint8_t>(size));
+  std::vector<void*> pointers(k + repair_count);
+  for (size_t i = 0; i < k; ++i)
+    pointers[i] = const_cast<uint8_t*>(sources[i].data());
+  for (size_t i = 0; i < repair_count; ++i) {
+    pointers[k + i] = result[i].data();
+    if (of_build_repair_symbol(raw, pointers.data(),
+                               static_cast<uint32_t>(k + i)) != OF_STATUS_OK)
+      return false;
+  }
+  *repairs = std::move(result);
+  return true;
 }
 
-int FecEncoder::Release() {
-  if (!fec_session_) {
-    LOG_ERROR("Invalid FEC codec instance");
-    return -1;
-  }
-
-  {
-    if (OF_STATUS_OK != of_release_codec_instance(fec_session_)) {
-      LOG_ERROR("Release FEC codec instance failed");
-      return -1;
-    }
-  }
-
-  if (fec_rs_params_) {
-    free(fec_rs_params_);
-  }
-
-  return 0;
-}
-
-uint8_t **FecEncoder::Encode(const char *data, size_t len) {
-  uint8_t **fec_packets = nullptr;
-
-  unsigned int last_packet_size = len % max_size_of_packet_;
-  uint8_t num_of_source_packets =
-      (uint8_t)(len / max_size_of_packet_) + (last_packet_size ? 1 : 0);
-  uint8_t num_of_total_packets =
-      (uint8_t)floor((double)num_of_source_packets / code_rate_);
-
-  fec_params_->nb_source_symbols = num_of_source_packets;
-  fec_params_->nb_repair_symbols = num_of_total_packets - num_of_source_packets;
-
-  fec_params_->encoding_symbol_length = max_size_of_packet_;
-
-  if (OF_STATUS_OK != of_set_fec_parameters(fec_session_, fec_params_)) {
-    LOG_ERROR("Set FEC params failed for codec_id {}", (int)fec_codec_id_);
-    return nullptr;
-  }
-
-  fec_packets = (uint8_t **)calloc(num_of_total_packets, sizeof(uint8_t *));
-
-  if (nullptr == fec_packets) {
-    LOG_ERROR("Calloc failed for fec_packets with size [{}])",
-              num_of_total_packets);
-    return nullptr;
-  }
-
-  for (int esi = 0; esi < num_of_source_packets; esi++) {
-    if (esi != (num_of_source_packets - 1)) {
-      fec_packets[esi] =
-          (uint8_t *)calloc(max_size_of_packet_, sizeof(uint8_t));
-      if (nullptr == fec_packets[esi]) {
-        LOG_ERROR("Calloc failed for fec_packets[{}] with size [{}])", esi,
-                  max_size_of_packet_);
-        ReleaseFecPackets(fec_packets, len);
-        return nullptr;
-      }
-      memcpy(fec_packets[esi], data + esi * max_size_of_packet_,
-             max_size_of_packet_);
-    } else {
-      fec_packets[esi] =
-          (uint8_t *)calloc(max_size_of_packet_, sizeof(uint8_t));
-      if (nullptr == fec_packets[esi]) {
-        LOG_ERROR("Calloc failed for fec_packets[{}] with size [{}])", esi,
-                  last_packet_size);
-        ReleaseFecPackets(fec_packets, len);
-        return nullptr;
-      }
-      memcpy(fec_packets[esi], data + esi * max_size_of_packet_,
-             last_packet_size);
-    }
-  }
-
-  for (unsigned int esi = num_of_source_packets; esi < num_of_total_packets;
-       esi++) {
-    fec_packets[esi] = (uint8_t *)calloc(max_size_of_packet_, sizeof(uint8_t));
-    if (nullptr == fec_packets[esi]) {
-      LOG_ERROR("Calloc failed for fec_packets[{}] with size [{}])", esi,
-                max_size_of_packet_);
-      ReleaseFecPackets(fec_packets, len);
+uint8_t** FecEncoder::Encode(const char* data, size_t len) {
+  const size_t k = LegacyCount(len);
+  if (!data || !k) return nullptr;
+  const size_t n = LegacyTotal(k);
+  FecSymbols sources(k, std::vector<uint8_t>(kMaxSymbolSize));
+  for (size_t i = 0; i < k; ++i)
+    std::memcpy(sources[i].data(), data + i * kMaxSymbolSize,
+                std::min(kMaxSymbolSize, len - i * kMaxSymbolSize));
+  FecSymbols repairs;
+  if (!EncodeSymbols(sources, n - k, &repairs)) return nullptr;
+  auto** result = static_cast<uint8_t**>(std::calloc(n, sizeof(uint8_t*)));
+  if (!result) return nullptr;
+  for (size_t i = 0; i < n; ++i) {
+    result[i] = static_cast<uint8_t*>(std::malloc(kMaxSymbolSize));
+    if (!result[i]) {
+      ReleaseFecPackets(result, len);
       return nullptr;
     }
-    if (OF_STATUS_OK !=
-        of_build_repair_symbol(fec_session_, (void **)fec_packets, esi)) {
-      LOG_ERROR("Build repair symbols failed for esi [{}]", esi);
-      ReleaseFecPackets(fec_packets, len);
-      return nullptr;
-    }
+    std::memcpy(result[i], i < k ? sources[i].data() : repairs[i - k].data(),
+                kMaxSymbolSize);
   }
-
-  return fec_packets;
+  return result;
 }
 
-int FecEncoder::ReleaseFecPackets(uint8_t **fec_packets, size_t len) {
-  if (nullptr == fec_packets) {
-    LOG_ERROR("Release Fec packets failed, due to fec_packets is nullptr");
-    return -1;
-  }
-  unsigned int last_packet_size = len % max_size_of_packet_;
-  uint8_t num_of_source_packets =
-      (uint8_t)(len / max_size_of_packet_) + (last_packet_size ? 1 : 0);
-  uint8_t num_of_total_packets =
-      (uint8_t)floor((double)num_of_source_packets / code_rate_);
-
-  for (int esi = 0; esi < num_of_total_packets; esi++) {
-    if (fec_packets[esi]) {
-      free(fec_packets[esi]);
-    }
-  }
-  free(fec_packets);
-
+int FecEncoder::ReleaseFecPackets(uint8_t** packets, size_t len) {
+  if (!packets) return 0;
+  const size_t k = LegacyCount(len);
+  if (!k) return -1;
+  for (size_t i = 0; i < LegacyTotal(k); ++i) std::free(packets[i]);
+  std::free(packets);
   return 0;
 }
 
-void FecEncoder::GetFecPacketsParams(unsigned int source_length,
-                                     uint8_t &num_of_total_packets,
-                                     uint8_t &num_of_source_packets,
-                                     unsigned int &last_packet_size) {
-  last_packet_size = source_length % max_size_of_packet_;
-  num_of_source_packets = (uint8_t)(source_length / max_size_of_packet_) +
-                          (last_packet_size ? 1 : 0);
-  num_of_total_packets =
-      (uint8_t)floor((double)num_of_source_packets / code_rate_);
+void FecEncoder::GetFecPacketsParams(unsigned int len, uint8_t& total,
+                                     uint8_t& source, unsigned int& last_size) {
+  const size_t k = LegacyCount(len);
+  source = static_cast<uint8_t>(k);
+  total = static_cast<uint8_t>(LegacyTotal(k));
+  last_size = k ? static_cast<unsigned int>(len - (k - 1) * kMaxSymbolSize) : 0;
 }
-}
+}  // namespace minirtc

@@ -63,7 +63,8 @@ void RtpAudioReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
 
   if (on_receive_data_) {
     on_receive_data_((const char*)rtp_packet.Payload(),
-                     rtp_packet.PayloadSize());
+                     rtp_packet.PayloadSize(), rtp_packet.SequenceNumber(),
+                     rtp_packet.Timestamp());
   }
 }
 

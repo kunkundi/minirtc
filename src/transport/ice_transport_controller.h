@@ -83,7 +83,13 @@ class IceTransportController
   // SRTP is negotiated from the local setting and the remote SDP before
   // Create() starts the media pipelines. Keep the controller in sync when the
   // remote peer does not advertise a DTLS fingerprint.
+  void SetFecEnabled(bool video, bool audio) {
+    video_fec_enabled_ = video;
+    media_config_.audio_fec_enabled = audio;
+  }
   void SetSrtpEnabled(bool enable_srtp) { enable_srtp_ = enable_srtp; }
+  // Internal runtime override; public Params ABI remains unchanged.
+  void SetFecMode(FecMode mode) { fec_mode_.store(mode); }
   // DTLS readiness is published only after the SRTP sessions are installed.
   bool IsSrtpActive() const { return dtls_ready_.load(); }
 
@@ -136,7 +142,8 @@ class IceTransportController
   void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame,
                               const std::string& channel_name);
   void OnReceiveCompleteAudio(const char* data, size_t size,
-                              const std::string& channel_name);
+                              const std::string& channel_name,
+                              uint16_t sequence, uint32_t timestamp);
   void OnReceiveCompleteData(const char* data, size_t size,
                              const std::string& channel_name);
 
@@ -162,6 +169,7 @@ class IceTransportController
     int64_t send_time_ms = 0;
     size_t send_size = 0;  // Includes SRTP overhead when the packet is protected.
     bool tracked = false;
+    int64_t fec_feedback_id = -1;
   };
 
   PacketFeedbackRegistration RegisterPacketForFeedback(
@@ -174,6 +182,8 @@ class IceTransportController
                     const PacketFeedbackRegistration& registration);
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateVideoBitrateAllocation();
+  void UpdateFecProtection();
+  void ResetFecAdaptation();
   void UpdateControlState();
   void UpdateCongestedState();
   bool CanProbeWithoutMedia();
@@ -208,6 +218,10 @@ class IceTransportController
     std::optional<int> desired_target_bitrate;
     std::optional<int> applied_target_bitrate;
     bool bitrate_update_queued = false;
+    FecAdaptationController fec_controller;
+    FecProtectionConfig fec_protection;
+    int64_t fec_last_active_ms = -1;
+    double rtx_bitrate_ewma = 0;
     bool startup_resolution_attempted = false;
     bool startup_keyframe_pending = false;
     int startup_keyframe_retry_count = 0;
@@ -450,6 +464,12 @@ class IceTransportController
 
   bool enable_srtp_;
   bool video_rtx_enabled_ = false;
+  bool video_fec_enabled_ = false;
+  std::atomic<FecMode> fec_mode_{FecMode::kAdaptive};
+  uint64_t fec_config_version_ = 0;
+  bool fec_update_queued_ = false;  // Guarded by stream_senders_mutex_.
+  int64_t fec_snapshot_ms_ = -1, fec_log_ms_ = -1;
+  std::map<uint32_t, FecFeedbackSnapshot> fec_feedback_snapshots_;
   std::optional<uint8_t> video_abs_send_time_ext_id_;
   std::optional<uint8_t> video_abs_recv_time_ext_id_;
   std::optional<uint8_t> audio_abs_send_time_ext_id_;
@@ -481,7 +501,7 @@ class IceTransportController
   std::shared_ptr<TaskQueueLockFree> task_queue_decode_;
   std::shared_ptr<TaskQueueLockFree> task_queue_trans_fb_;
   webrtc::DataSize congestion_window_size_;
-  bool is_congested_ = false;
+  std::atomic<bool> is_congested_{false};
   std::string last_active_stream_;
 
  private:

@@ -34,6 +34,11 @@ class MediaChannel {
     LOG_INFO("Initialize() default implementation");
   }
 
+  // Set once during negotiation, before Initialize / media threads start.
+  virtual void SetFecEnabled(bool enabled) {}
+  // Invoked on the serialized pacer queue after initialization.
+  virtual void SetFecProtection(const FecProtectionConfig& config) {}
+
   virtual void Destroy() { LOG_INFO("Destroy() default implementation"); }
 
   virtual void SetAbsoluteSendTimeExtensionId(

@@ -39,7 +39,14 @@ class RtpPacketizer {
   void SetAbsoluteSendTimeExtensionId(
       std::optional<uint8_t> extension_id);
 
+  bool SetMaxPayloadSize(uint32_t size) {
+    if (size == 0 || size > MAX_NALU_LEN) return false;
+    max_payload_size_ = size;
+    return true;
+  }
+
  protected:
+  uint32_t max_payload_size_ = MAX_NALU_LEN;
   bool HasAbsoluteSendTimeExtension() const {
     return abs_send_time_ext_id_.has_value();
   }

@@ -7,46 +7,36 @@
 #ifndef _FEC_DECODER_H_
 #define _FEC_DECODER_H_
 
-#include <cstddef>
-#include <cstdint>
+#include <memory>
 
-#ifdef __cplusplus
-extern "C" {
-#endif
-#include "lib_common/of_openfec_api.h"
-#ifdef __cplusplus
-};
-#endif
+#include "fec_encoder.h"
 
 namespace minirtc {
 class FecDecoder {
  public:
+  enum class Result { kAccepted, kDuplicate, kComplete, kInvalid, kError };
   FecDecoder();
   ~FecDecoder();
+  FecDecoder(const FecDecoder&) = delete;
+  FecDecoder& operator=(const FecDecoder&) = delete;
 
- public:
-  int Init();
+  bool Reset(size_t source_count, size_t repair_count, size_t symbol_size);
+  Result AddSymbol(size_t id, const uint8_t* data, size_t size);
+  bool Complete() const;
+  // Valid until Reset/Release/destruction. Includes the source slots [0, k).
+  const FecSymbols& Symbols() const;
+
+  int Init() { return Release(); }
   int Release();
-  int ResetParams(unsigned int source_symbol_num);
-  uint8_t **DecodeWithNewSymbol(const char *fec_symbol,
-                                unsigned int fec_symbol_id);
-  int ReleaseSourcePackets(uint8_t **source_packets);
+  int ResetParams(unsigned int source_count);
+  // Legacy buffers must contain 1400 readable bytes. Returned table borrows
+  // this decoder's owned symbols; free only the table before resetting.
+  uint8_t** DecodeWithNewSymbol(const char* symbol, unsigned int id);
+  int ReleaseSourcePackets(uint8_t** packets);
 
  private:
-  double code_rate_ = 0.667;
-  int max_size_of_packet_ = 1400;
-
- private:
-  of_codec_id_t fec_codec_id_ = OF_CODEC_REED_SOLOMON_GF_2_M_STABLE;
-  of_session_t *fec_session_ = nullptr;
-  of_parameters_t *fec_params_ = nullptr;
-  of_rs_2_m_parameters_t *fec_rs_params_ = nullptr;
-  of_ldpc_parameters_t *fec_ldpc_params_ = nullptr;
-
-  unsigned int num_of_received_symbols_ = 0;
-  unsigned int num_of_source_packets_ = 0;
-  unsigned int num_of_total_packets_ = 0;
+  struct State;
+  std::unique_ptr<State> state_;
 };
 }  // namespace minirtc
-
 #endif

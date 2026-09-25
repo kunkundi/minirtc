@@ -11,7 +11,8 @@ AudioChannelReceive::AudioChannelReceive(
     const std::string& channel_name, uint32_t ssrc,
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics,
-    std::function<void(const char*, size_t)> on_receive_audio)
+    std::function<void(const char*, size_t, uint16_t, uint32_t)>
+        on_receive_audio)
     : channel_name_(channel_name),
       ssrc_(ssrc),
       clock_(clock),
@@ -24,12 +25,13 @@ AudioChannelReceive::~AudioChannelReceive() {}
 void AudioChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
   rtp_audio_receiver_ = std::make_unique<RtpAudioReceiver>(
       ssrc_, clock_, ice_io_statistics_);
-  rtp_audio_receiver_->SetOnReceiveData(
-      [this](const char* data, size_t size) -> void {
-        if (on_receive_audio_) {
-          on_receive_audio_(data, size);
-        }
-      });
+  rtp_audio_receiver_->SetOnReceiveData([this](const char* data, size_t size,
+                                               uint16_t sequence,
+                                               uint32_t timestamp) -> void {
+    if (on_receive_audio_) {
+      on_receive_audio_(data, size, sequence, timestamp);
+    }
+  });
 
   rtp_audio_receiver_->SetSendDataFunc([this](const char* data,
                                               size_t size) -> int {
@@ -63,7 +65,10 @@ int AudioChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
       return -1;
     }
     RtpPacket rtp_packet;
-    rtp_packet.Build((uint8_t*)data, (uint32_t)size);
+    if (!rtp_packet.Build((const uint8_t*)data, (uint32_t)size) ||
+        rtp_packet.Ssrc() != ssrc_ ||
+        rtp_packet.PayloadType() != rtp::PAYLOAD_TYPE::OPUS)
+      return -1;
     rtp_audio_receiver_->InsertRtpPacket(rtp_packet);
   }
 

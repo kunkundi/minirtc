@@ -28,6 +28,7 @@ void VideoChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
       std::make_unique<RtpVideoReceiver>(clock_, ice_io_statistics_);
   rtp_video_receiver_->SetLogContext(channel_name_);
   rtp_video_receiver_->SetMediaConfig(ssrc_, rtx_ssrc_, payload_type);
+  rtp_video_receiver_->SetFecEnabled(fec_enabled_);
   rtp_video_receiver_->SetAbsoluteSendTimeExtensionId(
       abs_send_time_ext_id_);
   rtp_video_receiver_->SetOnReceiveCompleteFrame(

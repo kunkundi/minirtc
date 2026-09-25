@@ -1,4 +1,10 @@
 /*
+ * @Author: DI JUNKUN
+ * @Date: 2025-11-15
+ * Copyright (c) 2023 by DI JUNKUN, All Rights Reserved.
+ */
+
+/*
  *  Copyright (c) 2016 The WebRTC project authors. All Rights Reserved.
  *
  *  Use of this source code is governed by a BSD-style license
@@ -7,8 +13,8 @@
  *  in the file PATENTS.  All contributing project authors may
  *  be found in the AUTHORS file in the root of the source tree.
  */
-#ifndef MODULES_RTP_RTCP_SOURCE_RTP_PACKET_TO_SEND_H_
-#define MODULES_RTP_RTCP_SOURCE_RTP_PACKET_TO_SEND_H_
+#ifndef _RTP_PACKET_TO_SEND_H_
+#define _RTP_PACKET_TO_SEND_H_
 
 #include <stddef.h>
 #include <stdint.h>
@@ -51,6 +57,8 @@ class RtpPacketToSend : public minirtc::RtpPacket {
   // Time in local time base as close as it can to frame capture time.
   webrtc::Timestamp capture_time() const { return capture_time_; }
   void set_capture_time(webrtc::Timestamp time) { capture_time_ = time; }
+  std::optional<webrtc::Timestamp> fec_deadline() const { return fec_deadline_; }
+  void set_fec_deadline(webrtc::Timestamp time) { fec_deadline_ = time; }
 
   void set_packet_type(webrtc::RtpPacketMediaType type);
 
@@ -178,6 +186,7 @@ class RtpPacketToSend : public minirtc::RtpPacket {
   bool is_red_ = false;
   bool send_as_ect1_ = false;
   std::optional<TimeDelta> time_in_send_queue_;
+  std::optional<webrtc::Timestamp> fec_deadline_;
 
  private:
   std::string stream_name_;
@@ -187,4 +196,4 @@ class RtpPacketToSend : public minirtc::RtpPacket {
 }  // namespace webrtc
 }  // namespace minirtc
 
-#endif  // MODULES_RTP_RTCP_SOURCE_RTP_PACKET_TO_SEND_H_
+#endif  // _RTP_PACKET_TO_SEND_H_

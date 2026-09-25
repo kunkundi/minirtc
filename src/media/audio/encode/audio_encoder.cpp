@@ -23,6 +23,10 @@ AudioEncoder::~AudioEncoder() {
 }
 
 int AudioEncoder::Init(const MediaCodecConfig& config) {
+  if (opus_encoder_) {
+    opus_encoder_destroy(opus_encoder_);
+    opus_encoder_ = nullptr;
+  }
   int err;
   opus_encoder_ = opus_encoder_create(sample_rate_, channel_num_,
                                       OPUS_APPLICATION_VOIP, &err);
@@ -31,9 +35,22 @@ int AudioEncoder::Init(const MediaCodecConfig& config) {
     return -1;
   }
 
-  opus_encoder_ctl(opus_encoder_, OPUS_SET_LSB_DEPTH(16));
-  opus_encoder_ctl(opus_encoder_,
-                   OPUS_SET_EXPERT_FRAME_DURATION(OPUS_FRAMESIZE_10_MS));
+  if (opus_encoder_ctl(opus_encoder_, OPUS_SET_LSB_DEPTH(16)) != OPUS_OK ||
+      opus_encoder_ctl(opus_encoder_, OPUS_SET_EXPERT_FRAME_DURATION(
+                                          OPUS_FRAMESIZE_10_MS)) != OPUS_OK ||
+      opus_encoder_ctl(opus_encoder_,
+                       OPUS_SET_INBAND_FEC(config.audio_fec_enabled ? 1 : 0)) !=
+          OPUS_OK ||
+      opus_encoder_ctl(opus_encoder_, OPUS_SET_PACKET_LOSS_PERC(
+                                          config.audio_fec_enabled ? 10 : 0)) !=
+          OPUS_OK ||
+      (config.audio_fec_enabled &&
+       opus_encoder_ctl(opus_encoder_, OPUS_SET_BITRATE(32000)) != OPUS_OK)) {
+    LOG_ERROR("Failed configuring Opus FEC / frame duration");
+    opus_encoder_destroy(opus_encoder_);
+    opus_encoder_ = nullptr;
+    return -1;
+  }
 
   return 0;
 }
@@ -66,7 +83,7 @@ int AudioEncoder::Encode(
       opus_encode(opus_encoder_, reinterpret_cast<const opus_int16*>(data),
                   frame_size_, out_data, MAX_PACKET_SIZE);
   if (ret < 0) {
-    LOG_ERROR("Opus encode failed: %s", opus_strerror(ret));
+    LOG_ERROR("Opus encode failed: {}", opus_strerror(ret));
     return -1;
   }
 

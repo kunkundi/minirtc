@@ -20,6 +20,7 @@
 #include "ice_agent.h"
 #include "media_channel.h"
 #include "paced_sender.h"
+#include "rtp_fec.h"
 #include "rtp_packet_history.h"
 #include "rtp_packetizer.h"
 #include "rtp_timestamp.h"
@@ -62,6 +63,8 @@ class VideoChannelSend : public MediaChannel {
                   std::shared_ptr<PacedSender> packet_sender,
                   bool rtx_enabled);
   void Destroy() override;
+  void SetFecEnabled(bool enabled) override { fec_enabled_ = enabled; }
+  void SetFecProtection(const FecProtectionConfig& config) override;
 
   void SetAbsoluteSendTimeExtensionId(
       std::optional<uint8_t> extension_id) override;
@@ -101,6 +104,13 @@ class VideoChannelSend : public MediaChannel {
   uint32_t ssrc_ = 0;
   uint32_t rtx_ssrc_ = 0;
   bool rtx_enabled_ = false;
+  bool fec_enabled_ = false;
+  struct FecSendState;
+  std::shared_ptr<FecSendState> fec_state_;
+  static void EnqueueRepairs(const std::shared_ptr<FecSendState>& state,
+                             FecSymbols repairs);
+  static void ScheduleFecFlush(const std::shared_ptr<FecSendState>& state);
+  int64_t last_fec_stats_ms_ = 0;
   std::shared_ptr<SystemClock> clock_;
   RtpTimestampGenerator rtp_timestamp_generator_;
   RtpPacketHistory rtp_packet_history_;

@@ -50,6 +50,23 @@ PacedSender::~PacedSender() { Shutdown(); }
 
 void PacedSender::Shutdown() { is_shutdown_.store(true); }
 
+void PacedSender::SetFecBudgets(const std::map<uint32_t, int64_t>& rates,
+                               int64_t total_bps, uint64_t version) {
+  RunOrPost([this, rates, total_bps, version] {
+    if (version <= fec_budget_version_) return;
+    fec_budget_version_ = version;
+    fec_budget_managed_ = true;
+    const int64_t now_ms = clock_->CurrentTime().ms();
+    fec_budget_.SetRate(total_bps, now_ms);
+    for (auto it = fec_stream_budgets_.begin(); it != fec_stream_budgets_.end();) {
+      if (!rates.count(it->first)) it = fec_stream_budgets_.erase(it);
+      else ++it;
+    }
+    for (const auto& rate : rates)
+      fec_stream_budgets_[rate.first].SetRate(rate.second, now_ms);
+  });
+}
+
 void PacedSender::RunOrPost(AnyInvocable<void()> task) {
   if (is_shutdown_.load()) {
     return;
@@ -196,7 +213,7 @@ void PacedSender::EnqueuePacket(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
   RunOrPost([this, packet = std::move(packet)]() mutable {
     EnqueuePacketOnQueue(std::move(packet));
-    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+    MaybeScheduleProcessPackets();
   });
 }
 
@@ -205,7 +222,7 @@ void PacedSender::EnqueuePacketsOnQueue(
   for (auto& packet : packets) {
     EnqueuePacketOnQueue(std::move(packet));
   }
-  MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  MaybeScheduleProcessPackets();
 }
 
 void PacedSender::EnqueuePacketOnQueue(

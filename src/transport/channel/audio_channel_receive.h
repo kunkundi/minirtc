@@ -18,11 +18,11 @@ class AudioChannelReceive : public MediaChannel {
  public:
   AudioChannelReceive();
   AudioChannelReceive(
-      const std::string &channel_name, uint32_t ssrc,
-      std::shared_ptr<SystemClock> clock,
-      std::shared_ptr<IceAgent> ice_agent,
+      const std::string& channel_name, uint32_t ssrc,
+      std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
       std::shared_ptr<IOStatistics> ice_io_statistics,
-      std::function<void(const char *, size_t)> on_receive_audio);
+      std::function<void(const char*, size_t, uint16_t, uint32_t)>
+          on_receive_audio);
   virtual ~AudioChannelReceive();
 
  public:
@@ -44,7 +44,8 @@ class AudioChannelReceive : public MediaChannel {
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpAudioReceiver> rtp_audio_receiver_ = nullptr;
-  std::function<void(const char *, size_t)> on_receive_audio_ = nullptr;
+  std::function<void(const char*, size_t, uint16_t, uint32_t)>
+      on_receive_audio_ = nullptr;
 };
 }  // namespace minirtc
 

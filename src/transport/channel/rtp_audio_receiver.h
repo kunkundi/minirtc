@@ -32,7 +32,8 @@ class RtpAudioReceiver {
   void SetSendDataFunc(std::function<int(const char*, size_t)> data_send_func);
 
   void SetOnReceiveData(
-      std::function<void(const char*, size_t)> on_receive_data) {
+      std::function<void(const char*, size_t, uint16_t, uint32_t)>
+          on_receive_data) {
     on_receive_data_ = on_receive_data;
   }
   uint32_t GetSsrc() { return ssrc_; }
@@ -45,7 +46,8 @@ class RtpAudioReceiver {
   int SendRtcpRR(ReceiverReport& rtcp_rr);
 
  private:
-  std::function<void(const char*, size_t)> on_receive_data_ = nullptr;
+  std::function<void(const char*, size_t, uint16_t, uint32_t)>
+      on_receive_data_ = nullptr;
   uint32_t last_complete_frame_ts_ = 0;
 
  private:

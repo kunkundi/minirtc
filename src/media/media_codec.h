@@ -70,6 +70,7 @@ class MediaCodecConfig {
             VideoDegradationPreference::MaintainResolution) {}
   ~MediaCodecConfig() {}
 
+  bool audio_fec_enabled = false;
   int init_width;
   int init_height;
   int init_bitrate;

@@ -12,6 +12,55 @@ constexpr int64_t kSenderReportIntervalUs = 1'000'000;
 
 }  // namespace
 
+struct VideoChannelSend::FecSendState {
+  RtpFecSender sender;
+  std::weak_ptr<PacedSender> pacer;
+  std::shared_ptr<SystemClock> clock;
+  std::string channel;
+  uint32_t rtx_ssrc = 0;
+  bool timer_pending = false;  // Pacer queue only.
+  std::atomic<bool> active{true};
+};
+
+void VideoChannelSend::EnqueueRepairs(const std::shared_ptr<FecSendState>& state,
+                                     FecSymbols repairs) {
+  auto pacer = state->pacer.lock();
+  if (!pacer || !state->active.load()) return;
+  for (auto& bytes : repairs) {
+    auto repair = std::make_unique<webrtc::RtpPacketToSend>();
+    if (!repair->Build(bytes.data(), static_cast<uint32_t>(bytes.size()))) continue;
+    repair->set_packet_type(webrtc::RtpPacketMediaType::kForwardErrorCorrection);
+    repair->set_capture_time(webrtc::Timestamp::Micros(state->clock->CurrentTimeUs()));
+    repair->set_fec_deadline(webrtc::Timestamp::Millis(state->sender.RepairDeadlineMs()));
+    repair->set_stream_name(state->channel);
+    repair->set_allow_retransmission(false);
+    repair->set_fec_protect_packet(false);
+    pacer->EnqueueRtpPacket(std::move(repair));
+  }
+}
+
+void VideoChannelSend::ScheduleFecFlush(const std::shared_ptr<FecSendState>& state) {
+  if (state->timer_pending || !state->active.load()) return;
+  const int64_t since = state->sender.PendingSinceMs();
+  auto pacer = state->pacer.lock();
+  if (since < 0 || !pacer) return;
+  state->timer_pending = true;
+  const int delay = int(std::max<int64_t>(1, since + 20 - state->clock->CurrentTimeMs()));
+  // The task owns only FEC state, never the channel. Destroy cancels via active.
+  if (!pacer->PostFecTask([state] {
+        state->timer_pending = false;
+        if (!state->active.load()) return;
+        EnqueueRepairs(state, state->sender.FlushExpired(
+                                 state->rtx_ssrc, state->clock->CurrentTimeMs()));
+        ScheduleFecFlush(state);
+      }, delay)) state->timer_pending = false;
+}
+
+void VideoChannelSend::SetFecProtection(const FecProtectionConfig& config) {
+  if (!fec_state_ || !fec_state_->active.load()) return;
+  fec_state_->sender.SetProtection(config, clock_->CurrentTimeMs());
+}
+
 VideoChannelSend::VideoChannelSend(
     const std::string& channel_name, std::shared_ptr<SystemClock> clock,
     std::shared_ptr<IceAgent> ice_agent,
@@ -56,7 +105,14 @@ void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
                                   bool rtx_enabled) {
   rtx_enabled_ = rtx_enabled;
   paced_sender_ = packet_sender;
+  if (fec_state_) fec_state_->active.store(false);
+  fec_state_ = std::make_shared<FecSendState>();
+  fec_state_->pacer = packet_sender;
+  fec_state_->clock = clock_;
+  fec_state_->channel = channel_name_;
+  fec_state_->rtx_ssrc = rtx_ssrc_;
   rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
+  if (fec_enabled_ && rtx_enabled_) rtp_packetizer_->SetMaxPayloadSize(1100);
   padding_packetizer_ = RtpPacketizer::Create(
       payload_type, rtx_enabled_ ? rtx_ssrc_ : ssrc_);
   rtp_packetizer_->SetAbsoluteSendTimeExtensionId(
@@ -83,6 +139,29 @@ void VideoChannelSend::OnSentRtpPacket(
     return;
   }
 
+  // The pacer callback has assigned the final sequence number and send-time
+  // extension, and the media datagram has been sent successfully. Protect these
+  // exact plaintext bytes, then enqueue repairs through the same pacer/SRTP
+  // path.
+  if (fec_enabled_ && rtx_enabled_ && paced_sender_ &&
+      fec_state_ && fec_state_->active.load() &&
+      packet->packet_type() == webrtc::RtpPacketMediaType::kVideo) {
+    auto repairs =
+        fec_state_->sender.AddPacket(packet->Buffer().data(), packet->Size(),
+                              rtx_ssrc_, clock_->CurrentTimeMs(), packet->is_key_frame());
+    const int64_t now_ms = clock_->CurrentTimeMs();
+    if (now_ms - last_fec_stats_ms_ >= 5000) {
+      const auto& stats = fec_state_->sender.Stats();
+      LOG_INFO(
+          "FEC send: channel={} source={} repair={} budget_skips={} "
+          "rejected={} codec_errors={}",
+          channel_name_, stats.source_packets, stats.repair_packets,
+          stats.budget_skips, stats.rejected_packets, stats.codec_errors);
+      last_fec_stats_ms_ = now_ms;
+    }
+    EnqueueRepairs(fec_state_, std::move(repairs));
+    ScheduleFecFlush(fec_state_);
+  }
   MaybeSendSenderReport(*packet);
 
   if (!task_queue_history_ || history_shutdown_.load()) {
@@ -280,6 +359,7 @@ std::vector<std::unique_ptr<RtpPacket>> VideoChannelSend::GeneratePadding(
 }
 
 void VideoChannelSend::Destroy() {
+  if (fec_state_) fec_state_->active.store(false);
   if (task_queue_history_) {
     history_shutdown_.store(true);
     {

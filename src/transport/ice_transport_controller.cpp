@@ -128,6 +128,15 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   user_data_ = user_data;
   native_video_output_ = native_video_output;
 
+  if (video_fec_enabled_ && !video_codec_inited_) {
+    target_bitrate_ = media_config_.init_bitrate;
+    FecProtectionConfig initial;
+    initial.source_ratio = fec_mode_.load() == FecMode::kOff ? 0 :
+                           fec_mode_.load() == FecMode::kAdaptive ? 0.10 : 0.25;
+    media_config_.init_bitrate = static_cast<int>(
+        AllocateFecBudget(initial, target_bitrate_, 0.94).media_bitrate_bps);
+    video_transport_bitrate_bps_.store(media_config_.init_bitrate);
+  }
   CreateCodecs(clock_, video_codec_payload_type, hardware_acceleration);
 
   if (enable_srtp_) {
@@ -325,11 +334,17 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
     for (auto& [channel_name, context] : stream_senders_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
+          context->transceiver->SetFecEnabled(video_fec_enabled_);
           context->transceiver->SetAbsoluteSendTimeExtensionId(
               video_abs_send_time_ext_id_);
           std::static_pointer_cast<VideoChannelSend>(context->transceiver)
               ->Initialize(video_codec_payload_type, paced_sender_,
                            video_rtx_enabled_);
+          // No repair generation before the first connection allocation.
+          FecProtectionConfig initial;
+          initial.source_ratio = 0;
+          initial.fec_bitrate_bps = 0;
+          context->transceiver->SetFecProtection(initial);
         } else if (context->type == StreamType::kAudio) {
           context->transceiver->SetAbsoluteSendTimeExtensionId(
               audio_abs_send_time_ext_id_);
@@ -350,6 +365,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
     for (auto& [_, context] : stream_receivers_) {
       if (context) {
         if (context->type == StreamType::kVideo) {
+          context->transceiver->SetFecEnabled(video_fec_enabled_);
           context->transceiver->SetAbsoluteSendTimeExtensionId(
               video_abs_recv_time_ext_id_);
           context->transceiver->Initialize(video_codec_payload_type);
@@ -609,9 +625,11 @@ uint32_t IceTransportController::AddAudioReceiveChannel(
     std::weak_ptr<IceTransportController> weak_self = shared_from_this();
     context->transceiver = std::make_shared<AudioChannelReceive>(
         channel_name, ssrc, clock_, ice_agent_, ice_io_statistics_,
-        [this, weak_self, channel_name](const char* data, size_t size) {
+        [this, weak_self, channel_name](const char* data, size_t size,
+                                        uint16_t sequence, uint32_t timestamp) {
           if (auto self = weak_self.lock()) {
-            OnReceiveCompleteAudio(data, size, channel_name);
+            OnReceiveCompleteAudio(data, size, channel_name, sequence,
+                                   timestamp);
           }
         });
     if (!context->transceiver) {
@@ -719,6 +737,9 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
   }
 
   context->last_capture_time = clock_->CurrentTimeMs();
+  // Encoder minimum rates must not defeat an exhausted transport allocation.
+  if (context->desired_target_bitrate && *context->desired_target_bitrate <= 0)
+    return 0;
 
   // ICE can become usable before DTLS has installed the SRTP sessions. Do not
   // copy, encode or queue video while the pacer is unable to send it. Keep
@@ -813,7 +834,6 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
 
     if (UsesBoundedVideoQueue(media_config_)) {
       int video_count = 0;
-      bool has_data = false;
       const int64_t now_ms = clock_->CurrentTimeMs();
       for (const auto& [_, sender] : stream_senders_) {
         if (!sender) continue;
@@ -823,13 +843,9 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
               now_ms - *sender->last_capture_time < 100))) {
           ++video_count;
         }
-        has_data |= sender->type == StreamType::kData &&
-                    sender->last_active_time &&
-                    now_ms - *sender->last_active_time < 100;
       }
       const int64_t transport_bitrate = video_transport_bitrate_bps_.load();
-      const int64_t video_bitrate =
-          has_data ? transport_bitrate * 9 / 10 : transport_bitrate;
+      const int64_t video_bitrate = transport_bitrate;
       // Count captured streams even before their first encoded output, but do
       // not reserve startup bandwidth for configured, idle displays.
       const int64_t stream_bitrate = video_bitrate / std::max(1, video_count);
@@ -2205,15 +2221,16 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
 }
 
 void IceTransportController::SetRelayPath(bool relay_path) {
-  relay_path_state_.store(relay_path ? 1 : 0, std::memory_order_release);
+  const bool changed = relay_path_state_.exchange(relay_path ? 1 : 0) != (relay_path ? 1 : 0);
   if (!task_queue_cc_ || !controller_) {
     return;
   }
 
-  task_queue_cc_->PostTask([this, relay_path]() mutable {
+  task_queue_cc_->PostTask([this, relay_path, changed]() mutable {
     if (!controller_) {
       return;
     }
+    if (changed) ResetFecAdaptation();
     const webrtc::Timestamp now = webrtc::Timestamp::Millis(
         webrtc_clock_->TimeInMilliseconds());
     PostUpdates(controller_->SetRelayPath(relay_path, now));
@@ -2267,6 +2284,7 @@ void IceTransportController::UpdateMediaTransportState() {
           }
           controller_->SetRepeatedInitialProbing(allow_probe_without_media);
           if (transport_ready != was_transport_ready) {
+            ResetFecAdaptation();
             webrtc::NetworkAvailability msg;
             msg.at_time = webrtc::Timestamp::Millis(
                 webrtc_clock_->TimeInMilliseconds());
@@ -2441,7 +2459,8 @@ void IceTransportController::OnReceiveCompleteFrame(
 }
 
 void IceTransportController::OnReceiveCompleteAudio(
-    const char* data, size_t size, const std::string& channel_name) {
+    const char* data, size_t size, const std::string& channel_name,
+    uint16_t sequence, uint32_t timestamp) {
   std::shared_lock lock(stream_receivers_mutex_);
   auto it = stream_receivers_.find(channel_name);
   if (it == stream_receivers_.end() || !it->second) {
@@ -2452,8 +2471,10 @@ void IceTransportController::OnReceiveCompleteAudio(
   if (!CheckSteamContext(channel_name, context)) {
     return;
   } else {
-    int num_frame_returned = context->codec->Decode(
-        (uint8_t*)data, size, [this, channel_name](uint8_t* data, int size) {
+    auto decoder = std::static_pointer_cast<AudioDecoder>(context->codec);
+    int num_frame_returned = decoder->DecodePacket(
+        (const uint8_t*)data, size, sequence, timestamp,
+        [this, channel_name](uint8_t* data, int size) {
           if (on_receive_audio_) {
             on_receive_audio_((const char*)data, size, remote_user_id_.data(),
                               remote_user_id_.size(), channel_name.data(),
@@ -2756,8 +2777,7 @@ int IceTransportController::CreateStreamCodecs(
             video_receiver_init_first_time = false;
           }
         } else if (context->type == StreamType::kAudio) {
-          context->codec =
-              std::make_shared<AudioDecoder>(AudioDecoder(48000, 1, 480));
+          context->codec = std::make_shared<AudioDecoder>(48000, 1, 480);
           if (!context->codec || 0 != context->codec->Init()) {
             LOG_ERROR("Audio decoder [{}] init failed", channel_name);
             return -1;
@@ -2943,10 +2963,9 @@ void IceTransportController::OnCongestionControlFeedback(
         if (controller_) {
           PostUpdates(
               controller_->OnTransportPacketsFeedback(feedback_msg.value()));
+          UpdateCongestedState();
         }
       });
-
-      UpdateCongestedState();
     }
   });
 }
@@ -2989,7 +3008,7 @@ IceTransportController::RegisterPacketForFeedback(
 
   {
     std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
-    transport_feedback_adapter_.AddPacket(
+    registration.fec_feedback_id = transport_feedback_adapter_.AddPacket(
         packet, pacing_info, send_size - packet.size(),
         webrtc::Timestamp::Millis(registration.send_time_ms));
     transport_feedback_adapter_.ProcessSentPacket(sent_packet);
@@ -3004,12 +3023,17 @@ void IceTransportController::RollbackPacketFeedback(
     return;
   }
   std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+  transport_feedback_adapter_.RemoveFecSend(registration.fec_feedback_id);
   transport_feedback_adapter_.RemovePacket(packet);
 }
 
 void IceTransportController::OnSentPacket(
     const webrtc::RtpPacketToSend& packet,
     const PacketFeedbackRegistration& registration) {
+  if (registration.tracked) {
+    std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+    transport_feedback_adapter_.CommitFecSend(registration.fec_feedback_id);
+  }
   if (!registration.tracked) {
     LOG_WARN(
         "Sent packet without transport_sequence_number (ssrc={}, "
@@ -3064,51 +3088,31 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   }
 
   if (update.target_rate) {
-    available_transport_bitrate_ =
-        update.target_rate.has_value()
-            ? (update.target_rate->target_rate.bps() == 0
-                   ? target_bitrate_
-                   : update.target_rate->target_rate.bps())
-            : target_bitrate_;
+    available_transport_bitrate_ = std::max<int64_t>(0, update.target_rate->target_rate.bps());
     target_bitrate_ = available_transport_bitrate_;
-    video_transport_bitrate_bps_.store(available_transport_bitrate_);
     video_network_estimate_ = update.target_rate->network_estimate;
   }
+  UpdateFecProtection();
 
   // A stable estimate need not produce another target-rate notification.
   // Advance confirmation timers on regular controller ticks as well.
   if (video_network_estimate_) {
     std::unique_lock lock(stream_senders_mutex_);
     if (!stream_senders_.empty()) {
-      // Count active video and data channels separately
+      // Resolution decisions use the same media budget as encoder updates.
       int video_count = 0;
-      int data_count = 0;
       for (auto& [_, context] : stream_senders_) {
         if (context->last_active_time.has_value()) {
           if (clock_->CurrentTimeMs() - context->last_active_time.value() <
               100) {
             if (context->type == StreamType::kVideo) {
               video_count++;
-            } else if (context->type == StreamType::kData) {
-              data_count++;
             }
           }
         }
       }
-
-      // Allocate bandwidth: reserve 10% for all data channels
-      // The rest goes to video channels
-      int64_t video_bitrate_total = available_transport_bitrate_;
-
-      if (data_count > 0) {
-        // All data channels together use 10% of total bandwidth
-        video_bitrate_total =
-            static_cast<int64_t>(available_transport_bitrate_ * 0.9);
-      }
-
       // Allocate bandwidth to video channels
       if (video_count > 0) {
-        int sub_target_bitrate = video_bitrate_total / video_count;
         const auto& network_estimate = *video_network_estimate_;
         const bool maintain_frame_rate =
             media_config_.video_degradation_preference ==
@@ -3136,6 +3140,7 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
               clock_->CurrentTimeMs() - *context->last_active_time >= 100) {
             continue;
           }
+          const int sub_target_bitrate = static_cast<int>(context->fec_protection.media_bitrate_bps);
 
           int source_width = context->source_width;
           int source_height = context->source_height;
@@ -3456,8 +3461,195 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   UpdateVideoBitrateAllocation();
 }
 
+void IceTransportController::ResetFecAdaptation() {
+  {
+    std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+    transport_feedback_adapter_.ResetFecFeedback();
+  }
+  fec_feedback_snapshots_.clear();
+  fec_snapshot_ms_ = -1;
+  std::unique_lock lock(stream_senders_mutex_);
+  for (const auto &item : stream_senders_) {
+    if (!item.second)
+      continue;
+    item.second->fec_controller.Reset();
+    item.second->rtx_bitrate_ewma = 0;
+  }
+}
+
+void IceTransportController::UpdateFecProtection() {
+  if (!task_queue_pacer_ || !paced_sender_)
+    return;
+  const int64_t now_ms = clock_->CurrentTimeMs();
+  const int64_t rtt_ms =
+      video_network_estimate_ &&
+              video_network_estimate_->round_trip_time.IsFinite()
+          ? std::clamp<int64_t>(video_network_estimate_->round_trip_time.ms(),
+                                0, 2000)
+          : 0;
+  const bool new_snapshot =
+      fec_snapshot_ms_ < 0 || now_ms - fec_snapshot_ms_ >= 200;
+  if (new_snapshot) {
+    std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+    fec_feedback_snapshots_ =
+        transport_feedback_adapter_.FecFeedback(now_ms, rtt_ms);
+    fec_snapshot_ms_ = now_ms;
+  }
+  const int64_t queue_ms = std::max(paced_sender_->ExpectedQueueTime().ms(),
+                                    paced_sender_->OldestPacketWaitTime().ms());
+  const auto mode = video_fec_enabled_ ? fec_mode_.load() : FecMode::kOff;
+  const bool log = fec_log_ms_ < 0 || now_ms - fec_log_ms_ >= 5000;
+  bool publish = false;
+  int64_t media_total = 0, fec_total = 0;
+  {
+    std::unique_lock lock(stream_senders_mutex_);
+    const uint64_t version = ++fec_config_version_;
+    auto active = [now_ms](const std::shared_ptr<StreamContext> &c) {
+      return c &&
+             ((c->last_active_time && now_ms - *c->last_active_time < 100) ||
+              (c->type == StreamType::kVideo && c->last_capture_time &&
+               now_ms - *c->last_capture_time < 100));
+    };
+    int videos = 0, audio = 0, data = 0;
+    for (const auto &item : stream_senders_) {
+      const auto &c = item.second;
+      if (!active(c))
+        continue;
+      if (c->type == StreamType::kVideo && c->codec)
+        ++videos;
+      if (c->type == StreamType::kAudio)
+        ++audio;
+      if (c->type == StreamType::kData)
+        ++data;
+    }
+    // Audio currently bypasses the video pacer. Reserve its 32 kbit/s Opus
+    // payload plus 100 RTP packets/s headers conservatively, per active stream.
+    const int64_t other =
+        int64_t(audio) * 64000 + (data ? target_bitrate_ / 10 : 0);
+    const int64_t share =
+        std::max<int64_t>(0, target_bitrate_ - other) / std::max(1, videos);
+    for (const auto &item : stream_senders_) {
+      const auto &c = item.second;
+      if (!c || c->type != StreamType::kVideo || !c->transceiver)
+        continue;
+      const uint32_t ssrc = c->ssrc.value_or(0), rtx = c->rtx_ssrc.value_or(0);
+      FecNetworkSnapshot network;
+      network.now_ms = now_ms;
+      network.rtt_ms = rtt_ms;
+      network.queue_ms = queue_ms;
+      network.transport_bps = target_bitrate_;
+      network.congested =
+          is_congested_.load() || !media_transport_ready_.load();
+      auto feedback = fec_feedback_snapshots_.find(ssrc);
+      if (feedback != fec_feedback_snapshots_.end())
+        network.feedback = feedback->second;
+      if (new_snapshot) {
+        auto auxiliary = fec_feedback_snapshots_.find(rtx);
+        const int64_t actual_rtx =
+            auxiliary == fec_feedback_snapshots_.end()
+                ? 0
+                : auxiliary->second
+                      .sent_bps[static_cast<size_t>(FecPacketKind::kRtx)];
+        // Reserve increases immediately and release them slowly.
+        c->rtx_bitrate_ewma =
+            std::max<double>(actual_rtx, c->rtx_bitrate_ewma * 0.8);
+      }
+      FecProtectionConfig config;
+      if (active(c)) {
+        c->fec_last_active_ms = now_ms;
+        config = c->fec_controller.Update(mode, network);
+        config = AllocateFecBudget(
+            config, share - static_cast<int64_t>(c->rtx_bitrate_ewma),
+            network.feedback.payload_fraction);
+        media_total += config.media_bitrate_bps;
+        fec_total += config.fec_bitrate_bps;
+      } else {
+        config.source_ratio = 0;
+        config.fec_bitrate_bps = 0;
+        if (c->fec_last_active_ms >= 0 &&
+            now_ms - c->fec_last_active_ms > 1000) {
+          c->fec_controller.Reset();
+          c->rtx_bitrate_ewma = 0;
+          c->fec_last_active_ms = -1;
+        }
+      }
+      config.version = version;
+      c->fec_protection = config;
+      if (log && active(c)) {
+        const auto auxiliary = fec_feedback_snapshots_.find(rtx);
+        const int64_t sent_repairs =
+            auxiliary == fec_feedback_snapshots_.end()
+                ? 0
+                : auxiliary->second
+                      .sent_bps[static_cast<size_t>(FecPacketKind::kRepair)];
+        LOG_INFO("FEC control: stream={} mode={} reason={} samples={} loss={} "
+                 "rtt={} queue={} feedback_age={} ratio={} media_bps={} "
+                 "fec_bps={} rtx_bps={} sent_media_bps={} sent_fec_bps={}",
+                 item.first, int(mode), FecDecisionName(config.reason),
+                 network.feedback.samples, network.feedback.loss_rate(), rtt_ms,
+                 queue_ms,
+                 network.feedback.last_feedback_ms < 0
+                     ? -1
+                     : now_ms - network.feedback.last_feedback_ms,
+                 config.source_ratio, config.media_bitrate_bps,
+                 config.fec_bitrate_bps,
+                 static_cast<int64_t>(c->rtx_bitrate_ewma),
+                 network.feedback
+                     .sent_bps[static_cast<size_t>(FecPacketKind::kMedia)],
+                 sent_repairs);
+      }
+    }
+    // Keep a startup admission budget for the first captured frame of a new
+    // stream. Idle streams still receive zero FEC allowance.
+    if (!videos) {
+      FecProtectionConfig startup;
+      startup.source_ratio = mode == FecMode::kOff     ? 0
+                             : mode == FecMode::kFixed ? 0.25
+                                                       : 0.10;
+      media_total = AllocateFecBudget(startup, target_bitrate_ - other, 0.94)
+                        .media_bitrate_bps;
+    }
+    video_transport_bitrate_bps_.store(media_total);
+    publish = !fec_update_queued_;
+    fec_update_queued_ = true;
+  }
+  if (log) {
+    fec_log_ms_ = now_ms;
+    LOG_INFO("FEC pacer: dropped={} media_bps={} fec_bps={}",
+             paced_sender_->FecDroppedPackets(), media_total, fec_total);
+  }
+  if (!publish)
+    return;
+  std::weak_ptr<IceTransportController> weak = shared_from_this();
+  if (!task_queue_pacer_->PostTask([weak] {
+        auto self = weak.lock();
+        if (!self)
+          return;
+        std::unique_lock lock(self->stream_senders_mutex_);
+        self->fec_update_queued_ = false;
+        if (!self->is_running_.load())
+          return;
+        std::map<uint32_t, int64_t> rates;
+        int64_t total = 0;
+        for (const auto &item : self->stream_senders_) {
+          const auto &c = item.second;
+          if (!c || c->type != StreamType::kVideo || !c->transceiver)
+            continue;
+          if (c->rtx_ssrc)
+            rates[*c->rtx_ssrc] = c->fec_protection.fec_bitrate_bps;
+          total += std::max<int64_t>(0, c->fec_protection.fec_bitrate_bps);
+          c->transceiver->SetFecProtection(c->fec_protection);
+        }
+        self->paced_sender_->SetFecBudgets(rates, total,
+                                           self->fec_config_version_);
+      })) {
+    std::unique_lock lock(stream_senders_mutex_);
+    fec_update_queued_ = false;
+  }
+}
+
 void IceTransportController::UpdateVideoBitrateAllocation() {
-  if (target_bitrate_ <= 0 || !is_running_.load() || !task_queue_encode_) {
+  if (!is_running_.load() || !task_queue_encode_) {
     return;
   }
 
@@ -3474,21 +3666,19 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
 
     auto is_active = [now_ms](const std::shared_ptr<StreamContext>& context) {
       constexpr int64_t kActiveStreamTimeoutMs = 100;
-      return context && context->last_active_time.has_value() &&
-             now_ms - context->last_active_time.value() <
-                 kActiveStreamTimeoutMs;
+      return context && ((context->last_active_time &&
+             now_ms - *context->last_active_time < kActiveStreamTimeoutMs) ||
+             (context->type == StreamType::kVideo && context->last_capture_time &&
+              now_ms - *context->last_capture_time < kActiveStreamTimeoutMs));
     };
 
     int active_video_count = 0;
-    int active_data_count = 0;
     for (const auto& [_, context] : stream_senders_) {
       if (!is_active(context)) {
         continue;
       }
       if (context->type == StreamType::kVideo && context->codec) {
         ++active_video_count;
-      } else if (context->type == StreamType::kData) {
-        ++active_data_count;
       }
     }
 
@@ -3496,20 +3686,16 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
       return;
     }
 
-    int64_t video_bitrate_total = target_bitrate_;
-    if (active_data_count > 0) {
-      video_bitrate_total = static_cast<int64_t>(target_bitrate_ * 0.9);
-    }
-    const int per_video_bitrate =
-        static_cast<int>(video_bitrate_total / active_video_count);
-
     for (const auto& [channel_name, context] : stream_senders_) {
       if (!is_active(context) || context->type != StreamType::kVideo ||
           !context->codec) {
         continue;
       }
 
+      const int per_video_bitrate = static_cast<int>(context->fec_protection.media_bitrate_bps);
       context->desired_target_bitrate = per_video_bitrate;
+      // Admission pauses at zero; avoid passing unsupported zero to codecs.
+      if (per_video_bitrate <= 0) continue;
       if (context->bitrate_update_queued) {
         continue;
       }
@@ -3571,6 +3757,10 @@ void IceTransportController::ApplyVideoBitrateUpdateOnEncodeQueue(
     }
 
     target_bitrate = context->desired_target_bitrate.value();
+    if (target_bitrate <= 0) {
+      context->bitrate_update_queued = false;
+      return;
+    }
     if (context->applied_target_bitrate == target_bitrate) {
       context->bitrate_update_queued = false;
       return;

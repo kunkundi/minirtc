@@ -29,6 +29,7 @@ class VideoChannelReceive : public MediaChannel {
 
  public:
   void Initialize(rtp::PAYLOAD_TYPE payload_type) override;
+  void SetFecEnabled(bool enabled) override { fec_enabled_ = enabled; }
   void Destroy() override;
 
   void SetAbsoluteSendTimeExtensionId(
@@ -49,6 +50,7 @@ class VideoChannelReceive : public MediaChannel {
  private:
   std::string channel_name_;
   uint32_t ssrc_ = 0;
+  bool fec_enabled_ = false;
   uint32_t rtx_ssrc_ = 0;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;

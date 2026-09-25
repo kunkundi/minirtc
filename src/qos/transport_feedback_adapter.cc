@@ -83,7 +83,7 @@ bool InFlightBytesTracker::NetworkRouteComparator::operator()(
 
 TransportFeedbackAdapter::TransportFeedbackAdapter() = default;
 
-void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
+int64_t TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
                                          const PacedPacketInfo& pacing_info,
                                          size_t overhead_bytes,
                                          Timestamp creation_time) {
@@ -96,7 +96,7 @@ void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
         "rtp_seq={}). "
         "Packet will not be tracked for feedback.",
         packet_to_send.Ssrc(), packet_to_send.SequenceNumber());
-    return;
+    return -1;
   }
 
   PruneRecentlyAcknowledgedPackets(creation_time);
@@ -139,6 +139,17 @@ void TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_send,
       SsrcAndRtpSequencenumber({feedback.ssrc, feedback.rtp_sequence_number}),
       feedback.sent.sequence_number);
   history_.emplace(feedback.sent.sequence_number, feedback);
+  FecPacketKind kind = FecPacketKind::kOther;
+  if (packet_to_send.packet_type() == RtpPacketMediaType::kVideo)
+    kind = FecPacketKind::kMedia;
+  else if (packet_to_send.packet_type() == RtpPacketMediaType::kForwardErrorCorrection)
+    kind = FecPacketKind::kRepair;
+  else if (packet_to_send.packet_type() == RtpPacketMediaType::kRetransmission)
+    kind = FecPacketKind::kRtx;
+  fec_feedback_.Register(feedback.sent.sequence_number, feedback.ssrc, kind,
+                         packet_to_send.size() + overhead_bytes,
+                         packet_to_send.payload_size(), creation_time.ms());
+  return feedback.sent.sequence_number;
 }
 
 bool TransportFeedbackAdapter::RemovePacket(
@@ -253,6 +264,8 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
       ++ignored_packets;
       continue;
     }
+    fec_feedback_.Feedback(packet_feedback->sent.sequence_number, received,
+                            feedback_receive_time.ms());
     PacketResult result;
     result.sent_packet = packet_feedback->sent;
     if (packet_info.arrival_time_offset.IsFinite()) {
@@ -306,6 +319,7 @@ TransportFeedbackAdapter::ToTransportFeedback(
 
 void TransportFeedbackAdapter::SetNetworkRoute(
     const rtc::NetworkRoute& network_route) {
+  if (network_route_ != network_route) fec_feedback_.Reset();
   network_route_ = network_route;
 }
 

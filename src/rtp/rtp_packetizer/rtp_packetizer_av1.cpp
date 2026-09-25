@@ -75,7 +75,7 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
 
   for (size_t i = 0; i < obus.size(); ++i) {
     const auto& obu = obus[i];
-    if (obu.size <= MAX_NALU_LEN) {
+    if (obu.size <= max_payload_size_) {
       ++sequence_number_;
       bool is_last = (i == (obus.size() - 1));
       int z = (i > 0) ? 1 : 0;
@@ -96,14 +96,15 @@ std::vector<std::unique_ptr<RtpPacket>> RtpPacketizerAv1::Build(
       CreateAndPushRtpPacket(rtp_packet_frame_.data(),
                              rtp_packet_frame_.size());
     } else {
-      size_t packet_num = (obu.size + MAX_NALU_LEN - 1) / MAX_NALU_LEN;
+      size_t packet_num =
+          (obu.size + max_payload_size_ - 1) / max_payload_size_;
 
       for (size_t j = 0; j < packet_num; ++j) {
         ++sequence_number_;
         bool is_last = (i == (obus.size() - 1)) && (j == (packet_num - 1));
-        size_t offset = j * MAX_NALU_LEN;
+        size_t offset = j * max_payload_size_;
         size_t size =
-            j == (packet_num - 1) ? (obu.size - offset) : MAX_NALU_LEN;
+            j == (packet_num - 1) ? (obu.size - offset) : max_payload_size_;
 
         int z = (i > 0 || j > 0) ? 1 : 0;
         int y = (!is_last) ? 1 : 0;

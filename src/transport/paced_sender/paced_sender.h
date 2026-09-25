@@ -4,8 +4,8 @@
  * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
  */
 
-#ifndef _PACED_SENDER__H_
-#define _PACED_SENDER__H_
+#ifndef _PACED_SENDER_H_
+#define _PACED_SENDER_H_
 
 #include <atomic>
 #include <memory>
@@ -24,6 +24,7 @@
 #include "rtp_packet_pacer.h"
 #include "rtp_packet_to_send.h"
 #include "task_queue.h"
+#include "fec_adaptation_controller.h"
 
 namespace minirtc {
 class PacedSender : public webrtc::RtpPacketPacer,
@@ -60,12 +61,31 @@ class PacedSender : public webrtc::RtpPacketPacer,
           generat_padding_func);
 
   void Shutdown();
+  bool PostFecTask(AnyInvocable<void()> task, int delay_ms) {
+    return !is_shutdown_.load() &&
+           task_queue_pacer_->PostDelayedTask(std::move(task), delay_ms);
+  }
+  void SetFecBudgets(const std::map<uint32_t, int64_t>& rates,
+                    int64_t total_bps, uint64_t version);
+  uint64_t FecDroppedPackets() const { return fec_dropped_.load(); }
 
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
                   const webrtc::PacedPacketInfo& cluster_info) override {
     if (is_shutdown_.load()) {
       return;
+    }
+    if (packet->packet_type() == webrtc::RtpPacketMediaType::kForwardErrorCorrection) {
+      const auto now = clock_->CurrentTime();
+      if ((packet->fec_deadline() && now >= *packet->fec_deadline()) ||
+          now - packet->capture_time() >= webrtc::TimeDelta::Millis(150) ||
+          (fec_budget_managed_ &&
+           (!fec_stream_budgets_.count(packet->Ssrc()) ||
+            !fec_stream_budgets_.at(packet->Ssrc()).Consume(packet->size() + 64, now.ms()) ||
+            !fec_budget_.Consume(packet->size() + 64, now.ms())))) {
+        ++fec_dropped_;
+        return;
+      }
     }
     if (on_sent_packet_func_) {
       // Assign the sequence number at the final serialized send point so all
@@ -246,6 +266,11 @@ class PacedSender : public webrtc::RtpPacketPacer,
   std::shared_ptr<TaskQueue> task_queue_pacer_;
   int64_t transport_seq_ = 0;
   std::map<uint32_t, uint16_t> ssrc_seq_;
+  FecRateBudget fec_budget_;
+  std::map<uint32_t, FecRateBudget> fec_stream_budgets_;
+  uint64_t fec_budget_version_ = 0;
+  bool fec_budget_managed_ = false;
+  std::atomic<uint64_t> fec_dropped_{0};
 
   webrtc::Timestamp last_send_time_;
   webrtc::Timestamp last_call_time_;

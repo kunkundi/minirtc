@@ -9,43 +9,28 @@
 
 #include <cstddef>
 #include <cstdint>
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-#include "lib_common/of_openfec_api.h"
-#ifdef __cplusplus
-};
-#endif
+#include <vector>
 
 namespace minirtc {
+using FecSymbols = std::vector<std::vector<uint8_t>>;
 
+// A bounded RS(255) block. Instances are confined to their calling thread.
+// All output is owned by the caller. Small live blocks use cached coefficients;
+// larger blocks fall back to OpenFEC. Neither path retains caller memory.
 class FecEncoder {
  public:
-  FecEncoder();
-  ~FecEncoder();
+  static constexpr size_t kMaxSymbols = 255;
+  static constexpr size_t kMaxSymbolSize = 1400;
+  bool EncodeSymbols(const FecSymbols& sources, size_t repair_count,
+                     FecSymbols* repairs) const;
 
- public:
-  int Init();
-  int Release();
-  uint8_t **Encode(const char *data, size_t len);
-  int ReleaseFecPackets(uint8_t **fec_packets, size_t len);
-  void GetFecPacketsParams(unsigned int source_length,
-                           uint8_t &num_of_total_packets,
-                           uint8_t &num_of_source_packets,
-                           unsigned int &last_packet_size);
-
- private:
-  double code_rate_ = 0.667;
-  int max_size_of_packet_ = 1400;
-
- private:
-  of_codec_id_t fec_codec_id_ = OF_CODEC_REED_SOLOMON_GF_2_M_STABLE;
-  of_session_t *fec_session_ = nullptr;
-  of_parameters_t *fec_params_ = nullptr;
-  of_rs_2_m_parameters_t *fec_rs_params_ = nullptr;
-  of_ldpc_parameters_t *fec_ldpc_params_ = nullptr;
+  // Legacy offline API. Network code must use the sized, owning API above.
+  int Init() { return 0; }
+  int Release() { return 0; }
+  uint8_t** Encode(const char* data, size_t len);
+  int ReleaseFecPackets(uint8_t** packets, size_t len);
+  void GetFecPacketsParams(unsigned int len, uint8_t& total, uint8_t& source,
+                           unsigned int& last_size);
 };
 }  // namespace minirtc
-
 #endif

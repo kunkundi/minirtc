@@ -255,20 +255,67 @@ std::unique_ptr<ReceivedFrame> RtpVideoReceiver::CreateReceivedFrame(
   return frame;
 }
 
-void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
-  const bool is_recovered =
-      rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX;
+void RtpVideoReceiver::SetFecEnabled(bool enabled) {
+  std::lock_guard<std::mutex> lock(fec_mtx_);
+  fec_receiver_.reset();
+  if (enabled && RtxEnabled())
+    fec_receiver_ = std::make_unique<RtpFecReceiver>(
+        remote_ssrc_.load(), rtx_ssrc_.load(), uint8_t(media_payload_type_));
+}
+
+void RtpVideoReceiver::InsertRtpPacket(RtpPacket& packet) {
+  const bool repair = packet.PayloadType() == rtp::PAYLOAD_TYPE::RS_FEC;
+  const bool obsolete_repair = repair && IsFrameTimestampObsolete(packet.Timestamp());
+  FecSymbols recovered;
+  {
+    std::lock_guard<std::mutex> lock(fec_mtx_);
+    if (repair && (!fec_receiver_ || packet.Ssrc() != rtx_ssrc_.load())) return;
+    if (fec_receiver_ && !obsolete_repair &&
+        (repair || (packet.PayloadType() == media_payload_type_ &&
+                    packet.Ssrc() == remote_ssrc_.load()))) {
+      recovered = fec_receiver_->AddPacket(
+          packet.Buffer().data(), packet.Size(), clock_->CurrentTime().ms());
+    }
+  }
+  // FEC, RTX and padding share the auxiliary sequence space. Report actual
+  // arrivals, including late repairs, so successful RTX is not misreported as
+  // loss between two repair packets. Reconstructed media is never fed to BWE.
+  const bool actual_rtx = packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX &&
+                          rtx_ssrc_.load() != 0 && packet.Ssrc() == rtx_ssrc_.load();
+  if (repair || actual_rtx) {
+    webrtc::RtpPacketReceived received;
+    if (received.Build(packet.Buffer().data(), packet.Size())) {
+      received.set_arrival_time(clock_->CurrentTime());
+      received.set_payload_type_frequency(kVideoPayloadTypeFrequency);
+      received.SetAbsoluteSendTimeExtensionId(abs_send_time_ext_id_);
+      receive_side_congestion_controller_.OnReceivedPacket(received,
+                                                           MediaType::VIDEO);
+      if (repair && io_statistics_)
+        io_statistics_->UpdateVideoInboundBytes(static_cast<uint32_t>(packet.Size()));
+    }
+  }
+  for (const auto& bytes : recovered) {
+    RtpPacket restored;
+    if (restored.Build(bytes.data(), static_cast<uint32_t>(bytes.size())))
+      InsertMediaPacket(restored, true);
+  }
+  if (!repair) InsertMediaPacket(packet);
+}
+
+void RtpVideoReceiver::InsertMediaPacket(RtpPacket& rtp_packet,
+                                         bool fec_recovered) {
+  const bool is_rtx = rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX;
+  const bool is_recovered = fec_recovered || is_rtx;
   const uint32_t negotiated_rtx_ssrc = rtx_ssrc_.load();
-  if (is_recovered &&
-      (negotiated_rtx_ssrc == 0 ||
-       rtp_packet.Ssrc() != negotiated_rtx_ssrc)) {
+  if (is_rtx &&
+      (negotiated_rtx_ssrc == 0 || rtp_packet.Ssrc() != negotiated_rtx_ssrc)) {
     LOG_WARN("Dropping unnegotiated RTX packet from SSRC {}",
              rtp_packet.Ssrc());
     return;
   }
   RtpPacket restored_media_packet;
   RtpPacket* media_packet = &rtp_packet;
-  if (is_recovered) {
+  if (is_rtx) {
     if (!RestoreMediaPacketFromRtx(rtp_packet, &restored_media_packet)) {
       LOG_WARN("Failed to restore media packet from RTX SSRC {}",
                rtp_packet.Ssrc());
@@ -288,11 +335,12 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
       // needless retries without allowing the old frame to be resurrected.
       std::lock_guard<std::mutex> lock(nack_mtx_);
       nack_->OnReceivedPacket(media_packet->SequenceNumber(), true);
-      recovery_late_rtx_packets_.fetch_add(1, std::memory_order_relaxed);
+      if (is_rtx)
+        recovery_late_rtx_packets_.fetch_add(1, std::memory_order_relaxed);
     }
     return;
   }
-  if (is_recovered) {
+  if (is_rtx) {
     recovery_accepted_rtx_packets_.fetch_add(1,
                                              std::memory_order_relaxed);
   }
@@ -463,7 +511,7 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& rtp_packet) {
 }
 
 void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
-  if (!fec_enable_) {
+  {
     rtp::NAL_UNIT_TYPE nalu_type = rtp_packet_h264.NalUnitType();
     if (rtp::NAL_UNIT_TYPE::NALU == nalu_type) {
       std::vector<uint8_t> bytestream;
@@ -491,119 +539,10 @@ void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
                                 rtp_packet_h264.FuAEnd());
     }
   }
-  //  else {
-  //   if (rtp::PAYLOAD_TYPE::H264 == rtp_packet.PayloadType()) {
-  //     if (rtp::NAL_UNIT_TYPE::NALU == rtp_packet.NalUnitType()) {
-  //       compelete_video_frame_queue_.push(
-  //           VideoFrame(rtp_packet.Payload(), rtp_packet.PayloadSize()));
-  //     } else if (rtp::NAL_UNIT_TYPE::FU_A == rtp_packet.NalUnitType()) {
-  //       incomplete_h264_frame_list_[rtp_packet.SequenceNumber()] =
-  //       rtp_packet; bool complete = CheckIsH264FrameCompleted(rtp_packet);
-  //       if
-  //       (!complete) {
-  //       }
-  //     }
-  //   } else if (rtp::PAYLOAD_TYPE::H264_FEC_SOURCE ==
-  //   rtp_packet.PayloadType()) {
-  //     if (last_packet_ts_ != rtp_packet.Timestamp()) {
-  //       fec_decoder_.Init();
-  //       fec_decoder_.ResetParams(rtp_packet.FecSourceSymbolNum());
-  //       last_packet_ts_ = rtp_packet.Timestamp();
-  //     }
-
-  //     incomplete_fec_packet_list_[rtp_packet.Timestamp()]
-  //                                [rtp_packet.SequenceNumber()] =
-  //                                rtp_packet;
-
-  //     uint8_t** complete_frame = fec_decoder_.DecodeWithNewSymbol(
-  //         (const char*)incomplete_fec_packet_list_[rtp_packet.Timestamp()]
-  //                                                 [rtp_packet.SequenceNumber()]
-  //                                                     .Payload(),
-  //         rtp_packet.FecSymbolId());
-
-  //     if (nullptr != complete_frame) {
-  //       if (!nv12_data_) {
-  //         nv12_data_ = new uint8_t[NV12_BUFFER_SIZE];
-  //       }
-
-  //       size_t complete_frame_size = 0;
-  //       for (int index = 0; index < rtp_packet.FecSourceSymbolNum();
-  //       index++)
-  //       {
-  //         if (nullptr == complete_frame[index]) {
-  //           LOG_ERROR("Invalid complete_frame[{}]", index);
-  //         }
-  //         memcpy(nv12_data_ + complete_frame_size, complete_frame[index],
-  //         1400); complete_frame_size += 1400;
-  //       }
-
-  //       fec_decoder_.ReleaseSourcePackets(complete_frame);
-  //       fec_decoder_.Release();
-  //       LOG_ERROR("Release incomplete_fec_packet_list_");
-  //       incomplete_fec_packet_list_.erase(rtp_packet.Timestamp());
-
-  //       if (incomplete_fec_frame_list_.end() !=
-  //           incomplete_fec_frame_list_.find(rtp_packet.Timestamp())) {
-  //         incomplete_fec_frame_list_.erase(rtp_packet.Timestamp());
-  //       }
-
-  //       compelete_video_frame_queue_.push(
-  //           VideoFrame(nv12_data_, complete_frame_size));
-  //     } else {
-  //       incomplete_fec_frame_list_.insert(rtp_packet.Timestamp());
-  //     }
-  //   } else if (rtp::PAYLOAD_TYPE::H264_FEC_REPAIR ==
-  //   rtp_packet.PayloadType()) {
-  //     if (incomplete_fec_frame_list_.end() ==
-  //         incomplete_fec_frame_list_.find(rtp_packet.Timestamp())) {
-  //       return;
-  //     }
-
-  //     if (last_packet_ts_ != rtp_packet.Timestamp()) {
-  //       fec_decoder_.Init();
-  //       fec_decoder_.ResetParams(rtp_packet.FecSourceSymbolNum());
-  //       last_packet_ts_ = rtp_packet.Timestamp();
-  //     }
-
-  //     incomplete_fec_packet_list_[rtp_packet.Timestamp()]
-  //                                [rtp_packet.SequenceNumber()] =
-  //                                rtp_packet;
-
-  //     uint8_t** complete_frame = fec_decoder_.DecodeWithNewSymbol(
-  //         (const char*)incomplete_fec_packet_list_[rtp_packet.Timestamp()]
-  //                                                 [rtp_packet.SequenceNumber()]
-  //                                                     .Payload(),
-  //         rtp_packet.FecSymbolId());
-
-  //     if (nullptr != complete_frame) {
-  //       if (!nv12_data_) {
-  //         nv12_data_ = new uint8_t[NV12_BUFFER_SIZE];
-  //       }
-
-  //       size_t complete_frame_size = 0;
-  //       for (int index = 0; index < rtp_packet.FecSourceSymbolNum();
-  //       index++)
-  //       {
-  //         if (nullptr == complete_frame[index]) {
-  //           LOG_ERROR("Invalid complete_frame[{}]", index);
-  //         }
-  //         memcpy(nv12_data_ + complete_frame_size, complete_frame[index],
-  //         1400); complete_frame_size += 1400;
-  //       }
-
-  //       fec_decoder_.ReleaseSourcePackets(complete_frame);
-  //       fec_decoder_.Release();
-  //       incomplete_fec_packet_list_.erase(rtp_packet.Timestamp());
-
-  //       compelete_video_frame_queue_.push(
-  //           VideoFrame(nv12_data_, complete_frame_size));
-  //     }
-  //   }
-  // }
 }
 
 void RtpVideoReceiver::ProcessAv1RtpPacket(RtpPacketAv1& rtp_packet_av1) {
-  if (!fec_enable_) {
+  {
     incomplete_av1_frame_list_[rtp_packet_av1.SequenceNumber()] =
         rtp_packet_av1;
     CheckIsAv1FrameCompleted(rtp_packet_av1);
@@ -874,6 +813,18 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
     return;
   }
   last_recovery_stats_log_ms_ = now_ms;
+  {
+    std::lock_guard<std::mutex> lock(fec_mtx_);
+    if (fec_receiver_) {
+      const auto& fec = fec_receiver_->Stats();
+      LOG_INFO(
+          "FEC receive: channel={} source={} repair={} recovered={} expired={} "
+          "rejected={} codec_errors={}",
+          log_context_, fec.source_packets, fec.repair_packets,
+          fec.recovered_packets, fec.expired_blocks, fec.rejected_packets,
+          fec.codec_errors);
+    }
+  }
 
   const auto take = [](std::atomic<uint64_t>& counter) {
     return counter.exchange(0, std::memory_order_relaxed);
@@ -1053,6 +1004,10 @@ void RtpVideoReceiver::MarkFrameDiscardedLocked(uint32_t timestamp) {
 }
 
 bool RtpVideoReceiver::Process() {
+  {
+    std::lock_guard<std::mutex> lock(fec_mtx_);
+    if (fec_receiver_) fec_receiver_->Expire(clock_->CurrentTime().ms());
+  }
   if (!is_running_.load()) {
     return false;
   }
