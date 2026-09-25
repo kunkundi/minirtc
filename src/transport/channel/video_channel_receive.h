@@ -40,6 +40,8 @@ class VideoChannelReceive : public MediaChannel {
   void RequestKeyFrame() override;
 
   void OnRttUpdate(int64_t rtt_ms) override;
+  void OnClockOffset(int64_t offset_us, int64_t rtt_us) override;
+  void ResetClockOffset() override;
 
   void OnSenderReport(const SenderReport &sender_report) override {
     if (rtp_video_receiver_) {

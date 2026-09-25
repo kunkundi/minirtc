@@ -29,6 +29,12 @@ class ReceiverRtt {
     uint32_t sender_ssrc = 0;
     std::optional<uint64_t> reference_time;
     std::vector<Dlrr> replies;
+
+    // A reference time piggybacked on a reply timestamps that reply. It must
+    // not start another exchange (otherwise two upgraded peers echo forever).
+    bool NeedsReply() const {
+      return reference_time && *reference_time != 0 && replies.empty();
+    }
   };
 
   static bool Parse(const uint8_t* payload, size_t size, Report& report) {
@@ -70,14 +76,26 @@ class ReceiverRtt {
   }
 
   static std::vector<uint8_t> Reply(uint32_t local_ssrc, uint32_t receiver_ssrc,
-                                    uint64_t ntp, int64_t delay_us) {
-    auto packet = Header(local_ssrc, 24);
+                                    uint64_t ntp, int64_t delay_us,
+                                    uint64_t reply_ntp = 0) {
+    auto packet = Header(local_ssrc, reply_ntp != 0 ? 36 : 24);
     packet[8] = 5;
     packet[11] = 3;
     Write32(packet.data() + 12, receiver_ssrc);
     Write32(packet.data() + 16, Compact(ntp));
     Write32(packet.data() + 20, uint64_t(delay_us) * 65536 / 1'000'000);
+    if (reply_ntp != 0) {
+      packet[24] = 4;
+      packet[27] = 2;
+      Write32(packet.data() + 28, reply_ntp >> 32);
+      Write32(packet.data() + 32, uint32_t(reply_ntp));
+    }
     return packet;
+  }
+
+  void Reset() {
+    std::lock_guard lock(mutex_);
+    pending_.clear();
   }
 
   std::optional<int64_t> Receive(const Dlrr& reply, uint32_t local_ssrc,

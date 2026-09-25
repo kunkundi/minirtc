@@ -153,6 +153,8 @@ class IceTransportController
   void OnSenderReport(const SenderReport& sender_report);
   void OnReceiverReport(const std::vector<RtcpReportBlock>& report_block_datas);
   void OnTransportRtt(double rtt_ms);
+  void OnTransportClockOffset(int64_t offset_us, int64_t rtt_us);
+  void ResetTransportClockOffset();
   void OnCongestionControlFeedback(
       const webrtc::rtcp::CongestionControlFeedback& feedback);
   void OnReceiveNack(uint32_t media_ssrc,

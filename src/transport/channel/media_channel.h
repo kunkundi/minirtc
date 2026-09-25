@@ -81,6 +81,8 @@ class MediaChannel {
   }
 
   virtual void OnRttUpdate(int64_t rtt_ms) {}
+  virtual void OnClockOffset(int64_t offset_us, int64_t rtt_us) {}
+  virtual void ResetClockOffset() {}
 
   virtual int OnReceiveRtpPacket(const char* data, size_t size) {
     LOG_INFO("OnReceiveRtpPacket() default implementation");

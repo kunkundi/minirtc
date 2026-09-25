@@ -557,6 +557,10 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     traversal_type_ = TraversalType::TP2P;
   }
   if (ice_transport_controller_) {
+    // A selected-pair change can alter path asymmetry. Discard calibrations
+    // and outstanding exchanges from the previous path, even for P2P -> P2P.
+    receiver_rtt_.Reset();
+    ice_transport_controller_->ResetTransportClockOffset();
     ice_transport_controller_->SetRelayPath(traversal_type_ ==
                                              TraversalType::TRelay);
   }
@@ -837,17 +841,34 @@ bool IceTransport::HandleExtendedReport(const RtcpCommonHeader& block) {
   ReceiverRtt::Report report;
   if (!ReceiverRtt::Parse(block.payload(), block.payload_size_bytes(), report))
     return false;
-  if (report.reference_time && *report.reference_time != 0 && ice_agent_) {
+  if (report.NeedsReply() && ice_agent_) {
+    const int64_t reply_us = clock_->CurrentTimeUs();
     const auto reply = ReceiverRtt::Reply(
         receiver_rtt_ssrc_, report.sender_ssrc, *report.reference_time,
-        std::max<int64_t>(0, clock_->CurrentTimeUs() - arrival_us));
+        std::max<int64_t>(0, reply_us - arrival_us),
+        clock_->MonotonicTimeUsToNtp(reply_us));
     ice_agent_->Send(reinterpret_cast<const char*>(reply.data()), reply.size());
   }
   for (const auto& reply : report.replies) {
     if (auto rtt =
             receiver_rtt_.Receive(reply, receiver_rtt_ssrc_, arrival_us)) {
-      if (ice_transport_controller_)
+      if (ice_transport_controller_) {
         ice_transport_controller_->OnTransportRtt(*rtt / 1000.0);
+        // The matched probe supplies t1/t4, DLRR supplies t3-t2, and RRTR in
+        // this same reply supplies t3. Never combine an unrelated SR arrival
+        // with the latest RTT: SR queueing would be subtracted from video age.
+        if (report.reference_time && *report.reference_time != 0) {
+          const int64_t offset_us =
+              arrival_us - clock_->NtpToUtcTimeUs(*report.reference_time) -
+              *rtt / 2;
+          ice_transport_controller_->OnTransportClockOffset(offset_us, *rtt);
+          LOG_DEBUG("Transport timing: peer={} rtt_ms={} clock_offset_us={} "
+                    "calibrated=true", remote_user_id_, *rtt / 1000.0, offset_us);
+        } else {
+          LOG_DEBUG("Transport timing: peer={} rtt_ms={} calibrated=false",
+                    remote_user_id_, *rtt / 1000.0);
+        }
+      }
     }
   }
   return true;

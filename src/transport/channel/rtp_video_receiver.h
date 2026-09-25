@@ -83,6 +83,11 @@ class RtpVideoReceiver : public ThreadBase {
 
   void OnSenderReport(const SenderReport& sender_report);
   void OnRttUpdate(int64_t rtt_ms);
+  void OnClockOffset(int64_t offset_us, int64_t rtt_us) {
+    rtp_timestamp_mapper_.UpdateClockOffset(
+        offset_us, rtt_us, system_clock_->CurrentTimeUs());
+  }
+  void ResetClockOffset() { rtp_timestamp_mapper_.ResetClockOffset(); }
 
   void RequestKeyFrame();
 

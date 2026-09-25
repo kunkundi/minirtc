@@ -2869,6 +2869,23 @@ void IceTransportController::OnTransportRtt(double rtt_ms) {
   }
 }
 
+void IceTransportController::OnTransportClockOffset(int64_t offset_us,
+                                                    int64_t rtt_us) {
+  std::shared_lock lock(stream_receivers_mutex_);
+  for (const auto& [_, context] : stream_receivers_) {
+    if (context && context->type == StreamType::kVideo && context->transceiver)
+      context->transceiver->OnClockOffset(offset_us, rtt_us);
+  }
+}
+
+void IceTransportController::ResetTransportClockOffset() {
+  std::shared_lock lock(stream_receivers_mutex_);
+  for (const auto& [_, context] : stream_receivers_) {
+    if (context && context->type == StreamType::kVideo && context->transceiver)
+      context->transceiver->ResetClockOffset();
+  }
+}
+
 void IceTransportController::OnReceiverReport(
     const std::vector<RtcpReportBlock>& report_block_datas) {
   webrtc::Timestamp now = webrtc_clock_->CurrentTime();

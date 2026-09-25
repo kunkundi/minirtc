@@ -7,33 +7,33 @@
 #ifndef _REMOTE_CAPTURE_TIME_ESTIMATOR_H_
 #define _REMOTE_CAPTURE_TIME_ESTIMATOR_H_
 
-#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <deque>
 #include <mutex>
 #include <optional>
-#include <vector>
 
 namespace minirtc {
 
-// Maps remote RTP capture timestamps to the local monotonic clock. Like
-// WebRTC, clock offset estimation assumes approximately symmetric paths.
+// Maps remote RTP capture timestamps to the local monotonic clock. Clock
+// offset comes from a matched RTT exchange, assuming symmetric paths, rather
+// than SR arrival times whose independent queueing would hide video delay.
 // Unknown/stale mappings never masquerade as zero-latency arrival timestamps.
 class RemoteCaptureTimeEstimator {
  public:
-  void UpdateRtt(int64_t rtt_us, int64_t now_us) {
+  void UpdateClockOffset(int64_t offset_us, int64_t rtt_us, int64_t now_us) {
     if (rtt_us < 0 || rtt_us > 2'000'000) return;
     std::lock_guard lock(mutex_);
-    rtt_us_ = rtt_us;
-    rtt_updated_us_ = now_us;
+    if (!offsets_.empty() && now_us < offsets_.back().time_us)
+      offsets_.clear();
+    offsets_.push_back({offset_us, rtt_us, now_us});
+    while (offsets_.size() > 8 ||
+           now_us - offsets_.front().time_us > kMaxAgeUs)
+      offsets_.pop_front();
   }
 
   void UpdateSenderReport(uint32_t rtp, int64_t remote_us, int64_t arrival_us) {
     std::lock_guard lock(mutex_);
-    if (!rtt_us_ || arrival_us < rtt_updated_us_ ||
-        arrival_us - rtt_updated_us_ > kMaxAgeUs)
-      return;
     if (!samples_.empty()) {
       const auto& last = samples_.back();
       if (rtp == last.rtp || remote_us == last.remote_us) return;
@@ -43,22 +43,32 @@ class RemoteCaptureTimeEstimator {
       if (delta <= 0 || elapsed <= 0 || elapsed > kMaxAgeUs ||
           std::abs(elapsed - delta * (1'000'000.0 / 90'000)) > 100'000) {
         samples_.clear();
-        offsets_.clear();
+        // A long gap alone doesn't change the peer's clock. Discard the
+        // calibration too if the sender's timelines no longer agree.
+        if (elapsed <= 0 ||
+            std::abs(elapsed - delta * (1'000'000.0 / 90'000)) > 100'000)
+          offsets_.clear();
       }
     }
     samples_.push_back({rtp, remote_us, arrival_us});
     if (samples_.size() > 20) samples_.pop_front();
-    offsets_.push_back(arrival_us - remote_us - *rtt_us_ / 2);
-    if (offsets_.size() > 7) offsets_.pop_front();
   }
 
   std::optional<int64_t> Estimate(uint32_t rtp, int64_t now_us) const {
     std::lock_guard lock(mutex_);
-    if (samples_.size() < 3 || !rtt_us_ ||
-        now_us < samples_.back().arrival_us || now_us < rtt_updated_us_ ||
-        now_us - samples_.back().arrival_us > kMaxAgeUs ||
-        now_us - rtt_updated_us_ > kMaxAgeUs)
+    if (samples_.size() < 3 ||
+        now_us < samples_.back().arrival_us ||
+        now_us - samples_.back().arrival_us > kMaxAgeUs)
       return std::nullopt;
+    // The least queued recent exchange gives the most reliable offset. Prefer
+    // the newer sample for ties so calibration follows slow clock drift.
+    const Offset* best = nullptr;
+    for (const auto& offset : offsets_) {
+      if (now_us < offset.time_us || now_us - offset.time_us > kMaxAgeUs)
+        continue;
+      if (!best || offset.rtt_us <= best->rtt_us) best = &offset;
+    }
+    if (!best) return std::nullopt;
     const auto& anchor = samples_.back();
     // Center both axes before fitting to preserve precision for UTC values.
     double x_mean = 0, y_mean = 0;
@@ -78,10 +88,8 @@ class RemoteCaptureTimeEstimator {
     const double slope = covariance / variance;
     // Video RTP uses 90 kHz. Reject malformed reports and implausible drift.
     if (slope < 11.0 || slope > 11.23) return std::nullopt;
-    std::vector<int64_t> offsets(offsets_.begin(), offsets_.end());
-    std::sort(offsets.begin(), offsets.end());
     const int64_t mapped =
-        anchor.remote_us + offsets[offsets.size() / 2] +
+        anchor.remote_us + best->offset_us +
         static_cast<int64_t>(std::llround(
             y_mean + slope * (RtpDelta(rtp, anchor.rtp) - x_mean)));
     if (mapped <= 0 || mapped > now_us || now_us - mapped > kMaxAgeUs)
@@ -93,7 +101,11 @@ class RemoteCaptureTimeEstimator {
     std::lock_guard lock(mutex_);
     samples_.clear();
     offsets_.clear();
-    rtt_us_.reset();
+  }
+
+  void ResetClockOffset() {
+    std::lock_guard lock(mutex_);
+    offsets_.clear();
   }
 
  private:
@@ -107,11 +119,14 @@ class RemoteCaptureTimeEstimator {
     int64_t remote_us;
     int64_t arrival_us;
   };
+  struct Offset {
+    int64_t offset_us;
+    int64_t rtt_us;
+    int64_t time_us;
+  };
   mutable std::mutex mutex_;
   std::deque<Sample> samples_;
-  std::deque<int64_t> offsets_;
-  std::optional<int64_t> rtt_us_;
-  int64_t rtt_updated_us_ = 0;
+  std::deque<Offset> offsets_;
 };
 }  // namespace minirtc
 

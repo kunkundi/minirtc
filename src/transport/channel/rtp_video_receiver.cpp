@@ -795,10 +795,6 @@ RtpVideoReceiver::GetFrameRecoveryTiming() {
 }
 
 void RtpVideoReceiver::OnRttUpdate(int64_t rtt_ms) {
-  if (rtt_ms >= 0 && rtt_ms <= 2000) {
-    rtp_timestamp_mapper_.UpdateRtt(rtt_ms * 1000,
-                                    system_clock_->CurrentTimeUs());
-  }
   if (!RtxEnabled()) {
     return;
   }

@@ -103,4 +103,13 @@ void VideoChannelReceive::OnRttUpdate(int64_t rtt_ms) {
     rtp_video_receiver_->OnRttUpdate(rtt_ms);
   }
 }
+
+void VideoChannelReceive::OnClockOffset(int64_t offset_us, int64_t rtt_us) {
+  if (rtp_video_receiver_)
+    rtp_video_receiver_->OnClockOffset(offset_us, rtt_us);
+}
+
+void VideoChannelReceive::ResetClockOffset() {
+  if (rtp_video_receiver_) rtp_video_receiver_->ResetClockOffset();
+}
 }  // namespace minirtc
