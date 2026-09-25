@@ -2858,12 +2858,14 @@ void IceTransportController::OnSenderReport(const SenderReport& sender_report) {
   }
 }
 
-void IceTransportController::OnTransportRtt(int64_t rtt_ms) {
-  if (rtt_ms < 0 || rtt_ms > 2000) return;
+void IceTransportController::OnTransportRtt(double rtt_ms) {
+  if (!std::isfinite(rtt_ms) || rtt_ms < 0 || rtt_ms > 2000) return;
+  if (ice_io_statistics_) ice_io_statistics_->RecordRtt(rtt_ms);
+  const int64_t receiver_rtt_ms = std::llround(rtt_ms);
   std::shared_lock lock(stream_receivers_mutex_);
   for (const auto& [_, context] : stream_receivers_) {
     if (context && context->type == StreamType::kVideo && context->transceiver)
-      context->transceiver->OnRttUpdate(rtt_ms);
+      context->transceiver->OnRttUpdate(receiver_rtt_ms);
   }
 }
 

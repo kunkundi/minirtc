@@ -331,6 +331,7 @@ int IceTransport::InitIceTransmission(
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
+        const auto rtt_ms = ice_io_statistics_->TakeRttMs();
         // A receive-only peer cannot derive RTT from its own media SRs.
         // Probe once per reporting interval, independent of audio/video sends.
         if (!is_closed_ && ice_agent_) {
@@ -351,6 +352,7 @@ int IceTransport::InitIceTransmission(
           minirtc_net_traffic_stats.srtp_active =
               ice_transport_controller_ &&
               ice_transport_controller_->IsSrtpActive();
+          minirtc_net_traffic_stats.rtt_ms = rtt_ms.value_or(-1);
           on_receive_net_status_report_(
               user_id_.data(), user_id_.size(), TraversalMode(traversal_type_),
               &minirtc_net_traffic_stats, remote_user_id_.data(),
@@ -558,8 +560,7 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     ice_transport_controller_->SetRelayPath(traversal_type_ ==
                                              TraversalType::TRelay);
   }
-  MiniRtcNetTrafficStats net_traffic_stats;
-  memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
+  MiniRtcNetTrafficStats net_traffic_stats{};
   net_traffic_stats.srtp_active = ice_transport_controller_ &&
                                 ice_transport_controller_->IsSrtpActive();
 
@@ -846,7 +847,7 @@ bool IceTransport::HandleExtendedReport(const RtcpCommonHeader& block) {
     if (auto rtt =
             receiver_rtt_.Receive(reply, receiver_rtt_ssrc_, arrival_us)) {
       if (ice_transport_controller_)
-        ice_transport_controller_->OnTransportRtt((*rtt + 500) / 1000);
+        ice_transport_controller_->OnTransportRtt(*rtt / 1000.0);
     }
   }
   return true;

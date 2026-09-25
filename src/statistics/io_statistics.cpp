@@ -1,5 +1,7 @@
 #include "io_statistics.h"
 
+#include <cmath>
+
 #include "log.h"
 
 #define STATISTICAL_PERIOD 1000
@@ -14,6 +16,24 @@ IOStatistics::IOStatistics(
 }
 
 IOStatistics::~IOStatistics() { Stop(); }
+
+void IOStatistics::RecordRtt(double rtt_ms) {
+  if (!std::isfinite(rtt_ms) || rtt_ms < 0 || rtt_ms > 2000) return;
+  std::lock_guard lock(rtt_mutex_);
+  rtt_total_ms_ += rtt_ms;
+  ++rtt_sample_count_;
+}
+
+std::optional<double> IOStatistics::TakeRttMs() {
+  std::lock_guard lock(rtt_mutex_);
+  const auto average = rtt_sample_count_ != 0
+                           ? std::optional<double>(rtt_total_ms_ /
+                                                   rtt_sample_count_)
+                           : std::nullopt;
+  rtt_total_ms_ = 0;
+  rtt_sample_count_ = 0;
+  return average;
+}
 
 void IOStatistics::Process() {
   while (running_) {

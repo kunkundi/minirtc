@@ -208,9 +208,9 @@ typedef struct {
  * audio, and data counters/rates. In the current implementation,
  * total_inbound_stats.loss_rate also sums the three loss fractions: it is not
  * a weighted aggregate and may exceed 1. Availability depends on the backend;
- * an initial login report contains zero statistics and UnknownMode.
+ * an initial login report contains zero counters, unavailable RTT and UnknownMode.
  */
-typedef struct {
+typedef struct MiniRtcNetTrafficStats {
   MiniRtcInboundStats video_inbound_stats;
   MiniRtcOutboundStats video_outbound_stats;
   MiniRtcInboundStats audio_inbound_stats;
@@ -220,6 +220,7 @@ typedef struct {
   MiniRtcInboundStats total_inbound_stats;
   MiniRtcOutboundStats total_outbound_stats;
   bool srtp_active;
+  double rtt_ms = -1; ///< -1 without a valid sample; zero RTT remains valid.
 } MiniRtcNetTrafficStats;
 
 /// Opaque owned handle. Create with CreatePeer; release only with DestroyPeer.

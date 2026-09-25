@@ -986,8 +986,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           password = "";
         }
 
-        MiniRtcNetTrafficStats net_traffic_stats;
-        memset(&net_traffic_stats, 0, sizeof(net_traffic_stats));
+        MiniRtcNetTrafficStats net_traffic_stats{};
 
         on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
                               TraversalMode::UnknownMode, &net_traffic_stats,

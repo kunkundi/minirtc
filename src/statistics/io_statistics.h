@@ -12,6 +12,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <thread>
 
 namespace minirtc {
@@ -60,6 +61,9 @@ class IOStatistics {
   void UpdateDataOutboundBytes(uint32_t bytes);
   void UpdateDataPacketLossCount(uint16_t seq_num);
 
+  void RecordRtt(double rtt_ms);
+  std::optional<double> TakeRttMs();
+
   void IncrementVideoInboundRtpPacketCount();
   void IncrementVideoOutboundRtpPacketCount();
 
@@ -79,6 +83,10 @@ class IOStatistics {
   uint32_t interval_ = 1000;
   std::condition_variable cond_var_;
   std::atomic<bool> running_{false};
+
+  std::mutex rtt_mutex_;
+  double rtt_total_ms_ = 0;
+  uint32_t rtt_sample_count_ = 0;
 
   std::atomic<uint32_t> video_inbound_bytes_ = 0;
   std::atomic<uint32_t> video_outbound_bytes_ = 0;
