@@ -32,9 +32,9 @@
 | Linux x86-64 | NVIDIA NVENC / NVDEC，需启用 CUDA | OpenH264 | SVT-AV1 / dav1d | 软件解码 CPU NV12；NVDEC CUDA NV12 |
 | Linux arm64 | 当前工厂使用软件路径 | OpenH264 | SVT-AV1 / dav1d | 软件解码 CPU NV12 |
 | macOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | VideoToolbox 的 `CVPixelBufferRef` |
-| iOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | VideoToolbox 的 `CVPixelBufferRef` |
+| iOS | VideoToolbox | 不构建 | SVT-AV1 / dav1d | VideoToolbox 的 `CVPixelBufferRef` |
 
-- 硬件路径同时受构建配置、运行时 `hardware_acceleration` 和设备能力影响。H.264 硬件编码初始化失败时，初始化工厂会尝试回退到 OpenH264。
+- 硬件路径同时受构建配置、运行时 `hardware_acceleration` 和设备能力影响。桌面端 H.264 硬件编码初始化失败时，初始化工厂会尝试回退到 OpenH264。iOS 不编译或链接 OpenH264，H.264 必须设置 `hardware_acceleration=true`；不支持软件 H.264 请求或初始化失败时，工厂返回空指针，不执行软件回退。
 - 当前 AV1 工厂使用 **SVT-AV1 编码 / dav1d 解码**。libaom 默认不参与构建；需要开发其后端时可通过 `xmake f --MINIRTC_ENABLE_AOM=true` 启用，这不会改变工厂的实现选择。Apple 平台没有 VideoToolbox AV1 路径。
 - 设置 `native_video_output=true` 请求原生帧。Apple 软件解码仍返回 CPU 数据；Windows / Linux 软件解码可返回 CPU NV12 描述符。原生输出不等于所有路径都零拷贝。
 

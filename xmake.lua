@@ -63,9 +63,7 @@ local libnice_configs = {
     include_virtual_interfaces =
         is_config("MINIRTC_INCLUDE_VIRTUAL_ICE_INTERFACES", true)
 }
--- Every iOS build contains the hardware and software codec backends. Runtime
--- selection still prefers VideoToolbox for H.264 unless the caller explicitly
--- requests software processing.
+-- iOS uses VideoToolbox exclusively for H.264; software AV1 remains available.
 if is_iphoneos then
     add_defines("MINIRTC_IOS=1")
     add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1",
@@ -79,10 +77,9 @@ if is_iphoneos then
     add_packages("asio", "nlohmann_json", "spdlog", "libnice",
         "websocketpp", "libsrtp", "openfec", "libopus", "libyuv",
         "concurrentqueue")
-    add_requires("openh264 2.6.0", {system = false}, {configs = {shared = false}})
     add_requires("dav1d 1.4.3", {system = false}, {configs = {shared = false, tools = false}})
     add_requires("svt-av1 v3.0.2", {system = false}, {configs = {shared = false, tools = false}})
-    add_packages("openh264", "dav1d", "svt-av1")
+    add_packages("dav1d", "svt-av1")
 else
     add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
     add_requires("libnice 0.1.24",
@@ -312,16 +309,12 @@ target("media")
     elseif is_iphoneos then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
-        "src/media/video/encode/openh264/*.cpp",
-        "src/media/video/decode/openh264/*.cpp",
         "src/media/video/encode/video_toolbox/*.mm",
         "src/media/video/decode/video_toolbox/*.mm",
         "src/media/video/encode/avt/*.cpp",
         "src/media/video/decode/dav1d/*.cpp")
         add_includedirs("src/media/video/encode",
         "src/media/video/decode",
-        "src/media/video/encode/openh264",
-        "src/media/video/decode/openh264",
         "src/media/video/encode/video_toolbox",
         "src/media/video/decode/video_toolbox",
         "src/media/video/encode/avt",

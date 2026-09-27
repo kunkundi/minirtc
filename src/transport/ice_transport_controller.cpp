@@ -2757,6 +2757,7 @@ int IceTransportController::CreateStreamCodecs(
         if (context->type == StreamType::kVideo) {
           context->codec = VideoDecoderFactory::CreateVideoDecoder(
               clock, hardware_acceleration, codec_type, native_video_output_);
+#if !defined(MINIRTC_IOS)
           if (!context->codec) {
             context->codec =
                 VideoDecoderFactory::CreateVideoDecoder(
@@ -2767,6 +2768,7 @@ int IceTransportController::CreateStreamCodecs(
                 "decoder",
                 channel_name);
           }
+#endif
           if (!context->codec || context->codec->Init()) {
             LOG_ERROR("Decoder [{}] init failed", channel_name);
             return -1;

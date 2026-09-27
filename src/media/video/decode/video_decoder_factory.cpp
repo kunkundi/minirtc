@@ -1,7 +1,9 @@
 #include "video_decoder_factory.h"
 
 #include "dav1d/dav1d_av1_decoder.h"
+#if !defined(MINIRTC_IOS)
 #include "openh264/openh264_decoder.h"
+#endif
 
 #if defined(__APPLE__)
 #include <CoreMedia/CoreMedia.h>
@@ -46,6 +48,14 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
     return nullptr;
   }
 
+#if defined(MINIRTC_IOS)
+  if (!hardware_acceleration ||
+      !CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
+    LOG_ERROR("VideoToolbox H.264 decoding is unavailable or disabled on iOS");
+    return nullptr;
+  }
+  return std::make_unique<VideoToolboxDecoder>(clock, native_video_output);
+#else
 #if defined(__APPLE__)
   if (hardware_acceleration &&
       CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
@@ -60,6 +70,7 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
   }
 #endif
   return std::make_unique<OpenH264Decoder>(clock, native_video_output);
+#endif
 }
 
 bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(

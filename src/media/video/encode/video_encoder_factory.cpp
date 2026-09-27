@@ -1,7 +1,9 @@
 #include "video_encoder_factory.h"
 
 #include "avt/svt_av1_encoder.h"
+#if !defined(MINIRTC_IOS)
 #include "openh264/openh264_encoder.h"
+#endif
 
 #if (defined(_WIN32) || defined(_WIN64)) && USE_CUDA
 #include "nvcodec/nvidia_video_encoder.h"
@@ -42,7 +44,13 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     return nullptr;
   }
 
-#if defined(__APPLE__)
+#if defined(MINIRTC_IOS)
+  if (!hardware_acceleration) {
+    LOG_ERROR("Software H.264 encoding is unavailable on iOS");
+    return nullptr;
+  }
+  return std::make_unique<VideoToolboxEncoder>(clock);
+#elif defined(__APPLE__)
   if (hardware_acceleration) {
     return std::make_unique<VideoToolboxEncoder>(clock);
   }
@@ -79,6 +87,11 @@ VideoEncoderFactory::CreateInitializedVideoEncoder(
   const std::string failed_encoder_name =
       encoder ? encoder->GetEncoderName() : "requested encoder";
 
+#if defined(MINIRTC_IOS)
+  // iOS has no software H.264 backend to fall back to.
+  LOG_ERROR("Encoder [{}] initialization failed", failed_encoder_name);
+  return nullptr;
+#else
   // A negotiated AV1 stream must stay AV1. Only a failed hardware H.264
   // encoder can be transparently replaced with the software H.264 backend.
   if (!hardware_acceleration || codec_type == VideoCodecType::AV1) {
@@ -97,6 +110,7 @@ VideoEncoderFactory::CreateInitializedVideoEncoder(
   }
 
   return encoder;
+#endif
 }
 
 bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(

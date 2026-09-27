@@ -32,9 +32,9 @@ The build produces a **C++17 static library** with `extern "C"` function linkage
 | Linux x86-64 | NVIDIA NVENC / NVDEC; requires CUDA build | OpenH264 | SVT-AV1 / dav1d | CPU NV12 from software decoders; CUDA NV12 from NVDEC |
 | Linux arm64 | Current factories use software codecs | OpenH264 | SVT-AV1 / dav1d | CPU NV12 from software decoders |
 | macOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | `CVPixelBufferRef` from VideoToolbox |
-| iOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | `CVPixelBufferRef` from VideoToolbox |
+| iOS | VideoToolbox | Not built | SVT-AV1 / dav1d | `CVPixelBufferRef` from VideoToolbox |
 
-- Hardware use depends on build configuration, runtime `hardware_acceleration`, and device support. The initialization factory attempts an OpenH264 fallback when hardware H.264 encoder initialization fails.
+- Hardware use depends on build configuration, runtime `hardware_acceleration`, and device support. On desktop, the initialization factory attempts an OpenH264 fallback when hardware H.264 encoder initialization fails. iOS does not compile or link OpenH264 and requires `hardware_acceleration=true` for H.264; software H.264 requests or initialization failures return a null codec without a software fallback.
 - The AV1 factories select **SVT-AV1 encoding / dav1d decoding**. libaom is excluded by default; use `xmake f --MINIRTC_ENABLE_AOM=true` to build its optional backends for development. This does not change the factories' selection. There is no VideoToolbox AV1 path on Apple platforms.
 - Set `native_video_output=true` to request native frames. Apple software decoders still return CPU data; Windows / Linux software decoders can return CPU NV12 descriptors. Native output does not guarantee zero copies throughout every path.
 
