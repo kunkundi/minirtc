@@ -2,6 +2,10 @@ package("glib")
     set_homepage("https://docs.gtk.org/glib/")
     set_description("Low-level core library that forms the basis for projects such as GTK+ and GNOME.")
     set_license("LGPL-2.1-or-later")
+    if is_plat("iphoneos") then
+        add_configs("ios_sandbox_revision", {default = "1", type = "string", readonly = true,
+            description = "Disable unused system volume discovery on iOS"})
+    end
 
     add_urls("https://download.gnome.org/sources/glib/$(version).tar.xz", {alias = "home", version = function (version)
         return format("%d.%d/glib-%s", version:major(), version:minor(), version)
@@ -112,6 +116,39 @@ package("glib")
         if package:is_plat("iphoneos") then
             table.insert(configs, "-Dnls=disabled")
             table.insert(configs, "-Dxattr=false")
+            -- MiniRTC uses GIO networking, not system volume enumeration or
+            -- filesystem capacity queries. Do not ship those optional APIs on
+            -- iOS or declare a privacy purpose the application does not have.
+            io.replace("meson.build", "if cc.has_function(f)",
+                "if f not in ['statfs', 'statvfs', 'getfsstat', 'getvfsstat', 'getfsent'] and cc.has_function(f)",
+                {plain = true})
+            local used_space = "      g_file_info_set_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED, block_size * (statfs_buffer.f_blocks - statfs_buffer.f_bfree));"
+            io.replace("gio/glocalfile.c", used_space,
+                "#if defined(USE_STATFS) || defined(USE_STATVFS)\n" .. used_space .. "\n#endif",
+                {plain = true})
+            io.replace("gio/gunixmounts.c",
+                "#error No _g_get_unix_mounts() implementation for system",
+                [[/* CrossDesk iOS sandbox: system mounts are not exposed. */
+static const char *get_mtab_monitor_file (void) { return NULL; }
+static GList *_g_get_unix_mounts (void) { return NULL; }
+static GUnixMountEntry **
+_g_unix_mounts_get_from_file (const char *path, uint64_t *time_out, size_t *count_out)
+{
+  if (time_out != NULL) *time_out = 0;
+  if (count_out != NULL) *count_out = 0;
+  return NULL;
+}]], {plain = true})
+            io.replace("gio/gunixmounts.c",
+                "#error No g_get_mount_table() implementation for system",
+                [[/* CrossDesk iOS sandbox: no user-manageable mount table. */
+static GList *_g_get_unix_mount_points (void) { return NULL; }
+static GUnixMountPoint **
+_g_unix_mount_points_get_from_file (const char *path, uint64_t *time_out, size_t *count_out)
+{
+  if (time_out != NULL) *time_out = 0;
+  if (count_out != NULL) *count_out = 0;
+  return NULL;
+}]], {plain = true})
         end
         if package:is_plat("macosx") and package:version():le("2.61.0") then
             table.insert(configs, "-Diconv=native")

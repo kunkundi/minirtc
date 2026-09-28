@@ -427,6 +427,10 @@ void WsClient::LoadTlsSystemRootCertificates(SSL_CTX* ssl_ctx) {
   if (!LoadWindowsRootCertificates(ssl_ctx)) {
     LOG_WARN("Unable to load Windows Root certificates");
   }
+#elif defined(__APPLE__) && TARGET_OS_IPHONE
+  // iOS evaluates the peer chain and hostname with SecTrust below. OpenSSL's
+  // build-host certificate paths are not an iOS trust store.
+  return;
 #else
 #ifdef __APPLE__
 #if !TARGET_OS_IPHONE
