@@ -73,8 +73,7 @@ int RtpAudioSender::SendRtpPacket(QueuedAudioPacket queued_packet) {
   total_rtp_packets_sent_++;
 
   if (io_statistics_) {
-    io_statistics_->UpdateAudioOutboundBytes(
-        static_cast<uint32_t>(rtp_packet.Size()));
+    // The transport records wire bytes, including the SRTP tag, once sent.
     io_statistics_->IncrementAudioOutboundRtpPacketCount();
   }
 

@@ -42,22 +42,7 @@ void DataChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
   rtp_packetizer_ =
       RtpPacketizer::Create(payload_type, rtp_data_sender_->GetSsrc());
 
-  rtp_data_sender_->SetSendDataFunc(
-      [this](const char* data, size_t size) -> int {
-        if (!ice_agent_) {
-          LOG_ERROR("ice_agent_ is nullptr");
-          return -1;
-        }
-
-        auto ice_state = ice_agent_->GetIceState();
-
-        if (ICE_STATE_DESTROYED == ice_state) {
-          return -2;
-        }
-
-        ice_io_statistics_->UpdateDataOutboundBytes((uint32_t)size);
-        return ice_agent_->Send(data, size);
-      });
+  rtp_data_sender_->SetSendDataFunc(send_packet_func_);
 
   rtp_data_sender_->Start();
 }

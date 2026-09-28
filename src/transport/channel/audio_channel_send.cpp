@@ -31,22 +31,7 @@ void AudioChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
   rtp_audio_sender_->SetAbsoluteSendTimeExtensionId(
       abs_send_time_ext_id_);
 
-  rtp_audio_sender_->SetSendDataFunc(
-      [this](const char *data, size_t size) -> int {
-        if (!ice_agent_) {
-          LOG_ERROR("ice_agent_ is nullptr");
-          return -1;
-        }
-
-        auto ice_state = ice_agent_->GetIceState();
-
-        if (ICE_STATE_DESTROYED == ice_state) {
-          return -2;
-        }
-
-        ice_io_statistics_->UpdateAudioOutboundBytes((uint32_t)size);
-        return ice_agent_->Send(data, size);
-      });
+  rtp_audio_sender_->SetSendDataFunc(send_packet_func_);
 
   rtp_audio_sender_->Start();
 }

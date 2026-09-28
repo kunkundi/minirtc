@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <future>
+#include <limits>
 #include <memory>
 #include <vector>
 
@@ -217,24 +218,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           size_t send_size = 0;
 
           if (self->enable_srtp_) {
-            int len = packet->Size();
-
-            const size_t protected_size = packet->Size() + 16;
-            if (protected_packet.size() < protected_size) {
-              protected_packet.resize(protected_size);
-            }
-            memcpy(protected_packet.data(), packet->Buffer().data(), len);
-
-            auto srtp_it =
-                self->ssrc_to_srtp_sender_.find(packet->Ssrc());
-            if (srtp_it == self->ssrc_to_srtp_sender_.end() ||
-                !srtp_it->second || !srtp_it->second->valid()) {
-              LOG_ERROR("No SRTP sender session for SSRC {}", packet->Ssrc());
-              notify_send_failure();
-              return;
-            }
-            const int result =
-                srtp_it->second->protectRtp(protected_packet.data(), &len);
+            const int result = self->ProtectOutgoingPacket(
+                reinterpret_cast<const char*>(packet->Buffer().data()),
+                packet->Size(), protected_packet);
             if (result < 0) {
               LOG_ERROR("SRTP protect failed for stream [{}]: {} ({})",
                         packet->Ssrc(),
@@ -247,7 +233,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 
             send_buffer =
                 reinterpret_cast<const char*>(protected_packet.data());
-            send_size = static_cast<size_t>(len);
+            send_size = protected_packet.size();
           } else {
             send_buffer =
                 reinterpret_cast<const char*>(packet->Buffer().data());
@@ -346,11 +332,15 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           initial.fec_bitrate_bps = 0;
           context->transceiver->SetFecProtection(initial);
         } else if (context->type == StreamType::kAudio) {
+          context->transceiver->SetSendPacketFunc(
+              CreateUnpacedSendFunction(context->type));
           context->transceiver->SetAbsoluteSendTimeExtensionId(
               audio_abs_send_time_ext_id_);
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS,
                                            paced_sender_);
         } else if (context->type == StreamType::kData) {
+          context->transceiver->SetSendPacketFunc(
+              CreateUnpacedSendFunction(context->type));
           rtp::PAYLOAD_TYPE data_pt = context->reliable
                                           ? rtp::PAYLOAD_TYPE::KCP
                                           : rtp::PAYLOAD_TYPE::DATA;
@@ -374,6 +364,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
               audio_abs_recv_time_ext_id_);
           context->transceiver->Initialize(rtp::PAYLOAD_TYPE::OPUS);
         } else if (context->type == StreamType::kData) {
+          context->transceiver->SetSendPacketFunc(
+              CreateUnpacedSendFunction(context->type));
           rtp::PAYLOAD_TYPE data_pt = context->reliable
                                           ? rtp::PAYLOAD_TYPE::KCP
                                           : rtp::PAYLOAD_TYPE::DATA;
@@ -2295,6 +2287,85 @@ void IceTransportController::UpdateMediaTransportState() {
   }
 }
 
+std::function<int(const char*, size_t)>
+IceTransportController::CreateUnpacedSendFunction(StreamType type) {
+  std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+  // Each channel has its own serialized sender thread and scratch buffer.
+  return [weak_self, type, protected_packet = std::vector<uint8_t>()](
+             const char* data, size_t size) mutable -> int {
+    auto self = weak_self.lock();
+    if (!self || !self->ice_agent_) {
+      return -2;
+    }
+    if (self->PrepareUnpacedPacket(data, size, protected_packet) < 0) return -1;
+
+    const int result = self->ice_agent_->Send(data, size);
+    if (result >= 0 && self->ice_io_statistics_) {
+      if (type == StreamType::kAudio) {
+        self->ice_io_statistics_->UpdateAudioOutboundBytes(
+            static_cast<uint32_t>(size));
+      } else {
+        self->ice_io_statistics_->UpdateDataOutboundBytes(
+            static_cast<uint32_t>(size));
+      }
+    }
+    return result;
+  };
+}
+
+int IceTransportController::PrepareUnpacedPacket(
+    const char*& data, size_t& size, std::vector<uint8_t>& protected_packet) {
+  if (!media_transport_ready_.load() || !data || size < 4 ||
+      (static_cast<uint8_t>(data[0]) >> 6) != 2) {
+    return -1;
+  }
+  // Sender reports retain the RTCP path. Only a negotiated capability may
+  // enable audio/data SRTP; a decryption error never changes that mode.
+  const uint8_t packet_type = static_cast<uint8_t>(data[1]);
+  const bool is_rtcp = packet_type >= 192 && packet_type <= 223;
+  if (enable_srtp_ && audio_data_srtp_enabled_ && !is_rtcp) {
+    const int result = ProtectOutgoingPacket(data, size, protected_packet);
+    if (result < 0) {
+      LOG_ERROR("SRTP protect failed: {} ({})",
+                SrtpEngine::ErrToStr(static_cast<srtp_err_status_t>(-result)),
+                -result);
+      return -1;
+    }
+    data = reinterpret_cast<const char*>(protected_packet.data());
+    size = protected_packet.size();
+  }
+  return 0;
+}
+
+int IceTransportController::ProtectOutgoingPacket(
+    const char* data, size_t size, std::vector<uint8_t>& protected_packet) {
+  if (!data || size < 12 ||
+      size > static_cast<size_t>(std::numeric_limits<int>::max() - 16)) {
+    return -static_cast<int>(srtp_err_status_bad_param);
+  }
+  // The maps remain immutable after this acquire observes publication.
+  if (!dtls_ready_.load()) {
+    return -static_cast<int>(srtp_err_status_no_ctx);
+  }
+  const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+  const uint32_t ssrc = (static_cast<uint32_t>(bytes[8]) << 24) |
+                        (static_cast<uint32_t>(bytes[9]) << 16) |
+                        (static_cast<uint32_t>(bytes[10]) << 8) | bytes[11];
+  auto it = ssrc_to_srtp_sender_.find(ssrc);
+  if (it == ssrc_to_srtp_sender_.end() || !it->second ||
+      !it->second->valid()) {
+    return -static_cast<int>(srtp_err_status_no_ctx);
+  }
+  protected_packet.resize(size + 16);
+  std::memcpy(protected_packet.data(), data, size);
+  int len = static_cast<int>(size);
+  const int result = it->second->protectRtp(protected_packet.data(), &len);
+  if (result == 0) {
+    protected_packet.resize(static_cast<size_t>(len));
+  }
+  return result;
+}
+
 int IceTransportController::DecryptIncomingPacket(uint8_t* buffer, int* size,
                                                   uint32_t* out_ssrc) {
   if (!buffer || !size || *size < 12) {
@@ -2314,6 +2385,9 @@ int IceTransportController::DecryptIncomingPacket(uint8_t* buffer, int* size,
     *out_ssrc = ssrc;
   }
 
+  if (!dtls_ready_.load()) {
+    return -static_cast<int>(srtp_err_status_no_ctx);
+  }
   auto it = ssrc_to_srtp_receiver_.find(ssrc);
   if (it == ssrc_to_srtp_receiver_.end() || !it->second ||
       !it->second->valid()) {
@@ -2502,63 +2576,95 @@ void IceTransportController::OnReceiveCompleteData(
 // }
 
 void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
-  bool local_is_client_sender;
-
-  ice_agent_->ExportSrtpKeys(local_key_, local_salt_, remote_key_, remote_salt_,
-                             offer_peer_);
-
-  // LOG_INFO(
-  //     "SRTP keys exported: local key[{}], local salt[{}], remote key[{}], "
-  //     "remote salt[{}]",
-  //     toHex(local_key_), toHex(local_salt_), toHex(remote_key_),
-  //     toHex(remote_salt_));
-
-  // setup SRTP senders
-  SrtpEngine::Params sender_params;
-  memcpy(sender_params.key, local_key_.data(), 16);
-  memcpy(sender_params.salt, local_salt_.data(), 12);
-  auto add_sender_session = [&](uint32_t ssrc) {
-    if (ssrc == 0) {
-      return;
-    }
-    sender_params.ssrc = ssrc;
-    sender_params.receiver_any_inbound = false;
-    ssrc_to_srtp_sender_[ssrc] =
-        SrtpEngine::CreateSenderPtr(sender_params);
-  };
-  for (auto& [channel_name, context] : stream_senders_) {
-    if (context) {
-      add_sender_session(context->ssrc.value_or(0));
-      if (context->type == StreamType::kVideo && video_rtx_enabled_) {
-        add_sender_session(context->rtx_ssrc.value_or(0));
-      }
-    }
+  if (!enable_srtp_ || dtls_ready_.load()) {
+    return;
   }
-
-  // setup SRTP receivers
-  SrtpEngine::Params receiver_params;
-  memcpy(receiver_params.key, remote_key_.data(), 16);
-  memcpy(receiver_params.salt, remote_salt_.data(), 12);
-  auto add_receiver_session = [&](uint32_t ssrc) {
-    if (ssrc == 0) {
-      return;
-    }
-    receiver_params.ssrc = ssrc;
-    receiver_params.receiver_any_inbound = false;
-    ssrc_to_srtp_receiver_[ssrc] =
-        SrtpEngine::CreateReceiverPtr(receiver_params);
-  };
-  for (auto& [channel_name, context] : stream_receivers_) {
-    if (context) {
-      add_receiver_session(context->ssrc.value_or(0));
-      if (context->type == StreamType::kVideo) {
-        add_receiver_session(context->rtx_ssrc.value_or(0));
-      }
-    }
+  if (!ice_agent_ ||
+      !ice_agent_->ExportSrtpKeys(local_key_, local_salt_, remote_key_,
+                                 remote_salt_, offer_peer_) ||
+      !InstallSrtpSessions()) {
+    LOG_ERROR("Failed to initialize SRTP sessions");
+    return;
   }
 
   dtls_ready_.store(true);
   UpdateMediaTransportState();
+}
+
+bool IceTransportController::InstallSrtpSessions() {
+  if (local_key_.size() != 16 || local_salt_.size() != 12 ||
+      remote_key_.size() != 16 || remote_salt_.size() != 12) {
+    return false;
+  }
+
+  // Build all directions before publishing readiness to the sender threads.
+  decltype(ssrc_to_srtp_sender_) senders;
+  decltype(ssrc_to_srtp_receiver_) receivers;
+  SrtpEngine::Params sender_params;
+  std::memcpy(sender_params.key, local_key_.data(), 16);
+  std::memcpy(sender_params.salt, local_salt_.data(), 12);
+  SrtpEngine::Params receiver_params;
+  std::memcpy(receiver_params.key, remote_key_.data(), 16);
+  std::memcpy(receiver_params.salt, remote_salt_.data(), 12);
+
+  auto add_sender = [&](uint32_t ssrc) {
+    if (ssrc == 0 || senders.count(ssrc)) return true;
+    sender_params.ssrc = ssrc;
+    auto session = SrtpEngine::CreateSenderPtr(sender_params);
+    if (!session || !session->valid()) return false;
+    senders.emplace(ssrc, std::move(session));
+    return true;
+  };
+  auto add_receiver = [&](uint32_t ssrc) {
+    if (ssrc == 0 || receivers.count(ssrc)) return true;
+    receiver_params.ssrc = ssrc;
+    auto session = SrtpEngine::CreateReceiverPtr(receiver_params);
+    if (!session || !session->valid()) return false;
+    receivers.emplace(ssrc, std::move(session));
+    return true;
+  };
+
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+    for (const auto& [_, context] : stream_senders_) {
+      if (!context || (context->type != StreamType::kVideo &&
+                       !audio_data_srtp_enabled_)) continue;
+      const uint32_t ssrc = context->ssrc.value_or(0);
+      if (!add_sender(ssrc)) return false;
+      if (context->type == StreamType::kVideo && video_rtx_enabled_ &&
+          !add_sender(context->rtx_ssrc.value_or(0))) {
+        return false;
+      }
+      // KCP ACKs return with the original data stream's SSRC, but are
+      // authenticated using the remote peer's sending key.
+      if (context->type == StreamType::kData && context->reliable &&
+          !add_receiver(ssrc)) {
+        return false;
+      }
+    }
+  }
+  {
+    std::shared_lock lock(stream_receivers_mutex_);
+    for (const auto& [_, context] : stream_receivers_) {
+      if (!context || (context->type != StreamType::kVideo &&
+                       !audio_data_srtp_enabled_)) continue;
+      const uint32_t ssrc = context->ssrc.value_or(0);
+      if (!add_receiver(ssrc)) return false;
+      if (context->type == StreamType::kVideo &&
+          !add_receiver(context->rtx_ssrc.value_or(0))) {
+        return false;
+      }
+      // Reliable receivers send RTP-wrapped ACKs on the incoming SSRC.
+      if (context->type == StreamType::kData && context->reliable &&
+          !add_sender(ssrc)) {
+        return false;
+      }
+    }
+  }
+
+  ssrc_to_srtp_sender_.swap(senders);
+  ssrc_to_srtp_receiver_.swap(receivers);
+  return true;
 }
 
 int IceTransportController::UpdateVideoSettings(

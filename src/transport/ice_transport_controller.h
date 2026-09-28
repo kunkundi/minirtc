@@ -88,6 +88,9 @@ class IceTransportController
     media_config_.audio_fec_enabled = audio;
   }
   void SetSrtpEnabled(bool enable_srtp) { enable_srtp_ = enable_srtp; }
+  void SetAudioDataSrtpEnabled(bool enabled) {
+    audio_data_srtp_enabled_ = enable_srtp_ && enabled;
+  }
   // Internal runtime override; public Params ABI remains unchanged.
   void SetFecMode(FecMode mode) { fec_mode_.store(mode); }
   // DTLS readiness is published only after the SRTP sessions are installed.
@@ -161,6 +164,12 @@ class IceTransportController
                      const std::vector<uint16_t>& nack_sequence_numbers);
 
  private:
+  int ProtectOutgoingPacket(const char* data, size_t size,
+                            std::vector<uint8_t>& protected_packet);
+  int PrepareUnpacedPacket(const char*& data, size_t& size,
+                           std::vector<uint8_t>& protected_packet);
+  bool InstallSrtpSessions();
+
   int CreateCodecs(std::shared_ptr<SystemClock> clock,
                    rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
   int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
@@ -202,6 +211,8 @@ class IceTransportController
 
  private:
   enum class StreamType { kAudio, kVideo, kData };
+  std::function<int(const char*, size_t)> CreateUnpacedSendFunction(
+      StreamType type);
   enum class StreamDirection { kSend, kReceive };
 
   class StreamContext {
@@ -466,6 +477,7 @@ class IceTransportController
   std::atomic<bool> is_running_;
 
   bool enable_srtp_;
+  bool audio_data_srtp_enabled_ = false;
   bool video_rtx_enabled_ = false;
   bool video_fec_enabled_ = false;
   std::atomic<FecMode> fec_mode_{FecMode::kAdaptive};

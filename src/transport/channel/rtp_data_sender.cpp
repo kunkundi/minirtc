@@ -43,13 +43,15 @@ int RtpDataSender::SendRtpPacket(std::unique_ptr<RtpPacket> rtp_packet) {
     rtp_packet_queue_.clear();
     return -1;
   }
+  if (ret < 0) {
+    return ret;
+  }
 
-  last_send_bytes_ += (uint32_t)rtp_packet->Size();
   total_rtp_payload_sent_ += (uint32_t)rtp_packet->PayloadSize();
   total_rtp_packets_sent_++;
 
   if (io_statistics_) {
-    io_statistics_->UpdateDataOutboundBytes(last_send_bytes_);
+    // The transport records wire bytes, including the SRTP tag, once sent.
     io_statistics_->IncrementDataOutboundRtpPacketCount();
   }
 
@@ -129,8 +131,6 @@ bool RtpDataSender::CheckIsTimeSendSR() {
 }
 
 bool RtpDataSender::Process() {
-  last_send_bytes_ = 0;
-
   for (size_t i = 0; i < 10; i++)
     if (!rtp_packet_queue_.isEmpty()) {
       std::optional<std::unique_ptr<RtpPacket>> rtp_packet =

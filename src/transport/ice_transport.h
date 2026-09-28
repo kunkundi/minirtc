@@ -144,6 +144,9 @@ class IceTransport {
   bool NegotiateDataPayloadType(const std::string& remote_sdp);
 
  private:
+  void AppendAudioDataSrtpCapability();
+  bool NegotiateSrtp(const std::string& remote_sdp, bool remote_has_fingerprint);
+
   uint8_t CheckIsRtpPacket(const char* buffer, size_t size);
   uint8_t CheckIsRtcpPacket(const char* buffer, size_t size);
   uint8_t CheckIsVideoPacket(const char* buffer, size_t size);
@@ -199,6 +202,7 @@ class IceTransport {
   bool use_reliable_ice_ = false;
   TurnMode turn_mode_ = TurnMode::TurnDisabled;
   bool enable_srtp_ = true;
+  bool audio_data_srtp_enabled_ = false;
   VideoContentType video_content_type_ = VideoContentType::ScreenContent;
   VideoQuality video_quality_ = QualityHigh;
   int video_frame_rate_ = 60;

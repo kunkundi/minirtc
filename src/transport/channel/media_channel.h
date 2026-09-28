@@ -7,8 +7,10 @@
 #ifndef _MEDIA_CHANNEL_H_
 #define _MEDIA_CHANNEL_H_
 
+#include <functional>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <vector>
 
 #include "encoded_frame.h"
@@ -32,6 +34,11 @@ class MediaChannel {
 
   virtual void Initialize(rtp::PAYLOAD_TYPE payload_type) {
     LOG_INFO("Initialize() default implementation");
+  }
+
+  // Install before Initialize starts the unpaced audio/data sender threads.
+  void SetSendPacketFunc(std::function<int(const char*, size_t)> send_packet) {
+    send_packet_func_ = std::move(send_packet);
   }
 
   // Set once during negotiation, before Initialize / media threads start.
@@ -117,6 +124,9 @@ class MediaChannel {
   }
 
   virtual bool CanGeneratePadding() const { return false; }
+
+ protected:
+  std::function<int(const char*, size_t)> send_packet_func_;
 };
 }  // namespace minirtc
 

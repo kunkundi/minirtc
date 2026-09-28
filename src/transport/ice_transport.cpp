@@ -617,27 +617,22 @@ void IceTransport::OnReceiveBuffer(NiceAgent* agent, guint stream_id,
     return;
   }
 
-  // if SRTP enabled, try to decrypt first
-  if (enable_srtp_) {
-    bool is_audio = CheckIsAudioPacket(buffer, size);
-    bool is_data = CheckIsDataPacket(buffer, size);
-
-    // do not decrypt audio and data packet because they are not encrypted now
-    if (!is_audio && !is_data) {
-      const int result = ice_transport_controller_->DecryptIncomingPacket(
-          reinterpret_cast<uint8_t*>(buffer), &len, &ssrc);
-      if (result < 0) {
-        uint8_t payload_type = buffer[1] & 0x7F;
-        LOG_ERROR("SRTP unprotect failed for SSRC {} [{} {}]: {} ({})", ssrc,
-                  payload_type, size,
-                  SrtpEngine::ErrToStr(static_cast<srtp_err_status_t>(-result)),
-                  -result);
-        return;
-      }
-      size = static_cast<guint>(len);
-    } else {
-      ssrc = GetRtpSsrc(buffer, size);
+  // The negotiated mode is fixed for this transport. Legacy peers send
+  // audio/data in plaintext even when their video uses SRTP.
+  const bool is_audio_or_data =
+      CheckIsAudioPacket(buffer, size) || CheckIsDataPacket(buffer, size);
+  if (enable_srtp_ && (audio_data_srtp_enabled_ || !is_audio_or_data)) {
+    const int result = ice_transport_controller_->DecryptIncomingPacket(
+        reinterpret_cast<uint8_t*>(buffer), &len, &ssrc);
+    if (result < 0) {
+      uint8_t payload_type = buffer[1] & 0x7F;
+      LOG_ERROR("SRTP unprotect failed for SSRC {} [{} {}]: {} ({})", ssrc,
+                payload_type, size,
+                SrtpEngine::ErrToStr(static_cast<srtp_err_status_t>(-result)),
+                -result);
+      return;
     }
+    size = static_cast<guint>(len);
   } else {
     if (!CheckIsRtpPacket(buffer, size)) {
       uint8_t payload_type = buffer[1] & 0x7F;
@@ -1054,6 +1049,7 @@ int IceTransport::SendOffer() {
   if (enable_srtp_) {
     local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
   }
+  AppendAudioDataSrtpCapability();
 
   json message = {{"type", "offer"},
                   {"transmission_id", transmission_id_},
@@ -1076,6 +1072,7 @@ int IceTransport::SendAnswer() {
   if (enable_srtp_) {
     local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
   }
+  AppendAudioDataSrtpCapability();
 
   json message = {{"type", "answer"},
                   {"transmission_id", transmission_id_},
@@ -1366,9 +1363,48 @@ void IceTransport::ParseSsrcFromSdpAndRemove(
   sdp_block = new_sdp_block.str();
 }
 
+void IceTransport::AppendAudioDataSrtpCapability() {
+  // Offers advertise support; answers confirm only a mutually supported mode.
+  if (enable_srtp_ && (offer_peer_ || audio_data_srtp_enabled_)) {
+    local_sdp_ += std::string(kAudioDataSrtpAttribute) + "\r\n";
+  }
+}
+
+bool IceTransport::NegotiateSrtp(const std::string& remote_sdp,
+                                bool remote_has_fingerprint) {
+  const auto capability = ParseAudioDataSrtpCapability(remote_sdp);
+  if (!capability.has_value()) {
+    LOG_ERROR("Invalid audio/data SRTP capability");
+    return false;
+  }
+  const bool enable_srtp = enable_srtp_ && remote_has_fingerprint;
+  const bool audio_data_srtp = enable_srtp && *capability;
+  if (remote_capabilities_got_) {
+    if (enable_srtp != enable_srtp_ ||
+        audio_data_srtp != audio_data_srtp_enabled_) {
+      LOG_ERROR("Changed SRTP protection mode requires a new ICE transport");
+      return false;
+    }
+    return true;
+  }
+
+  enable_srtp_ = enable_srtp;
+  audio_data_srtp_enabled_ = audio_data_srtp;
+  if (ice_transport_controller_) {
+    ice_transport_controller_->SetSrtpEnabled(enable_srtp_);
+    ice_transport_controller_->SetAudioDataSrtpEnabled(audio_data_srtp_enabled_);
+  }
+  if (enable_srtp_ && !audio_data_srtp_enabled_) {
+    LOG_INFO("Peer uses legacy SRTP: video encrypted, audio/data plaintext");
+  }
+  return true;
+}
+
 std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   const auto fingerprints = SplitIceFingerprint(remote_sdp);
   if (!fingerprints) return {};
+  // Read the complete SDP before audio/data sections are removed for libnice.
+  if (!NegotiateSrtp(remote_sdp, !fingerprints->fingerprint.empty())) return {};
   std::string media_stream_sdp;
 
   std::size_t video_start = remote_sdp.find("m=video");
@@ -1429,8 +1465,6 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
   if (!fingerprints->fingerprint.empty()) {
     media_stream_sdp +=
         "a=fingerprint:sha-256 " + fingerprints->fingerprint + "\r\n";
-  } else {
-    enable_srtp_ = false;
   }
   if (!fingerprints->punch_fingerprint.empty()) {
     media_stream_sdp += std::string(kUdpPunchFingerprintAttribute) +
@@ -1471,10 +1505,6 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
         audio_abs_send_time_ext_id_.reset();
         audio_abs_recv_time_ext_id_.reset();
       }
-    }
-
-    if (ice_transport_controller_) {
-      ice_transport_controller_->SetSrtpEnabled(enable_srtp_);
     }
 
     for (const auto& entry : video_receivers_ssrc_) {

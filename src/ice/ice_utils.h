@@ -23,6 +23,10 @@ inline constexpr char kP2pEnhancementAttribute[] =
 // Advertise rfc5764 support; legacy or an absent attribute uses the old layout.
 inline constexpr char kSrtpKeyLayoutAttribute[] =
     "a=x-minirtc-srtp-key-layout:rfc5764";
+// Older peers advertise SRTP for video only. Audio/data (including KCP ACKs)
+// require this separate capability in both the offer and the answer.
+inline constexpr char kAudioDataSrtpAttribute[] =
+    "a=x-minirtc-audio-data-srtp:1";
 inline constexpr char kUdpPunchAttribute[] = "a=x-minirtc-udp-punch:1";
 // Enables the authenticated pool-wide-retry mode: at most two attempts on
 // the same sockets, sharing the original ICE deadline and replay state.
@@ -55,6 +59,23 @@ inline bool SupportsUniqueIceAttribute(const std::string& sdp,
 inline bool SupportsUdpPunch(const std::string& sdp) {
   return SupportsUniqueIceAttribute(
       sdp, "a=x-minirtc-udp-punch:", kUdpPunchAttribute);
+}
+
+// Absence selects the legacy wire format. Malformed, duplicate, or unknown
+// declarations reject negotiation instead of silently selecting plaintext.
+inline std::optional<bool> ParseAudioDataSrtpCapability(const std::string& sdp) {
+  std::istringstream lines(sdp);
+  std::string line;
+  bool found = false;
+  while (std::getline(lines, line)) {
+    if (!line.empty() && line.back() == '\r') line.pop_back();
+    if (line == "a=x-minirtc-audio-data-srtp" ||
+        line.rfind("a=x-minirtc-audio-data-srtp:", 0) == 0) {
+      if (found || line != kAudioDataSrtpAttribute) return std::nullopt;
+      found = true;
+    }
+  }
+  return found;
 }
 inline bool SupportsUdpPunchRetry(const std::string& sdp) {
   return SupportsUdpPunch(sdp) &&

@@ -49,7 +49,6 @@ class RtpDataSender : public ThreadBase {
  private:
   uint32_t ssrc_ = 0;
   std::shared_ptr<IOStatistics> io_statistics_ = nullptr;
-  uint32_t last_send_bytes_ = 0;
   uint32_t total_rtp_payload_sent_ = 0;
   uint32_t total_rtp_packets_sent_ = 0;
   uint32_t last_send_rtcp_sr_packet_ts_ = 0;
