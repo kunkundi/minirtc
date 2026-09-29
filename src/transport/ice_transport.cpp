@@ -62,6 +62,18 @@ std::string CandidateAddress(const NiceAddress& address) {
          std::to_string(nice_address_get_port(&address));
 }
 
+std::string CandidateDescription(const NiceCandidate& candidate) {
+  return std::string(CandidateTypeName(candidate.type)) + "/" +
+         CandidateTransportName(candidate.transport) + " " +
+         CandidateAddress(candidate.addr);
+}
+
+void CopyText(char* target, size_t capacity, const std::string& value) {
+  const size_t copied = std::min(capacity - 1, value.size());
+  memcpy(target, value.data(), copied);
+  target[copied] = '\0';
+}
+
 std::string Trim(std::string value) {
   const auto is_space = [](unsigned char c) { return std::isspace(c); };
   value.erase(value.begin(),
@@ -353,6 +365,7 @@ int IceTransport::InitIceTransmission(
               ice_transport_controller_ &&
               ice_transport_controller_->IsSrtpActive();
           minirtc_net_traffic_stats.rtt_ms = rtt_ms.value_or(-1);
+          FillSelectedPath(minirtc_net_traffic_stats);
           on_receive_net_status_report_(
               user_id_.data(), user_id_.size(), TraversalMode(traversal_type_),
               &minirtc_net_traffic_stats, remote_user_id_.data(),
@@ -529,11 +542,10 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     return;
   }
   LOG_INFO(
-      "selected ICE path local={}/{} {} remote={}/{} {}",
-      CandidateTypeName(local->type), CandidateTransportName(local->transport),
-      CandidateAddress(local->addr), CandidateTypeName(remote->type),
-      CandidateTransportName(remote->transport),
-      CandidateAddress(remote->addr));
+      "selected ICE path local={} remote={}", CandidateDescription(*local),
+      CandidateDescription(*remote));
+  selected_local_path_ = CandidateDescription(*local);
+  selected_remote_path_ = CandidateDescription(*remote);
   if (local->type == NICE_CANDIDATE_TYPE_RELAYED ||
       remote->type == NICE_CANDIDATE_TYPE_RELAYED) {
     LOG_INFO("Traversal using relay server");
@@ -567,6 +579,7 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
   MiniRtcNetTrafficStats net_traffic_stats{};
   net_traffic_stats.srtp_active = ice_transport_controller_ &&
                                 ice_transport_controller_->IsSrtpActive();
+  FillSelectedPath(net_traffic_stats);
 
   if (on_receive_net_status_report_) {
     on_receive_net_status_report_(user_id_.data(), user_id_.size(),
@@ -574,6 +587,11 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
                                 &net_traffic_stats, remote_user_id_.data(),
                                 remote_user_id_.size(), user_data_);
   }
+}
+
+void IceTransport::FillSelectedPath(MiniRtcNetTrafficStats& stats) const {
+  CopyText(stats.local_path, sizeof(stats.local_path), selected_local_path_);
+  CopyText(stats.remote_path, sizeof(stats.remote_path), selected_remote_path_);
 }
 
 void IceTransport::OnDtlsHandshakeDone(gpointer user_ptr) {
