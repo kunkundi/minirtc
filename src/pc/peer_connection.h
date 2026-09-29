@@ -156,6 +156,7 @@ class PeerConnection {
       const std::string& remote_user_id, const char* context,
       const ConnectionInfo& info);
   void ClearPeerConnections(const char* reason);
+  void ReportSessions();
 
  private:
   void StartIceWorker();
@@ -262,8 +263,11 @@ class PeerConnection {
   std::unordered_map<std::string, std::shared_ptr<ConnectionInterface>>
       peer_connection_map_;
   std::shared_mutex peer_connection_map_mutex_;
+  std::unordered_map<std::string, nlohmann::json> session_tickets_;
+  std::unordered_set<std::string> connected_peers_;
 
   std::unordered_set<std::string> internal_signal_types_{
+      "session_ticket", "session_resumed",
       "login",
       "transmission_id",
       "user_join_transmission",

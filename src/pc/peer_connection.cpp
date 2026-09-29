@@ -395,6 +395,7 @@ int PeerConnection::Login() {
 
   json message = {{"type", "login"},
                   {"user_id", user_id_with_pwd_},
+                  {"session_resume_version", 1},
                   {"ice_config_version", 1}};
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
@@ -572,6 +573,13 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
       return;
     }
 
+    if (status == ConnectionStatus::Connected) {
+      {
+        std::unique_lock lock(peer_connection_map_mutex_);
+        connected_peers_.insert(remote_user_id);
+      }
+      ReportSessions();
+    }
     if (on_connection_status_) {
       on_connection_status_(status, peer_id, peer_id_size, user_data);
     }
@@ -608,6 +616,15 @@ bool PeerConnection::RetirePeerConnection(
       terminal_connection_cleanup_queue_.push(connection);
     }
     peer_connection_map_.erase(it);
+    connected_peers_.erase(remote_user_id);
+    auto ticket = session_tickets_.find(remote_user_id);
+    if (ticket != session_tickets_.end()) {
+      auto report = ticket->second;
+      report["type"] = "session_report"; report["alive"] = false;
+      if (ws_transport_ && ws_transport_->GetStatus() == WsStatus::WsOpened)
+        ws_transport_->Send(report.dump());
+      session_tickets_.erase(ticket);
+    }
     LOG_INFO("[{}] Retire peer connection for user [{}] after status [{}]",
              user_id_, remote_user_id, ConnectionStatusToString(status));
     ice_work_cv_.notify_one();
@@ -639,6 +656,7 @@ PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
       LOG_WARN("[{}] Replace existing peer connection for user [{}] on {}",
                user_id_, remote_user_id, context);
     }
+    connected_peers_.erase(remote_user_id);
 
     connection = CreateManagedPeerConnection(remote_user_id, info);
     peer_connection_map_.emplace(remote_user_id, connection);
@@ -672,6 +690,8 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
       }
     }
     peer_connection_map_.clear();
+    connected_peers_.clear();
+    session_tickets_.clear();
   }
 
   if (connections.empty()) {
@@ -686,6 +706,18 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
                             remote_user_id.size(), user_data_);
     }
     connection->ReleaseAllIceTransmission();
+  }
+}
+
+void PeerConnection::ReportSessions() {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  if (!ws_transport_ || ws_transport_->GetStatus() != WsStatus::WsOpened) return;
+  for (const auto& pair : session_tickets_) {
+    if (!connected_peers_.count(pair.first)) continue;
+    auto report = pair.second;
+    report["type"] = "session_report";
+    report["alive"] = true;
+    ws_transport_->Send(report.dump());
   }
 }
 
@@ -970,6 +1002,25 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
   std::string type = j["type"];
   // LOG_INFO("signal type: {}", type);
   switch (HASH_STRING_PIECE(type.c_str())) {
+    case "session_ticket"_H: {
+      bool valid = true;
+      for (const char* key : {"transmission_id", "host_id", "guest_id", "token"})
+        if (!j.contains(key) || !j[key].is_string()) valid = false;
+      if (!valid || j["token"].get<std::string>().size() != 64) break;
+      const auto host = j["host_id"].get<std::string>();
+      const auto guest = j["guest_id"].get<std::string>();
+      if (user_id_ != host && user_id_ != guest) break;
+      const auto remote = user_id_ == host ? guest : host;
+      {
+        std::unique_lock lock(peer_connection_map_mutex_);
+        session_tickets_[remote] = j;
+        connected_peers_.erase(remote);
+      }
+      // Tickets precede SDP on a new connection. Confirm after ICE connects.
+      break;
+    }
+    case "session_resumed"_H:
+      break;
     case "login"_H: {
       if (j["status"].get<std::string>() == "success") {
         per_connection_ice_config_ =
@@ -981,6 +1032,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         if (user_id_with_pwd.find("@") != std::string::npos) {
           user_id_ = user_id_with_pwd.substr(0, user_id_with_pwd.find("@"));
           password = user_id_with_pwd.substr(user_id_with_pwd.find("@") + 1);
+          user_id_with_pwd_ = user_id_with_pwd;
         } else {
           user_id_ = user_id_with_pwd;
           password = "";
@@ -1004,6 +1056,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         }
         on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),
                           user_id_.size(), user_data_);
+        ReportSessions();
       } else if (j["status"].get<std::string>() == "fail") {
         auto reason = std::string("Unknown error");
         if (j.contains("reason") && j["reason"].is_string()) {
