@@ -12,6 +12,11 @@ package("libyuv")
         local configs = {"-DUNIT_TEST=OFF"}
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
 
+        if package:is_plat("macosx") then
+            -- Match CrossDesk's minimum supported macOS version for all objects.
+            table.insert(configs, "-DCMAKE_OSX_DEPLOYMENT_TARGET=14.0")
+        end
+
         if package:is_plat("iphoneos") then
             -- libyuv's upstream CMake file does not recognize Xcode's iOS
             -- toolchain processor consistently, which omits the arm64 NEON
