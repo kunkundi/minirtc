@@ -238,6 +238,12 @@ typedef struct MiniRtcNetTrafficStats {
   MiniRtcOutboundStats total_outbound_stats;
   bool srtp_active;
   double rtt_ms = -1; ///< -1 without a valid sample; zero RTT remains valid.
+  /// Selected ICE candidate pair as "<type>/<transport> <address>", for example
+  /// "relay/udp 192.0.2.1:34567" or "host/udp [2001:db8::1]:56789". Empty until
+  /// a pair is selected. Both fields sit past the counter block copied from the
+  /// transport's internal statistics, so they must stay after rtt_ms.
+  char local_path[64];
+  char remote_path[64];
 } MiniRtcNetTrafficStats;
 
 /// Opaque owned handle. Create with CreatePeer; release only with DestroyPeer.

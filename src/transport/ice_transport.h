@@ -165,6 +165,8 @@ class IceTransport {
                          const char* lfoundation, const char* rfoundation,
                          gpointer user_ptr);
 
+  void FillSelectedPath(MiniRtcNetTrafficStats& stats) const;
+
   void OnReceiveBuffer(NiceAgent* agent, guint stream_id, guint component_id,
                        guint size, gchar* buffer, gpointer user_ptr);
 
@@ -251,6 +253,8 @@ class IceTransport {
   std::atomic<NiceComponentState> state_{NICE_COMPONENT_STATE_DISCONNECTED};
   IceComponentStateTracker component_state_tracker_;
   TraversalType traversal_type_ = TraversalType::TP2P;
+  std::string selected_local_path_;
+  std::string selected_remote_path_;
   void* user_data_ = nullptr;
 
  private:
