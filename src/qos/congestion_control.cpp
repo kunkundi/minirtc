@@ -25,7 +25,9 @@ constexpr float kDefaultPaceMultiplier = 2.5f;
 constexpr double kProbeDropThroughputFraction = 0.85;
 
 constexpr DataRate kDirectStartingRate = DataRate::BitsPerSec(2500000);
-constexpr DataRate kRelayStartingRate = DataRate::BitsPerSec(1500000);
+// Relays measured far below this: starting at 1.5 Mbps only filled the TURN
+// queue, which pushed RTT from 11 ms to 843 ms and starved frame assembly.
+constexpr DataRate kRelayStartingRate = DataRate::BitsPerSec(800000);
 constexpr TimeDelta kProbeEstimateSettleTime = TimeDelta::Millis(100);
 
 }  // namespace
