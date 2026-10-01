@@ -5,6 +5,9 @@
 #include <iostream>
 #include <thread>
 #include <vector>
+#if defined(__ANDROID__)
+#include <asio/ssl/host_name_verification.hpp>
+#endif
 
 #include "log.h"
 
@@ -429,10 +432,25 @@ bool WsClient::OnTlsVerify(bool preverified,
     return true;
   }
 
+#if defined(__ANDROID__)
+  // A valid CA chain alone does not authenticate the configured endpoint.
+  // Verify DNS names and IP SANs using the same host used by WebSocket SNI.
+  if (preverified &&
+      !websocketpp::lib::asio::ssl::host_name_verification(
+          websocketpp::uri(uri_).get_host())(preverified, ctx)) {
+    X509_STORE_CTX_set_error(ctx.native_handle(), X509_V_ERR_HOSTNAME_MISMATCH);
+    preverified = false;
+  }
+#endif
   if (!preverified) {
+#if defined(__ANDROID__)
+    LogTlsVerificationError(ctx.native_handle());
+    SetStatus(WsTlsCertError);
+#else
     if (LogTlsVerificationError(ctx.native_handle())) {
       SetStatus(WsTlsCertError);
     }
+#endif
     tls_failure_count_++;
   } else {
     tls_failure_count_ = 0;

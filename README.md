@@ -4,7 +4,7 @@
 
 [English](README_EN.md) · [公开 API](src/api/minirtc.h) · [CrossDesk](https://github.com/kunkundi/crossdesk) · [信令服务端](https://github.com/kunkundi/crossdesk-server)
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS-brightgreen)](#platforms)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS%20%7C%20Android-brightgreen)](#platforms)
 [![License: LGPL v3](https://img.shields.io/badge/license-LGPL--3.0-blue)](LICENSE)
 [![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc)](https://github.com/kunkundi/minirtc/issues)
 
@@ -33,9 +33,10 @@
 | Linux arm64 | 当前工厂使用软件路径 | OpenH264 | SVT-AV1 / dav1d | 软件解码 CPU NV12 |
 | macOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | VideoToolbox 的 `CVPixelBufferRef` |
 | iOS | VideoToolbox | 不构建 | SVT-AV1 / dav1d | VideoToolbox 的 `CVPixelBufferRef` |
+| Android arm64 | 尚未实现 | OpenH264 | SVT-AV1 / dav1d | 软件解码 CPU NV12 |
 
 - 硬件路径同时受构建配置、运行时 `hardware_acceleration` 和设备能力影响。桌面端 H.264 硬件编码初始化失败时，初始化工厂会尝试回退到 OpenH264。iOS 不编译或链接 OpenH264，H.264 必须设置 `hardware_acceleration=true`；不支持软件 H.264 请求或初始化失败时，工厂返回空指针，不执行软件回退。
-- 当前 AV1 工厂使用 **SVT-AV1 编码 / dav1d 解码**。libaom 默认不参与构建；需要开发其后端时可通过 `xmake f --MINIRTC_ENABLE_AOM=true` 启用，这不会改变工厂的实现选择。Apple 平台没有 VideoToolbox AV1 路径。
+- 当前各平台 AV1 工厂使用 **SVT-AV1 编码 / dav1d 解码**。libaom 默认不参与构建；需要开发其后端时可通过 `xmake f --MINIRTC_ENABLE_AOM=true` 启用，这不会改变工厂的实现选择。Apple 平台没有 VideoToolbox AV1 路径，Android 尚未接入 MediaCodec。
 - 设置 `native_video_output=true` 请求原生帧。Apple 软件解码仍返回 CPU 数据；Windows / Linux 软件解码可返回 CPU NV12 描述符。原生输出不等于所有路径都零拷贝。
 
 具体选择逻辑见 [编码工厂](src/media/video/encode/video_encoder_factory.cpp) 与 [解码工厂](src/media/video/decode/video_decoder_factory.cpp)。
@@ -82,6 +83,20 @@ xmake b minirtc
 ```
 
 此命令生成 iOS 静态库，不会生成 App 或 XCFramework，也不代表模拟器构建已验证。切回桌面构建时应重新配置目标平台。Xcode 工程的依赖合并、链接和 SDK 环境处理可参考 CrossDesk 的 [iOS 构建脚本](https://github.com/kunkundi/crossdesk/blob/HEAD/apps/ios/scripts/build_minirtc_ios.sh)。
+
+### Android
+
+Android arm64 使用 OpenH264、SVT-AV1 和 dav1d 软件编解码，并关闭 UPnP。SVT-AV1 使用内置的 `getauxval` CPU 检测，按运行设备选择 NEON 及扩展指令。使用 Xmake 3.1.1 和 NDK r28c，在本仓库根目录执行，`ANDROID_NDK_HOME` 指向已安装的 NDK：
+
+```sh
+xmake f -p android -a arm64-v8a -m release --ndk="$ANDROID_NDK_HOME" \
+  --ndk_sdkver=26 --runtimes=c++_static --policies=package.precompiled:n -y
+xmake b minirtc
+```
+
+Android 适配直接维护在本仓库内。宿主工程可直接包含本仓库的 `xmake.lua`，同时为构建产物和依赖缓存设置独立目录。创建 Peer 前，Android 宿主需将系统 TrustManager 根证书导出到应用私有 PEM 文件，并将 `SSL_CERT_FILE` 设置为该路径；MiniRTC 显式加载此文件并校验证书链及主机名。Android 与其他平台使用相同的解码任务提交逻辑，当前未限制压缩帧的解码排队长度和等待时间。
+
+AV1 发送端设置 `Params::av1_encoding=true`，添加视频流后提交 NV12 帧。Android 与其他平台使用相同的 SVT-AV1 编码工厂；编码依靠 CPU，实时性能取决于设备、分辨率和帧率。
 
 ### 选项与产物
 

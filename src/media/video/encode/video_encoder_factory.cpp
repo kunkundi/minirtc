@@ -33,8 +33,7 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     VideoCodecType codec_type) {
   if (codec_type == VideoCodecType::AV1) {
-    LOG_INFO("VideoToolbox AV1 encoding is unavailable; using the SVT-AV1 "
-             "encoder");
+    LOG_INFO("Using the SVT-AV1 software encoder");
     return std::make_unique<SvtAv1Encoder>(clock);
   }
 

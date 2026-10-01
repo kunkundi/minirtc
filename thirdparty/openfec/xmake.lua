@@ -12,6 +12,11 @@ package("openfec")
     add_deps("cmake~host", {host = true})
 
     on_install(function (package)
+        if package:is_plat("android") then
+            for _, file in ipairs(os.files("src/**.c")) do
+                io.writefile(file, "#include <string.h>\n#include <strings.h>\n#define bcmp memcmp\n" .. io.readfile(file))
+            end
+        end
         local configs = {}
         table.insert(configs, "-DDEBUG=" .. (package:debug() and "ON" or "OFF"))
         table.insert(configs, "-DCMAKE_INSTALL_PREFIX=" .. package:installdir())

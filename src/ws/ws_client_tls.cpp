@@ -18,6 +18,10 @@
 #endif
 
 #include <vector>
+#if defined(__ANDROID__)
+#include <cstdlib>
+#include <stdexcept>
+#endif
 
 #include "log.h"
 
@@ -426,6 +430,16 @@ void WsClient::LoadTlsSystemRootCertificates(SSL_CTX* ssl_ctx) {
 #ifdef _WIN32
   if (!LoadWindowsRootCertificates(ssl_ctx)) {
     LOG_WARN("Unable to load Windows Root certificates");
+  }
+#elif defined(__ANDROID__)
+  // Android app processes inherit AT_SECURE from zygote. OpenSSL's default
+  // loader then ignores SSL_CERT_FILE via ossl_safe_getenv, even after JNI
+  // sets it. Load only the app-owned TrustManager export explicitly instead
+  // of using build-host paths or changing OpenSSL's secure-execution policy.
+  const char* bundle = std::getenv("SSL_CERT_FILE");
+  if (!bundle || !*bundle ||
+      SSL_CTX_load_verify_locations(ssl_ctx, bundle, nullptr) != 1) {
+    throw std::runtime_error("Unable to load Android system trust bundle");
   }
 #elif defined(__APPLE__) && TARGET_OS_IPHONE
   // iOS evaluates the peer chain and hostname with SecTrust below. OpenSSL's

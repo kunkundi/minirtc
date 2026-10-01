@@ -30,7 +30,7 @@ package("openh264")
         end
     end)
 
-    on_install("windows", "linux", "macosx", "iphoneos", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", "android", function (package)
         if package:version():ge("2.4.1") then
             import("package.tools.meson")
 

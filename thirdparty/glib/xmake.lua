@@ -44,7 +44,7 @@ package("glib")
 
     add_deps("meson~host", "ninja~host", {host = true})
     add_deps("libffi", "zlib")
-    if is_plat("linux") then
+    if is_plat("linux", "android") then
         add_deps("libiconv")
     elseif is_plat("macosx") then
         add_deps("libiconv", {system = true})
@@ -60,8 +60,8 @@ package("glib")
 
     add_includedirs("include/glib-2.0", "lib/glib-2.0/include")
     add_links("gio-2.0", "gobject-2.0", "gthread-2.0", "gmodule-2.0", "glib-2.0")
-    if is_plat("iphoneos") then
-        -- GLib falls back to its bundled proxy-libintl on iOS. Meson installs
+    if is_plat("iphoneos", "android") then
+        -- GLib falls back to bundled proxy-libintl on iOS and Android. Meson installs
         -- that archive next to GLib, so expose it to consumers and to the
         -- package link test.
         add_includedirs("include")
@@ -101,7 +101,7 @@ package("glib")
         package:add("deps", "libffi", {system = false, configs = {shared = false}})
     end)
 
-    on_install("windows", "macosx", "iphoneos", "linux", "cross", "mingw", function (package)
+    on_install("windows", "macosx", "iphoneos", "linux", "cross", "mingw", "android", function (package)
         local configs = {"-Dbsymbolic_functions=false",
                          "-Ddtrace=false",
                          "-Dman=false",
@@ -113,6 +113,9 @@ package("glib")
                          "-Dlibmount=disabled",
                          "-Dsysprof=disabled",
                          "-Dintrospection=disabled"}
+        if package:is_plat("android") then
+            table.insert(configs, "-Dnls=disabled")
+        end
         if package:is_plat("iphoneos") then
             table.insert(configs, "-Dnls=disabled")
             table.insert(configs, "-Dxattr=false")

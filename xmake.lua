@@ -58,6 +58,7 @@ add_defines("ASIO_STANDALONE", "ASIO_HAS_STD_TYPE_TRAITS", "ASIO_HAS_STD_SHARED_
 add_defines("USE_CUDA=" .. (is_config("USE_CUDA", true) and "1" or "0"))
 
 local is_iphoneos = is_plat("iphoneos")
+local is_android = is_plat("android")
 local libnice_configs = {
     shared = false,
     include_virtual_interfaces =
@@ -81,12 +82,14 @@ if is_iphoneos then
     add_requires("svt-av1 v3.0.2", {system = false}, {configs = {shared = false, tools = false}})
     add_packages("dav1d", "svt-av1")
 else
-    add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "svt-av1 v3.0.2", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
+    add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1", "websocketpp 0.8.2", "libsrtp v2.7.0", "openfec 1.4.2", "libopus 1.5.1", "openh264 2.6.0", "dav1d 1.4.3", "libyuv 2025.8.14", "concurrentqueue 1.0.4", {system = false}, {configs = {shared = false}})
     add_requires("libnice 0.1.24",
         {system = false, configs = libnice_configs})
     add_requireconfs("**.libnice", {version = "0.1.24", override = true,
         configs = libnice_configs})
-    add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "svt-av1", "concurrentqueue")
+    add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "concurrentqueue")
+    add_requires("svt-av1 v3.0.2", {system = false, configs = {shared = false, tools = false}})
+    add_packages("svt-av1")
 end
 
 if is_config("MINIRTC_ENABLE_AOM", true) then
@@ -113,6 +116,9 @@ if is_os("windows") then
     add_defines("_WEBSOCKETPP_CPP11_INTERNAL_")
     add_cxflags("/WX")
     set_runtimes("MT")
+elseif is_android then
+    add_cxflags("-fPIC", "-Wno-unused-variable")
+    add_syslinks("log")
 elseif is_os("linux") then
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
@@ -265,7 +271,7 @@ target("media")
             "thirdparty/nvcodec/interface", {public = true})
             add_includedirs(path.join(get_cuda_dir(), "include"), {public = true})
         end
-    elseif is_os("linux") then
+    elseif is_os("linux") or is_android then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
         "src/media/video/encode/openh264/*.cpp",

@@ -255,9 +255,11 @@ int Dav1dAv1Decoder::Decode(
                                       frame_width_, frame_height_);
   }
 
-  decoded_frame_->UpdateBuffer(nv12_frame_, nv12_frame_capacity_);
-  decoded_frame_->SetWidth(received_frame->Width());
-  decoded_frame_->SetHeight(received_frame->Height());
+  // A smaller frame may reuse a larger allocation after a resolution change.
+  // Publish only the decoded pixels, never the allocation's stale tail.
+  decoded_frame_->UpdateBuffer(nv12_frame_, nv12_frame_size_);
+  decoded_frame_->SetWidth(frame_width_);
+  decoded_frame_->SetHeight(frame_height_);
   decoded_frame_->SetDecodedWidth(frame_width_);
   decoded_frame_->SetDecodedHeight(frame_height_);
   decoded_frame_->SetReceivedTimestamp(received_frame->ReceivedTimestamp());

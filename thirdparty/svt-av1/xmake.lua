@@ -16,16 +16,15 @@ package("svt-av1")
     add_deps("cmake~host", "nasm~host", {host = true})
 
     on_load(function (package)
-        -- SVT-AV1 already has an Apple/AArch64 runtime feature detector based
-        -- on sysctl. Avoid cpuinfo on iOS because the upstream Xmake cpuinfo
-        -- package rejects cross builds; desktop builds keep the existing
-        -- cpuinfo-backed detection path.
-        if not package:is_plat("iphoneos") then
+        -- Mobile AArch64 uses SVT-AV1's own runtime CPU detection: sysctl on
+        -- iOS and getauxval on Android. Keep NEON and optional instruction
+        -- dispatch without adding the separate cpuinfo cross-build dependency.
+        if not package:is_plat("iphoneos", "android") then
             package:add("deps", "cpuinfo")
         end
     end)
 
-    on_install("windows", "linux", "macosx", "iphoneos", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", "android", function (package)
         local configs = {
             "-DBUILD_TESTING=OFF",
             "-DCOVERAGE=OFF",
@@ -39,14 +38,23 @@ package("svt-av1")
             "-DEXCLUDE_HASH=ON"
         }
 
-        if package:is_plat("iphoneos") then
+        if package:is_plat("iphoneos", "android") then
             table.insert(configs, "-DUSE_CPUINFO=OFF")
         else
             table.insert(configs, "-DUSE_CPUINFO=SYSTEM")
         end
 
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
-        import("package.tools.cmake").install(package, configs)
+        local cmake = import("package.tools.cmake")
+        local opt = {}
+        if package:is_plat("android") then
+            -- Upstream CMake replaces the NDK's absolute archive tools with
+            -- bare llvm-ar/llvm-ranlib names. Resolve those to the same NDK.
+            opt.envs = cmake.buildenvs(package)
+            opt.envs.PATH = path.directory(package:build_getenv("ar")) ..
+                path.envsep() .. (opt.envs.PATH or os.getenv("PATH") or "")
+        end
+        cmake.install(package, configs, opt)
     end)
 
     on_test(function (package)

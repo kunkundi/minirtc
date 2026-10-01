@@ -22,7 +22,9 @@ package("libnice")
 
     add_deps("meson~host", "pkgconf", {host = true})
     add_deps("glib 2.84.1", "openssl3 3.3.2")
-    add_deps("gupnp-igd 1.6.0", {system = false, configs = {shared = false}})
+    if not is_plat("android") then
+        add_deps("gupnp-igd 1.6.0", {system = false, configs = {shared = false}})
+    end
 
     add_configs("include_virtual_interfaces", {description = "Gather candidates from VPN/TUN interfaces", default = false, type = "boolean"})
 
@@ -46,7 +48,7 @@ package("libnice")
             "-Dgtk_doc=disabled",
             "-Dcrypto-library=openssl",
             "-Dintrospection=disabled",
-            "-Dgupnp=enabled"
+            package:is_plat("android") and "-Dgupnp=disabled" or "-Dgupnp=enabled"
         }
 
         if not package:config("include_virtual_interfaces") then

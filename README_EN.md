@@ -4,7 +4,7 @@ A lightweight, cross-platform real-time media library powering [CrossDesk](https
 
 [中文](README.md) · [Public API](src/api/minirtc.h) · [CrossDesk](https://github.com/kunkundi/crossdesk) · [Signaling server](https://github.com/kunkundi/crossdesk-server)
 
-[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS-brightgreen)](#platforms)
+[![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS%20%7C%20Android-brightgreen)](#platforms)
 [![License: LGPL v3](https://img.shields.io/badge/license-LGPL--3.0-blue)](LICENSE)
 [![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc)](https://github.com/kunkundi/minirtc/issues)
 
@@ -33,9 +33,10 @@ The build produces a **C++17 static library** with `extern "C"` function linkage
 | Linux arm64 | Current factories use software codecs | OpenH264 | SVT-AV1 / dav1d | CPU NV12 from software decoders |
 | macOS | VideoToolbox | OpenH264 | SVT-AV1 / dav1d | `CVPixelBufferRef` from VideoToolbox |
 | iOS | VideoToolbox | Not built | SVT-AV1 / dav1d | `CVPixelBufferRef` from VideoToolbox |
+| Android arm64 | Not implemented | OpenH264 | SVT-AV1 / dav1d | CPU NV12 from software decoders |
 
 - Hardware use depends on build configuration, runtime `hardware_acceleration`, and device support. On desktop, the initialization factory attempts an OpenH264 fallback when hardware H.264 encoder initialization fails. iOS does not compile or link OpenH264 and requires `hardware_acceleration=true` for H.264; software H.264 requests or initialization failures return a null codec without a software fallback.
-- The AV1 factories select **SVT-AV1 encoding / dav1d decoding**. libaom is excluded by default; use `xmake f --MINIRTC_ENABLE_AOM=true` to build its optional backends for development. This does not change the factories' selection. There is no VideoToolbox AV1 path on Apple platforms.
+- The AV1 factories on all platforms select **SVT-AV1 encoding / dav1d decoding**. libaom is excluded by default; use `xmake f --MINIRTC_ENABLE_AOM=true` to build its optional backends for development. This does not change the factories' selection. There is no VideoToolbox AV1 path on Apple platforms, and Android MediaCodec is not integrated.
 - Set `native_video_output=true` to request native frames. Apple software decoders still return CPU data; Windows / Linux software decoders can return CPU NV12 descriptors. Native output does not guarantee zero copies throughout every path.
 
 See the [encoder factory](src/media/video/encode/video_encoder_factory.cpp) and [decoder factory](src/media/video/decode/video_decoder_factory.cpp) for selection logic.
@@ -82,6 +83,20 @@ xmake b minirtc
 ```
 
 This builds an iOS static library, not an App or XCFramework, and does not establish simulator support. Reconfigure the target platform before returning to desktop builds. See CrossDesk's [iOS build script](https://github.com/kunkundi/crossdesk/blob/HEAD/apps/ios/scripts/build_minirtc_ios.sh) for dependency merging, linking, and SDK environment handling in an Xcode project.
+
+### Android
+
+The Android arm64 build uses OpenH264, SVT-AV1 and dav1d software codecs and disables UPnP. SVT-AV1 uses its built-in `getauxval` CPU detection to dispatch NEON and optional instructions at runtime. Use Xmake 3.1.1 and NDK r28c; from this repository's root, point `ANDROID_NDK_HOME` at the installed NDK:
+
+```sh
+xmake f -p android -a arm64-v8a -m release --ndk="$ANDROID_NDK_HOME" \
+  --ndk_sdkver=26 --runtimes=c++_static --policies=package.precompiled:n -y
+xmake b minirtc
+```
+
+All Android support lives in this repository. An embedding application can include its `xmake.lua` directly while keeping build and package caches in a separate directory. Before creating a peer, the Android host must export its system TrustManager roots to an app-owned PEM file and set `SSL_CERT_FILE` to that path. MiniRTC loads that file explicitly and verifies the certificate chain and hostname. Android uses the same decode task submission logic as the other platforms; compressed-frame queue length and waiting time are currently unbounded.
+
+To send AV1, set `Params::av1_encoding=true`, add a video stream and submit NV12 frames. Android uses the same SVT-AV1 encoder factory as the other platforms. Encoding runs on the CPU; real-time performance depends on the device, resolution and frame rate.
 
 ### Options and artifacts
 

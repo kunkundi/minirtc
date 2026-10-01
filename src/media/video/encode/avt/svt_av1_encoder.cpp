@@ -86,10 +86,10 @@ void SvtAv1Encoder::Release() {
 
   if (stream_header_buffer_) {
     if (stream_header_buffer_->p_buffer) {
-      free(stream_header_buffer_->p_buffer);
+      delete[] stream_header_buffer_->p_buffer;
       stream_header_buffer_->p_buffer = nullptr;
     }
-    free(stream_header_buffer_);
+    delete stream_header_buffer_;
     stream_header_buffer_ = nullptr;
   }
 
@@ -206,7 +206,7 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
     return -1;
   }
 
-  stream_header_buffer_ = new EbBufferHeaderType;
+  stream_header_buffer_ = new EbBufferHeaderType{};
   if (!stream_header_buffer_) {
     LOG_ERROR("Failed to allocate stream header buffer");
     return -1;
@@ -222,6 +222,7 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   }
 
   yuv420p_frame_capacity_ = frame_width_ * frame_height_ * 3 / 2;
+  delete[] yuv420p_frame_;
   yuv420p_frame_ = new uint8_t[yuv420p_frame_capacity_];
 
   // A reconfigured SVT instance starts a new coded sequence. Make the
@@ -236,7 +237,7 @@ int SvtAv1Encoder::Encode(
     const RawFrame& raw_frame,
     std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
   if (!svt_av1_encoder_) {
-    LOG_ERROR("Invalid openh264 encoder");
+    LOG_ERROR("Invalid SVT-AV1 encoder");
     return -1;
   }
 
@@ -257,7 +258,9 @@ int SvtAv1Encoder::Encode(
 
   if (raw_frame.Width() != frame_width_ ||
       raw_frame.Height() != frame_height_) {
-    ResetEncodeResolution(raw_frame.Width(), raw_frame.Height());
+    if (ResetEncodeResolution(raw_frame.Width(), raw_frame.Height()) != 0) {
+      return -1;
+    }
   }
 
   Nv12ToI420((unsigned char*)raw_frame.Buffer(), raw_frame.Width(),

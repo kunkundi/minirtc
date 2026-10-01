@@ -16,7 +16,7 @@ package("dav1d")
         add_syslinks("pthread", "dl")
     end
 
-    on_install("!android and !wasm", function (package)
+    on_install("!wasm", function (package)
         import("package.tools.meson")
 
         local configs = {"-Denable_tests=false"}
