@@ -2915,7 +2915,7 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
   int ret = -1;
 
   if (rtp::PAYLOAD_TYPE::AV1 == video_pt) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
     ret = CreateStreamCodecs(clock, hardware_acceleration_,
                              VideoCodecType::AV1);
 #else
@@ -2926,7 +2926,7 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
     ret = CreateStreamCodecs(clock, false, VideoCodecType::AV1);
 #endif
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
-#if defined(__APPLE__)
+#if defined(__APPLE__) || defined(__ANDROID__)
     ret = CreateStreamCodecs(clock, hardware_acceleration_,
                              VideoCodecType::H264);
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)

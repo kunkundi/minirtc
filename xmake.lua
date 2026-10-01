@@ -118,7 +118,7 @@ if is_os("windows") then
     set_runtimes("MT")
 elseif is_android then
     add_cxflags("-fPIC", "-Wno-unused-variable")
-    add_syslinks("log")
+    add_syslinks("log", "android", "mediandk", "dl")
 elseif is_os("linux") then
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
@@ -325,6 +325,12 @@ target("media")
         "src/media/video/decode/video_toolbox",
         "src/media/video/encode/avt",
         "src/media/video/decode/dav1d", {public = true})
+    end
+    if is_android then
+        add_files("src/media/mediacodec/*.cpp",
+            "src/media/video/encode/mediacodec/*.cpp",
+            "src/media/video/decode/mediacodec/*.cpp")
+        add_includedirs("src/media/mediacodec")
     end
     if is_config("MINIRTC_ENABLE_AOM", true) then
         add_files("src/media/video/encode/aom/*.cpp",

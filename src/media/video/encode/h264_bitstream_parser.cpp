@@ -415,14 +415,44 @@ H264BitstreamParser::ParseSps(const uint8_t* data, size_t length) const {
     }
   }
 
+  uint32_t width_mbs = 0, height_mbs = 0;
   if (!reader.ReadUnsignedGolomb(&value) ||  // max_num_ref_frames
       !reader.SkipBits(1) ||                 // gaps_in_frame_num_value_allowed
-      !reader.ReadUnsignedGolomb(&value) ||  // pic_width_in_mbs_minus1
-      !reader.ReadUnsignedGolomb(&value) ||  // pic_height_in_map_units_minus1
+      !reader.ReadUnsignedGolomb(&width_mbs) ||
+      !reader.ReadUnsignedGolomb(&height_mbs) ||
       !reader.ReadBit(&sps.frame_mbs_only_flag)) {
     return std::nullopt;
   }
+  // Keep QP parsing usable for truncated headers, but expose dimensions only
+  // after the complete cropping syntax has been validated.
+  if (width_mbs >= 512 || height_mbs >= 512 ||
+      (!sps.frame_mbs_only_flag && !reader.SkipBits(1)) || !reader.SkipBits(1))
+    return sps;
+  bool cropped = false;
+  if (!reader.ReadBit(&cropped)) return sps;
+  uint32_t left = 0, right = 0, top = 0, bottom = 0;
+  if (cropped && (!reader.ReadUnsignedGolomb(&left) ||
+                  !reader.ReadUnsignedGolomb(&right) ||
+                  !reader.ReadUnsignedGolomb(&top) ||
+                  !reader.ReadUnsignedGolomb(&bottom))) return sps;
+  const int chroma = sps.separate_colour_plane_flag ? 0 : sps.chroma_format_idc;
+  const int crop_x = chroma == 1 || chroma == 2 ? 2 : 1;
+  const int crop_y = (chroma == 1 ? 2 : 1) * (sps.frame_mbs_only_flag ? 1 : 2);
+  const int64_t width = (int64_t(width_mbs) + 1) * 16 - (int64_t(left) + right) * crop_x;
+  const int64_t height = (int64_t(height_mbs) + 1) * 16 * (sps.frame_mbs_only_flag ? 1 : 2) -
+                         (int64_t(top) + bottom) * crop_y;
+  if (width > 0 && height > 0 && width <= 8192 && height <= 8192) {
+    sps.width = width;
+    sps.height = height;
+  }
   return sps;
+}
+
+bool H264BitstreamParser::GetResolution(int* width, int* height) const {
+  if (!sps_ || !sps_->width || !sps_->height || !width || !height) return false;
+  *width = sps_->width;
+  *height = sps_->height;
+  return true;
 }
 
 std::optional<H264BitstreamParser::PpsState>

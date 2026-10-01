@@ -1,4 +1,10 @@
 /*
+ * @Author: DI JUNKUN
+ * @Date: 2026-10-02
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
+ */
+
+/*
  * Copyright (c) 2015 The WebRTC project authors. All Rights Reserved.
  *
  * Adapted from WebRTC's common_video/h264/h264_bitstream_parser at
@@ -6,8 +12,8 @@
  * thirdparty/webrtc/LICENSE and thirdparty/webrtc/PATENTS.
  */
 
-#ifndef MINIRTC_H264_BITSTREAM_PARSER_H_
-#define MINIRTC_H264_BITSTREAM_PARSER_H_
+#ifndef _H264_BITSTREAM_PARSER_H_
+#define _H264_BITSTREAM_PARSER_H_
 
 #include <cstddef>
 #include <cstdint>
@@ -24,6 +30,7 @@ class H264BitstreamParser {
   void ParseBitstream(const uint8_t* bitstream, size_t length);
   std::optional<int> GetLastSliceQp() const;
   void Reset();
+  bool GetResolution(int* width, int* height) const;
 
  private:
   enum class Result {
@@ -34,6 +41,7 @@ class H264BitstreamParser {
 
   struct SpsState {
     uint32_t id = 0;
+    int width = 0, height = 0;
     uint32_t chroma_format_idc = 1;
     bool separate_colour_plane_flag = false;
     uint32_t log2_max_frame_num = 4;
@@ -68,4 +76,4 @@ class H264BitstreamParser {
 
 }  // namespace minirtc
 
-#endif  // MINIRTC_H264_BITSTREAM_PARSER_H_
+#endif

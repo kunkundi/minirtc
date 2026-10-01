@@ -20,6 +20,11 @@
 #define MINIRTC_HAS_CUDA_DECODER 0
 #endif
 
+#if defined(__ANDROID__)
+#include "mediacodec/android_video_decoder.h"
+#include "android_codec_support.h"
+#endif
+
 #include "log.h"
 
 namespace minirtc {
@@ -33,6 +38,13 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
                                         bool hardware_acceleration,
                                         VideoCodecType codec_type,
                                         bool native_video_output) {
+#if defined(__ANDROID__)
+  if (hardware_acceleration &&
+      (codec_type == VideoCodecType::H264 || codec_type == VideoCodecType::AV1)) {
+    return std::make_unique<AndroidVideoDecoder>(clock, codec_type,
+                                                 native_video_output);
+  }
+#endif
   if (codec_type == VideoCodecType::AV1) {
     if (hardware_acceleration) {
       LOG_INFO("Hardware AV1 decoding is not supported; using the dav1d "
@@ -75,6 +87,9 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
 
 bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
+#if defined(__ANDROID__)
+  return !FindAndroidCodecs(codec_type, false).empty();
+#else
   if (codec_type != VideoCodecType::H264) {
     return false;
   }
@@ -84,6 +99,7 @@ bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
   return CheckIsCudaDecodeSupported();
 #else
   return false;
+#endif
 #endif
 }
 

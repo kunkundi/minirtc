@@ -21,6 +21,11 @@
 // use software encoder
 #endif
 
+#if defined(__ANDROID__)
+#include "mediacodec/android_video_encoder.h"
+#include "android_codec_support.h"
+#endif
+
 #include "log.h"
 
 namespace minirtc {
@@ -32,6 +37,12 @@ VideoEncoderFactory::~VideoEncoderFactory() {}
 std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     VideoCodecType codec_type) {
+#if defined(__ANDROID__)
+  if (hardware_acceleration &&
+      (codec_type == VideoCodecType::H264 || codec_type == VideoCodecType::AV1)) {
+    return std::make_unique<AndroidVideoEncoder>(clock, codec_type);
+  }
+#endif
   if (codec_type == VideoCodecType::AV1) {
     LOG_INFO("Using the SVT-AV1 software encoder");
     return std::make_unique<SvtAv1Encoder>(clock);
@@ -114,6 +125,9 @@ VideoEncoderFactory::CreateInitializedVideoEncoder(
 
 bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
+#if defined(__ANDROID__)
+  return !FindAndroidCodecs(codec_type, true).empty();
+#else
   if (codec_type != VideoCodecType::H264) {
     return false;
   }
@@ -125,6 +139,7 @@ bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
   return CheckIsCudaEncodeSupported();
 #else
   return false;
+#endif
 #endif
 }
 }  // namespace minirtc

@@ -1,3 +1,9 @@
+/*
+ * @Author: DI JUNKUN
+ * @Date: 2026-10-02
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
+ */
+
 #ifndef _MINIRTC_H_
 #define _MINIRTC_H_
 
@@ -89,6 +95,7 @@ enum MiniRtcNativeVideoFrameType : uint32_t {
   MiniRtcNativeVideoFrameCpuNv12 = 1,       ///< Host-accessible NV12 planes.
   MiniRtcNativeVideoFrameCudaNv12 = 2,      ///< CUDA device-memory NV12 planes.
   MiniRtcNativeVideoFrameCVPixelBuffer = 3, ///< Apple CVPixelBufferRef payload.
+  MiniRtcNativeVideoFrameAndroidMediaCodec = 4, ///< Output-only Surface buffer.
 };
 
 #ifdef __cplusplus
@@ -112,9 +119,19 @@ typedef struct {
   void* context;             ///< Owning CUcontext; borrowed with the frame.
 } MiniRtcCudaNv12Frame;
 
+/// Output-only MediaCodec buffer. render(owner, ANativeWindow*) consumes the
+/// buffer once; null detaches its codec from the previous window. Return 0 on
+/// success, negative on failure. release(owner) discards unrendered buffers.
+/// A codec reset invalidates retained tokens; rendering such a token fails.
+/// copy_to_nv12 is null for this type; it cannot be used as encoder input.
+typedef struct {
+  int (*render)(void* owner, void* native_window);
+} MiniRtcAndroidMediaCodecFrame;
+
 /// Access only the member named by MiniRtcNativeVideoFrame::type.
 typedef union {
   MiniRtcCpuNv12Frame cpu_nv12;
+  MiniRtcAndroidMediaCodecFrame android_media_codec;
   MiniRtcCudaNv12Frame cuda_nv12;
   void* cv_pixel_buffer; ///< NV12 CVPixelBufferRef; use Apple APIs for plane access.
 } MiniRtcNativeVideoFramePayload;
