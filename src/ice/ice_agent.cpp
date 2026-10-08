@@ -211,9 +211,12 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     // Use regular nomination from the start: libnice rejects late TCP
     // candidates if aggressive UDP checks have already started. Background
     // upgrades are enabled separately after negotiating the MiniRTC extension.
+    // Require ongoing peer responses so silent disconnects trigger the
+    // terminal connection callback and release session resources.
     NiceAgentOption agent_options = static_cast<NiceAgentOption>(
         NICE_AGENT_OPTION_REGULAR_NOMINATION |
         NICE_AGENT_OPTION_SUPPORT_RENOMINATION |
+        NICE_AGENT_OPTION_CONSENT_FRESHNESS |
         (use_trickle_ice_ ? NICE_AGENT_OPTION_ICE_TRICKLE
                           : NICE_AGENT_OPTION_NONE) |
         (use_reliable_ice_ ? NICE_AGENT_OPTION_RELIABLE
@@ -225,7 +228,8 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
 
     LOG_INFO(
         "Nice agent init with [trickle ice|{}], [reliable mode|{}], "
-        "[nomination|regular], [renomination|true], [turn mode|{}]",
+        "[nomination|regular], [renomination|true], "
+        "[consent freshness|true], [turn mode|{}]",
         use_trickle_ice_, use_reliable_ice_, TurnModeName(turn_mode_));
 
     if (agent == nullptr) {
