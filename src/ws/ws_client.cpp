@@ -342,7 +342,8 @@ void WsClient::Send(const std::string& message) {
   m_endpoint_->send(connection_handle_, message,
                     websocketpp::frame::opcode::text, ec);
   if (ec) {
-    LOG_ERROR("Sending message error: {}, [{}]", ec.message(), message);
+    // Signaling payloads may contain passwords or reconnect bearer tokens.
+    LOG_ERROR("Sending message error: {}", ec.message());
   }
 }
 

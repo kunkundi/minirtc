@@ -186,6 +186,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   }
 
   user_id_with_pwd_ = params.user_id ? params.user_id : "";
+  reconnect_login_.Clear();
   auto at_pos = user_id_with_pwd_.find('@');
   if (at_pos != std::string::npos) {
     user_id_ = user_id_with_pwd_.substr(0, at_pos);
@@ -328,6 +329,11 @@ int PeerConnection::Init(PeerConnectionParams params) {
     auto j = json::parse(msg, nullptr, /*allow_exceptions=*/false);
     if (!j.is_discarded() && j.contains("type") && j["type"].is_string()) {
       std::string t = j["type"].get<std::string>();
+      if ((t == "change_password" || t == "revoke_reconnect_credential") &&
+          j.contains("status") && j["status"] == "success" &&
+          j.contains("user_id") && j["user_id"] == user_id_) {
+        reconnect_login_.Clear();
+      }
       if (internal_signal_types_.find(t) != internal_signal_types_.end()) {
         ProcessSignal(msg);
         return;
@@ -416,10 +422,11 @@ int PeerConnection::Login() {
 
   int ret = 0;
 
-  json message = {{"type", "login"},
-                  {"user_id", user_id_with_pwd_},
-                  {"session_resume_version", 1},
-                  {"ice_config_version", 1}};
+  const auto now = std::chrono::duration_cast<std::chrono::seconds>(
+      std::chrono::system_clock::now().time_since_epoch()).count();
+  json message = reconnect_login_.Request(user_id_with_pwd_, now);
+  message["session_resume_version"] = 1;
+  message["ice_config_version"] = 1;
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
 
@@ -1098,6 +1105,10 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           password = "";
         }
 
+        reconnect_login_.Accepted(j, user_id_with_pwd_,
+            std::chrono::duration_cast<std::chrono::seconds>(
+                std::chrono::system_clock::now().time_since_epoch()).count());
+
         MiniRtcNetTrafficStats net_traffic_stats{};
 
         on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
@@ -1118,6 +1129,11 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
                           user_id_.size(), user_data_);
         ReportSessions();
       } else if (j["status"].get<std::string>() == "fail") {
+        if (reconnect_login_.RetryPassword()) {
+          LOG_INFO("Reconnect credential rejected; retrying password login");
+          Login();
+          break;
+        }
         auto reason = std::string("Unknown error");
         if (j.contains("reason") && j["reason"].is_string()) {
           reason = j["reason"].get<std::string>();

@@ -26,6 +26,7 @@
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 #include "ws_client.h"
+#include "reconnect_login.h"
 
 namespace minirtc {
 
@@ -214,6 +215,7 @@ class PeerConnection {
   bool offer_peer_ = false;
   std::string user_id_ = "";
   std::string user_id_with_pwd_ = "";
+  ReconnectLogin reconnect_login_;
   std::string remote_user_id_ = "";
   std::string local_transmission_id_ = "";
   std::string remote_transmission_id_ = "";
