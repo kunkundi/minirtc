@@ -522,7 +522,14 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
 
 void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
   auto con = c->get_con_from_hdl(hdl);
-  LOG_WARN("Connection closed");
+  // blank/abnormal_close means the transport died without a close frame, which
+  // is what separates a server-initiated shutdown from a network drop.
+  const websocketpp::close::status::value close_code =
+      con ? con->get_remote_close_code()
+          : websocketpp::close::status::blank;
+  LOG_WARN("Connection closed (code={} reason={})",
+           static_cast<int>(close_code),
+           con ? con->get_remote_close_reason() : std::string());
   if (!shutdown_) {
     AsyncReConnect();
   }
