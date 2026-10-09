@@ -493,6 +493,40 @@ int PeerConnection::Leave(const std::string& transmission_id) {
   return 0;
 }
 
+int PeerConnection::DisconnectPeer(const std::string& transmission_id,
+                                    const std::string& remote_user_id) {
+  if (transmission_id.empty() || remote_user_id.empty() ||
+      remote_user_id == user_id_) {
+    return -1;
+  }
+
+  std::shared_ptr<ConnectionInterface> connection;
+  int result = -1;
+  {
+    std::shared_lock lock(peer_connection_map_mutex_);
+    const auto it = peer_connection_map_.find(remote_user_id);
+    if (it == peer_connection_map_.end()) return -1;
+    connection = it->second;
+    if (ws_transport_ && ws_transport_->GetStatus() == WsStatus::WsOpened) {
+      // Queue this before retirement reports the session as no longer alive.
+      // A separate message type prevents older servers from interpreting a
+      // selective disconnect as the host leaving its entire transmission.
+      const json message = {{"type", "disconnect_peer"},
+                            {"user_id", user_id_},
+                            {"transmission_id", transmission_id},
+                            {"remote_user_id", remote_user_id}};
+      ws_transport_->Send(message.dump());
+      result = 0;
+    }
+  }
+  if (RetirePeerConnection(remote_user_id, connection,
+                           ConnectionStatus::Closed) && on_connection_status_) {
+    on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+                          remote_user_id.size(), user_data_);
+  }
+  return result;
+}
+
 int PeerConnection::AddVideoStream(const char* stream_id) {
   LOG_DEBUG("Add video stream [{}]", stream_id);
   media_stream_ids_.video.push_back(stream_id);
@@ -1363,6 +1397,8 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       if (it != peer_connection_map_.end()) {
         connection = it->second;
         peer_connection_map_.erase(it);
+        connected_peers_.erase(remote_user_id);
+        session_tickets_.erase(remote_user_id);
       }
     }
     if (connection) {

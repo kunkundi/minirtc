@@ -113,6 +113,16 @@ int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   return 0;
 }
 
+int DisconnectPeerConnection(PeerPtr* peer_ptr, const char* transmission_id,
+                              const char* remote_user_id) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !transmission_id ||
+      !*transmission_id || !remote_user_id || !*remote_user_id) {
+    return -1;
+  }
+  return peer_ptr->peer_connection->DisconnectPeer(transmission_id,
+                                                   remote_user_id);
+}
+
 int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");

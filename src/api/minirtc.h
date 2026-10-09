@@ -417,6 +417,21 @@ MINIRTC_API int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id);
 MINIRTC_API int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id);
 
 /**
+ * @brief As a session host, disconnect one remote peer and notify it via WSS.
+ * @param transmission_id Non-empty, NUL-terminated hosted session identity.
+ * @param remote_user_id Non-empty, NUL-terminated guest identity to disconnect.
+ * @return 0 if the notification was queued, -1 for invalid arguments, an absent
+ * peer, or unavailable signaling. An existing local peer is closed even when
+ * signaling is unavailable. Other peers and signaling remain active.
+ *
+ * Requires a signaling server supporting disconnect_peer. Closed is emitted
+ * locally; transport cleanup runs on the ICE worker.
+ */
+MINIRTC_API int DisconnectPeerConnection(PeerPtr* peer_ptr,
+                                        const char* transmission_id,
+                                        const char* remote_user_id);
+
+/**
  * @brief Register an outgoing video stream for subsequent session negotiation.
  * @param stream_id Non-null, non-empty, NUL-terminated unique stream name.
  * @return 0 on registration, -1 for an invalid peer.

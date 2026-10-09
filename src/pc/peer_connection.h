@@ -90,6 +90,8 @@ class PeerConnection {
   int Join(const std::string& transmission_id);
 
   int Leave(const std::string& transmission_id);
+  int DisconnectPeer(const std::string& transmission_id,
+                      const std::string& remote_user_id);
 
   int AddVideoStream(const char* stream_id);
   int AddAudioStream(const char* stream_id);
