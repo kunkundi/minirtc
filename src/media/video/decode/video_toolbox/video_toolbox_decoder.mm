@@ -462,14 +462,15 @@ bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
 
   CFMutableDictionaryRef decoder_spec = CFDictionaryCreateMutable(
       kCFAllocatorDefault, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
-#if TARGET_OS_IOS
+  // Leave the simulator free to select its available software decoder.
+#if TARGET_OS_IOS && !TARGET_OS_SIMULATOR
   if (@available(iOS 17.0, *)) {
     CFDictionarySetValue(
         decoder_spec,
         kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
         kCFBooleanTrue);
   }
-#else
+#elif !TARGET_OS_IOS
   CFDictionarySetValue(
       decoder_spec,
       kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,

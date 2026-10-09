@@ -7,6 +7,7 @@
 
 #if defined(__APPLE__)
 #include <CoreMedia/CoreMedia.h>
+#include <TargetConditionals.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include "video_toolbox/video_toolbox_decoder.h"
 #endif
@@ -61,11 +62,14 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
   }
 
 #if defined(MINIRTC_IOS)
+  // Simulator VideoToolbox can decode in software without hardware support.
+#if !TARGET_OS_SIMULATOR
   if (!hardware_acceleration ||
       !CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
     LOG_ERROR("VideoToolbox H.264 decoding is unavailable or disabled on iOS");
     return nullptr;
   }
+#endif
   return std::make_unique<VideoToolboxDecoder>(clock, native_video_output);
 #else
 #if defined(__APPLE__)
