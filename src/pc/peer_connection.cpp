@@ -8,6 +8,7 @@
 #include "ice_utils.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
+#include "signal_server_address.h"
 
 namespace minirtc {
 
@@ -255,6 +256,18 @@ int PeerConnection::Init(PeerConnectionParams params) {
     cfg_signal_server_port_ = std::to_string(signal_server_port_);
   }
 
+  const auto address = ParseSignalServerAddress(cfg_signal_server_ip_);
+  if (!address) {
+    LOG_ERROR("Invalid signaling server address");
+    return -1;
+  }
+  signal_server_port_ = address->port.value_or(signal_server_port_);
+  if (signal_server_port_ < 1 || signal_server_port_ > 65535) {
+    LOG_ERROR("Invalid signaling server port");
+    return -1;
+  }
+  uri_ = address->Url(signal_server_port_);
+
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
   connection_info_.hardware_acceleration = hardware_acceleration_;
@@ -369,7 +382,6 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   clock_ = std::make_shared<SystemClock>();
   ws_transport_ = std::make_shared<WsClient>(on_receive_ws_msg_, on_ws_status_);
-  uri_ = "wss://" + cfg_signal_server_ip_ + ":" + cfg_signal_server_port_;
   if (ws_transport_) {
     ws_transport_->Connect(uri_);
   }

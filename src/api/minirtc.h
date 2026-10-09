@@ -323,7 +323,8 @@ typedef struct {
   bool use_cfg_file; ///< Select INI configuration instead of direct settings.
   char cfg_path[256]; ///< INI path; relative paths use the process working dir.
 
-  /// Signaling host only: no wss:// prefix, port, or path. WSS uses system trust.
+  /// Signaling host with optional path, or wss/https URL. WSS uses system trust.
+  /// An explicit URL port overrides signal_server_port.
   char signal_server_ip[256];
   int signal_server_port;  ///< WSS port; no automatic default in direct mode.
   char log_path[256]; ///< Logger directory; an empty value uses "logs".
