@@ -86,6 +86,8 @@ class PeerConnection {
 
  public:
   int Init(PeerConnectionParams params);
+  int UpdateConnectionSettings(bool hardware_acceleration, bool av1_encoding,
+                                TurnMode turn_mode);
 
   int Join(const std::string& transmission_id);
 
@@ -258,6 +260,7 @@ class PeerConnection {
 
  private:
   MediaStreamIds media_stream_ids_;
+  std::mutex connection_info_mutex_;
   ConnectionInfo connection_info_;
   ConnectionCallbacks connection_callbacks_;
   std::shared_ptr<ConnectionInterface> peer_connection_;

@@ -385,6 +385,17 @@ int PeerConnection::Init(PeerConnectionParams params) {
   return 0;
 }
 
+int PeerConnection::UpdateConnectionSettings(bool hardware_acceleration,
+                                              bool av1_encoding,
+                                              TurnMode turn_mode) {
+  if (!IsValidTurnMode(turn_mode)) return -1;
+  std::lock_guard lock(connection_info_mutex_);
+  connection_info_.hardware_acceleration = hardware_acceleration;
+  connection_info_.av1_encoding = av1_encoding;
+  connection_info_.turn_mode = turn_mode;
+  return 0;
+}
+
 int PeerConnection::Login() {
   if (WsStatus::WsOpened != ws_status_) {
     LOG_ERROR("Websocket not opened");
@@ -985,7 +996,10 @@ bool PeerConnection::BuildConnectionInfo(const json& message,
                                          const std::string& transmission_id,
                                          const std::string& remote_user_id,
                                          ConnectionInfo& info) {
-  info = connection_info_;
+  {
+    std::lock_guard lock(connection_info_mutex_);
+    info = connection_info_;
+  }
   info.transmission_id = transmission_id;
   info.user_id = user_id_;
   info.remote_user_id = remote_user_id;
@@ -1011,11 +1025,11 @@ bool PeerConnection::BuildConnectionInfo(const json& message,
     LOG_WARN("No fresh ICE configuration was supplied by signaling");
     return false;
   }
-  if ((turn_mode_ == TurnMode::TurnForceUdp ||
-       turn_mode_ == TurnMode::TurnForceTcp) &&
+  if ((info.turn_mode == TurnMode::TurnForceUdp ||
+       info.turn_mode == TurnMode::TurnForceTcp) &&
       std::none_of(config.servers.begin(), config.servers.end(),
                    [&](const auto& server) {
-                     return IceTurnTransportAllowed(server, turn_mode_);
+                     return IceTurnTransportAllowed(server, info.turn_mode);
                    })) {
     LOG_WARN(
         "Per-connection ICE configuration has no relay matching forced TURN "

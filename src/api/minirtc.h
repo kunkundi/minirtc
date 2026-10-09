@@ -393,6 +393,18 @@ MINIRTC_API void DestroyPeer(PeerPtr** peer_ptr);
 MINIRTC_API int Init(PeerPtr* peer_ptr);
 
 /**
+ * @brief Update codec and ICE defaults without reconnecting signaling.
+ *
+ * Call after Init. The settings are copied atomically for subsequent remote
+ * connections; existing or already negotiating connections keep their snapshot.
+ * Returns 0 on success, -1 for an invalid peer or TURN mode. As with other peer
+ * APIs, the caller must prevent concurrent destruction of the handle.
+ */
+MINIRTC_API int UpdateConnectionSettings(PeerPtr* peer_ptr,
+                                         bool hardware_acceleration,
+                                         bool av1_encoding, TurnMode turn_mode);
+
+/**
  * @brief Request a remote session through the signaling service.
  * @param transmission_id Non-null, NUL-terminated target identity in the
  * service's format; CrossDesk commonly uses "remote-id@password".

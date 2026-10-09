@@ -102,6 +102,15 @@ int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   return ret;
 }
 
+int UpdateConnectionSettings(PeerPtr* peer_ptr, bool hardware_acceleration,
+                              bool av1_encoding, TurnMode turn_mode) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    return -1;
+  }
+  return peer_ptr->peer_connection->UpdateConnectionSettings(
+      hardware_acceleration, av1_encoding, turn_mode);
+}
+
 int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
