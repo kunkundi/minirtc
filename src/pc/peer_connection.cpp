@@ -6,6 +6,7 @@
 #include "INIReader.h"
 #include "common.h"
 #include "ice_utils.h"
+#include "join_failure.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
 #include "signal_server_address.h"
@@ -1166,21 +1167,18 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       std::string transmission_id = j["transmission_id"].get<std::string>();
       std::string status = j["status"].get<std::string>();
       if (status == "failed") {
-        std::string reason = j["reason"].get<std::string>();
-        LOG_ERROR("{}", reason);
-        if ("Incorrect password" == reason) {
-          on_connection_status_(ConnectionStatus::IncorrectPassword,
-                                transmission_id.data(), transmission_id.size(),
-                                user_data_);
-        } else if ("No such transmission id" == reason) {
-          on_connection_status_(ConnectionStatus::NoSuchTransmissionId,
-                                transmission_id.data(), transmission_id.size(),
-                                user_data_);
-        } else if ("Remote unavailable" == reason) {
-          on_connection_status_(ConnectionStatus::RemoteUnavailable,
-                                transmission_id.data(), transmission_id.size(),
-                                user_data_);
+        std::string reason = "Unknown error";
+        if (j.contains("reason") && j["reason"].is_string()) {
+          reason = j["reason"].get<std::string>();
         }
+        LOG_ERROR("{}", reason);
+        // Expose structured rejection details before the status notification,
+        // without extending the callback ABI used by existing applications.
+        if (on_signal_message_) {
+          on_signal_message_(signal.data(), signal.size(), user_data_);
+        }
+        on_connection_status_(ParseJoinFailure(j).status, transmission_id.data(),
+                              transmission_id.size(), user_data_);
       } else {
         std::string remote_user_id = j["user_id"].get<std::string>();
 

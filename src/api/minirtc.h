@@ -278,7 +278,8 @@ typedef void (*OnSignalStatus)(SignalStatus status, const char* peer_id,
                                const size_t peer_id_size, void* user_data);
 
 /// Receive a borrowed signaling payload not consumed by MiniRTC's internal
-/// handler. Optional; not an observer of every raw signaling message.
+/// handler, plus failed user_join_transmission replies (including error_code
+/// and retry_after) before OnConnectionStatus. Optional; not a raw observer.
 typedef void (*OnSignalMessage)(const char* message, size_t size,
                                 void* user_data);
 
@@ -351,7 +352,7 @@ typedef struct {
   OnReceiveVideoFrame on_receive_video_frame; ///< Optional decoded-frame receiver.
 
   OnSignalStatus on_signal_status; ///< Required; use a no-op if unused.
-  OnSignalMessage on_signal_message; ///< Optional unhandled-signaling receiver.
+  OnSignalMessage on_signal_message; ///< Optional signaling/rejected-join receiver.
   OnConnectionStatus on_connection_status; ///< Required; use a no-op if unused.
   OnNetStatusReport on_net_status_report; ///< Required, including during login.
 
