@@ -25,17 +25,27 @@ constexpr std::pair<int, int> kResolutionSteps[] = {
     {3840, 2160},  // 4K
 };
 
-// Screen-content model: bitrate = coefficient * pixels.
+// Screen-content model: bitrate = coefficient * pixels, where the coefficient
+// is bits per pixel at the reference frame rate. Each quality preset buys its
+// pixels at a different price, so the three tiers stay distinguishable even
+// when the transport only carries a few hundred kilobits per second.
 //
-// At 30 fps the coefficient is calibrated for sharp H.264 desktop text:
+// The medium preset is calibrated for sharp H.264 desktop text at 30 fps:
 //   720p  -> ~2.5 Mbps | 1080p -> ~5.6 Mbps
 //   1440p -> ~10 Mbps  | 4K    -> ~22 Mbps
 // Frame-rate scaling uses sqrt(fps / 30): temporal prediction means 60 fps
 // does not require exactly twice the bitrate, while still giving it enough
 // headroom to avoid spending the extra frames on coarse quantization.
 constexpr float kBitrateAlpha = 1.0f;
-constexpr float kBitrateCoeff30Fps = 2.70f;
+constexpr float kQualityBitrateCoeff[] = {
+    1.80f,  // QualityLow: coarser quantization, cheapest per pixel.
+    2.70f,  // QualityMedium: reference calibration.
+    3.60f,  // QualityHigh: keeps text edges crisp when bandwidth allows.
+};
 constexpr float kReferenceFrameRate = 30.0f;
+// Balanced must stay readable, so it gives up frame rate before spatial detail;
+// only frame-rate priority may collapse to the bottom of the tier list.
+constexpr int kBalancedMinPixels = 1280 * 720;
 // Reserve media-pipeline headroom when every captured frame matters. Without
 // this margin, normal throughput variance keeps the pipeline on the edge of
 // its budget and the input queue has to discard frames to stay bounded.
@@ -193,10 +203,19 @@ int ResolutionAdapter::GetMaxPixelsForQuality() const {
   }
 }
 
+int ResolutionAdapter::GetMinPixelsForPreference() const {
+  if (video_degradation_preference_ == VideoDegradationPreference::Balanced)
+    return kBalancedMinPixels;
+  return kResolutionSteps[0].first * kResolutionSteps[0].second;
+}
+
 float ResolutionAdapter::GetBitrateCoefficient() const {
   if (video_content_type_ != VideoContentType::ScreenContent) {
     return kLegacyBitrateCoeff;
   }
+  const int quality_index = std::clamp(static_cast<int>(video_quality_), 0,
+                                       static_cast<int>(std::size(
+                                           kQualityBitrateCoeff)) - 1);
   const float frame_rate_scale =
       std::sqrt(static_cast<float>(video_frame_rate_) / kReferenceFrameRate);
   float headroom = 1.0f;
@@ -207,7 +226,7 @@ float ResolutionAdapter::GetBitrateCoefficient() const {
              VideoDegradationPreference::Balanced) {
     headroom = kBalancedHeadroom;
   }
-  return kBitrateCoeff30Fps * frame_rate_scale * headroom;
+  return kQualityBitrateCoeff[quality_index] * frame_rate_scale * headroom;
 }
 
 float ResolutionAdapter::GetBitrateAlpha() const {
@@ -233,6 +252,9 @@ ResolutionBitrateLimits ResolutionAdapter::ComputeBitrateLimitsForResolution(
 std::vector<ResolutionBitrateLimits> ResolutionAdapter::GetBitrateLimits()
     const {
   const int max_pixels = GetMaxPixelsForQuality();
+  // A source smaller than the floor still needs one usable tier, so the floor
+  // can never exceed the quality ceiling.
+  const int min_pixels = std::min(GetMinPixelsForPreference(), max_pixels);
 
   std::vector<ResolutionBitrateLimits> limits;
   limits.reserve(std::size(kResolutionSteps));
@@ -246,6 +268,7 @@ std::vector<ResolutionBitrateLimits> ResolutionAdapter::GetBitrateLimits()
 
   for (int i = 0; i <= last_valid_idx; ++i) {
     const auto [w, h] = kResolutionSteps[i];
+    if (w * h < min_pixels && i != last_valid_idx) continue;
     limits.push_back(
         ComputeBitrateLimitsForResolution(w, h, i == last_valid_idx));
   }

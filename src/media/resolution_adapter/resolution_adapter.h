@@ -68,6 +68,9 @@ class ResolutionAdapter {
 
   int GetMaxPixelsForQuality() const;
 
+  // Spatial floor the current preference may not adapt below.
+  int GetMinPixelsForPreference() const;
+
   float GetBitrateCoefficient() const;
 
   float GetBitrateAlpha() const;
