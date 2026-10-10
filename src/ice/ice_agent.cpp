@@ -971,6 +971,7 @@ int IceAgent::Send(const char* data, size_t size) {
 void IceAgent::StopSending() { send_disabled_.store(true); }
 
 void IceAgent::CleanupDtls() {
+  DisarmDtlsDeadline();
   if (ssl_) {
     SSL_free(ssl_);
     ssl_ = nullptr;
@@ -1134,12 +1135,48 @@ int IceAgent::StartDtls(bool is_client) {
   int err = SSL_get_error(ssl_, ret);
   if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
     LOG_INFO("DTLS handshake started, awaiting peer packets...");
+    ArmDtlsDeadline();
     return 0;
   }
   LOG_ERROR("DTLS handshake start failed, err={}", err);
 
   log_openssl_errors();
   return -1;
+}
+
+void IceAgent::ArmDtlsDeadline() {
+  GMainContext* context = gcontext_.load();
+  if (!context) return;
+  GSource* source = g_timeout_source_new(kDtlsHandshakeTimeoutMs);
+  g_source_set_callback(source, DtlsDeadlineTickStatic, this, nullptr);
+  GSource* expected = nullptr;
+  if (!dtls_timeout_source_.compare_exchange_strong(expected, source)) {
+    g_source_unref(source);
+    return;
+  }
+  g_source_attach(source, context);
+}
+
+void IceAgent::DisarmDtlsDeadline() {
+  GSource* source = dtls_timeout_source_.exchange(nullptr);
+  if (!source) return;
+  g_source_destroy(source);
+  g_source_unref(source);
+}
+
+gboolean IceAgent::DtlsDeadlineTickStatic(gpointer data) {
+  auto* self = static_cast<IceAgent*>(data);
+  self->dtls_timeout_source_.store(nullptr);
+  if (self->destroyed_ || self->send_disabled_ || self->dtls_handshake_done_) {
+    return G_SOURCE_REMOVE;
+  }
+  LOG_ERROR("DTLS handshake timed out after {} ms, failing the connection",
+            kDtlsHandshakeTimeoutMs);
+  if (self->on_state_changed_) {
+    self->on_state_changed_(self->agent_, self->stream_id_, 1,
+                            NICE_COMPONENT_STATE_FAILED, self->user_ptr_);
+  }
+  return G_SOURCE_REMOVE;
 }
 
 void IceAgent::GenerateDtlsCertificate(int days_valid) {
@@ -1402,6 +1439,7 @@ bool IceAgent::CompleteDtlsHandshake() {
     return false;
   }
   dtls_peer_verified_ = true;
+  DisarmDtlsDeadline();
   MaybeStartPunch();
   LOG_INFO("DTLS peer fingerprint verified");
   if (on_cb_dtls_done_) on_cb_dtls_done_(user_ptr_);
