@@ -51,6 +51,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   int ReConnect();
 
+  // Reset the backoff ladder and retry now. Used when the user explicitly asks
+  // signaling to reconnect instead of waiting out the exponential delay.
+  void ForceReconnect();
+
   void AsyncReConnect();
 
   void Close();

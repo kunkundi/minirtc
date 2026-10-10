@@ -136,6 +136,8 @@ class PeerConnection {
 
   int SendSignalMessage(const char* message, size_t size);
 
+  int ForceSignalReconnect();
+
  private:
   int Login();
   int SendJoinRequestLocked(const std::string& transmission_id);

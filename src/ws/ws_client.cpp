@@ -364,6 +364,22 @@ void WsClient::AsyncReConnect() {
   ScheduleReconnect(delay_seconds);
 }
 
+void WsClient::ForceReconnect() {
+  if (shutdown_) {
+    return;
+  }
+
+  LOG_INFO("Forcing a signaling reconnect");
+  reconnect_attempts_ = 0;
+  if (is_reconnecting_.load()) {
+    // A worker is asleep or already connecting; it cannot be cut short without
+    // a second cancellation flag, but the reset ladder makes its next retry
+    // immediate.
+    return;
+  }
+  AsyncReConnect();
+}
+
 void WsClient::Close() {
   Shutdown();
 }
