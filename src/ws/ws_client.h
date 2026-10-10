@@ -51,6 +51,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   int ReConnect();
 
+  // Reset the backoff ladder and retry now. Used when the user explicitly asks
+  // signaling to reconnect instead of waiting out the exponential delay.
+  void ForceReconnect();
+
   void AsyncReConnect();
 
   void Close();
@@ -103,7 +107,9 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void ScheduleReconnect(int delay_seconds);
 
  private:
-  std::unique_ptr<client> m_endpoint_;
+  // Shared with the I/O worker so the endpoint outlives m_endpoint_.reset().
+  // That keeps a worker that refuses to stop safe to abandon.
+  std::shared_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
 
   std::thread m_thread_;

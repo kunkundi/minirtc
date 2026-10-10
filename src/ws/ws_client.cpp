@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <future>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -18,6 +19,8 @@ WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
     : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
 namespace {
+constexpr auto kWorkerStopTimeout = std::chrono::milliseconds(3000);
+
 void JoinThread(std::thread& thread) {
   if (!thread.joinable()) {
     return;
@@ -31,6 +34,39 @@ void JoinThread(std::thread& thread) {
   }
 
   thread.join();
+}
+
+// A websocket io_service can refuse to return from run() when the transport is
+// mid-handshake on a blackholed route, which used to wedge signaling shutdown
+// and everything queued behind it. std::thread has no timed join, so hand the
+// worker to a detached joiner and give up after the deadline. The caller must
+// guarantee the worker no longer touches `this`; the I/O worker owns its
+// endpoint through a shared_ptr, so abandoning it is safe.
+bool JoinThreadWithin(std::thread& thread, std::chrono::milliseconds timeout) {
+  if (!thread.joinable()) {
+    return true;
+  }
+  if (thread.get_id() == std::this_thread::get_id()) {
+    thread.detach();
+    return true;
+  }
+
+  auto joined = std::make_shared<std::promise<void>>();
+  auto finished = joined->get_future();
+  std::thread joiner([worker = std::move(thread), joined]() mutable {
+    if (worker.joinable()) {
+      worker.join();
+    }
+    joined->set_value();
+  });
+  joiner.detach();
+
+  if (finished.wait_for(timeout) == std::future_status::ready) {
+    return true;
+  }
+  LOG_WARN("WebSocket worker did not stop within {} ms; abandoning it",
+           timeout.count());
+  return false;
 }
 }  // namespace
 
@@ -81,7 +117,7 @@ void WsClient::Shutdown() {
     m_endpoint_->stop_perpetual();
     m_endpoint_->stop();
   }
-  JoinThread(m_thread_);
+  JoinThreadWithin(m_thread_, kWorkerStopTimeout);
   LOG_DEBUG("WebSocket I/O worker stopped");
 
   m_endpoint_.reset();
@@ -98,9 +134,12 @@ void WsClient::StopThreads() {
   CleanupPendingThreads();
 
   if (m_endpoint_) {
+    // stop_perpetual alone does not end run() while a handshake or timer is
+    // still outstanding, which is what used to hang ReConnect here forever.
     m_endpoint_->stop_perpetual();
+    m_endpoint_->stop();
   }
-  JoinThread(m_thread_);
+  JoinThreadWithin(m_thread_, kWorkerStopTimeout);
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
@@ -259,14 +298,15 @@ int WsClient::Connect(const std::string& uri) {
 
   StopThreads();
 
-  m_endpoint_ = std::make_unique<client>();
+  m_endpoint_ = std::make_shared<client>();
   SetStatus(WsOpening);
   m_endpoint_->init_asio();
   m_endpoint_->start_perpetual();
 
   RegisterHandlers();
-  m_thread_ =
-      std::thread([endpoint = m_endpoint_.get()]() { endpoint->run(); });
+  // The worker keeps its own reference so resetting m_endpoint_ cannot leave
+  // run() executing on freed memory if the join below has to be abandoned.
+  m_thread_ = std::thread([endpoint = m_endpoint_]() { endpoint->run(); });
 
   websocketpp::lib::error_code ec;
   auto con = m_endpoint_->get_connection(uri, ec);
@@ -322,6 +362,22 @@ void WsClient::AsyncReConnect() {
 
   LOG_INFO("AsyncReConnect: scheduling reconnect (attempt {})", attempt);
   ScheduleReconnect(delay_seconds);
+}
+
+void WsClient::ForceReconnect() {
+  if (shutdown_) {
+    return;
+  }
+
+  LOG_INFO("Forcing a signaling reconnect");
+  reconnect_attempts_ = 0;
+  if (is_reconnecting_.load()) {
+    // A worker is asleep or already connecting; it cannot be cut short without
+    // a second cancellation flag, but the reset ladder makes its next retry
+    // immediate.
+    return;
+  }
+  AsyncReConnect();
 }
 
 void WsClient::Close() {
@@ -459,7 +515,12 @@ bool WsClient::OnTlsVerify(bool preverified,
   return preverified;
 }
 
-void WsClient::OnOpen(client*, websocketpp::connection_hdl hdl) {
+void WsClient::OnOpen(client* c, websocketpp::connection_hdl hdl) {
+  // An abandoned I/O worker can still deliver one last callback; acting on a
+  // stale endpoint would replace the live connection handle.
+  if (shutdown_ || c != m_endpoint_.get()) {
+    return;
+  }
   LOG_INFO("WebSocket connection opened");
   connection_handle_ = hdl;
   SetStatus(WsOpened);
@@ -469,6 +530,9 @@ void WsClient::OnOpen(client*, websocketpp::connection_hdl hdl) {
 }
 
 void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
+  if (shutdown_ || c != m_endpoint_.get()) {
+    return;
+  }
   auto con = c->get_con_from_hdl(hdl);
   std::string error_msg = con ? con->get_ec().message() : "unknown";
   websocketpp::lib::error_code ec =
@@ -521,8 +585,18 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
 }
 
 void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
+  if (c != m_endpoint_.get()) {
+    return;
+  }
   auto con = c->get_con_from_hdl(hdl);
-  LOG_WARN("Connection closed");
+  // blank/abnormal_close means the transport died without a close frame, which
+  // is what separates a server-initiated shutdown from a network drop.
+  const websocketpp::close::status::value close_code =
+      con ? con->get_remote_close_code()
+          : websocketpp::close::status::blank;
+  LOG_WARN("Connection closed (code={} reason={})",
+           static_cast<int>(close_code),
+           con ? con->get_remote_close_reason() : std::string());
   if (!shutdown_) {
     AsyncReConnect();
   }

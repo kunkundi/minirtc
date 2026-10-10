@@ -954,6 +954,18 @@ int PeerConnection::SendSignalMessage(const char* message, size_t size) {
   return 0;
 }
 
+int PeerConnection::ForceSignalReconnect() {
+  if (!ws_transport_) {
+    LOG_ERROR("Websocket transport is unavailable");
+    return -1;
+  }
+  if (WsStatus::WsOpened == ws_status_) {
+    return 0;
+  }
+  ws_transport_->ForceReconnect();
+  return 0;
+}
+
 int64_t PeerConnection::GetSystemTimeMicros() {
   if (clock_) {
     return clock_->CurrentTimeUs();

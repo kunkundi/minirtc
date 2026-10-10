@@ -333,3 +333,11 @@ int SendSignalMessage(PeerPtr* peer_ptr, const char* message, size_t size) {
   }
   return peer_ptr->peer_connection->SendSignalMessage(message, size);
 }
+
+int ReconnectSignal(PeerPtr* peer_ptr) {
+  if (!peer_ptr || !peer_ptr->peer_connection) {
+    LOG_ERROR("Peer connection not created");
+    return -1;
+  }
+  return peer_ptr->peer_connection->ForceSignalReconnect();
+}
