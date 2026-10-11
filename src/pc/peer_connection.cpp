@@ -959,7 +959,9 @@ int PeerConnection::ForceSignalReconnect() {
     LOG_ERROR("Websocket transport is unavailable");
     return -1;
   }
-  if (WsStatus::WsOpened == ws_status_) {
+  // A live WebSocket can still have a failed login. Only an authenticated
+  // signaling connection is a no-op; the transport status alone is not enough.
+  if (SignalStatus::SignalConnected == GetSignalStatus()) {
     return 0;
   }
   ws_transport_->ForceReconnect();

@@ -2,7 +2,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <future>
 #include <iostream>
 #include <thread>
 #include <vector>
@@ -19,8 +18,6 @@ WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
     : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
 namespace {
-constexpr auto kWorkerStopTimeout = std::chrono::milliseconds(3000);
-
 void JoinThread(std::thread& thread) {
   if (!thread.joinable()) {
     return;
@@ -36,38 +33,6 @@ void JoinThread(std::thread& thread) {
   thread.join();
 }
 
-// A websocket io_service can refuse to return from run() when the transport is
-// mid-handshake on a blackholed route, which used to wedge signaling shutdown
-// and everything queued behind it. std::thread has no timed join, so hand the
-// worker to a detached joiner and give up after the deadline. The caller must
-// guarantee the worker no longer touches `this`; the I/O worker owns its
-// endpoint through a shared_ptr, so abandoning it is safe.
-bool JoinThreadWithin(std::thread& thread, std::chrono::milliseconds timeout) {
-  if (!thread.joinable()) {
-    return true;
-  }
-  if (thread.get_id() == std::this_thread::get_id()) {
-    thread.detach();
-    return true;
-  }
-
-  auto joined = std::make_shared<std::promise<void>>();
-  auto finished = joined->get_future();
-  std::thread joiner([worker = std::move(thread), joined]() mutable {
-    if (worker.joinable()) {
-      worker.join();
-    }
-    joined->set_value();
-  });
-  joiner.detach();
-
-  if (finished.wait_for(timeout) == std::future_status::ready) {
-    return true;
-  }
-  LOG_WARN("WebSocket worker did not stop within {} ms; abandoning it",
-           timeout.count());
-  return false;
-}
 }  // namespace
 
 WsClient::~WsClient() { Shutdown(); }
@@ -83,11 +48,13 @@ void WsClient::Shutdown() {
   // Shutdown is terminal. In particular, wake and invalidate a delayed
   // reconnect before waiting for any worker so an obsolete client cannot be
   // revived after its PeerConnection has been destroyed.
-  shutdown_ = true;
+  {
+    std::lock_guard<std::mutex> lock(reconnect_mtx_);
+    shutdown_ = true;
+    reconnect_generation_.fetch_add(1);
+  }
   running_ = false;
-  is_reconnecting_ = false;
   cond_var_.notify_all();
-  reconnect_generation_.fetch_add(1);
   reconnect_cv_.notify_all();
 
   std::vector<std::thread> reconnect_threads;
@@ -117,7 +84,10 @@ void WsClient::Shutdown() {
     m_endpoint_->stop_perpetual();
     m_endpoint_->stop();
   }
-  JoinThreadWithin(m_thread_, kWorkerStopTimeout);
+  // stop() ends asynchronous network waits. An executing callback must still
+  // finish before Close returns: PeerConnection callbacks capture their owner
+  // by raw pointer, and DestroyPeer deletes that owner immediately afterwards.
+  JoinThread(m_thread_);
   LOG_DEBUG("WebSocket I/O worker stopped");
 
   m_endpoint_.reset();
@@ -139,7 +109,7 @@ void WsClient::StopThreads() {
     m_endpoint_->stop_perpetual();
     m_endpoint_->stop();
   }
-  JoinThreadWithin(m_thread_, kWorkerStopTimeout);
+  JoinThread(m_thread_);
 
   m_endpoint_.reset();
   heartbeat_started_ = false;
@@ -147,7 +117,10 @@ void WsClient::StopThreads() {
 
 void WsClient::CleanupPendingThreads() {
   // Increment generation to signal all pending threads to exit.
-  reconnect_generation_.fetch_add(1);
+  {
+    std::lock_guard<std::mutex> lock(reconnect_mtx_);
+    reconnect_generation_.fetch_add(1);
+  }
   reconnect_cv_.notify_all();
 
   std::vector<std::thread> pending_threads;
@@ -161,17 +134,29 @@ void WsClient::CleanupPendingThreads() {
   }
 }
 
-void WsClient::ScheduleReconnect(int delay_seconds) {
+void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
+  // Serialize a forced wake with both scheduling and entering the wait, so a
+  // click just before the worker starts waiting cannot be lost.
+  std::unique_lock<std::mutex> schedule_lock(reconnect_mtx_);
   if (shutdown_) {
     return;
+  }
+  if (force) {
+    reconnect_attempts_ = 0;
   }
 
   // ensure only one reconnect attempt is scheduled at a time.
   bool expected = false;
   if (!is_reconnecting_.compare_exchange_strong(expected, true)) {
+    if (force && reconnect_waiting_) {
+      reconnect_now_ = true;
+      reconnect_cv_.notify_all();
+    }
     LOG_DEBUG("Reconnect already in progress, skipping.");
     return;
   }
+  reconnect_waiting_ = true;
+  reconnect_now_ = force;
 
   LOG_INFO("Will retry connection after {} seconds", delay_seconds);
 
@@ -182,25 +167,28 @@ void WsClient::ScheduleReconnect(int delay_seconds) {
   std::thread reconnect_thread([weak_self, delay_seconds,
                                 current_generation]() {
     if (auto self = weak_self.lock()) {
-      if (delay_seconds > 0) {
+      {
         // use interruptible wait instead of sleep
         std::unique_lock<std::mutex> lock(self->reconnect_mtx_);
         self->reconnect_cv_.wait_for(
             lock, std::chrono::seconds(delay_seconds),
             [&self, current_generation]() {
-              return self->shutdown_.load() ||
+              return self->shutdown_.load() || self->reconnect_now_ ||
                      self->reconnect_generation_.load() != current_generation;
             });
-      }
+        self->reconnect_waiting_ = false;
+        self->reconnect_now_ = false;
 
-      // Generation changed or shutdown started; cancel this reconnect attempt.
-      if (self->shutdown_ ||
-          self->reconnect_generation_.load() != current_generation) {
-        self->is_reconnecting_.store(false);
-        return;
+        // Generation changed or shutdown started; cancel this attempt.
+        if (self->shutdown_ ||
+            self->reconnect_generation_.load() != current_generation) {
+          self->is_reconnecting_.store(false);
+          return;
+        }
       }
 
       self->ReConnect();
+      std::lock_guard<std::mutex> lock(self->reconnect_mtx_);
       self->is_reconnecting_.store(false);
     }
   });
@@ -223,6 +211,7 @@ void WsClient::ScheduleReconnect(int delay_seconds) {
     }
   }
 
+  schedule_lock.unlock();
   JoinThread(reconnect_thread);
 }
 
@@ -304,8 +293,8 @@ int WsClient::Connect(const std::string& uri) {
   m_endpoint_->start_perpetual();
 
   RegisterHandlers();
-  // The worker keeps its own reference so resetting m_endpoint_ cannot leave
-  // run() executing on freed memory if the join below has to be abandoned.
+  // Keep the endpoint alive while run() unwinds, including when the final
+  // WsClient reference is released by a callback on this worker.
   m_thread_ = std::thread([endpoint = m_endpoint_]() { endpoint->run(); });
 
   websocketpp::lib::error_code ec;
@@ -365,19 +354,8 @@ void WsClient::AsyncReConnect() {
 }
 
 void WsClient::ForceReconnect() {
-  if (shutdown_) {
-    return;
-  }
-
   LOG_INFO("Forcing a signaling reconnect");
-  reconnect_attempts_ = 0;
-  if (is_reconnecting_.load()) {
-    // A worker is asleep or already connecting; it cannot be cut short without
-    // a second cancellation flag, but the reset ladder makes its next retry
-    // immediate.
-    return;
-  }
-  AsyncReConnect();
+  ScheduleReconnect(0, true);
 }
 
 void WsClient::Close() {
@@ -516,8 +494,7 @@ bool WsClient::OnTlsVerify(bool preverified,
 }
 
 void WsClient::OnOpen(client* c, websocketpp::connection_hdl hdl) {
-  // An abandoned I/O worker can still deliver one last callback; acting on a
-  // stale endpoint would replace the live connection handle.
+  // Ignore callbacks during shutdown or from a replaced endpoint.
   if (shutdown_ || c != m_endpoint_.get()) {
     return;
   }

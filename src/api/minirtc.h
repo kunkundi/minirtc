@@ -616,9 +616,9 @@ MINIRTC_API int SendSignalMessage(PeerPtr* peer_ptr, const char* message,
 
 /**
  * @brief Retry signaling now, skipping the exponential reconnect backoff.
- * @return 0 when signaling is open or a retry was requested; -1 for an invalid
- * peer or unavailable transport. Call after Init. Login is replayed by the
- * existing reconnect path, so callers do not re-authenticate.
+ * @return 0 when signaling is authenticated or a retry was requested; -1 for
+ * an invalid peer or unavailable transport. Call after Init. Login is replayed
+ * by the existing reconnect path, so callers do not re-authenticate.
  */
 MINIRTC_API int ReconnectSignal(PeerPtr* peer_ptr);
 
