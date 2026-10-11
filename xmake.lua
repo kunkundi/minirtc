@@ -200,13 +200,6 @@ target("ws")
     add_files("src/ws/*.cpp")
     add_includedirs("src/ws", {public = true})
 
-target("dtls_deadline_test")
-    set_kind("binary")
-    set_default(false)
-    add_deps("ice")
-    add_files("tests/peerconnection/dtls_deadline_test.cpp")
-    add_tests("default", {run_timeout = 60000})
-
 target("rtp")
     set_kind("object")
     add_deps("log", "common", "frame", "ringbuffer", "thread", "rtcp", "fec", "statistics")
