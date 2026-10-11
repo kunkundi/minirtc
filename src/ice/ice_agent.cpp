@@ -405,6 +405,7 @@ gboolean IceAgent::CloseNiceAgentStatic(gpointer data) {
   auto* self = static_cast<IceAgent*>(data);
   NiceAgent* agent = self->agent_.load();
   self->StopPunch();
+  self->dtls_timer_.Stop();
 
   if (self->nice_inited_.load() && agent != nullptr &&
       self->stream_id_ != 0) {
@@ -971,7 +972,7 @@ int IceAgent::Send(const char* data, size_t size) {
 void IceAgent::StopSending() { send_disabled_.store(true); }
 
 void IceAgent::CleanupDtls() {
-  DisarmDtlsDeadline();
+  dtls_timer_.Stop();
   if (ssl_) {
     SSL_free(ssl_);
     ssl_ = nullptr;
@@ -984,6 +985,7 @@ void IceAgent::CleanupDtls() {
   dtls_started_ = false;
   dtls_handshake_done_ = false;
   dtls_peer_verified_ = false;
+  dtls_failed_ = false;
   remote_standard_srtp_key_layout_ = false;
   punch_remote_ufrag_.clear();
   remote_fingerprint_.clear();
@@ -1022,6 +1024,7 @@ BIO_METHOD* IceAgent::BIO_s_nice() {
 int IceAgent::bio_nice_write(BIO* b, const char* buf, int len) {
   IceAgent* self = reinterpret_cast<IceAgent*>(BIO_get_data(b));
   if (!self || !buf || len <= 0) return -1;
+  BIO_clear_retry_flags(b);
   int r = self->Send(buf, (size_t)len);
   if (r == 0) return len;
   return -1;
@@ -1030,6 +1033,7 @@ int IceAgent::bio_nice_write(BIO* b, const char* buf, int len) {
 int IceAgent::bio_nice_read(BIO* b, char* buf, int len) {
   IceAgent* self = reinterpret_cast<IceAgent*>(BIO_get_data(b));
   if (!self || !buf || len <= 0) return -1;
+  BIO_clear_retry_flags(b);
 
   std::lock_guard<std::mutex> lk(self->dtls_mutex_);
   if (self->dtls_incoming_.empty()) {
@@ -1070,6 +1074,7 @@ long IceAgent::bio_nice_ctrl(BIO* b, int cmd, long num, void* ptr) {
 }
 
 int IceAgent::StartDtls(bool is_client) {
+  if (dtls_failed_ || send_disabled_ || destroyed_) return -1;
   if (dtls_started_ || !ShouldUseDtls()) return 0;
 
   SSL_library_init();
@@ -1079,6 +1084,7 @@ int IceAgent::StartDtls(bool is_client) {
   ssl_ctx_ = SSL_CTX_new(DTLS_method());
   if (!ssl_ctx_) {
     LOG_ERROR("SSL_CTX_new failed");
+    FailDtlsHandshake();
     return -1;
   }
 
@@ -1086,23 +1092,28 @@ int IceAgent::StartDtls(bool is_client) {
       SSL_CTX_set_tlsext_use_srtp(ssl_ctx_,
                                 "SRTP_AEAD_AES_128_GCM") != 0) {
     LOG_ERROR("SSL_CTX_set_tlsext_use_srtp failed");
+    FailDtlsHandshake();
     return -1;
   }
 
   if (!dtls_cert_ || !dtls_pkey_) {
     LOG_ERROR("DTLS cert/key not generated");
+    FailDtlsHandshake();
     return -1;
   }
   if (SSL_CTX_use_certificate(ssl_ctx_, dtls_cert_) != 1) {
     LOG_ERROR("use_certificate failed");
+    FailDtlsHandshake();
     return -1;
   }
   if (SSL_CTX_use_PrivateKey(ssl_ctx_, dtls_pkey_) != 1) {
     LOG_ERROR("use_private_key failed");
+    FailDtlsHandshake();
     return -1;
   }
   if (SSL_CTX_check_private_key(ssl_ctx_) != 1) {
     LOG_ERROR("check_private_key failed");
+    FailDtlsHandshake();
     return -1;
   }
 
@@ -1112,12 +1123,18 @@ int IceAgent::StartDtls(bool is_client) {
   ssl_ = SSL_new(ssl_ctx_);
   if (!ssl_) {
     LOG_ERROR("SSL_new failed");
+    FailDtlsHandshake();
     return -1;
   }
 
   SSL_set_app_data(ssl_, this);
 
   bio_ = BIO_new(BIO_s_nice());
+  if (!bio_) {
+    LOG_ERROR("BIO_new failed");
+    FailDtlsHandshake();
+    return -1;
+  }
   BIO_set_data(bio_, this);
   SSL_set_bio(ssl_, bio_, bio_);
 
@@ -1128,6 +1145,7 @@ int IceAgent::StartDtls(bool is_client) {
 
   dtls_started_ = true;
 
+  ERR_clear_error();
   int ret = SSL_do_handshake(ssl_);
   if (ret == 1) {
     return CompleteDtlsHandshake() ? 0 : -1;
@@ -1135,50 +1153,35 @@ int IceAgent::StartDtls(bool is_client) {
   int err = SSL_get_error(ssl_, ret);
   if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
     LOG_INFO("DTLS handshake started, awaiting peer packets...");
-    ArmDtlsDeadline();
+    dtls_timer_.Start(
+        ssl_, gcontext_.load(), std::chrono::milliseconds(kDtlsHandshakeTimeoutMs),
+        [this](DtlsHandshakeTimer::Failure failure) {
+          if (destroyed_ || send_disabled_ || dtls_handshake_done_) return;
+          if (failure == DtlsHandshakeTimer::Failure::Deadline) {
+            LOG_ERROR("DTLS handshake timed out after {} ms, failing the connection",
+                      kDtlsHandshakeTimeoutMs);
+          } else {
+            LOG_ERROR("DTLS handshake retransmission failed");
+            log_openssl_errors();
+          }
+          FailDtlsHandshake();
+        });
     return 0;
   }
   LOG_ERROR("DTLS handshake start failed, err={}", err);
 
   log_openssl_errors();
+  FailDtlsHandshake();
   return -1;
 }
 
-void IceAgent::ArmDtlsDeadline() {
-  GMainContext* context = gcontext_.load();
-  if (!context) return;
-  GSource* source = g_timeout_source_new(kDtlsHandshakeTimeoutMs);
-  g_source_set_callback(source, DtlsDeadlineTickStatic, this, nullptr);
-  GSource* expected = nullptr;
-  if (!dtls_timeout_source_.compare_exchange_strong(expected, source)) {
-    g_source_unref(source);
-    return;
+void IceAgent::FailDtlsHandshake() {
+  dtls_timer_.Stop();
+  if (dtls_failed_.exchange(true) || destroyed_ || send_disabled_) return;
+  if (on_state_changed_) {
+    on_state_changed_(agent_, stream_id_, 1, NICE_COMPONENT_STATE_FAILED,
+                      user_ptr_);
   }
-  g_source_attach(source, context);
-}
-
-void IceAgent::DisarmDtlsDeadline() {
-  GSource* source = dtls_timeout_source_.exchange(nullptr);
-  if (!source) return;
-  g_source_destroy(source);
-  g_source_unref(source);
-}
-
-gboolean IceAgent::DtlsDeadlineTickStatic(gpointer data) {
-  auto* self = static_cast<IceAgent*>(data);
-  // Returning G_SOURCE_REMOVE only releases the context's reference. Drop
-  // our owning reference as well, including when teardown has already begun.
-  self->DisarmDtlsDeadline();
-  if (self->destroyed_ || self->send_disabled_ || self->dtls_handshake_done_) {
-    return G_SOURCE_REMOVE;
-  }
-  LOG_ERROR("DTLS handshake timed out after {} ms, failing the connection",
-            kDtlsHandshakeTimeoutMs);
-  if (self->on_state_changed_) {
-    self->on_state_changed_(self->agent_, self->stream_id_, 1,
-                            NICE_COMPONENT_STATE_FAILED, self->user_ptr_);
-  }
-  return G_SOURCE_REMOVE;
 }
 
 void IceAgent::GenerateDtlsCertificate(int days_valid) {
@@ -1331,6 +1334,7 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
       IsDtlsRecord(reinterpret_cast<uint8_t*>(buffer), size);
   const bool use_dtls = ShouldUseDtls();
   if (use_dtls && looks_dtls) {
+    if (dtls_failed_ || send_disabled_ || destroyed_) return;
     if (dtls_started_) {
       {
         std::lock_guard<std::mutex> lk(dtls_mutex_);
@@ -1338,14 +1342,22 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
             std::vector<uint8_t>((uint8_t*)buffer, (uint8_t*)buffer + size));
       }
 
-      int ret = SSL_do_handshake(ssl_);
+      // After local completion, SSL_read still processes a retransmitted
+      // peer Finished and resends our final flight if its first copy was lost.
+      // DTLS application data is unused here; media travels through SRTP.
+      unsigned char unused;
+      ERR_clear_error();
+      int ret = dtls_handshake_done_ ? SSL_read(ssl_, &unused, sizeof(unused))
+                                     : SSL_do_handshake(ssl_);
       if (ret <= 0) {
         int err = SSL_get_error(ssl_, ret);
         if (err == SSL_ERROR_WANT_READ || err == SSL_ERROR_WANT_WRITE) {
+          dtls_timer_.Refresh();
           return;
         } else {
-          LOG_ERROR("SSL_do_handshake failed, err={}", err);
+          LOG_ERROR("DTLS packet processing failed, err={}", err);
           log_openssl_errors();
+          FailDtlsHandshake();
           return;
         }
       }
@@ -1377,18 +1389,48 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
   }
 }
 
+void IceAgent::DispatchIceCallback(std::function<void()> callback) {
+  GMainContext* context = gcontext_.load();
+  if (!context || destroyed_ || send_disabled_) return;
+  if (g_main_context_is_owner(context)) {
+    callback();
+    return;
+  }
+
+  // libnice emits signals on the caller's thread, including calls that add
+  // remote candidates. Serialize DTLS state and timer access with OnNiceRecv.
+  // DestroyIceAgent joins this context before releasing the agent; abandoned
+  // callbacks are deleted when the context's remaining sources are destroyed.
+  auto* task = new std::function<void()>(
+      [this, callback = std::move(callback)] {
+        if (!destroyed_ && !send_disabled_) callback();
+      });
+  g_main_context_invoke_full(
+      context, G_PRIORITY_DEFAULT,
+      [](gpointer data) -> gboolean {
+        (*static_cast<std::function<void()>*>(data))();
+        return G_SOURCE_REMOVE;
+      },
+      task,
+      [](gpointer data) { delete static_cast<std::function<void()>*>(data); });
+}
+
 void IceAgent::OnNiceStateChangedStatic(NiceAgent* agent, guint stream_id,
                                         guint component_id,
                                         NiceComponentState state,
                                         gpointer data) {
   auto* self = reinterpret_cast<IceAgent*>(data);
   if (self) {
-    self->OnNiceStateChanged(stream_id, component_id, state);
+    self->DispatchIceCallback([self, stream_id, component_id, state] {
+      self->OnNiceStateChanged(stream_id, component_id, state);
+    });
   }
 }
 
 void IceAgent::MaybeStartDtls() {
-  if (dtls_started_ || !ShouldUseDtls() || send_disabled_ || destroyed_) return;
+  if (dtls_started_ || dtls_failed_ || !ShouldUseDtls() || send_disabled_ ||
+      destroyed_)
+    return;
   const auto state = nice_agent_get_component_state(agent_, stream_id_, 1);
   if (state != NICE_COMPONENT_STATE_CONNECTED &&
       state != NICE_COMPONENT_STATE_READY)
@@ -1420,6 +1462,12 @@ void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
           nice_agent_punch_get_deadline(agent_, stream_id_, 1) / 1000;
   }
   MaybeStartDtls();
+  // Late ICE state changes must not revive a failed DTLS connection.
+  if (dtls_failed_) return;
+  if (state == NICE_COMPONENT_STATE_FAILED) {
+    dtls_failed_ = true;
+    dtls_timer_.Stop();
+  }
   if (state == NICE_COMPONENT_STATE_READY) MaybeStartPunch();
   if (on_state_changed_) {
     on_state_changed_(agent_, stream_id, component_id, state, user_ptr_);
@@ -1428,20 +1476,23 @@ void IceAgent::OnNiceStateChanged(guint stream_id, guint component_id,
 
 bool IceAgent::CompleteDtlsHandshake() {
   if (dtls_handshake_done_) return dtls_peer_verified_;
-  dtls_handshake_done_ = true;
+  if (dtls_failed_ || send_disabled_ || destroyed_) return false;
   X509* peer = SSL_get_peer_certificate(ssl_);
   if (!peer) {
     LOG_ERROR("DTLS peer certificate missing");
+    FailDtlsHandshake();
     return false;
   }
   const std::string fingerprint = ComputeFingerprint(peer);
   X509_free(peer);
   if (remote_fingerprint_.empty() || fingerprint != remote_fingerprint_) {
     LOG_ERROR("DTLS peer fingerprint mismatch");
+    FailDtlsHandshake();
     return false;
   }
   dtls_peer_verified_ = true;
-  DisarmDtlsDeadline();
+  dtls_handshake_done_ = true;
+  dtls_timer_.Stop();
   MaybeStartPunch();
   LOG_INFO("DTLS peer fingerprint verified");
   if (on_cb_dtls_done_) on_cb_dtls_done_(user_ptr_);
@@ -1452,22 +1503,29 @@ void IceAgent::OnNiceSelectedPairStatic(NiceAgent* agent, guint stream,
                                         guint component, const char* local,
                                         const char* remote, gpointer data) {
   auto* self = static_cast<IceAgent*>(data);
-  if (stream == self->stream_id_ && component == NICE_COMPONENT_TYPE_RTP) {
-    NiceCandidate *selected_local = nullptr, *selected_remote = nullptr;
-    if (!self->relay_selected_ms_ &&
-        nice_agent_get_selected_pair(agent, stream, component, &selected_local,
-                                     &selected_remote) &&
-        selected_local && selected_remote &&
-        (selected_local->type == NICE_CANDIDATE_TYPE_RELAYED ||
-         selected_remote->type == NICE_CANDIDATE_TYPE_RELAYED)) {
-      // Start the trigger delay at relay selection, before READY/DTLS finish.
-      self->relay_selected_ms_ = g_get_monotonic_time() / 1000;
-    }
-    self->MaybeStartDtls();
-  }
-  if (self->on_new_selected_pair_)
-    self->on_new_selected_pair_(agent, stream, component, local, remote,
-                                self->user_ptr_);
+  if (!self) return;
+  // Signal arguments belong to the emitting thread; retain the foundations
+  // until the owning ICE context has consumed the notification.
+  self->DispatchIceCallback(
+      [self, agent, stream, component, local = std::string(local ? local : ""),
+       remote = std::string(remote ? remote : "")] {
+        if (stream == self->stream_id_ && component == NICE_COMPONENT_TYPE_RTP) {
+          NiceCandidate *selected_local = nullptr, *selected_remote = nullptr;
+          if (!self->relay_selected_ms_ &&
+              nice_agent_get_selected_pair(agent, stream, component,
+                                           &selected_local, &selected_remote) &&
+              selected_local && selected_remote &&
+              (selected_local->type == NICE_CANDIDATE_TYPE_RELAYED ||
+               selected_remote->type == NICE_CANDIDATE_TYPE_RELAYED)) {
+            // Start the trigger delay at relay selection, before READY/DTLS finish.
+            self->relay_selected_ms_ = g_get_monotonic_time() / 1000;
+          }
+          self->MaybeStartDtls();
+        }
+        if (self->on_new_selected_pair_)
+          self->on_new_selected_pair_(agent, stream, component, local.c_str(),
+                                      remote.c_str(), self->user_ptr_);
+      });
 }
 
 void IceAgent::MaybeStartPunch() {

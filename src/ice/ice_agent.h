@@ -15,12 +15,14 @@
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
+#include <functional>
 #include <iostream>
 #include <mutex>
 #include <queue>
 #include <thread>
 #include <vector>
 
+#include "dtls_handshake_timer.h"
 #include "gio/gnetworking.h"
 #include "glib.h"
 #include "ice_server_config.h"
@@ -161,6 +163,7 @@ class IceAgent {
   FILE* file_out_ = nullptr;
 
  private:
+  void DispatchIceCallback(std::function<void()> callback);
   static void OnStunMappingStatic(NiceAgent* agent, NiceCandidate* sample,
                                   const gchar* server_ip, guint server_port,
                                   guint sequence, gpointer data);
@@ -184,13 +187,12 @@ class IceAgent {
   std::atomic<bool> dtls_started_{false};
   std::atomic<bool> dtls_handshake_done_{false};
   std::atomic<bool> dtls_peer_verified_{false};
+  std::atomic<bool> dtls_failed_{false};
   // A peer that never answers the DTLS handshake used to leave the session
   // hanging in CONNECTED forever, so the deadline fails it instead.
   static constexpr int64_t kDtlsHandshakeTimeoutMs = 20000;
-  std::atomic<GSource*> dtls_timeout_source_{nullptr};
-  static gboolean DtlsDeadlineTickStatic(gpointer data);
-  void ArmDtlsDeadline();
-  void DisarmDtlsDeadline();
+  DtlsHandshakeTimer dtls_timer_;
+  void FailDtlsHandshake();
   std::atomic<bool> remote_standard_srtp_key_layout_{false};
   std::string remote_fingerprint_;
   std::string punch_remote_ufrag_;
