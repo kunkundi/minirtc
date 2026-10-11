@@ -954,6 +954,20 @@ int PeerConnection::SendSignalMessage(const char* message, size_t size) {
   return 0;
 }
 
+int PeerConnection::ForceSignalReconnect() {
+  if (!ws_transport_) {
+    LOG_ERROR("Websocket transport is unavailable");
+    return -1;
+  }
+  // A live WebSocket can still have a failed login. Only an authenticated
+  // signaling connection is a no-op; the transport status alone is not enough.
+  if (SignalStatus::SignalConnected == GetSignalStatus()) {
+    return 0;
+  }
+  ws_transport_->ForceReconnect();
+  return 0;
+}
+
 int64_t PeerConnection::GetSystemTimeMicros() {
   if (clock_) {
     return clock_->CurrentTimeUs();

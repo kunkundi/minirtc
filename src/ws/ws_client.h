@@ -51,6 +51,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   int ReConnect();
 
+  // Reset the backoff ladder and retry now. Used when the user explicitly asks
+  // signaling to reconnect instead of waiting out the exponential delay.
+  void ForceReconnect();
+
   void AsyncReConnect();
 
   void Close();
@@ -100,10 +104,11 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   void CleanupPendingThreads();
 
-  void ScheduleReconnect(int delay_seconds);
+  void ScheduleReconnect(int delay_seconds, bool force = false);
 
  private:
-  std::unique_ptr<client> m_endpoint_;
+  // Also owned by the I/O worker until run() returns.
+  std::shared_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
 
   std::thread m_thread_;
@@ -113,6 +118,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::mutex pending_threads_mtx_;
   std::condition_variable reconnect_cv_;
   std::mutex reconnect_mtx_;
+  // Protected by reconnect_mtx_. A force request wakes an existing delay but
+  // does not start a second connection while the worker is already connecting.
+  bool reconnect_waiting_ = false;
+  bool reconnect_now_ = false;
   std::mutex shutdown_mtx_;
 
   std::string uri_;
