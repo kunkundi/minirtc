@@ -1166,7 +1166,9 @@ void IceAgent::DisarmDtlsDeadline() {
 
 gboolean IceAgent::DtlsDeadlineTickStatic(gpointer data) {
   auto* self = static_cast<IceAgent*>(data);
-  self->dtls_timeout_source_.store(nullptr);
+  // Returning G_SOURCE_REMOVE only releases the context's reference. Drop
+  // our owning reference as well, including when teardown has already begun.
+  self->DisarmDtlsDeadline();
   if (self->destroyed_ || self->send_disabled_ || self->dtls_handshake_done_) {
     return G_SOURCE_REMOVE;
   }

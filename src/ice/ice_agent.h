@@ -186,7 +186,7 @@ class IceAgent {
   std::atomic<bool> dtls_peer_verified_{false};
   // A peer that never answers the DTLS handshake used to leave the session
   // hanging in CONNECTED forever, so the deadline fails it instead.
-  static constexpr int64_t kDtlsHandshakeTimeoutMs = 10000;
+  static constexpr int64_t kDtlsHandshakeTimeoutMs = 20000;
   std::atomic<GSource*> dtls_timeout_source_{nullptr};
   static gboolean DtlsDeadlineTickStatic(gpointer data);
   void ArmDtlsDeadline();
