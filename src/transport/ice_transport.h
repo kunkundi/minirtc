@@ -90,6 +90,8 @@ class IceTransport {
   int RequestVideoKeyFrame(const std::string& stream_name);
 
   int RequestAllVideoKeyFrames();
+  int SetVideoSendPaused(bool paused);
+  int SetAudioSendPaused(bool paused);
   int UpdateVideoResolution(int width, int height);
   int UpdateVideoSettings(VideoQuality quality, int frame_rate,
                           VideoDegradationPreference preference);

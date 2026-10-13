@@ -36,6 +36,7 @@ class RtpPacketHistory {
 
  public:
   void SetRtt(webrtc::TimeDelta rtt);
+  void Clear() { packet_history_.clear(); }
   void PutRtpPacket(std::unique_ptr<webrtc::RtpPacketToSend> rtp_packet,
                     int64_t send_time);
   void MarkPacketAsSent(uint16_t sequence_number);

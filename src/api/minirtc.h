@@ -511,6 +511,26 @@ MINIRTC_API int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
                                     int frame_rate,
                                     VideoDegradationPreference preference);
 
+/** Pause/resume all outgoing video channels for one peer. New frames and stale
+ * encoder output are discarded while paused; queued video, RTX/FEC, probing
+ * and padding are stopped on the pacer queue. Resume requests fresh keyframes.
+ * Keeps the connection, capture source, audio/data and video settings intact.
+ * Returns 0 when accepted (pacer cleanup is asynchronous), -1 for an invalid
+ * peer/ID or unsupported transport. Idempotent; safe from received-data callbacks.
+ * Packets already handed to the network cannot be recalled.
+ */
+MINIRTC_API int SetVideoSendPaused(PeerPtr* peer_ptr, const char* remote_id,
+                                  size_t remote_id_size, bool paused);
+
+/** Pause/resume all outgoing audio channels for one peer. Paused PCM input and
+ * queued audio packets are discarded; resuming sends only fresh audio. Keeps
+ * capture, the connection and video/data intact. Returns 0 when applied, -1 for
+ * an invalid peer/ID or unsupported transport. Idempotent; safe from received-data
+ * callbacks. Packets already handed to the network cannot be recalled.
+ */
+MINIRTC_API int SetAudioSendPaused(PeerPtr* peer_ptr, const char* remote_id,
+                                  size_t remote_id_size, bool paused);
+
 /** Bound outgoing video for one peer to a physical-pixel viewport. Preserves
  * aspect ratio and never upscales; quality/network adaptation may send less.
  * width/height must both be 0 (restore source size), or both in [2, 16384].

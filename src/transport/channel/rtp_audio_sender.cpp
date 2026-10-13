@@ -30,8 +30,22 @@ RtpAudioSender::~RtpAudioSender() { SSRCManager::Instance().DeleteSsrc(ssrc_); }
 void RtpAudioSender::Enqueue(
     std::vector<std::unique_ptr<RtpPacket>>& rtp_packets,
     int64_t media_time_us) {
+  std::lock_guard lock(send_mutex_);
+  if (paused_) return;
   for (auto& rtp_packet : rtp_packets) {
-    rtp_packet_queue_.push({std::move(rtp_packet), media_time_us});
+    rtp_packet_queue_.push({std::move(rtp_packet), media_time_us, generation_});
+  }
+}
+
+void RtpAudioSender::SetPaused(bool paused) {
+  std::lock_guard lock(send_mutex_);
+  if (paused_ == paused) return;
+  paused_ = paused;
+  if (paused) {
+    ++generation_;
+    // Drain to release packet storage; also invalidate a packet already popped
+    // by Process() if pause/resume happens before its send begins.
+    while (rtp_packet_queue_.pop()) {}
   }
 }
 
@@ -41,6 +55,8 @@ void RtpAudioSender::SetSendDataFunc(
 }
 
 int RtpAudioSender::SendRtpPacket(QueuedAudioPacket queued_packet) {
+  std::lock_guard lock(send_mutex_);
+  if (paused_ || queued_packet.generation != generation_) return 0;
   if (!data_send_func_ || !queued_packet.packet) {
     LOG_ERROR("data_send_func_ is nullptr");
     return -1;
@@ -116,13 +132,15 @@ int RtpAudioSender::SendRtcpSR(SenderReport& rtcp_sr) {
 }
 
 bool RtpAudioSender::Process() {
-  for (size_t i = 0; i < 10; i++)
-    if (!rtp_packet_queue_.isEmpty()) {
-      std::optional<QueuedAudioPacket> queued_packet = rtp_packet_queue_.pop();
-      if (queued_packet) {
-        SendRtpPacket(std::move(*queued_packet));
-      }
+  for (size_t i = 0; i < 10; i++) {
+    std::optional<QueuedAudioPacket> queued_packet;
+    {
+      std::lock_guard lock(send_mutex_);
+      queued_packet = rtp_packet_queue_.pop();
     }
+    if (!queued_packet) break;
+    SendRtpPacket(std::move(*queued_packet));
+  }
 
   return true;
 }

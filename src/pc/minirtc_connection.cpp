@@ -115,6 +115,14 @@ int MiniRtcConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ice_transport_->RequestVideoKeyFrame(stream_id ? stream_id : "");
 }
 
+int MiniRtcConnection::SetVideoSendPaused(bool paused) {
+  return ice_transport_ ? ice_transport_->SetVideoSendPaused(paused) : -1;
+}
+
+int MiniRtcConnection::SetAudioSendPaused(bool paused) {
+  return ice_transport_ ? ice_transport_->SetAudioSendPaused(paused) : -1;
+}
+
 int MiniRtcConnection::UpdateVideoResolution(int width, int height) {
   return ice_transport_ ? ice_transport_->UpdateVideoResolution(width, height) : -1;
 }

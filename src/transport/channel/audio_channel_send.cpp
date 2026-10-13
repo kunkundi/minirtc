@@ -53,6 +53,10 @@ void AudioChannelSend::Destroy() {
   }
 }
 
+void AudioChannelSend::SetSendPaused(bool paused) {
+  if (rtp_audio_sender_) rtp_audio_sender_->SetPaused(paused);
+}
+
 int AudioChannelSend::SendAudio(char* data, size_t size,
                                 uint32_t samples_per_channel,
                                 int64_t captured_timestamp_us) {

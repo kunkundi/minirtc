@@ -65,6 +65,8 @@ class VideoChannelSend : public MediaChannel {
   void Destroy() override;
   void SetFecEnabled(bool enabled) override { fec_enabled_ = enabled; }
   void SetFecProtection(const FecProtectionConfig& config) override;
+  // Called on the pacer queue when pausing this peer's video.
+  void ResetSendState();
 
   void SetAbsoluteSendTimeExtensionId(
       std::optional<uint8_t> extension_id) override;

@@ -46,6 +46,8 @@ class MediaChannel {
   // Invoked on the serialized pacer queue after initialization.
   virtual void SetFecProtection(const FecProtectionConfig& config) {}
 
+  virtual void SetSendPaused(bool paused) {}
+
   virtual void Destroy() { LOG_INFO("Destroy() default implementation"); }
 
   virtual void SetAbsoluteSendTimeExtensionId(

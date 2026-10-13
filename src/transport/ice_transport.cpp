@@ -1784,6 +1784,16 @@ int IceTransport::RequestVideoKeyFrame(const std::string& stream_name) {
   return 0;
 }
 
+int IceTransport::SetVideoSendPaused(bool paused) {
+  return ice_transport_controller_
+             ? ice_transport_controller_->SetVideoSendPaused(paused) : -1;
+}
+
+int IceTransport::SetAudioSendPaused(bool paused) {
+  return ice_transport_controller_
+             ? ice_transport_controller_->SetAudioSendPaused(paused) : -1;
+}
+
 int IceTransport::UpdateVideoResolution(int width, int height) {
   return ice_transport_controller_ ? ice_transport_controller_->UpdateVideoResolution(width, height) : -1;
 }

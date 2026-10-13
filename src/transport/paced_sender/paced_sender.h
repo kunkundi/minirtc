@@ -72,7 +72,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
                   const webrtc::PacedPacketInfo& cluster_info) override {
-    if (is_shutdown_.load()) {
+    if (is_shutdown_.load() || ShouldDropVideoPacket(*packet)) {
       return;
     }
     if (packet->packet_type() == webrtc::RtpPacketMediaType::kForwardErrorCorrection) {
@@ -144,6 +144,9 @@ class PacedSender : public webrtc::RtpPacketPacer,
 
   void CreateProbeClusters(
       std::vector<webrtc::ProbeClusterConfig> probe_cluster_configs) override;
+
+  void SetVideoSendPaused(bool paused, const std::vector<uint32_t>& ssrcs,
+                          webrtc::Timestamp pause_time);
 
   // Temporarily pause all sending.
   void Pause() override;
@@ -262,6 +265,13 @@ class PacedSender : public webrtc::RtpPacketPacer,
   mutable std::mutex stats_mutex_;
   // Protects against ProcessPackets reentry from packet sent receipts.
   bool processing_packets_ = false;
+  bool video_send_paused_ = false;  // Accessed only on the pacer queue.
+  webrtc::Timestamp video_pause_time_ = webrtc::Timestamp::MinusInfinity();
+  bool ShouldDropVideoPacket(const webrtc::RtpPacketToSend& packet) const {
+    return packet.packet_type() != webrtc::RtpPacketMediaType::kAudio &&
+           (video_send_paused_ || (video_pause_time_.IsFinite() &&
+                                  packet.capture_time() <= video_pause_time_));
+  }
 
   std::shared_ptr<TaskQueue> task_queue_pacer_;
   int64_t transport_seq_ = 0;

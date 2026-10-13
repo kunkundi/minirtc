@@ -8,6 +8,7 @@
 #define _RTP_AUDIO_SENDER_H_
 
 #include <functional>
+#include <mutex>
 #include <optional>
 
 #include "clock/system_clock.h"
@@ -31,6 +32,7 @@ class RtpAudioSender : public ThreadBase {
   void Enqueue(std::vector<std::unique_ptr<RtpPacket>> &rtp_packets,
                int64_t media_time_us);
   void SetSendDataFunc(std::function<int(const char *, size_t)> data_send_func);
+  void SetPaused(bool paused);
   uint32_t GetSsrc() { return ssrc_; }
   void SetAbsoluteSendTimeExtensionId(
       std::optional<uint8_t> extension_id) {
@@ -42,6 +44,7 @@ class RtpAudioSender : public ThreadBase {
   struct QueuedAudioPacket {
     std::unique_ptr<RtpPacket> packet;
     int64_t media_time_us = 0;
+    uint64_t generation = 0;
   };
 
   int SendRtpPacket(QueuedAudioPacket queued_packet);
@@ -53,6 +56,9 @@ class RtpAudioSender : public ThreadBase {
  private:
   std::function<int(const char *, size_t)> data_send_func_ = nullptr;
   RingBuffer<QueuedAudioPacket> rtp_packet_queue_;
+  std::mutex send_mutex_;
+  bool paused_ = false;
+  uint64_t generation_ = 0;
 
  private:
   uint32_t ssrc_ = 0;

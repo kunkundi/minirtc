@@ -194,6 +194,22 @@ int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
       std::string(remote_id, remote_id_size), quality, frame_rate, preference);
 }
 
+int SetVideoSendPaused(PeerPtr* peer_ptr, const char* remote_id,
+                       size_t remote_id_size, bool paused) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size)
+    return -1;
+  return peer_ptr->peer_connection->SetVideoSendPaused(
+      std::string(remote_id, remote_id_size), paused);
+}
+
+int SetAudioSendPaused(PeerPtr* peer_ptr, const char* remote_id,
+                       size_t remote_id_size, bool paused) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size)
+    return -1;
+  return peer_ptr->peer_connection->SetAudioSendPaused(
+      std::string(remote_id, remote_id_size), paused);
+}
+
 int UpdateVideoResolution(PeerPtr* peer_ptr, const char* remote_id,
                           size_t remote_id_size, int width, int height) {
   if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size ||

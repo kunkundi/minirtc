@@ -61,6 +61,16 @@ void VideoChannelSend::SetFecProtection(const FecProtectionConfig& config) {
   fec_state_->sender.SetProtection(config, clock_->CurrentTimeMs());
 }
 
+void VideoChannelSend::ResetSendState() {
+  if (fec_state_) fec_state_->sender.Reset();
+  {
+    std::lock_guard lock(pending_nacks_mtx_);
+    pending_nack_sequence_numbers_.clear();
+  }
+  if (task_queue_history_ && !history_shutdown_.load())
+    task_queue_history_->PostTask([this] { rtp_packet_history_.Clear(); });
+}
+
 VideoChannelSend::VideoChannelSend(
     const std::string& channel_name, std::shared_ptr<SystemClock> clock,
     std::shared_ptr<IceAgent> ice_agent,

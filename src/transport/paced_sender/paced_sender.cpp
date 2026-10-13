@@ -102,7 +102,7 @@ void PacedSender::SetGeneratePaddingFunc(
 std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
 PacedSender::GeneratePadding(webrtc::DataSize size) {
   std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> to_send_rtp_packets;
-  if (is_shutdown_.load()) {
+  if (is_shutdown_.load() || video_send_paused_) {
     return to_send_rtp_packets;
   }
   const webrtc::Timestamp padding_time = clock_->CurrentTime();
@@ -160,6 +160,7 @@ void PacedSender::CreateProbeClusters(
     std::vector<webrtc::ProbeClusterConfig> probe_cluster_configs) {
   RunOrPost([this, probe_cluster_configs = std::move(probe_cluster_configs)]()
                 mutable {
+    if (video_send_paused_) return;
     if (!transport_ready_) {
       for (const auto& config : probe_cluster_configs) {
         LOG_WARN(
@@ -172,6 +173,25 @@ void PacedSender::CreateProbeClusters(
       return;
     }
     pacing_controller_.CreateProbeClusters(probe_cluster_configs);
+    MaybeScheduleProcessPackets();
+  });
+}
+
+void PacedSender::SetVideoSendPaused(bool paused,
+                                    const std::vector<uint32_t>& ssrcs,
+                                    webrtc::Timestamp pause_time) {
+  RunOrPost([this, paused, ssrcs, pause_time] {
+    if (video_send_paused_ == paused) return;
+    video_send_paused_ = paused;
+    if (paused) {
+      // Use the API request time: a busy pacer can process pause/resume after
+      // the encoder has already produced the first fresh recovery keyframe.
+      video_pause_time_ = pause_time;
+      pacing_controller_.AbortProbing("video_paused");
+      for (uint32_t ssrc : ssrcs)
+        pacing_controller_.RemovePacketsForSsrc(ssrc);
+      UpdateStats();
+    }
     MaybeScheduleProcessPackets();
   });
 }
@@ -227,6 +247,9 @@ void PacedSender::EnqueuePacketsOnQueue(
 
 void PacedSender::EnqueuePacketOnQueue(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+  // Also discard retransmissions posted late by the history queue, including
+  // after a quick pause/resume. They still carry the old capture timestamp.
+  if (ShouldDropVideoPacket(*packet)) return;
   packet->set_transport_sequence_number(transport_seq_++);
   size_t packet_size = packet->payload_size() + packet->padding_size();
   if (include_overhead_) {

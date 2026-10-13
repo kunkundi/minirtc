@@ -729,6 +729,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     return -1;
   }
 
+  if (video_send_paused_) return 0;
   context->last_capture_time = clock_->CurrentTimeMs();
   // Encoder minimum rates must not defeat an exhausted transport allocation.
   if (context->desired_target_bitrate && *context->desired_target_bitrate <= 0)
@@ -899,7 +900,8 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
 
         {
           std::shared_lock lock(self->stream_senders_mutex_);
-          if (context->video_settings_generation != settings_generation) return;
+          if (self->video_send_paused_ ||
+              context->video_settings_generation != settings_generation) return;
         }
         // The transport may have become unavailable after frame admission.
         // Restore the request consumed above so the next frame can resync.
@@ -1958,6 +1960,7 @@ int IceTransportController::OnVideoEncoded(
 
   {
     std::unique_lock lock(stream_senders_mutex_);
+    if (video_send_paused_) return 0;
     auto it = stream_senders_.find(channel_name);
     if (it == stream_senders_.end() || it->second != context ||
         !context->transceiver ||
@@ -2114,6 +2117,7 @@ int IceTransportController::OnVideoEncoded(
   if (!is_running_.load()) {
     return -1;
   }
+  if (video_send_paused_) return 0;
 
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || it->second != context ||
@@ -2133,6 +2137,7 @@ int IceTransportController::SendAudio(const MiniRtcAudioFrame* audio_frame,
   }
 
   std::shared_lock lock(stream_senders_mutex_);
+  if (audio_send_paused_) return 0;
   auto it = stream_senders_.find(channel_name);
   if (it == stream_senders_.end() || !it->second) {
     if (!is_running_.load()) {
@@ -2677,6 +2682,61 @@ bool IceTransportController::InstallSrtpSessions() {
   return true;
 }
 
+int IceTransportController::SetVideoSendPaused(bool paused) {
+  std::unique_lock lock(stream_senders_mutex_);
+  if (!is_running_.load() || !task_queue_pacer_ || !paced_sender_) return -1;
+  if (video_send_paused_ == paused) return 0;
+
+  std::vector<uint32_t> ssrcs;
+  std::vector<std::shared_ptr<VideoChannelSend>> channels;
+  for (auto& [name, context] : stream_senders_) {
+    if (!context || context->type != StreamType::kVideo) continue;
+    if (context->ssrc) ssrcs.push_back(*context->ssrc);
+    if (context->rtx_ssrc) ssrcs.push_back(*context->rtx_ssrc);
+    if (context->transceiver)
+      channels.push_back(
+          std::static_pointer_cast<VideoChannelSend>(context->transceiver));
+  }
+  // Serialize purge/resume with packet delivery, without waiting on a pacer
+  // callback that may itself need stream_senders_mutex_. Posting under this
+  // lock also preserves the order of concurrent pause/resume calls.
+  if (!task_queue_pacer_->PostTask(
+          [pacer = paced_sender_, paused, pause_time = webrtc_clock_->CurrentTime(),
+           ssrcs = std::move(ssrcs),
+           channels = std::move(channels)] {
+            pacer->SetVideoSendPaused(paused, ssrcs, pause_time);
+            if (paused)
+              for (auto& channel : channels) channel->ResetSendState();
+          })) return -1;
+
+  video_send_paused_ = paused;
+  video_frame_cadences_.clear();
+  for (auto& [name, context] : stream_senders_) {
+    if (!context || context->type != StreamType::kVideo) continue;
+    // Invalidate queued raw frames and late asynchronous encoder callbacks,
+    // even if they finish after a quick pause/resume cycle.
+    ++context->video_settings_generation;
+    if (!paused) {
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      FullIntraRequest(name);
+    }
+  }
+  return 0;
+}
+
+int IceTransportController::SetAudioSendPaused(bool paused) {
+  std::unique_lock lock(stream_senders_mutex_);
+  if (!is_running_.load()) return -1;
+  if (audio_send_paused_ == paused) return 0;
+  for (auto& [name, context] : stream_senders_)
+    if (context && context->type == StreamType::kAudio && context->transceiver)
+      context->transceiver->SetSendPaused(paused);
+  audio_send_paused_ = paused;
+  return 0;
+}
+
 int IceTransportController::UpdateVideoResolution(int width, int height) {
   if (!is_running_.load() ||
       !((width == 0 && height == 0) ||
@@ -3140,6 +3200,7 @@ void IceTransportController::OnReceiveNack(
     uint32_t media_ssrc,
     const std::vector<uint16_t>& nack_sequence_numbers) {
   std::shared_lock lock(stream_senders_mutex_);
+  if (video_send_paused_) return;
   for (auto& [channel_name, context] : stream_senders_) {
     if (context && context->type == StreamType::kVideo &&
         context->transceiver && context->ssrc.value_or(0) == media_ssrc) {

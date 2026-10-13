@@ -116,6 +116,8 @@ class IceTransportController
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);
 
+  int SetVideoSendPaused(bool paused);
+  int SetAudioSendPaused(bool paused);
   int UpdateVideoResolution(int width, int height);
   int UpdateVideoSettings(VideoQuality quality, int frame_rate,
                           VideoDegradationPreference preference);
@@ -534,6 +536,9 @@ class IceTransportController
   bool video_encoder_hardware_ = false;
   // Guarded by stream_senders_mutex_, separately for each display.
   std::unordered_map<std::string, VideoFrameCadence> video_frame_cadences_;
+  // Guarded by stream_senders_mutex_; each controller owns one peer's send state.
+  bool video_send_paused_ = false;
+  bool audio_send_paused_ = false;
   bool native_video_output_;
 
  private:

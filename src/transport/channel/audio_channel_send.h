@@ -30,6 +30,7 @@ class AudioChannelSend : public MediaChannel {
   void Initialize(rtp::PAYLOAD_TYPE payload_type,
                   std::shared_ptr<PacedSender> packet_sender) override;
   void Destroy() override;
+  void SetSendPaused(bool paused) override;
 
   void SetAbsoluteSendTimeExtensionId(
       std::optional<uint8_t> extension_id) override;
