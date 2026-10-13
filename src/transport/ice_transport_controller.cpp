@@ -2785,6 +2785,15 @@ int IceTransportController::UpdateVideoSettings(
     VideoQuality quality, int frame_rate,
     VideoDegradationPreference preference) {
   if (!is_running_.load() || !task_queue_encode_) return -1;
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+    // Bandwidth/audio-only subscriptions do not need an encode-queue round
+    // trip. Compare actual encoder settings, since legacy settings messages
+    // can change them independently of the last preview subscription.
+    if (video_quality_ == quality && media_config_.max_frame_rate == frame_rate &&
+        media_config_.video_degradation_preference == preference)
+      return 0;
+  }
   auto completion = std::make_shared<std::promise<int>>();
   auto result = completion->get_future();
   std::weak_ptr<IceTransportController> weak = shared_from_this();
