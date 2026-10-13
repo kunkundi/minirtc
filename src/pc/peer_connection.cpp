@@ -811,6 +811,14 @@ int PeerConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ret;
 }
 
+int PeerConnection::UpdateVideoResolution(const std::string& remote_id,
+                                           int width, int height) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(remote_id);
+  if (it == peer_connection_map_.end() || !it->second) return -1;
+  return it->second->UpdateVideoResolution(width, height);
+}
+
 int PeerConnection::UpdateVideoSettings(const std::string& remote_id,
                                         VideoQuality quality, int frame_rate,
                                         VideoDegradationPreference preference) {

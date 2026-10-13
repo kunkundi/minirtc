@@ -194,6 +194,16 @@ int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
       std::string(remote_id, remote_id_size), quality, frame_rate, preference);
 }
 
+int UpdateVideoResolution(PeerPtr* peer_ptr, const char* remote_id,
+                          size_t remote_id_size, int width, int height) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size ||
+      !((width == 0 && height == 0) ||
+        (width >= 2 && height >= 2 && width <= 16384 && height <= 16384)))
+    return -1;
+  return peer_ptr->peer_connection->UpdateVideoResolution(
+      std::string(remote_id, remote_id_size), width, height);
+}
+
 int RequestAllVideoKeyFrames(PeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");

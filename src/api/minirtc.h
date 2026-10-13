@@ -511,6 +511,18 @@ MINIRTC_API int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
                                     int frame_rate,
                                     VideoDegradationPreference preference);
 
+/** Bound outgoing video for one peer to a physical-pixel viewport. Preserves
+ * aspect ratio and never upscales; quality/network adaptation may send less.
+ * width/height must both be 0 (restore source size), or both in [2, 16384].
+ * Applied independently to each display. Requests fresh keyframes for this
+ * peer, including when the bound is unchanged. Does not change the desktop mode.
+ * Returns 0 on success, -1 for invalid input, unknown peer or unsupported
+ * transport. Safe from the received-data callback.
+ */
+MINIRTC_API int UpdateVideoResolution(PeerPtr* peer_ptr, const char* remote_id,
+                                      size_t remote_id_size, int width,
+                                      int height);
+
 /// Request local key frames for all outgoing video streams on current peers.
 /// Return values and asynchronous behavior follow RequestVideoKeyFrame.
 MINIRTC_API int RequestAllVideoKeyFrames(PeerPtr* peer_ptr);

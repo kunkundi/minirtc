@@ -1784,6 +1784,10 @@ int IceTransport::RequestVideoKeyFrame(const std::string& stream_name) {
   return 0;
 }
 
+int IceTransport::UpdateVideoResolution(int width, int height) {
+  return ice_transport_controller_ ? ice_transport_controller_->UpdateVideoResolution(width, height) : -1;
+}
+
 int IceTransport::UpdateVideoSettings(VideoQuality quality, int frame_rate,
                                       VideoDegradationPreference preference) {
   return ice_transport_controller_

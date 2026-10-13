@@ -116,6 +116,7 @@ class IceTransportController
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);
 
+  int UpdateVideoResolution(int width, int height);
   int UpdateVideoSettings(VideoQuality quality, int frame_rate,
                           VideoDegradationPreference preference);
 
@@ -225,8 +226,8 @@ class IceTransportController
 
     std::optional<int> target_width;
     std::optional<int> target_height;
-    int source_width = 0;   // original capture width  (aspect-ratio anchor)
-    int source_height = 0;  // original capture height (aspect-ratio anchor)
+    int source_width = 0;   // capture fitted to this peer's viewport bound
+    int source_height = 0;  // aspect-ratio anchor for further adaptation
     std::optional<int64_t> last_active_time;
     std::optional<int64_t> last_capture_time;
     std::optional<int> desired_target_bitrate;
@@ -496,6 +497,9 @@ class IceTransportController
   std::atomic<int> relay_path_state_{-1};
   std::atomic<int64_t> video_transport_bitrate_bps_{MINIRTC_INIT_BITRATE};
   std::optional<webrtc::NetworkEstimate> video_network_estimate_;
+  // Physical viewport bound for this peer; guarded by stream_senders_mutex_.
+  int video_resolution_width_ = 0;
+  int video_resolution_height_ = 0;
   VideoQuality video_quality_;
 
   std::vector<uint8_t> local_key_;

@@ -11,6 +11,7 @@
 #include "native_video_frame.h"
 #include "resolution_adapter.h"
 #include "video_adaptation_policy.h"
+#include "video_resolution_limit.h"
 #include "video_frame_wrapper.h"
 
 #if defined(__APPLE__)
@@ -781,16 +782,19 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
             ? static_cast<int64_t>(video_frame->captured_timestamp)
             : clock_->CurrentTimeUs());
 
-    // Save the original capture resolution so later resolution changes keep the
-    // same aspect ratio.
+    // Adapt against the viewer's useful source size. This keeps recovery and
+    // bandwidth probes from repeatedly trying to exceed the viewport ceiling.
+    const auto [source_width, source_height] = FitVideoResolution(
+        raw_frame.Width(), raw_frame.Height(), video_resolution_width_,
+        video_resolution_height_);
     if (context->source_width <= 0 || context->source_height <= 0 ||
-        context->source_width != raw_frame.Width() ||
-        context->source_height != raw_frame.Height()) {
+        context->source_width != source_width ||
+        context->source_height != source_height) {
       if (context->startup_keyframe_pending) {
         context->FinishStartupKeyframe();
       }
-      context->source_width = raw_frame.Width();
-      context->source_height = raw_frame.Height();
+      context->source_width = source_width;
+      context->source_height = source_height;
       context->source_resolution_initialized_ms = clock_->CurrentTimeMs();
       context->initial_resolution_recovery = true;
       context->native_resolution_probe_attempted = false;
@@ -872,8 +876,14 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     std::shared_ptr<TaskQueueLockFree> encode_queue = task_queue_encode_;
 
     const uint64_t settings_generation = context->video_settings_generation;
-    const int target_width = context->target_width.value_or(0);
-    const int target_height = context->target_height.value_or(0);
+    // Clamp even the first frame and any stale adaptation target after a
+    // display/viewport change. Scaling happens once, on the encode queue.
+    const auto target_resolution = FitVideoResolution(
+        source_width, source_height,
+        context->target_width.value_or(source_width),
+        context->target_height.value_or(source_height));
+    const int target_width = target_resolution.first;
+    const int target_height = target_resolution.second;
     auto post_encode = [weak_self, weak_context, encode_queue, channel_name,
                         force_i_frame, target_width, target_height,
                         settings_generation](RawFrame&& frame) mutable {
@@ -903,7 +913,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         }
         const bool needs_scaling =
             target_width > 0 && target_height > 0 &&
-            target_width < frame.Width() && target_height < frame.Height();
+            (target_width < frame.Width() || target_height < frame.Height());
         if (const auto* native_frame = frame.NativeFrame();
             native_frame &&
             (needs_scaling ||
@@ -2665,6 +2675,34 @@ bool IceTransportController::InstallSrtpSessions() {
   ssrc_to_srtp_sender_.swap(senders);
   ssrc_to_srtp_receiver_.swap(receivers);
   return true;
+}
+
+int IceTransportController::UpdateVideoResolution(int width, int height) {
+  if (!is_running_.load() ||
+      !((width == 0 && height == 0) ||
+        (width >= 2 && height >= 2 && width <= 16384 && height <= 16384)))
+    return -1;
+  std::unique_lock lock(stream_senders_mutex_);
+  const bool changed = video_resolution_width_ != width ||
+                       video_resolution_height_ != height;
+  video_resolution_width_ = width;
+  video_resolution_height_ = height;
+  for (auto& [name, context] : stream_senders_) {
+    if (!context || context->type != StreamType::kVideo) continue;
+    // Discard pending output at the old dimensions. The next admitted frame
+    // resets adaptation with the new bound and produces a fresh keyframe.
+    if (changed) {
+      ++context->video_settings_generation;
+      context->source_width = context->source_height = 0;
+      context->target_width.reset();
+      context->target_height.reset();
+      context->mapped_target_width.reset();
+      context->mapped_target_height.reset();
+    }
+    // Also refresh unchanged dimensions when a paused subscription resumes.
+    FullIntraRequest(name);
+  }
+  return 0;
 }
 
 int IceTransportController::UpdateVideoSettings(
