@@ -811,6 +811,14 @@ int PeerConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ret;
 }
 
+int PeerConnection::UpdateVideoBitrateLimit(const std::string& remote_id,
+                                           int max_bitrate_bps) {
+  std::shared_lock lock(peer_connection_map_mutex_);
+  auto it = peer_connection_map_.find(remote_id);
+  if (it == peer_connection_map_.end() || !it->second) return -1;
+  return it->second->UpdateVideoBitrateLimit(max_bitrate_bps);
+}
+
 int PeerConnection::SetVideoSendPaused(const std::string& remote_id, bool paused) {
   std::shared_lock lock(peer_connection_map_mutex_);
   auto it = peer_connection_map_.find(remote_id);

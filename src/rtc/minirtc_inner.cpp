@@ -194,6 +194,15 @@ int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
       std::string(remote_id, remote_id_size), quality, frame_rate, preference);
 }
 
+int UpdateVideoBitrateLimit(PeerPtr* peer_ptr, const char* remote_id,
+                            size_t remote_id_size, int max_bitrate_bps) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size ||
+      max_bitrate_bps < 0 || max_bitrate_bps > 100'000'000)
+    return -1;
+  return peer_ptr->peer_connection->UpdateVideoBitrateLimit(
+      std::string(remote_id, remote_id_size), max_bitrate_bps);
+}
+
 int SetVideoSendPaused(PeerPtr* peer_ptr, const char* remote_id,
                        size_t remote_id_size, bool paused) {
   if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size)

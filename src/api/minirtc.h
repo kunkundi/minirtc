@@ -511,6 +511,16 @@ MINIRTC_API int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
                                     int frame_rate,
                                     VideoDegradationPreference preference);
 
+/** Set the combined video bandwidth budget for one peer, including FEC/RTX.
+ * 0 removes the limit; otherwise accepts [1, 100000000] bits per second.
+ * Congestion control may allocate less. This is a sustained video target,
+ * not a packet shaper; audio and data are independent. Returns 0 when queued,
+ * -1 for invalid input, an unknown peer or an unsupported transport.
+ */
+MINIRTC_API int UpdateVideoBitrateLimit(PeerPtr* peer_ptr, const char* remote_id,
+                                       size_t remote_id_size,
+                                       int max_bitrate_bps);
+
 /** Pause/resume all outgoing video channels for one peer. New frames and stale
  * encoder output are discarded while paused; queued video, RTX/FEC, probing
  * and padding are stopped on the pacer queue. Resume requests fresh keyframes.

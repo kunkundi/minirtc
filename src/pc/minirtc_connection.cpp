@@ -115,6 +115,10 @@ int MiniRtcConnection::RequestVideoKeyFrame(const char* stream_id) {
   return ice_transport_->RequestVideoKeyFrame(stream_id ? stream_id : "");
 }
 
+int MiniRtcConnection::UpdateVideoBitrateLimit(int max_bitrate_bps) {
+  return ice_transport_ ? ice_transport_->UpdateVideoBitrateLimit(max_bitrate_bps) : -1;
+}
+
 int MiniRtcConnection::SetVideoSendPaused(bool paused) {
   return ice_transport_ ? ice_transport_->SetVideoSendPaused(paused) : -1;
 }

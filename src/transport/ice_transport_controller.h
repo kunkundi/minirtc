@@ -116,6 +116,7 @@ class IceTransportController
   int SendReliableData(const char* data, size_t size,
                        const std::string& channel_name);
 
+  int UpdateVideoBitrateLimit(int max_bitrate_bps);
   int SetVideoSendPaused(bool paused);
   int SetAudioSendPaused(bool paused);
   int UpdateVideoResolution(int width, int height);
@@ -550,6 +551,7 @@ class IceTransportController
   bool audio_codec_inited_ = false;
 
  private:
+  int video_bitrate_limit_bps_ = 0;  // Accessed only on the congestion queue.
   int64_t target_bitrate_ = 0;
   int64_t available_transport_bitrate_ = 0;
 

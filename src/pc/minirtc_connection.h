@@ -34,6 +34,7 @@ class MiniRtcConnection : public ConnectionInterface {
                      const char* stream_id) override;
   int RequestVideoKeyFrame(const char* stream_id) override;
   int RequestAllVideoKeyFrames() override;
+  int UpdateVideoBitrateLimit(int max_bitrate_bps) override;
   int SetVideoSendPaused(bool paused) override;
   int SetAudioSendPaused(bool paused) override;
   int UpdateVideoResolution(int width, int height) override;

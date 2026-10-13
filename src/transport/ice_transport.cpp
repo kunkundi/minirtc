@@ -1784,6 +1784,10 @@ int IceTransport::RequestVideoKeyFrame(const std::string& stream_name) {
   return 0;
 }
 
+int IceTransport::UpdateVideoBitrateLimit(int max_bitrate_bps) {
+  return ice_transport_controller_ ? ice_transport_controller_->UpdateVideoBitrateLimit(max_bitrate_bps) : -1;
+}
+
 int IceTransport::SetVideoSendPaused(bool paused) {
   return ice_transport_controller_
              ? ice_transport_controller_->SetVideoSendPaused(paused) : -1;

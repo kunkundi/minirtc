@@ -90,6 +90,7 @@ class IceTransport {
   int RequestVideoKeyFrame(const std::string& stream_name);
 
   int RequestAllVideoKeyFrames();
+  int UpdateVideoBitrateLimit(int max_bitrate_bps);
   int SetVideoSendPaused(bool paused);
   int SetAudioSendPaused(bool paused);
   int UpdateVideoResolution(int width, int height);

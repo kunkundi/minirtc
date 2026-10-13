@@ -2682,6 +2682,22 @@ bool IceTransportController::InstallSrtpSessions() {
   return true;
 }
 
+int IceTransportController::UpdateVideoBitrateLimit(int max_bitrate_bps) {
+  if (!is_running_.load() || !task_queue_cc_ || max_bitrate_bps < 0 ||
+      max_bitrate_bps > 100'000'000) return -1;
+  std::weak_ptr<IceTransportController> weak = shared_from_this();
+  return task_queue_cc_->PostTask([weak, max_bitrate_bps] {
+    auto self = weak.lock();
+    if (!self || !self->is_running_.load()) return;
+    if (self->video_bitrate_limit_bps_ == max_bitrate_bps) return;
+    self->video_bitrate_limit_bps_ = max_bitrate_bps;
+    if (self->paced_sender_)
+      self->paced_sender_->SetProbeBitrateLimit(max_bitrate_bps);
+    self->UpdateFecProtection();
+    self->UpdateVideoBitrateAllocation();
+  }) ? 0 : -1;
+}
+
 int IceTransportController::SetVideoSendPaused(bool paused) {
   std::unique_lock lock(stream_senders_mutex_);
   if (!is_running_.load() || !task_queue_pacer_ || !paced_sender_) return -1;
@@ -3753,8 +3769,10 @@ void IceTransportController::UpdateFecProtection() {
     // payload plus 100 RTP packets/s headers conservatively, per active stream.
     const int64_t other =
         int64_t(audio) * 64000 + (data ? target_bitrate_ / 10 : 0);
-    const int64_t share =
-        std::max<int64_t>(0, target_bitrate_ - other) / std::max(1, videos);
+    int64_t video_budget = std::max<int64_t>(0, target_bitrate_ - other);
+    const int limit = video_bitrate_limit_bps_;
+    if (limit > 0) video_budget = std::min<int64_t>(video_budget, limit);
+    const int64_t share = video_budget / std::max(1, videos);
     for (const auto &item : stream_senders_) {
       const auto &c = item.second;
       if (!c || c->type != StreamType::kVideo || !c->transceiver)
@@ -3833,7 +3851,7 @@ void IceTransportController::UpdateFecProtection() {
       startup.source_ratio = mode == FecMode::kOff     ? 0
                              : mode == FecMode::kFixed ? 0.25
                                                        : 0.10;
-      media_total = AllocateFecBudget(startup, target_bitrate_ - other, 0.94)
+      media_total = AllocateFecBudget(startup, video_budget, 0.94)
                         .media_bitrate_bps;
     }
     video_transport_bitrate_bps_.store(media_total);

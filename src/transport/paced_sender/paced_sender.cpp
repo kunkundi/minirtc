@@ -1,6 +1,7 @@
 
 #include "paced_sender.h"
 
+#include <algorithm>
 #include <chrono>
 
 #include "log.h"
@@ -161,6 +162,11 @@ void PacedSender::CreateProbeClusters(
   RunOrPost([this, probe_cluster_configs = std::move(probe_cluster_configs)]()
                 mutable {
     if (video_send_paused_) return;
+    if (probe_bitrate_limit_bps_ > 0) {
+      const auto limit = webrtc::DataRate::BitsPerSec(probe_bitrate_limit_bps_);
+      for (auto& config : probe_cluster_configs)
+        config.target_data_rate = std::min(config.target_data_rate, limit);
+    }
     if (!transport_ready_) {
       for (const auto& config : probe_cluster_configs) {
         LOG_WARN(
@@ -174,6 +180,18 @@ void PacedSender::CreateProbeClusters(
     }
     pacing_controller_.CreateProbeClusters(probe_cluster_configs);
     MaybeScheduleProcessPackets();
+  });
+}
+
+void PacedSender::SetProbeBitrateLimit(int max_bitrate_bps) {
+  RunOrPost([this, max_bitrate_bps] {
+    if (probe_bitrate_limit_bps_ == max_bitrate_bps) return;
+    if (max_bitrate_bps > 0 &&
+        (probe_bitrate_limit_bps_ == 0 ||
+         max_bitrate_bps < probe_bitrate_limit_bps_)) {
+      pacing_controller_.AbortProbing("video_budget_reduced");
+    }
+    probe_bitrate_limit_bps_ = max_bitrate_bps;
   });
 }
 
