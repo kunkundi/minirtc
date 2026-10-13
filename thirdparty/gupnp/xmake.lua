@@ -106,6 +106,11 @@ package("gupnp-igd")
     add_urls("https://download.gnome.org/sources/gupnp-igd/1.6/gupnp-igd-$(version).tar.xz",
              "https://mirrors.nju.edu.cn/gentoo/distfiles/c5/gupnp-igd-$(version).tar.xz")
     add_versions("1.6.0", "4099978339ab22126d4968f2a332b6d094fc44c78797860781f1fc2f11771b74")
+    add_patches("1.6.0", path.join(os.scriptdir(), "patches", "gupnp_igd_action_lifetime_1.6.0.patch"),
+        "8cac12a9b72b7025011031331950f4846728071b8374fd6d5ba512c174d3f110")
+    -- Invalidate cached archives built with leaking actions/unbounded retries.
+    add_configs("action_lifetime_revision", {default = "1", type = "string", readonly = true,
+        description = "Release asynchronous actions and bound port conflict retries"})
     add_deps("meson~host", "ninja~host", "pkgconf", {host = true})
     add_deps("glib 2.84.1", "gupnp 1.6.9", "gssdp 1.6.4",
         {system = false, configs = {shared = false}})

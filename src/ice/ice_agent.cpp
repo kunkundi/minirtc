@@ -280,12 +280,18 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       }
     }
     g_object_set(agent, "controlling-mode", controlling_, nullptr);
+#if defined(MINIRTC_IOS) || defined(__ANDROID__)
+    // Mobile libnice builds omit UPnP; keep runtime settings and logs aligned.
+    g_object_set(agent, "upnp", FALSE, nullptr);
+    LOG_DEBUG("ICE UPnP mapping disabled in mobile builds");
+#else
     // Enable port mapping unless the caller explicitly requires relay-only ICE.
     const bool enable_upnp = !IsTurnForced(turn_mode_);
     g_object_set(agent, "upnp", enable_upnp,
                  "upnp-timeout", 3000u, nullptr);
     LOG_DEBUG("ICE UPnP mapping [{}], discovery timeout 3000 ms",
              enable_upnp);
+#endif
 
     g_signal_connect(agent, "candidate-gathering-done",
                      G_CALLBACK(on_gathering_done_), user_ptr_);

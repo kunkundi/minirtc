@@ -1,0 +1,225 @@
+--- a/libgupnp-igd/gupnp-simple-igd.c
++++ b/libgupnp-igd/gupnp-simple-igd.c
+@@ -52,6 +52,8 @@
+ #include <libgupnp/gupnp.h>
+ 
+ #define SOUP_REQUEST_TIMEOUT 5
++#define MAX_CONFLICT_RETRIES 3
++#define CONFLICT_RETRY_DELAY_MS 250
+ 
+ struct _GUPnPSimpleIgdPrivate
+ {
+@@ -98,6 +100,8 @@
+   guint actual_external_port;
+ 
+   GSource *renew_src;
++  GSource *retry_src;
++  guint conflict_retries;
+ };
+ 
+ /* signals */
+@@ -144,6 +148,8 @@
+ static void free_mapping (GUPnPSimpleIgd *self, struct Mapping *mapping);
+ 
+ static void stop_proxymapping (struct ProxyMapping *pm, gboolean stop_renew);
++static void _service_proxy_added_port_mapping (GObject *source_object,
++    GAsyncResult *res, gpointer user_data);
+ 
+ static void gupnp_simple_igd_add_port_real (GUPnPSimpleIgd *self,
+     const gchar *protocol,
+@@ -381,9 +387,6 @@
+   }
+   g_clear_error (&error);
+ 
+-  if (action)
+-    gupnp_service_proxy_action_unref (action);
+-
+   self->priv->deleting_count--;
+   g_object_unref (self);
+ }
+@@ -408,6 +411,7 @@
+ 
+     gupnp_service_proxy_call_action_async (pm->proxy->proxy, action, NULL,
+         _service_proxy_delete_port_mapping, self);
++    gupnp_service_proxy_action_unref (action);
+   }
+ 
+   g_slice_free (struct ProxyMapping, pm);
+@@ -623,7 +627,7 @@
+ {
+   GUPnPServiceProxy *proxy = GUPNP_SERVICE_PROXY (source_object);
+   struct Proxy *prox = user_data;
+-  GUPnPSimpleIgd *self = prox->parent;
++  GUPnPSimpleIgd *self;
+   GUPnPServiceProxyAction *action;
+   GError *error = NULL;
+   gchar *ip = NULL;
+@@ -633,23 +637,26 @@
+ 
+   if (action == NULL &&
+       g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++  {
++    /* The mapping/proxy may already have been freed by cancellation. */
++    g_clear_error (&error);
+     return;
+-
++  }
++
++  self = prox->parent;
+   g_clear_object (&prox->external_ip_cancellable);
+ 
+   if (action == NULL)
+     goto error;
+ 
+   if (!gupnp_service_proxy_action_get_result (action, &error,
+-          "NewExternalIPAddress", G_TYPE_STRING, &ip, NULL)) {
+-    gupnp_service_proxy_action_unref (action);
++          "NewExternalIPAddress", G_TYPE_STRING, &ip, NULL))
+     goto error;
+-  }
+-  gupnp_service_proxy_action_unref (action);
+ 
+   if (!validate_ip_address (ip))
+   {
+     prox->external_ip_failed = TRUE;
++    g_free (ip);
+ 
+     for (i=0; i < prox->proxymappings->len; i++)
+     {
+@@ -722,6 +729,7 @@
+   gupnp_service_proxy_call_action_async (prox->proxy, action,
+       prox->external_ip_cancellable,
+       _service_proxy_got_external_ip_address, prox);
++  gupnp_service_proxy_action_unref (action);
+ 
+   gupnp_service_proxy_add_notify (prox->proxy, "ExternalIPAddress",
+       G_TYPE_STRING, _external_ip_address_changed, prox);
+@@ -736,24 +744,24 @@
+   GUPnPServiceProxy *proxy = GUPNP_SERVICE_PROXY (source_object);
+   GUPnPServiceProxyAction *action;
+   struct ProxyMapping *pm = user_data;
+-  GUPnPSimpleIgd *self = pm->proxy->parent;
++  GUPnPSimpleIgd *self;
+   GError *error = NULL;
+ 
+   action = gupnp_service_proxy_call_action_finish (proxy, res, &error);
+ 
+   if (action == NULL &&
+       g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++  {
++    /* The mapping/proxy may already have been freed by cancellation. */
++    g_clear_error (&error);
+     return;
+-
++  }
++
++  self = pm->proxy->parent;
+   g_clear_object (&pm->cancellable);
+ 
+-  if (action) {
+-    if (gupnp_service_proxy_action_get_result (action, &error, NULL)) {
+-      gupnp_service_proxy_action_unref (action);
+-      return;
+-    }
+-    gupnp_service_proxy_action_unref (action);
+-  }
++  if (action && gupnp_service_proxy_action_get_result (action, &error, NULL))
++    return;
+ 
+   g_return_if_fail (error);
+   g_signal_emit (self, signals[SIGNAL_ERROR_MAPPING_PORT], error->domain,
+@@ -788,6 +796,22 @@
+ 
+   gupnp_service_proxy_call_action_async (pm->proxy->proxy, action,
+       pm->cancellable, callback, pm);
++  /* GUPnP retains the action until completion; finish returns a borrowed
++   * pointer, or NULL on failure. Do not defer this reference to the callback. */
++  gupnp_service_proxy_action_unref (action);
++}
++
++static gboolean
++_retry_mapping_timeout (gpointer user_data)
++{
++  struct ProxyMapping *pm = user_data;
++
++  g_source_unref (pm->retry_src);
++  pm->retry_src = NULL;
++  gupnp_simple_igd_call_add_port_mapping (pm,
++      _service_proxy_added_port_mapping);
++
++  return G_SOURCE_REMOVE;
+ }
+ 
+ static gboolean
+@@ -813,17 +837,15 @@
+   GUPnPSimpleIgd *self;
+   GError *error = NULL;
+ 
+-  /* This is a hack, but wek now that "res" is actually implemented as a GTask,
+-   * we're just too lazy to carry our own reference counted structure
+-   */
+-  if (g_cancellable_is_cancelled (g_task_get_cancellable (G_TASK (res))))
+-    return;
+-
+   action = gupnp_service_proxy_call_action_finish (proxy, res, &error);
+ 
+   if (action == NULL &&
+       g_error_matches (error, G_IO_ERROR, G_IO_ERROR_CANCELLED))
++  {
++    /* The mapping/proxy may already have been freed by cancellation. */
++    g_clear_error (&error);
+     return;
++  }
+ 
+   self = pm->proxy->parent;
+   g_clear_object (&pm->cancellable);
+@@ -831,12 +853,8 @@
+   if (action == NULL)
+     goto error;
+ 
+-  if (!gupnp_service_proxy_action_get_result (action, &error, NULL)) {
+-    gupnp_service_proxy_action_unref (action);
++  if (!gupnp_service_proxy_action_get_result (action, &error, NULL))
+     goto error;
+-  }
+-
+-  gupnp_service_proxy_action_unref (action);
+ 
+   pm->mapped = TRUE;
+ 
+@@ -863,13 +881,18 @@
+ 
+     /* 718 == ConflictInMappingEntry */
+     if (pm->mapping->requested_external_port == 0 &&
+-        error->domain == GUPNP_CONTROL_ERROR && error->code == 718)
++        error->domain == GUPNP_CONTROL_ERROR && error->code == 718 &&
++        pm->conflict_retries < MAX_CONFLICT_RETRIES)
+     {
+       /* The previous port was already used, lets pick another random port */
+       pm->actual_external_port = g_random_int_range (1025, 65535);
+ 
+-      gupnp_simple_igd_call_add_port_mapping (pm,
+-          _service_proxy_added_port_mapping);
++      /* A router may reject every port. Bound retries and back off instead
++       * of flooding it after libnice has finished candidate gathering. */
++      pm->retry_src = g_timeout_source_new (
++          CONFLICT_RETRY_DELAY_MS << pm->conflict_retries++);
++      g_source_set_callback (pm->retry_src, _retry_mapping_timeout, pm, NULL);
++      g_source_attach (pm->retry_src, self->priv->main_context);
+     }
+     else
+     {
+@@ -1112,6 +1135,13 @@
+   g_cancellable_cancel (pm->cancellable);
+   g_clear_object (&pm->cancellable);
+ 
++  if (pm->retry_src)
++  {
++    g_source_destroy (pm->retry_src);
++    g_source_unref (pm->retry_src);
++    pm->retry_src = NULL;
++  }
++
+   if (stop_renew && pm->renew_src)
+   {
+     g_source_destroy (pm->renew_src);

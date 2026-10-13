@@ -22,8 +22,13 @@ package("libnice")
 
     add_deps("meson~host", "pkgconf", {host = true})
     add_deps("glib 2.84.1", "openssl3 3.3.2")
-    if not is_plat("android") then
+    if not is_plat("iphoneos", "android") then
         add_deps("gupnp-igd 1.6.0", {system = false, configs = {shared = false}})
+    end
+    if is_plat("iphoneos") then
+        -- Invalidate iOS archives previously built with UPnP enabled.
+        add_configs("ios_upnp_disabled", {default = true, type = "boolean", readonly = true,
+            description = "Build iOS ICE without UPnP discovery and port mapping"})
     end
 
     add_configs("include_virtual_interfaces", {description = "Gather candidates from VPN/TUN interfaces", default = false, type = "boolean"})
@@ -48,7 +53,7 @@ package("libnice")
             "-Dgtk_doc=disabled",
             "-Dcrypto-library=openssl",
             "-Dintrospection=disabled",
-            package:is_plat("android") and "-Dgupnp=disabled" or "-Dgupnp=enabled"
+            package:is_plat("iphoneos", "android") and "-Dgupnp=disabled" or "-Dgupnp=enabled"
         }
 
         if not package:config("include_virtual_interfaces") then
