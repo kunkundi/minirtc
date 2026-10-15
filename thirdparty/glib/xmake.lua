@@ -60,7 +60,7 @@ package("glib")
 
     add_includedirs("include/glib-2.0", "lib/glib-2.0/include")
     add_links("gio-2.0", "gobject-2.0", "gthread-2.0", "gmodule-2.0", "glib-2.0")
-    if is_plat("iphoneos", "android") then
+    if is_plat("iphoneos", "android", "harmony") then
         -- GLib falls back to bundled proxy-libintl on iOS and Android. Meson installs
         -- that archive next to GLib, so expose it to consumers and to the
         -- package link test.
@@ -101,7 +101,7 @@ package("glib")
         package:add("deps", "libffi", {system = false, configs = {shared = false}})
     end)
 
-    on_install("windows", "macosx", "iphoneos", "linux", "cross", "mingw", "android", function (package)
+    on_install("windows", "macosx", "iphoneos", "linux", "cross", "mingw", "android", "harmony", function (package)
         local configs = {"-Dbsymbolic_functions=false",
                          "-Ddtrace=false",
                          "-Dman=false",
@@ -113,7 +113,7 @@ package("glib")
                          "-Dlibmount=disabled",
                          "-Dsysprof=disabled",
                          "-Dintrospection=disabled"}
-        if package:is_plat("android") then
+        if package:is_plat("android", "harmony") then
             table.insert(configs, "-Dnls=disabled")
         end
         if package:is_plat("iphoneos") then
@@ -169,6 +169,9 @@ _g_unix_mount_points_get_from_file (const char *path, uint64_t *time_out, size_t
             io.gsub("meson.build", "dependency%('libffi',", "dependency('libffi', modules: ['libffi::ffi'],")
         end
         local opt = {packagedeps = {"libintl", "libiconv", "libffi", "zlib"}}
+        if package:is_plat("harmony") then
+            opt.host_machine = "system = 'linux'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'"
+        end
         if package:is_plat("iphoneos") then
             import("lib.detect.find_tool")
             local host_cc = assert(find_tool("clang"), "host C compiler not found")

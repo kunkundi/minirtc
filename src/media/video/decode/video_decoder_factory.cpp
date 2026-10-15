@@ -27,6 +27,9 @@
 #endif
 
 #include "log.h"
+#if defined(__OHOS__)
+#include "harmony/harmony_video_decoder.h"
+#endif
 
 namespace minirtc {
 
@@ -39,6 +42,10 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
                                         bool hardware_acceleration,
                                         VideoCodecType codec_type,
                                         bool native_video_output) {
+#if defined(__OHOS__)
+  if (hardware_acceleration && (codec_type == VideoCodecType::H264 || codec_type == VideoCodecType::AV1))
+    return std::make_unique<HarmonyVideoDecoder>(clock, codec_type);
+#endif
 #if defined(__ANDROID__)
   if (hardware_acceleration &&
       (codec_type == VideoCodecType::H264 || codec_type == VideoCodecType::AV1)) {
@@ -91,6 +98,9 @@ VideoDecoderFactory::CreateVideoDecoder(std::shared_ptr<SystemClock> clock,
 
 bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
+#if defined(__OHOS__)
+  return HarmonyVideoDecoder::Supported(codec_type);
+#endif
 #if defined(__ANDROID__)
   return !FindAndroidCodecs(codec_type, false).empty();
 #else

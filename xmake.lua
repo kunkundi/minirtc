@@ -59,6 +59,10 @@ add_defines("USE_CUDA=" .. (is_config("USE_CUDA", true) and "1" or "0"))
 
 local is_iphoneos = is_plat("iphoneos")
 local is_android = is_plat("android")
+local is_harmony = is_plat("harmony")
+if is_harmony then
+    add_requireconfs("**.usrsctp", {configs = {cxflags = "-D_GNU_SOURCE"}})
+end
 local libnice_configs = {
     shared = false,
     include_virtual_interfaces =
@@ -119,7 +123,7 @@ if is_os("windows") then
 elseif is_android then
     add_cxflags("-fPIC", "-Wno-unused-variable")
     add_syslinks("log", "android", "mediandk", "dl")
-elseif is_os("linux") then
+elseif is_os("linux") or is_harmony then
     add_cxflags("-fPIC", "-Wno-unused-variable") 
     add_syslinks("pthread")
 elseif is_os("macosx") or is_iphoneos then
@@ -246,6 +250,10 @@ target("transport")
 target("media")
     set_kind("object")
     add_deps("log", "frame", "common", "rtp")
+    if is_harmony then
+        add_files("src/media/video/decode/harmony/*.cpp")
+        add_syslinks("native_media_codecbase", "native_media_core", "native_media_vdec", "hilog_ndk.z", {public = true})
+    end
     if is_os("windows") then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
@@ -271,7 +279,7 @@ target("media")
             "thirdparty/nvcodec/interface", {public = true})
             add_includedirs(path.join(get_cuda_dir(), "include"), {public = true})
         end
-    elseif is_os("linux") or is_android then
+    elseif is_os("linux") or is_android or is_harmony then
         add_files("src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
         "src/media/video/encode/openh264/*.cpp",

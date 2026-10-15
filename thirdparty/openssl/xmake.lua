@@ -47,7 +47,7 @@ package("openssl3")
         import("package.tools.make").make(package, {"install_sw"})
     end)
 
-    on_install("android", function (package)
+    on_install("android", "harmony", function (package)
         -- Use the NDK archive indexer, never the host's ranlib.
         local envs = import("package.tools.autoconf").buildenvs(package)
         envs.RANLIB = envs.AR:gsub("llvm%-ar", "llvm-ranlib")

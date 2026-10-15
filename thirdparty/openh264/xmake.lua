@@ -30,7 +30,7 @@ package("openh264")
         end
     end)
 
-    on_install("windows", "linux", "macosx", "iphoneos", "android", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", "android", "harmony", function (package)
         if package:version():ge("2.4.1") then
             import("package.tools.meson")
 
@@ -71,6 +71,9 @@ package("openh264")
             end
 
             local opt = {}
+            if package:is_plat("harmony") then
+                opt.host_machine = "system = 'linux'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'"
+            end
             opt.envs = meson.buildenvs(package)
             -- add gas-preprocessor to PATH
             if package:is_plat("windows") and package:is_arch("arm.*") then

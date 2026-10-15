@@ -8,8 +8,12 @@ package("libyuv")
 
     add_deps("cmake~host", {host = true})
 
-    on_install("windows", "linux", "macosx", "iphoneos", "android", "cross", "bsd", "mingw", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", "android", "harmony", "cross", "bsd", "mingw", function (package)
         local configs = {"-DUNIT_TEST=OFF"}
+        if package:is_plat("harmony") then
+            table.insert(configs, "-DCMAKE_SYSTEM_NAME=Linux")
+            table.insert(configs, "-DCMAKE_SYSTEM_PROCESSOR=aarch64")
+        end
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
 
         if package:is_plat("macosx") then
@@ -92,7 +96,7 @@ asm(".arch_extension i8mm");
         io.replace("CMakeLists.txt", "INSTALL ( PROGRAMS ${CMAKE_BINARY_DIR}/yuvconvert			DESTINATION bin )", "", {plain = true})
         import("package.tools.cmake").install(package, configs)
         
-        if package:is_plat("linux", "android") then
+        if package:is_plat("linux", "android", "harmony") then
             if package:config("shared") then 
                 os.tryrm(package:installdir("lib", "*.a"))
             else 

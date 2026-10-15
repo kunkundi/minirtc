@@ -27,6 +27,10 @@ package("dav1d")
         end
 
         local opt = {}
+        if package:is_plat("harmony") then
+            opt.host_machine = "system = 'linux'\ncpu_family = 'aarch64'\ncpu = 'aarch64'\nendian = 'little'"
+            opt.cflags = "-D_GNU_SOURCE"
+        end
         opt.envs = meson.buildenvs(package)
         -- add gas-preprocessor to PATH
         if package:is_plat("windows") and package:is_arch("arm.*") then

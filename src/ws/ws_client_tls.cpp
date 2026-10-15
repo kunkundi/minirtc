@@ -431,6 +431,14 @@ void WsClient::LoadTlsSystemRootCertificates(SSL_CTX* ssl_ctx) {
   if (!LoadWindowsRootCertificates(ssl_ctx)) {
     LOG_WARN("Unable to load Windows Root certificates");
   }
+#elif defined(__OHOS__)
+  // Supplied by HarmonyOS Certificate Manager on the device, never a host CA
+  // path. Keep OpenSSL's chain and hostname verification enabled.
+  const char* directory = std::getenv("SSL_CERT_DIR");
+  if (!directory || !*directory ||
+      SSL_CTX_load_verify_locations(ssl_ctx, nullptr, directory) != 1) {
+    throw std::runtime_error("Unable to load HarmonyOS system trust store");
+  }
 #elif defined(__ANDROID__)
   // Android app processes inherit AT_SECURE from zygote. OpenSSL's default
   // loader then ignores SSL_CERT_FILE via ossl_safe_getenv, even after JNI

@@ -19,12 +19,12 @@ package("svt-av1")
         -- Mobile AArch64 uses SVT-AV1's own runtime CPU detection: sysctl on
         -- iOS and getauxval on Android. Keep NEON and optional instruction
         -- dispatch without adding the separate cpuinfo cross-build dependency.
-        if not package:is_plat("iphoneos", "android") then
+        if not package:is_plat("iphoneos", "android", "harmony") then
             package:add("deps", "cpuinfo")
         end
     end)
 
-    on_install("windows", "linux", "macosx", "iphoneos", "android", function (package)
+    on_install("windows", "linux", "macosx", "iphoneos", "android", "harmony", function (package)
         local configs = {
             "-DBUILD_TESTING=OFF",
             "-DCOVERAGE=OFF",
@@ -38,10 +38,21 @@ package("svt-av1")
             "-DEXCLUDE_HASH=ON"
         }
 
-        if package:is_plat("iphoneos", "android") then
+        if package:is_plat("iphoneos", "android", "harmony") then
             table.insert(configs, "-DUSE_CPUINFO=OFF")
         else
             table.insert(configs, "-DUSE_CPUINFO=SYSTEM")
+        end
+
+        if package:is_plat("harmony") then
+            table.insert(configs, "-DCMAKE_SYSTEM_NAME=Linux")
+            table.insert(configs, "-DCMAKE_SYSTEM_PROCESSOR=aarch64")
+            -- HarmonyOS deliberately does not export pthread_setaffinity_np.
+            -- Use the same scheduler-managed worker path as Android.
+            io.replace("Source/Lib/Codec/svt_threads.h",
+                "#if defined(__linux__) && !defined(__ANDROID__)",
+                "#if defined(__linux__) && !defined(__ANDROID__) && !defined(__OHOS__)",
+                {plain = true})
         end
 
         table.insert(configs, "-DCMAKE_BUILD_TYPE=" .. (package:debug() and "Debug" or "Release"))
