@@ -56,6 +56,7 @@ class DataChannelConnection : public ConnectionInterface {
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
       const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
       const std::string cname, const std::string msid,
+      const std::shared_ptr<WebMediaHandler>& media_handler,
       const std::function<void(void)> onOpen);
 
   std::shared_ptr<Stream> AddAudio(
@@ -66,8 +67,8 @@ class DataChannelConnection : public ConnectionInterface {
 
   std::shared_ptr<::rtc::DataChannel> AddData(
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-      const std::string remote_user_id,
-      const ConnectionCallbacks& callbacks,
+      const std::string remote_user_id, const ConnectionCallbacks& callbacks,
+      std::weak_ptr<DataChannelTransport> transport,
       const std::function<void(void)> onOpen);
 
   std::shared_ptr<Stream> CreateStream(const std::string h264Samples,

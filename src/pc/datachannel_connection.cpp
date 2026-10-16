@@ -7,6 +7,7 @@
 #include "ice_utils.h"
 #include "log.h"
 #include "nlohmann/json.hpp"
+#include "web_input_router.h"
 
 namespace minirtc {
 
@@ -520,6 +521,7 @@ DataChannelConnection::CreateDataChannelConnection(
                    info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1
                                       : rtp::PAYLOAD_TYPE::H264,
                    GenerateUniqueSsrc(), video_stream_id, video_stream_id,
+                   dc_transport->MediaHandler(),
                    [video_stream_id, wc = make_weak_ptr(dc_transport)]() {
                      LOG_INFO("Video stream {} opened", video_stream_id);
                    }));
@@ -540,15 +542,13 @@ DataChannelConnection::CreateDataChannelConnection(
         info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
         info_.hardware_acceleration);
 
-    for (auto& data_stream_id_kv : media_stream_ids_.data) {
-      std::string data_stream_id = data_stream_id_kv.first;
-      dc_transport->AddDataStream(
-          data_stream_id,
-          AddData(peer_connection, remote_user_id, callbacks_,
-                  [data_stream_id, wc = make_weak_ptr(dc_transport)]() {
-                    LOG_INFO("Data stream {} opened", data_stream_id);
-                  }));
-    }
+    // One legacy control channel, with aliases for the registered data streams.
+    // Extra channels are created only after a new browser advertises support.
+    auto control = AddData(peer_connection, remote_user_id, callbacks_,
+                           make_weak_ptr(dc_transport), [] {});
+    dc_transport->AddDataStream("data-stream", control);
+    for (const auto& [stream_id, reliable] : media_stream_ids_.data)
+      dc_transport->AddDataStream(stream_id, control);
 
     dc_transport->GetPeerConnection()->setLocalDescription();
     std::string offer = dc_transport->GetPeerConnection()
@@ -575,53 +575,33 @@ std::shared_ptr<Stream> DataChannelConnection::AddVideo(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
     const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
     const std::string cname, const std::string msid,
+    const std::shared_ptr<WebMediaHandler>& media_handler,
     const std::function<void(void)> onOpen) {
   auto video = ::rtc::Description::Video(cname);
-  if (payload_type == rtp::PAYLOAD_TYPE::AV1) {
-    video.addAV1Codec((int)payload_type);
-    video.addSSRC(ssrc, cname, msid, cname);
-    video.setDirection(::rtc::Description::Direction::SendRecv);
-    auto track = peer_connection->addTrack(video);
-    // create RTP configuration
-    auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
-        ssrc, cname, payload_type, ::rtc::AV1RtpPacketizer::VideoClockRate);
-    // create packetizer
-    auto packetizer = std::make_shared<::rtc::AV1RtpPacketizer>(
-        ::rtc::AV1RtpPacketizer::Packetization::Obu, rtpConfig);
-    // add RTCP SR handler
-    auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
-    packetizer->addToChain(srReporter);
-    // add RTCP NACK handler
-    auto nackResponder = std::make_shared<::rtc::RtcpNackResponder>();
-    packetizer->addToChain(nackResponder);
-    // set handler
-    track->setMediaHandler(packetizer);
-    track->onOpen(onOpen);
-    auto trackData = std::make_shared<Stream>(track, srReporter);
-    return trackData;
-  } else {
-    video.addH264Codec((int)payload_type);
-    video.addSSRC(ssrc, cname, msid, cname);
-    video.setDirection(::rtc::Description::Direction::SendRecv);
-    auto track = peer_connection->addTrack(video);
-    // create RTP configuration
-    auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
-        ssrc, cname, payload_type, ::rtc::H264RtpPacketizer::VideoClockRate);
-    // create packetizer
-    auto packetizer = std::make_shared<::rtc::H264RtpPacketizer>(
-        ::rtc::NalUnit::Separator::StartSequence, rtpConfig);
-    // add RTCP SR handler
-    auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
-    packetizer->addToChain(srReporter);
-    // add RTCP NACK handler
-    auto nackResponder = std::make_shared<::rtc::RtcpNackResponder>();
-    packetizer->addToChain(nackResponder);
-    // set handler
-    track->setMediaHandler(packetizer);
-    track->onOpen(onOpen);
-    auto trackData = std::make_shared<Stream>(track, srReporter);
-    return trackData;
-  }
+  // The browser path negotiates H.264 (AV1 is disabled in the constructor).
+  video.addH264Codec((int)payload_type);
+  video.addExtMap(
+      {3, "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"});
+  video.addSSRC(ssrc, cname, msid, cname);
+  video.setDirection(::rtc::Description::Direction::SendRecv);
+  auto track = peer_connection->addTrack(video);
+  // create RTP configuration
+  auto rtpConfig = std::make_shared<::rtc::RtpPacketizationConfig>(
+      ssrc, cname, payload_type, ::rtc::H264RtpPacketizer::VideoClockRate);
+  // create packetizer
+  auto packetizer = std::make_shared<::rtc::H264RtpPacketizer>(
+      ::rtc::NalUnit::Separator::StartSequence, rtpConfig, 1150);
+  // add RTCP SR handler
+  auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
+  media_handler->RegisterStream(ssrc, srReporter);
+  // QoS handles RR/REMB/PLI/FIR and deadline-aware NACK repairs; the
+  // unbounded default NACK responder would bypass its pacing budget.
+  packetizer->addToChain(media_handler);
+  // set handler
+  track->setMediaHandler(packetizer);
+  track->onOpen(onOpen);
+  auto trackData = std::make_shared<Stream>(track, srReporter);
+  return trackData;
 }
 
 std::shared_ptr<Stream> DataChannelConnection::AddAudio(
@@ -643,9 +623,7 @@ std::shared_ptr<Stream> DataChannelConnection::AddAudio(
   // add RTCP SR handler
   auto srReporter = std::make_shared<::rtc::RtcpSrReporter>(rtpConfig);
   packetizer->addToChain(srReporter);
-  // add RTCP NACK handler
-  auto nackResponder = std::make_shared<::rtc::RtcpNackResponder>();
-  packetizer->addToChain(nackResponder);
+  // Opus uses in-band FEC; late audio repairs would bypass the QoS budget.
   // set handler
   track->setMediaHandler(packetizer);
   track->onOpen(onOpen);
@@ -655,29 +633,66 @@ std::shared_ptr<Stream> DataChannelConnection::AddAudio(
 
 std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-    const std::string remote_user_id,
-    const ConnectionCallbacks& callbacks,
+    const std::string remote_user_id, const ConnectionCallbacks& callbacks,
+    std::weak_ptr<DataChannelTransport> transport,
     const std::function<void(void)> onOpen) {
-  auto dc = peer_connection->createDataChannel("ping-pong");
+  ::rtc::DataChannelInit control_init;
+  // Advertise support through DCEP metadata, before the browser sends JSON.
+  // Legacy hosts leave this empty, so new browsers can stay silent with them.
+  control_init.protocol = "crossdesk-control-v1";
+  auto dc = peer_connection->createDataChannel("ping-pong", control_init);
   dc->onOpen(onOpen);
 
-  dc->onClosed([dc]() { LOG_INFO("DataChannel closed: {}", dc->label()); });
-
-  dc->onMessage([remote_user_id, callbacks](
-                    std::variant<::rtc::binary, std::string> msg) {
-    if (callbacks.on_receive_data_buffer) {
-      if (std::holds_alternative<std::string>(msg)) {
-        const auto& str = std::get<std::string>(msg);
-        // Legacy browsers send control JSON on whichever channel arrived last.
-        // Preserve the generic source instead of routing it as file/clipboard
-        // data, but always identify the authenticated remote peer correctly.
-        constexpr char source_id[] = "data-stream";
-        callbacks.on_receive_data_buffer(
-            str.data(), str.size(), remote_user_id.data(),
-            remote_user_id.size(), source_id, sizeof(source_id) - 1,
-            callbacks.user_data);
+  dc->onClosed([] { LOG_INFO("Web control channel closed"); });
+  auto input = std::make_shared<WebInputRouter>([remote_user_id, callbacks](
+                                                    const std::string& str) {
+    if (!callbacks.on_receive_data_buffer) return;
+    constexpr char source_id[] = "data-stream";
+    callbacks.on_receive_data_buffer(
+        str.data(), str.size(), remote_user_id.data(), remote_user_id.size(),
+        source_id, sizeof(source_id) - 1, callbacks.user_data);
+  });
+  auto upgraded = std::make_shared<std::atomic<bool>>(false);
+  dc->onMessage([transport, input,
+                 upgraded](std::variant<::rtc::binary, std::string> msg) {
+    auto owner = transport.lock();
+    if (!owner || !std::holds_alternative<std::string>(msg)) return;
+    const auto& str = std::get<std::string>(msg);
+    if (str.size() > 4096) return;
+    const auto message = json::parse(str, nullptr, false);
+    if (!message.is_object()) return;
+    if (message.contains("type") && message["type"] == "web_qos_hello") {
+      if (!message.contains("version") || message["version"] != 1 ||
+          upgraded->exchange(true))
+        return;
+      try {
+        ::rtc::DataChannelInit motion_init;
+        motion_init.reliability.unordered = true;
+        motion_init.reliability.maxRetransmits = 0;
+        auto motion = owner->GetPeerConnection()->createDataChannel(
+            "crossdesk-input-v1", motion_init);
+        motion->onMessage([input](auto data) {
+          if (std::holds_alternative<std::string>(data))
+            input->Deliver(std::get<std::string>(data), true);
+        });
+        owner->AddDataStream("crossdesk-input-v1", motion);
+        ::rtc::DataChannelInit qos_init;
+        qos_init.reliability.unordered = true;
+        qos_init.reliability.maxPacketLifeTime = std::chrono::milliseconds(500);
+        auto qos = owner->GetPeerConnection()->createDataChannel(
+            "crossdesk-qos-v1", qos_init);
+        qos->onMessage([transport](auto data) {
+          if (auto owner = transport.lock();
+              owner && std::holds_alternative<std::string>(data))
+            owner->ProcessBrowserFeedback(std::get<std::string>(data));
+        });
+        owner->AddDataStream("crossdesk-qos-v1", qos);
+      } catch (const std::exception& error) {
+        LOG_WARN("Could not enable browser QoS channels: {}", error.what());
       }
+      return;
     }
+    input->Deliver(str, false);
   });
 
   return dc;

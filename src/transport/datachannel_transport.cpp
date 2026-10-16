@@ -1,9 +1,12 @@
 #include "datachannel_transport.h"
 
+#include <algorithm>
+#include <cmath>
 #include <vector>
 
 #include "log.h"
 #include "native_video_frame.h"
+#include "nlohmann/json.hpp"
 #include "resolution_adapter.h"
 #include "video_frame_wrapper.h"
 
@@ -19,7 +22,7 @@ namespace minirtc {
 
 Stream::Stream(std::shared_ptr<::rtc::Track> track,
                std::shared_ptr<::rtc::RtcpSrReporter> sender)
-    : track_(track), sender_(sender) {}
+    : track_(track), sender_(sender), ssrc_(sender->rtpConfig->ssrc) {}
 
 DataChannelTransport::DataChannelTransport(
     std::shared_ptr<SystemClock> clock,
@@ -36,6 +39,7 @@ DataChannelTransport::DataChannelTransport(
       hardware_acceleration_(false) {
   task_queue_encode_ = std::make_shared<TaskQueueLockFree>("encode");
   task_queue_decode_ = std::make_shared<TaskQueueLockFree>("decode");
+  media_handler_ = std::make_shared<WebMediaHandler>();
 }
 
 DataChannelTransport::~DataChannelTransport() {
@@ -67,9 +71,18 @@ void DataChannelTransport::SetVideoConfig(
   media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference = video_degradation_preference;
+  media_config_.init_bitrate = media_config_.average_bitrate = 600000;
+  media_config_.min_bitrate = 16000;
+  media_config_.audio_fec_enabled = true;
+  media_config_.key_frame_interval = media_config_.max_frame_rate * 3;
+  // Web sessions need a spatial escape hatch on weak links, including when
+  // the host's default preference is to preserve the native resolution.
   resolution_adapter_ = std::make_unique<ResolutionAdapter>(
       video_quality, media_config_.max_frame_rate, video_content_type,
-      video_degradation_preference);
+      video_degradation_preference ==
+              VideoDegradationPreference::MaintainResolution
+          ? VideoDegradationPreference::Balanced
+          : video_degradation_preference);
 }
 
 void DataChannelTransport::Shutdown() {
@@ -86,6 +99,7 @@ void DataChannelTransport::Shutdown() {
     task_queue_decode_->Stop();
     task_queue_decode_.reset();
   }
+  if (media_handler_) media_handler_->Stop();
 }
 
 int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
@@ -137,12 +151,15 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     LOG_ERROR("Encoder task queue not init");
     return -1;
   }
+  if (!media_handler_->CanEncode(stream->ssrc_)) return 0;
+  const auto budget = media_handler_->Budget(stream->ssrc_);
   // Native capture is shared at 60 fps. Preserve the configured frame rate
   // for browser connections too, even though they do not expose live settings.
   {
     std::lock_guard lock(stream->video_admission_mutex_);
-    if (!stream->video_frame_cadence_.Accept(clock_->CurrentTimeUs(),
-                                            media_config_.max_frame_rate)) {
+    if (!stream->video_frame_cadence_.Accept(
+            clock_->CurrentTimeUs(),
+            std::min(media_config_.max_frame_rate, budget.max_fps))) {
       return 0;
     }
   }
@@ -173,11 +190,13 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
 
   std::weak_ptr<DataChannelTransport> weak_self = shared_from_this();
   std::weak_ptr<::rtc::Track> weak_track = track;
-  const bool should_force_i_frame = force_i_frame || force_stream_i_frame;
+  const bool should_force_i_frame =
+      force_i_frame || force_stream_i_frame ||
+      media_handler_->TakeKeyFrameRequest(stream->ssrc_);
 
   task_queue_encode_->PostTask([weak_self, weak_track, codec,
-                                raw_frame = std::move(raw_frame),
-                                stream_id, should_force_i_frame]() mutable {
+                                raw_frame = std::move(raw_frame), stream_id,
+                                stream, should_force_i_frame]() mutable {
     auto self = weak_self.lock();
     if (!self) return -1;
 
@@ -191,13 +210,55 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       return -1;
     }
 
+    const auto budget = self->media_handler_->Budget(stream->ssrc_);
+    if (stream->applied_bitrate_ != budget.video_bps &&
+        codec->SetTargetBitrate(budget.video_bps) == 0) {
+      stream->applied_bitrate_ = budget.video_bps;
+    }
+    const auto now_ms = self->clock_->CurrentTimeMs();
+    int target_width = raw_frame.Width(), target_height = raw_frame.Height();
+    self->resolution_adapter_->GetResolution(
+        std::max(16000,
+                 static_cast<int>(budget.video_bps * budget.decode_scale)),
+        raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
+    const bool new_source =
+        stream->source_width_ != static_cast<int>(raw_frame.Width()) ||
+        stream->source_height_ != static_cast<int>(raw_frame.Height());
+    const int64_t current_pixels =
+        int64_t(stream->adapted_width_) * stream->adapted_height_;
+    const int64_t desired_pixels = int64_t(target_width) * target_height;
+    const bool downscale = desired_pixels < current_pixels * 0.75;
+    const bool upscale = desired_pixels > current_pixels * 1.35;
+    if (target_width > 0 && target_height > 0 &&
+        (new_source || !current_pixels ||
+         (downscale && now_ms - stream->last_resize_ms_ >= 1000) ||
+         (upscale && now_ms - stream->last_resize_ms_ >= 5000))) {
+      stream->adapted_width_ = target_width;
+      stream->adapted_height_ = target_height;
+      stream->source_width_ = raw_frame.Width();
+      stream->source_height_ = raw_frame.Height();
+      stream->last_resize_ms_ = now_ms;
+    }
+    const bool scale =
+        stream->adapted_width_ > 0 && stream->adapted_height_ > 0 &&
+        (stream->adapted_width_ != static_cast<int>(raw_frame.Width()) ||
+         stream->adapted_height_ != static_cast<int>(raw_frame.Height()));
     if (const auto* native_frame = raw_frame.NativeFrame();
         native_frame &&
-        !codec->SupportsNativeFrameInput(native_frame->type)) {
+        (scale || !codec->SupportsNativeFrameInput(native_frame->type))) {
       if (!raw_frame.MaterializeNativeFrame()) {
         LOG_ERROR("[{}] Failed to materialize native video frame", stream_id);
         return -1;
       }
+    }
+    if (scale) {
+      RawFrame scaled;
+      if (self->resolution_adapter_->ResolutionDowngrade(
+              raw_frame, stream->adapted_width_, stream->adapted_height_,
+              scaled) != 0)
+        return -1;
+      scaled.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
+      raw_frame = std::move(scaled);
     }
 
     std::shared_ptr<::rtc::Track> track_shared = track_ptr;
@@ -220,11 +281,17 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
             return -1;
           }
 
-          track_shared->sendFrame(
-              reinterpret_cast<const std::byte*>(encoded_frame.Buffer()),
-              encoded_frame.Size(),
-              std::chrono::duration<double, std::micro>(
-                  encoded_frame.CapturedTimestamp()));
+          try {
+            track_shared->sendFrame(
+                reinterpret_cast<const std::byte*>(encoded_frame.Buffer()),
+                encoded_frame.Size(),
+                std::chrono::duration<double, std::micro>(
+                    encoded_frame.CapturedTimestamp()));
+          } catch (const std::exception& error) {
+            self_track->RequestVideoKeyFrame(stream_id);
+            LOG_WARN("Web video send failed: {}", error.what());
+            return -1;
+          }
           return 0;
         });
     return 0;
@@ -276,8 +343,9 @@ int DataChannelTransport::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
   std::lock_guard<std::mutex> encode_lock(stream->audio_encode_mutex_);
   const int ret = codec->Encode(
       reinterpret_cast<const uint8_t*>(audio_frame->data), audio_frame->size,
-      [track, stream](char* encoded_audio_buffer, size_t encoded_size,
-                      uint32_t samples_per_channel) -> int {
+      [track, stream, media = media_handler_](
+          char* encoded_audio_buffer, size_t encoded_size,
+          uint32_t samples_per_channel) -> int {
         if (!track->isOpen()) {
           return -1;
         }
@@ -285,10 +353,12 @@ int DataChannelTransport::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
         const double timestamp_seconds =
             static_cast<double>(stream->audio_sample_count_) /
             ::rtc::OpusRtpPacketizer::DefaultClockRate;
+        stream->audio_sample_count_ += samples_per_channel;
+        // Preserve the media clock when stale audio cannot fit the link.
+        if (!media->AdmitAudio(encoded_size)) return 0;
         track->sendFrame(
             reinterpret_cast<const std::byte*>(encoded_audio_buffer),
             encoded_size, std::chrono::duration<double>(timestamp_seconds));
-        stream->audio_sample_count_ += samples_per_channel;
         return 0;
       });
   return ret;
@@ -325,6 +395,58 @@ void DataChannelTransport::AddVideoStream(std::string stream_id,
                                           std::shared_ptr<Stream> stream) {
   std::unique_lock lock(video_streams_mutex_);
   video_streams_.emplace(stream_id, stream);
+}
+
+void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
+  if (message.size() > 4096 || shutdown_.load()) return;
+  const auto report = nlohmann::json::parse(message, nullptr, false);
+  if (!report.is_object()) return;
+  try {
+    if (report.value("type", std::string()) != "web_qos" ||
+        report.value("version", 0) != 1)
+      return;
+    const auto sequence = report.at("sequence").get<uint64_t>();
+    if (!sequence || sequence > 9007199254740991ULL) return;
+    std::lock_guard lock(feedback_mutex_);
+    const auto now = clock_->CurrentTimeMs();
+    if (sequence <= feedback_sequence_ ||
+        (last_feedback_ms_ >= 0 && now - last_feedback_ms_ < 200))
+      return;
+    const int64_t expected = report.value("packets", int64_t{0});
+    const int64_t lost = report.value("lost", int64_t{0});
+    if (expected < 0 || expected > 1000000 || lost < 0 || lost > expected)
+      return;
+    media_handler_->OnTelemetry(
+        lost, expected, report.value("rtt_ms", 0),
+        report.value("jitter_ms", 0.0), report.value("decode_ms", 0.0),
+        report.value("fps", 0.0), report.value("frozen", false));
+    feedback_sequence_ = sequence;
+    last_feedback_ms_ = now;
+    std::shared_ptr<::rtc::DataChannel> channel;
+    {
+      std::shared_lock data_lock(data_streams_mutex_);
+      const auto it = data_streams_.find("crossdesk-qos-v1");
+      if (it != data_streams_.end()) channel = it->second;
+    }
+    if (channel && channel->isOpen() && channel->bufferedAmount() < 4096) {
+      const auto budget = media_handler_->Budget();
+      const nlohmann::json status = {
+          {"type", "web_qos_status"},
+          {"version", 1},
+          {"network_bps", budget.network_bps},
+          {"video_bps", budget.video_bps},
+          {"max_fps", budget.max_fps},
+          {"queue_ms", media_handler_->QueueDelayMs()},
+          {"loss_ratio", budget.loss_ratio},
+          {"rtt_ms", budget.rtt_ms}};
+      try {
+        channel->send(status.dump());
+      } catch (const std::exception&) {
+      }
+    }
+  } catch (const nlohmann::json::exception&) {
+    // The receiver is remote input; malformed telemetry must not stop media.
+  }
 }
 
 void DataChannelTransport::RequestAllVideoKeyFrames() {

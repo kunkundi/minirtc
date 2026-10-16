@@ -29,6 +29,7 @@
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 #include "video_frame_cadence.h"
+#include "web_media_handler.h"
 
 namespace minirtc {
 
@@ -46,6 +47,14 @@ class Stream {
   std::mutex video_admission_mutex_;
   VideoFrameCadence video_frame_cadence_;
   uint64_t audio_sample_count_ = 0;
+  uint32_t ssrc_ = 0;
+  // Accessed only on this connection's encode queue.
+  int applied_bitrate_ = 0;
+  int adapted_width_ = 0;
+  int adapted_height_ = 0;
+  int source_width_ = 0;
+  int source_height_ = 0;
+  int64_t last_resize_ms_ = -1;
 };
 
 class DataChannelTransport
@@ -66,6 +75,10 @@ class DataChannelTransport
       VideoQuality video_quality, int video_frame_rate,
       VideoContentType video_content_type,
       VideoDegradationPreference video_degradation_preference);
+  std::shared_ptr<WebMediaHandler> MediaHandler() const {
+    return media_handler_;
+  }
+  void ProcessBrowserFeedback(const std::string& message);
 
  public:
   int SendVideoFrame(const MiniRtcVideoFrame* video_frame,
@@ -125,6 +138,10 @@ class DataChannelTransport
 
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_;
+  std::shared_ptr<WebMediaHandler> media_handler_;
+  std::mutex feedback_mutex_;
+  uint64_t feedback_sequence_ = 0;
+  int64_t last_feedback_ms_ = -1;
   std::atomic<bool> b_force_i_frame_;
   std::mutex force_i_frame_streams_mutex_;
   std::unordered_set<std::string> force_i_frame_streams_;
