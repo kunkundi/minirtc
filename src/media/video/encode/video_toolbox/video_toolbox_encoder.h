@@ -33,6 +33,8 @@ class VideoToolboxEncoder : public MediaCodec {
 
   int SetTargetBitrate(int bitrate) override;
 
+  int SetTargetFrameRate(int frame_rate) override;
+
   bool SupportsDynamicEncodingSpeedPriority() const override { return true; }
 
   bool SupportsNativeFrameInput(

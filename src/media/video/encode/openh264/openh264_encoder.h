@@ -34,6 +34,8 @@ class OpenH264Encoder : public MediaCodec {
 
   int SetTargetBitrate(int bitrate) override;
 
+  int SetTargetFrameRate(int frame_rate) override;
+
   int GetResolution(int* width, int* height) const override {
     if (seq_ == 0) {
       return -1;

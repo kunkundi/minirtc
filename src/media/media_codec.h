@@ -135,6 +135,10 @@ class MediaCodec {
 
   virtual int SetTargetBitrate(int bitrate) { return 0; }
 
+  // Keep encoder rate control aligned with admission when a transport adapts
+  // FPS. Unsupported encoders retain their configured rate.
+  virtual int SetTargetFrameRate(int frame_rate) { return -1; }
+
   virtual bool SupportsDynamicEncodingSpeedPriority() const { return false; }
 
   virtual bool SupportsNativeFrameInput(

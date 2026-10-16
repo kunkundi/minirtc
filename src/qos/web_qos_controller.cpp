@@ -106,8 +106,11 @@ void WebQosController::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
     healthy_since_ms_ = -1;
   else if (healthy_since_ms_ < 0)
     healthy_since_ms_ = now_ms;
-  if (growing_buffer || frozen) BackOff(0.8, now_ms);
-  if ((slow_decode || frozen) &&
+  // Missing reference frames also freeze playback. Requesting an IDR belongs
+  // to the media handler; a freeze alone proves neither congestion nor a slow
+  // decoder. Avoid a freeze -> resize -> keyframe -> freeze feedback loop.
+  if (growing_buffer) BackOff(0.8, now_ms);
+  if (slow_decode &&
       (last_pressure_ms_ < 0 || now_ms - last_pressure_ms_ >= 1000)) {
     budget_.decode_scale = std::max(0.25, budget_.decode_scale * 0.75);
     last_pressure_ms_ = now_ms;
@@ -132,7 +135,14 @@ WebQosController::Budget WebQosController::Update(int64_t now_ms,
   }
   // Local encoder overshoot needs fewer/smaller frames, not a lower network
   // drain rate. Reducing both would reinforce the backlog and trap low rates.
-  if (queue_ms > 150 &&
+  if (queue_ms <= 150)
+    queue_pressure_since_ms_ = -1;
+  else if (queue_pressure_since_ms_ < 0)
+    queue_pressure_since_ms_ = now_ms;
+  // Short keyframe bursts are expected and already bounded by frame deadlines.
+  // Only sustained local backlog should lower the spatial budget.
+  if (queue_pressure_since_ms_ >= 0 &&
+      now_ms - queue_pressure_since_ms_ >= 1000 &&
       (last_pressure_ms_ < 0 || now_ms - last_pressure_ms_ >= 1000)) {
     budget_.decode_scale = std::max(0.25, budget_.decode_scale * 0.75);
     last_pressure_ms_ = now_ms;
@@ -174,12 +184,9 @@ WebQosController::Budget WebQosController::Update(int64_t now_ms,
   // fall below the old 1 Mbit/s encoder default on constrained connections.
   budget_.video_bps = std::max(
       16000, static_cast<int>(budget_.network_bps * 0.85) - budget_.audio_bps);
-  budget_.max_fps = budget_.video_bps < 250000    ? 10
-                    : budget_.video_bps < 700000  ? 20
-                    : budget_.video_bps < 1800000 ? 30
-                                                  : 60;
-  if (budget_.decode_scale < 0.75)
-    budget_.max_fps = std::min(budget_.max_fps, 30);
+  budget_.max_fps = budget_.video_bps < 250000   ? 10
+                    : budget_.video_bps < 700000 ? 20
+                                                : kMaxFrameRate;
   last_update_ms_ = now_ms;
   return budget_;
 }

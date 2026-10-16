@@ -29,6 +29,7 @@ class VideoToolboxEncoder::Impl {
   int Encode(const RawFrame& raw_frame, function<int(const EncodedFrame&)> on_encoded_image);
   int ForceIdr();
   int SetTargetBitrate(int bitrate);
+  int SetTargetFrameRate(int frame_rate);
   int SetPrioritizeEncodingSpeedOverQuality(bool prioritize_speed);
   int GetResolution(int* width, int* height);
   std::string GetEncoderName() { return "VideoToolboxH264"; }
@@ -625,6 +626,19 @@ int VideoToolboxEncoder::Impl::SetTargetBitrate(int bitrate) {
   return 0;
 }
 
+int VideoToolboxEncoder::Impl::SetTargetFrameRate(int frame_rate) {
+  lock_guard<mutex> guard(lock_);
+  if (!session_ || frame_rate < 1 || frame_rate > 60) return -1;
+  if (frame_rate == max_fps_) return 0;
+  CFNumberRef fps = CFNumberCreate(nullptr, kCFNumberIntType, &frame_rate);
+  const OSStatus status = VTSessionSetProperty(
+      session_, kVTCompressionPropertyKey_ExpectedFrameRate, fps);
+  CFRelease(fps);
+  if (status != noErr) return -1;
+  max_fps_ = frame_rate;
+  return 0;
+}
+
 int VideoToolboxEncoder::Impl::SetPrioritizeEncodingSpeedOverQuality(
     bool prioritize_speed) {
   lock_guard<mutex> guard(lock_);
@@ -810,6 +824,10 @@ int VideoToolboxEncoder::Encode(const RawFrame& raw_frame,
 int VideoToolboxEncoder::ForceIdr() { return impl_->ForceIdr(); }
 
 int VideoToolboxEncoder::SetTargetBitrate(int bitrate) { return impl_->SetTargetBitrate(bitrate); }
+
+int VideoToolboxEncoder::SetTargetFrameRate(int frame_rate) {
+  return impl_->SetTargetFrameRate(frame_rate);
+}
 
 int VideoToolboxEncoder::SetPrioritizeEncodingSpeedOverQuality(
     bool prioritize_speed) {

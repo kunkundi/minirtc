@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <sstream>
 #include <vector>
 
 #include "log.h"
@@ -68,21 +69,21 @@ void DataChannelTransport::SetVideoConfig(
     VideoQuality video_quality, int video_frame_rate,
     VideoContentType video_content_type,
     VideoDegradationPreference video_degradation_preference) {
-  media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
+  video_quality_ = video_quality;
+  // Cap each Web sender without lowering capture for concurrent native peers.
+  media_config_.max_frame_rate =
+      video_frame_rate > 0
+          ? std::min(video_frame_rate, WebQosController::kMaxFrameRate)
+          : WebQosController::kMaxFrameRate;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference = video_degradation_preference;
   media_config_.init_bitrate = media_config_.average_bitrate = 600000;
   media_config_.min_bitrate = 16000;
   media_config_.audio_fec_enabled = true;
   media_config_.key_frame_interval = media_config_.max_frame_rate * 3;
-  // Web sessions need a spatial escape hatch on weak links, including when
-  // the host's default preference is to preserve the native resolution.
   resolution_adapter_ = std::make_unique<ResolutionAdapter>(
       video_quality, media_config_.max_frame_rate, video_content_type,
-      video_degradation_preference ==
-              VideoDegradationPreference::MaintainResolution
-          ? VideoDegradationPreference::Balanced
-          : video_degradation_preference);
+      video_degradation_preference);
 }
 
 void DataChannelTransport::Shutdown() {
@@ -216,6 +217,21 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       stream->applied_bitrate_ = budget.video_bps;
     }
     const auto now_ms = self->clock_->CurrentTimeMs();
+    const bool keep_resolution =
+        self->media_config_.video_degradation_preference ==
+        VideoDegradationPreference::MaintainResolution;
+    const int effective_fps =
+        std::min(self->media_config_.max_frame_rate, budget.max_fps);
+    if (stream->applied_frame_rate_ != effective_fps &&
+        codec->SetTargetFrameRate(effective_fps) == 0) {
+      stream->applied_frame_rate_ = effective_fps;
+    }
+    // The bandwidth mapping must use the admitted FPS, not capture's 60 fps.
+    // Resolution priority uses it only for upgrades or actual pipeline pressure.
+    self->resolution_adapter_->SetPreferences(
+        self->video_quality_, effective_fps,
+        keep_resolution ? VideoDegradationPreference::Balanced
+                        : self->media_config_.video_degradation_preference);
     int target_width = raw_frame.Width(), target_height = raw_frame.Height();
     self->resolution_adapter_->GetResolution(
         std::max(16000,
@@ -224,15 +240,45 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     const bool new_source =
         stream->source_width_ != static_cast<int>(raw_frame.Width()) ||
         stream->source_height_ != static_cast<int>(raw_frame.Height());
+    if (new_source || !stream->adapted_width_) {
+      // A conservative initial bandwidth estimate is not evidence that the
+      // desktop needs 180p. Start with readable pixels; bounded keyframe/queue
+      // recovery can still reduce them immediately on genuinely weak links.
+      self->resolution_adapter_->GetStartupResolution(
+          raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
+      stream->source_started_ms_ = now_ms;
+      stream->downscale_since_ms_ = -1;
+    }
     const int64_t current_pixels =
         int64_t(stream->adapted_width_) * stream->adapted_height_;
     const int64_t desired_pixels = int64_t(target_width) * target_height;
     const bool downscale = desired_pixels < current_pixels * 0.75;
     const bool upscale = desired_pixels > current_pixels * 1.35;
+    if (!downscale)
+      stream->downscale_since_ms_ = -1;
+    else if (stream->downscale_since_ms_ < 0)
+      stream->downscale_since_ms_ = now_ms;
+    const bool pipeline_pressure = budget.decode_scale < 0.95;
+    const bool bandwidth_downscale =
+        !keep_resolution && now_ms - stream->source_started_ms_ >= 5000 &&
+        stream->downscale_since_ms_ >= 0 &&
+        now_ms - stream->downscale_since_ms_ >= 2000;
     if (target_width > 0 && target_height > 0 &&
         (new_source || !current_pixels ||
-         (downscale && now_ms - stream->last_resize_ms_ >= 1000) ||
+         (downscale && (pipeline_pressure || bandwidth_downscale) &&
+          now_ms - stream->last_resize_ms_ >= 1000) ||
          (upscale && now_ms - stream->last_resize_ms_ >= 5000))) {
+      LOG_INFO(
+          "Web video adaptation: peer={} stream={} {}x{} -> {}x{} "
+          "video_bps={} fps={} scale={} reason={}",
+          self->remote_id_, stream_id, stream->adapted_width_,
+          stream->adapted_height_, target_width, target_height,
+          budget.video_bps, effective_fps,
+          budget.decode_scale,
+          new_source || !current_pixels ? "startup"
+          : upscale                     ? "bandwidth_recovery"
+          : pipeline_pressure           ? "pipeline_pressure"
+                                        : "sustained_bandwidth");
       stream->adapted_width_ = target_width;
       stream->adapted_height_ = target_height;
       stream->source_width_ = raw_frame.Width();
@@ -422,6 +468,27 @@ void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
         report.value("fps", 0.0), report.value("frozen", false));
     feedback_sequence_ = sequence;
     last_feedback_ms_ = now;
+    if (last_receiver_log_ms_ < 0 || now - last_receiver_log_ms_ >= 5000) {
+      ::rtc::Candidate local, remote;
+      std::ostringstream local_route, remote_route;
+      if (peer_connection_->getSelectedCandidatePair(&local, &remote)) {
+        local_route << local.type() << '/' << local.transportType();
+        remote_route << remote.type() << '/' << remote.transportType();
+      }
+      auto relay_protocol = report.value("relay_protocol", std::string());
+      if (relay_protocol != "udp" && relay_protocol != "tcp" &&
+          relay_protocol != "tls")
+        relay_protocol = "unknown";
+      LOG_DEBUG(
+          "Web receiver: peer={} fps={} size={}x{} jitter_ms={} decode_ms={} "
+          "frozen={} packets={} lost={} ice_local={} ice_remote={} "
+          "browser_relay_protocol={}",
+          remote_id_, report.value("fps", 0.0), report.value("width", 0),
+          report.value("height", 0), report.value("jitter_ms", 0.0),
+          report.value("decode_ms", 0.0), report.value("frozen", false),
+          expected, lost, local_route.str(), remote_route.str(), relay_protocol);
+      last_receiver_log_ms_ = now;
+    }
     std::shared_ptr<::rtc::DataChannel> channel;
     {
       std::shared_lock data_lock(data_streams_mutex_);
@@ -437,6 +504,7 @@ void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
           {"video_bps", budget.video_bps},
           {"max_fps", budget.max_fps},
           {"queue_ms", media_handler_->QueueDelayMs()},
+          {"decode_scale", budget.decode_scale},
           {"loss_ratio", budget.loss_ratio},
           {"rtt_ms", budget.rtt_ms}};
       try {

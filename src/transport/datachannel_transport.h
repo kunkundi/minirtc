@@ -50,11 +50,14 @@ class Stream {
   uint32_t ssrc_ = 0;
   // Accessed only on this connection's encode queue.
   int applied_bitrate_ = 0;
+  int applied_frame_rate_ = 0;
   int adapted_width_ = 0;
   int adapted_height_ = 0;
   int source_width_ = 0;
   int source_height_ = 0;
   int64_t last_resize_ms_ = -1;
+  int64_t source_started_ms_ = -1;
+  int64_t downscale_since_ms_ = -1;
 };
 
 class DataChannelTransport
@@ -135,6 +138,7 @@ class DataChannelTransport
   std::shared_mutex data_streams_mutex_;
 
   MediaCodecConfig media_config_;
+  VideoQuality video_quality_ = VideoQuality::QualityHigh;
 
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_;
@@ -142,6 +146,7 @@ class DataChannelTransport
   std::mutex feedback_mutex_;
   uint64_t feedback_sequence_ = 0;
   int64_t last_feedback_ms_ = -1;
+  int64_t last_receiver_log_ms_ = -1;
   std::atomic<bool> b_force_i_frame_;
   std::mutex force_i_frame_streams_mutex_;
   std::unordered_set<std::string> force_i_frame_streams_;

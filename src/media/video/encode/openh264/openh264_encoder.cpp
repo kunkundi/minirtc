@@ -409,6 +409,19 @@ int OpenH264Encoder::SetTargetBitrate(int bitrate) {
   return 0;
 }
 
+int OpenH264Encoder::SetTargetFrameRate(int frame_rate) {
+  if (!openh264_encoder_ || frame_rate < 1 || frame_rate > 60) return -1;
+  if (frame_rate == max_fps_) return 0;
+  float fps = static_cast<float>(frame_rate);
+  const int result =
+      openh264_encoder_->SetOption(ENCODER_OPTION_FRAME_RATE, &fps);
+  if (result != cmResultSuccess) return result;
+  max_fps_ = frame_rate;
+  encoder_params_.fMaxFrameRate = fps;
+  encoder_params_.sSpatialLayers[0].fFrameRate = fps;
+  return 0;
+}
+
 int OpenH264Encoder::Release() {
   if (openh264_encoder_) {
     openh264_encoder_->Uninitialize();
