@@ -94,7 +94,7 @@ class ConnectionInterface {
                              const char* stream_id) = 0;
   virtual int RequestVideoKeyFrame(const char* stream_id) = 0;
   virtual int RequestAllVideoKeyFrames() = 0;
-  // Legacy/web transports do not negotiate desktop live video settings.
+  // Unsupported transports reject optional live settings.
   virtual int UpdateVideoBitrateLimit(int) { return -1; }
   virtual int SetVideoSendPaused(bool) { return -1; }
   virtual int SetAudioSendPaused(bool) { return -1; }

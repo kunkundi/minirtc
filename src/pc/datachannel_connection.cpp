@@ -131,6 +131,14 @@ int DataChannelConnection::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                                        stream_id ? stream_id : "");
 }
 
+int DataChannelConnection::UpdateVideoSettings(
+    VideoQuality quality, int frame_rate,
+    VideoDegradationPreference preference) {
+  return dc_ready_ && dc_transport_
+             ? dc_transport_->UpdateVideoSettings(quality, frame_rate, preference)
+             : -1;
+}
+
 int DataChannelConnection::SendDataFrame(const char* data, size_t size,
                                          const char* stream_id) {
   if (!dc_ready_) {
@@ -465,11 +473,16 @@ DataChannelConnection::CreateDataChannelConnection(
             break;
           case ::rtc::PeerConnection::State::Connecting:
             ice_state = ConnectionStatus::Connecting;
+            dc_ready_ = false;
             LOG_INFO("PeerConnection state: Checking");
             break;
           case ::rtc::PeerConnection::State::Connected:
+            // Host capabilities are sent by the Connected callback. Wait for
+            // SCTP/DCEP too, otherwise that first reliable message is dropped.
+            if (!dc_transport_ || !dc_transport_->IsControlChannelOpen() ||
+                dc_ready_.exchange(true))
+              return;
             ice_state = ConnectionStatus::Connected;
-            dc_ready_ = true;
             LOG_INFO("PeerConnection state: Connected");
             break;
           case ::rtc::PeerConnection::State::Disconnected:
@@ -544,8 +557,19 @@ DataChannelConnection::CreateDataChannelConnection(
 
     // One legacy control channel, with aliases for the registered data streams.
     // Extra channels are created only after a new browser advertises support.
-    auto control = AddData(peer_connection, remote_user_id, callbacks_,
-                           make_weak_ptr(dc_transport), [] {});
+    auto control = AddData(
+        peer_connection, remote_user_id, callbacks_, make_weak_ptr(dc_transport),
+        [this, remote_user_id, weak = make_weak_ptr(dc_transport)] {
+          auto owner = weak.lock();
+          if (!owner || owner != dc_transport_ ||
+              owner->GetPeerConnection()->state() !=
+                  ::rtc::PeerConnection::State::Connected ||
+              dc_ready_.exchange(true))
+            return;
+          callbacks_.on_connection_status(
+              ConnectionStatus::Connected, remote_user_id.data(),
+              remote_user_id.size(), callbacks_.user_data);
+        });
     dc_transport->AddDataStream("data-stream", control);
     for (const auto& [stream_id, reliable] : media_stream_ids_.data)
       dc_transport->AddDataStream(stream_id, control);

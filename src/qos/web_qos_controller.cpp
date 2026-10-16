@@ -186,7 +186,10 @@ WebQosController::Budget WebQosController::Update(int64_t now_ms,
       16000, static_cast<int>(budget_.network_bps * 0.85) - budget_.audio_bps);
   budget_.max_fps = budget_.video_bps < 250000   ? 10
                     : budget_.video_bps < 700000 ? 20
+                    : budget_.video_bps < 1800000 ? 30
                                                 : kMaxFrameRate;
+  if (budget_.decode_scale < 0.75)
+    budget_.max_fps = std::min(budget_.max_fps, 30);
   last_update_ms_ = now_ms;
   return budget_;
 }

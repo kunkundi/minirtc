@@ -18,14 +18,14 @@ namespace minirtc {
 // All methods are serialized by the owning media handler.
 class WebQosController {
  public:
-  static constexpr int kMaxFrameRate = 30;
+  static constexpr int kMaxFrameRate = 60;
 
   struct Budget {
     int network_bps = 800000;
     int receiver_bps = 0;
     int video_bps = 600000;
     int audio_bps = 96000;
-    int max_fps = kMaxFrameRate;
+    int max_fps = 30;
     double decode_scale = 1.0;
     double loss_ratio = 0;
     int rtt_ms = 0;

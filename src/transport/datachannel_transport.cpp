@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <future>
 #include <sstream>
 #include <vector>
 
@@ -70,11 +71,10 @@ void DataChannelTransport::SetVideoConfig(
     VideoContentType video_content_type,
     VideoDegradationPreference video_degradation_preference) {
   video_quality_ = video_quality;
-  // Cap each Web sender without lowering capture for concurrent native peers.
+  // Use a conservative fallback until the controller negotiates live settings.
   media_config_.max_frame_rate =
-      video_frame_rate > 0
-          ? std::min(video_frame_rate, WebQosController::kMaxFrameRate)
-          : WebQosController::kMaxFrameRate;
+      video_frame_rate > 0 ? std::min(video_frame_rate, 30) : 30;
+  video_frame_rate_limit_ = media_config_.max_frame_rate;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference = video_degradation_preference;
   media_config_.init_bitrate = media_config_.average_bitrate = 600000;
@@ -86,7 +86,98 @@ void DataChannelTransport::SetVideoConfig(
       video_degradation_preference);
 }
 
+int DataChannelTransport::UpdateVideoSettings(
+    VideoQuality quality, int frame_rate,
+    VideoDegradationPreference preference) {
+  if (quality < QualityLow || quality > QualityHigh ||
+      (frame_rate != 30 && frame_rate != 60) ||
+      preference > VideoDegradationPreference::Balanced)
+    return -1;
+  auto completion = std::make_shared<std::promise<int>>();
+  auto result = completion->get_future();
+  {
+    std::lock_guard settings_lock(video_settings_mutex_);
+    if (shutdown_ || !task_queue_encode_) return -1;
+    std::weak_ptr<DataChannelTransport> weak = shared_from_this();
+    task_queue_encode_->PostTask([weak, quality, frame_rate, preference,
+                                  completion] {
+      auto self = weak.lock();
+      if (!self || self->shutdown_) {
+        completion->set_value(-1);
+        return;
+      }
+      if (self->video_quality_ == quality &&
+          self->media_config_.max_frame_rate == frame_rate &&
+          self->media_config_.video_degradation_preference == preference) {
+        completion->set_value(0);
+        return;
+      }
+      auto config = self->media_config_;
+      config.max_frame_rate = frame_rate;
+      config.key_frame_interval = frame_rate * 3;
+      config.video_degradation_preference = preference;
+      // Prepare all replacements before applying anything, including encoders
+      // that do not support in-place FPS changes. Reply only after application.
+      std::unordered_map<std::string, std::shared_ptr<MediaCodec>> encoders;
+      std::vector<std::shared_ptr<MediaCodec>> retired;
+      std::unique_lock lock(self->video_streams_mutex_);
+      for (const auto& [id, stream] : self->video_streams_) {
+        if (!stream || !stream->codec_) continue;
+        auto encoder_config = config;
+        if (stream->adapted_width_ > 0 && stream->adapted_height_ > 0) {
+          encoder_config.init_width = stream->adapted_width_;
+          encoder_config.init_height = stream->adapted_height_;
+        }
+        encoder_config.init_bitrate =
+            self->media_handler_->Budget(stream->ssrc_).video_bps;
+        auto codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
+            self->clock_, encoder_config, self->hardware_acceleration_,
+            self->video_codec_type_);
+        if (!codec) {
+          completion->set_value(-1);
+          return;
+        }
+        encoders.emplace(id, std::move(codec));
+      }
+      if (self->shutdown_) {
+        completion->set_value(-1);
+        return;
+      }
+      self->media_config_ = config;
+      self->video_quality_ = quality;
+      self->resolution_adapter_->SetPreferences(quality, frame_rate, preference);
+      for (auto& [id, codec] : encoders) {
+        auto& stream = self->video_streams_.at(id);
+        retired.push_back(std::move(stream->codec_));
+        stream->codec_ = std::move(codec);
+        stream->applied_bitrate_ = stream->applied_frame_rate_ = 0;
+        stream->adapted_width_ = stream->adapted_height_ = 0;
+        {
+          std::lock_guard admission_lock(stream->video_admission_mutex_);
+          stream->video_frame_cadence_ = VideoFrameCadence();
+        }
+      }
+      self->video_frame_rate_limit_ = frame_rate;
+      lock.unlock();
+      self->RequestAllVideoKeyFrames();
+      retired.clear();
+      LOG_INFO("Web negotiated video settings: quality={} fps={} preference={}",
+               static_cast<int>(quality), frame_rate,
+               static_cast<int>(preference));
+      completion->set_value(0);
+    });
+  }
+  // A stopped queue discards the task and breaks the promise.
+  completion.reset();
+  try {
+    return result.get();
+  } catch (const std::future_error&) {
+    return -1;
+  }
+}
+
 void DataChannelTransport::Shutdown() {
+  std::lock_guard settings_lock(video_settings_mutex_);
   bool expected = false;
   if (!shutdown_.compare_exchange_strong(expected, true)) {
     return;
@@ -154,13 +245,12 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
   }
   if (!media_handler_->CanEncode(stream->ssrc_)) return 0;
   const auto budget = media_handler_->Budget(stream->ssrc_);
-  // Native capture is shared at 60 fps. Preserve the configured frame rate
-  // for browser connections too, even though they do not expose live settings.
+  // Shared capture can run at 60 fps; each controller negotiates its own cap.
   {
     std::lock_guard lock(stream->video_admission_mutex_);
     if (!stream->video_frame_cadence_.Accept(
             clock_->CurrentTimeUs(),
-            std::min(media_config_.max_frame_rate, budget.max_fps))) {
+            std::min(video_frame_rate_limit_.load(), budget.max_fps))) {
       return 0;
     }
   }
@@ -200,6 +290,8 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                                 stream, should_force_i_frame]() mutable {
     auto self = weak_self.lock();
     if (!self) return -1;
+    // A settings transaction may replace the encoder after frame admission.
+    if (codec != stream->codec_) return 0;
 
     auto track_ptr = weak_track.lock();
     if (!track_ptr || track_ptr->isClosed()) {
@@ -497,12 +589,14 @@ void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
     }
     if (channel && channel->isOpen() && channel->bufferedAmount() < 4096) {
       const auto budget = media_handler_->Budget();
+      const int frame_rate_limit = video_frame_rate_limit_.load();
       const nlohmann::json status = {
           {"type", "web_qos_status"},
           {"version", 1},
           {"network_bps", budget.network_bps},
           {"video_bps", budget.video_bps},
-          {"max_fps", budget.max_fps},
+          {"max_fps", std::min(frame_rate_limit, budget.max_fps)},
+          {"frame_rate_limit", frame_rate_limit},
           {"queue_ms", media_handler_->QueueDelayMs()},
           {"decode_scale", budget.decode_scale},
           {"loss_ratio", budget.loss_ratio},
@@ -551,6 +645,12 @@ void DataChannelTransport::AddDataStream(
   data_streams_.emplace(stream_id, stream);
 }
 
+bool DataChannelTransport::IsControlChannelOpen() {
+  std::shared_lock lock(data_streams_mutex_);
+  const auto it = data_streams_.find("data-stream");
+  return it != data_streams_.end() && it->second && it->second->isOpen();
+}
+
 int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
                                        rtp::PAYLOAD_TYPE video_pt,
                                        bool hardware_acceleration) {
@@ -597,6 +697,8 @@ int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
 int DataChannelTransport::CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
                                              bool hardware_acceleration,
                                              VideoCodecType codec_type) {
+  video_codec_type_ = codec_type;
+  hardware_acceleration_ = hardware_acceleration;
   bool video_streams_init_first_time = true;
   bool audio_streams_init_first_time = true;
 

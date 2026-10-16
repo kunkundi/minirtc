@@ -78,10 +78,13 @@ class DataChannelTransport
       VideoQuality video_quality, int video_frame_rate,
       VideoContentType video_content_type,
       VideoDegradationPreference video_degradation_preference);
+  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
+                          VideoDegradationPreference preference);
   std::shared_ptr<WebMediaHandler> MediaHandler() const {
     return media_handler_;
   }
   void ProcessBrowserFeedback(const std::string& message);
+  bool IsControlChannelOpen();
 
  public:
   int SendVideoFrame(const MiniRtcVideoFrame* video_frame,
@@ -139,6 +142,9 @@ class DataChannelTransport
 
   MediaCodecConfig media_config_;
   VideoQuality video_quality_ = VideoQuality::QualityHigh;
+  VideoCodecType video_codec_type_ = VideoCodecType::H264;
+  std::atomic<int> video_frame_rate_limit_{30};
+  std::mutex video_settings_mutex_;
 
  private:
   std::unique_ptr<ResolutionAdapter> resolution_adapter_;
