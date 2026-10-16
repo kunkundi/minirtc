@@ -530,30 +530,25 @@ DataChannelConnection::CreateDataChannelConnection(
     for (auto& video_stream_id : media_stream_ids_.video) {
       dc_transport->AddVideoStream(
           video_stream_id,
-          AddVideo(peer_connection,
-                   info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1
-                                      : rtp::PAYLOAD_TYPE::H264,
-                   GenerateUniqueSsrc(), video_stream_id, video_stream_id,
-                   dc_transport->MediaHandler(),
-                   [video_stream_id, wc = make_weak_ptr(dc_transport)]() {
+          AddVideo(peer_connection, GenerateUniqueSsrc(), video_stream_id,
+                   video_stream_id, dc_transport->MediaHandler(),
+                   [video_stream_id]() {
                      LOG_INFO("Video stream {} opened", video_stream_id);
                    }));
     }
 
     for (auto& audio_stream_id : media_stream_ids_.audio) {
       dc_transport->AddAudioStream(
-          audio_stream_id,
-          AddAudio(peer_connection, rtp::PAYLOAD_TYPE::OPUS,
-                   GenerateUniqueSsrc(), "audio-stream", audio_stream_id,
-                   [audio_stream_id, wc = make_weak_ptr(dc_transport)]() {
-                     LOG_INFO("Audio stream {} opened", audio_stream_id);
-                   }));
+          audio_stream_id, AddAudio(peer_connection, rtp::PAYLOAD_TYPE::OPUS,
+                                    GenerateUniqueSsrc(), "audio-stream",
+                                    audio_stream_id, [audio_stream_id]() {
+                                      LOG_INFO("Audio stream {} opened",
+                                               audio_stream_id);
+                                    }));
     }
 
-    dc_transport->CreateCodecs(
-        clock_,
-        info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-        info_.hardware_acceleration);
+    dc_transport->CreateCodecs(clock_, rtp::PAYLOAD_TYPE::H264,
+                               info_.hardware_acceleration);
 
     // One legacy control channel, with aliases for the registered data streams.
     // Extra channels are created only after a new browser advertises support.
@@ -597,12 +592,12 @@ DataChannelConnection::CreateDataChannelConnection(
 
 std::shared_ptr<Stream> DataChannelConnection::AddVideo(
     const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-    const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
-    const std::string cname, const std::string msid,
+    const uint32_t ssrc, const std::string cname, const std::string msid,
     const std::shared_ptr<WebMediaHandler>& media_handler,
     const std::function<void(void)> onOpen) {
   auto video = ::rtc::Description::Video(cname);
   // The browser path negotiates H.264 (AV1 is disabled in the constructor).
+  constexpr auto payload_type = rtp::PAYLOAD_TYPE::H264;
   video.addH264Codec((int)payload_type);
   video.addExtMap(
       {3, "http://www.webrtc.org/experiments/rtp-hdrext/abs-send-time"});
@@ -683,7 +678,7 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     if (!owner || !std::holds_alternative<std::string>(msg)) return;
     const auto& str = std::get<std::string>(msg);
     if (str.size() > 4096) return;
-    const auto message = json::parse(str, nullptr, false);
+    auto message = json::parse(str, nullptr, false);
     if (!message.is_object()) return;
     if (message.contains("type") && message["type"] == "web_qos_hello") {
       if (!message.contains("version") || message["version"] != 1 ||
@@ -716,7 +711,7 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
       }
       return;
     }
-    input->Deliver(str, false);
+    input->Deliver(str, false, std::move(message));
   });
 
   return dc;

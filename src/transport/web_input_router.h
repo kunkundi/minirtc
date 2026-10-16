@@ -24,7 +24,11 @@ class WebInputRouter {
 
   void Deliver(const std::string& message, bool motion) {
     if (message.size() > 4096) return;
-    auto action = nlohmann::json::parse(message, nullptr, false);
+    Deliver(message, motion, nlohmann::json::parse(message, nullptr, false));
+  }
+
+  // The control channel already parses its handshake; reuse that JSON value.
+  void Deliver(const std::string& message, bool motion, nlohmann::json action) {
     if (!action.is_object()) return;
     std::lock_guard lock(mutex_);
     try {

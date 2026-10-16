@@ -29,7 +29,7 @@
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
 #include "video_frame_cadence.h"
-#include "web_media_handler.h"
+#include "web/web_media_handler.h"
 
 namespace minirtc {
 
@@ -41,16 +41,16 @@ class Stream {
          std::shared_ptr<::rtc::RtcpSrReporter> sender);
 
   std::shared_ptr<::rtc::Track> track_;
-  std::shared_ptr<::rtc::RtcpSrReporter> sender_;
   std::shared_ptr<MediaCodec> codec_;
   std::mutex audio_encode_mutex_;
   std::mutex video_admission_mutex_;
   VideoFrameCadence video_frame_cadence_;
+  std::atomic<int> adapted_frame_rate_{60};
   uint64_t audio_sample_count_ = 0;
   uint32_t ssrc_ = 0;
   // Accessed only on this connection's encode queue.
   int applied_bitrate_ = 0;
-  int applied_frame_rate_ = 0;
+  int requested_frame_rate_ = 0;
   int adapted_width_ = 0;
   int adapted_height_ = 0;
   int source_width_ = 0;

@@ -2,13 +2,12 @@
 
 #include <algorithm>
 #include <chrono>
-#include <limits>
 
 #include "log.h"
 
 namespace minirtc {
 namespace {
-constexpr size_t kMaxQueuedBytes = 512 * 1024;
+constexpr size_t kMaxQueuedBytes = 1024 * 1024;
 constexpr size_t kMaxCacheBytes = 2 * 1024 * 1024;
 constexpr size_t kPacketOverhead = 64;
 // Negotiated in DataChannelConnection::AddVideo. Timestamp at pacer departure,
@@ -139,6 +138,10 @@ bool WebMediaHandler::CanEncode(uint32_t ssrc) {
   const auto it = streams_.find(ssrc);
   if (stopped_ || it == streams_.end()) return false;
   const auto now = NowMs();
+  if (!media_started_) {
+    qos_.Start(now);
+    media_started_ = true;
+  }
   it->second.active_ms = now;
   return QueueDelayLocked(now) < 50;
 }
@@ -152,6 +155,11 @@ bool WebMediaHandler::AdmitAudio(size_t payload_size) {
   // delay to speech. Video repays at most one audio packet of token debt.
   tokens_ -= cost;
   return true;
+}
+
+void WebMediaHandler::SetFrameDeadline(int deadline_ms) {
+  std::lock_guard lock(mutex_);
+  frame_deadline_ms_ = std::clamp(deadline_ms, 250, 1000);
 }
 
 bool WebMediaHandler::TakeKeyFrameRequest(uint32_t ssrc) {
@@ -179,19 +187,23 @@ WebQosController::Budget WebMediaHandler::Budget(uint32_t ssrc) {
       if (state.active_ms >= 0 && now - state.active_ms < 1000) ++active;
     budget.video_bps = std::max(16000, budget.video_bps / std::max(1, active));
     const auto it = streams_.find(ssrc);
-    if (it != streams_.end()) budget.decode_scale *= it->second.recovery_scale;
+    if (it != streams_.end()) {
+      budget.decode_scale *= it->second.recovery_scale;
+      budget.keyframe_scale = it->second.keyframe_scale;
+    }
   }
   return budget;
 }
 
-void WebMediaHandler::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
+bool WebMediaHandler::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
                                   double jitter_ms, double decode_ms,
-                                  double fps, bool frozen) {
+                                  double fps, bool frozen, int received_bps) {
   std::lock_guard lock(mutex_);
-  if (stopped_) return;
+  if (stopped_) return false;
   const auto now = NowMs();
-  qos_.OnTelemetry(lost, expected, rtt_ms, jitter_ms, decode_ms, fps, frozen,
-                   now);
+  if (!qos_.OnTelemetry(lost, expected, rtt_ms, jitter_ms, decode_ms, fps,
+                        frozen, now, received_bps))
+    return false;
   if (frozen) {
     for (auto& [ssrc, stream] : streams_) {
       if (stream.last_freeze_request_ms < 0 ||
@@ -201,16 +213,31 @@ void WebMediaHandler::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
       }
     }
   }
+  return true;
 }
 
 void WebMediaHandler::RecoverLocked(uint32_t ssrc, int64_t now_ms,
-                                    bool oversized) {
+                                    bool oversized, bool keyframe) {
   auto& stream = streams_.at(ssrc);
   stream.waiting_for_keyframe = stream.request_keyframe = true;
   if (oversized) {
     stream.recovery_scale = std::max(0.125, stream.recovery_scale * 0.5);
     stream.last_recovery_ms = now_ms;
   }
+  if (oversized && keyframe) {
+    qos_.OnKeyFrameBlocked(now_ms);
+    if (stream.last_keyframe_failure_ms < 0 ||
+        now_ms - stream.last_keyframe_failure_ms >= 1000) {
+      if (++stream.blocked_keyframes >= 2)
+        stream.keyframe_scale = std::max(0.125, stream.keyframe_scale * 0.5);
+      stream.last_keyframe_failure_ms = now_ms;
+      stream.keyframe_failure_bps = budget_.network_bps;
+    }
+  }
+  DiscardStreamPacketsLocked(ssrc);
+}
+
+void WebMediaHandler::DiscardStreamPacketsLocked(uint32_t ssrc) {
   for (auto it = packets_.begin(); it != packets_.end();) {
     if (it->ssrc == ssrc) {
       queued_bytes_ -= it->message->size() + kPacketOverhead;
@@ -249,33 +276,34 @@ void WebMediaHandler::outgoing(::rtc::message_vector& messages,
     keyframe |= IsKeyFrame(*message);
   }
   auto it = streams_.find(ssrc);
-  const int deadline_ms = keyframe ? 1200 : 250;
+  const int deadline_ms = keyframe ? 2000 : frame_deadline_ms_;
   bool accept = it != streams_.end() && bytes > 0 &&
                 (!it->second.waiting_for_keyframe || keyframe);
   if (accept &&
       (bytes + queued_bytes_ > kMaxQueuedBytes ||
        (bytes + queued_bytes_) * 8000 / std::max(1, budget_.network_bps) >
            deadline_ms)) {
-    RecoverLocked(ssrc, now, true);
+    if (it->second.last_recovery_ms < 0 ||
+        now - it->second.last_recovery_ms >= 1000)
+      LOG_DEBUG("Web frame exceeds pacer budget: ssrc={} keyframe={} "
+                "bytes={} queued={} network={} deadline_ms={}",
+                ssrc, keyframe, bytes, queued_bytes_, budget_.network_bps,
+                deadline_ms);
+    RecoverLocked(ssrc, now, true, keyframe);
     accept = false;
   }
   if (accept && keyframe) {
-    RecoverLocked(ssrc, now, false);
+    DiscardStreamPacketsLocked(ssrc);
     it->second.waiting_for_keyframe = it->second.request_keyframe = false;
+    it->second.blocked_keyframes = 0;
+    // A complete recovery frame fits again. Keeping a historic pacer penalty
+    // would lower FPS and inflate per-frame encoder budgets indefinitely.
+    it->second.recovery_scale = 1;
   }
   for (auto msg = messages.begin(); msg != messages.end();) {
     if ((*msg)->type == ::rtc::Message::Control) {
-      // SR is generated before pacing; remember its actual local departure
-      // time instead of subtracting unrelated browser and host wall clocks.
-      const auto* p = reinterpret_cast<const uint8_t*>((*msg)->data());
-      if ((*msg)->size() >= 28 && p[1] == 200) {
-        const auto stream = streams_.find(Read32(p + 4));
-        if (stream != streams_.end()) {
-          auto& reports = stream->second.sender_reports;
-          if (reports.size() >= 16) reports.clear();
-          reports[Read32(p + 10)] = now;
-        }
-      }
+      // Control packets bypass pacing. SR accounting happens at departure in
+      // Run.
       ++msg;
       continue;
     }
@@ -414,7 +442,7 @@ void WebMediaHandler::Run() {
     if (stopped_) break;
     const auto now = NowMs();
     const int delay = QueueDelayLocked(now);
-    budget_ = qos_.Update(now, delay);
+    if (media_started_) budget_ = qos_.Update(now, delay);
     const double elapsed = std::clamp<int64_t>(now - previous, 0, 50) / 1000.0;
     previous = now;
     const double bytes_per_second = budget_.network_bps / 8.0;
@@ -436,11 +464,12 @@ void WebMediaHandler::Run() {
         ++it;
     }
     for (auto& [ssrc, state] : streams_) {
-      if (state.recovery_scale < 1 && state.last_recovery_ms >= 0 &&
-          now - state.last_recovery_ms > 5000 && delay < 50 &&
+      if (state.keyframe_scale < 1 && !state.waiting_for_keyframe &&
+          now - state.last_keyframe_failure_ms > 5000 && delay < 50 &&
+          budget_.network_bps > state.keyframe_failure_bps * 1.5 &&
           budget_.loss_ratio <= 0.02 && budget_.feedback_age_ms < 1500) {
-        state.recovery_scale = std::min(1.0, state.recovery_scale + 0.125);
-        state.last_recovery_ms = now;
+        state.keyframe_scale = std::min(1.0, state.keyframe_scale * 2);
+        state.last_keyframe_failure_ms = now;
       }
     }
     while (!packets_.empty() && !stopped_) {
@@ -495,6 +524,7 @@ void WebMediaHandler::Run() {
         failed = true;
       }
       lock.lock();
+      if (!failed) qos_.OnPacketSent(cost);
       if (failed) RecoverLocked(packet.ssrc, now, false);
     }
     if (now - last_log >= 5000 && !streams_.empty()) {

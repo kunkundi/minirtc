@@ -233,7 +233,8 @@ target("qos")
     set_kind("object")
     add_deps("log", "rtp", "rtcp")
     add_files("src/qos/*.cc", 
-    "src/qos/*.cpp")
+    "src/qos/*.cpp",
+    "src/qos/web/web_qos_controller.cpp")
     add_includedirs("src/qos", {public = true})
 
 target("transport")
@@ -241,7 +242,8 @@ target("transport")
     add_deps("log", "ws", "ice", "rtp", "rtcp", "srtp", "statistics", "media", "qos")
     add_files("src/transport/*.cpp",
     "src/transport/channel/*.cpp",
-    "src/transport/paced_sender/*.cpp")
+    "src/transport/paced_sender/*.cpp",
+    "src/qos/web/web_media_handler.cpp")
     add_includedirs("src/media/resolution_adapter")
     add_includedirs("src/transport",
     "src/transport/channel",

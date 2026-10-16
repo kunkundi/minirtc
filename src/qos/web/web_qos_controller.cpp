@@ -9,6 +9,7 @@ namespace minirtc {
 namespace {
 constexpr int kMinNetworkBps = 64000;
 constexpr int kFallbackBps = 500000;
+constexpr int kRecoveryProbeBps = 1000000;
 using webrtc::DataRate;
 using webrtc::TimeDelta;
 using webrtc::Timestamp;
@@ -22,9 +23,51 @@ WebQosController::WebQosController(int64_t now_ms)
                          Timestamp::Millis(now_ms));
 }
 
+void WebQosController::Start(int64_t now_ms) {
+  // Signaling/ICE setup is not a period of missing media feedback.
+  started_ms_ = last_feedback_ms_ = last_update_ms_ = now_ms;
+  send_window_ms_ = now_ms;
+  sent_bytes_ = 0;
+  application_limited_ = false;
+}
+
+void WebQosController::OnPacketSent(size_t bytes) {
+  sent_bytes_ += bytes;
+}
+
+void WebQosController::OnKeyFrameBlocked(int64_t now_ms) {
+  // With every IDR rejected locally there are no new RTP loss samples. A stale
+  // loss fraction must not lock the pacer at its minimum forever. Allow a
+  // bounded recovery frame. This is a probe, not a new bandwidth estimate.
+  if (last_packet_feedback_ms_ >= 0 &&
+      now_ms - last_packet_feedback_ms_ < 3000) return;
+  if (last_recovery_probe_ms_ >= 0 &&
+      now_ms - last_recovery_probe_ms_ < 8000) return;
+  if (budget_.network_bps >= kRecoveryProbeBps) return;
+  last_recovery_probe_ms_ = now_ms;
+  recovery_probe_until_ms_ = now_ms + 3000;
+  estimator_.SetSendBitrate(DataRate::BitsPerSec(kRecoveryProbeBps),
+                            Timestamp::Millis(now_ms));
+}
+
 void WebQosController::OnReceiverEstimate(int bitrate_bps, int64_t now_ms) {
   if (bitrate_bps <= 0) return;
-  if (budget_.receiver_bps > 0 && bitrate_bps < budget_.receiver_bps * 0.8) {
+  // A static desktop can send far less than the path supports. A receive-rate
+  // estimate from that sparse traffic is not proof of congestion; preserve the
+  // working rate until loss/RTT or fresh feedback says otherwise.
+  const bool delivery_confirmed = last_received_rate_ms_ >= 0 &&
+      now_ms - last_received_rate_ms_ <= 2000 &&
+      acknowledged_bps_ >= budget_.network_bps * 0.65;
+  const bool sparse_healthy_media =
+      (application_limited_ || delivery_confirmed) &&
+      budget_.loss_ratio <= 0.02 && last_decode_progress_ms_ >= 0 &&
+      now_ms - last_decode_progress_ms_ < 1500 &&
+      (last_loss_ms_ < 0 || now_ms - last_loss_ms_ >= 3000) &&
+      (last_backoff_ms_ < 0 || now_ms - last_backoff_ms_ >= 3000);
+  if (sparse_healthy_media && bitrate_bps < budget_.network_bps) {
+    probe_floor_bps_ = std::max(probe_floor_bps_, budget_.network_bps);
+  } else if (budget_.receiver_bps > 0 &&
+             bitrate_bps < budget_.receiver_bps * 0.8) {
     healthy_since_ms_ = -1;
     probe_floor_bps_ = 0;
   }
@@ -38,23 +81,39 @@ void WebQosController::ApplyReceiverLimit(int64_t now_ms) {
   estimator_.UpdateReceiverEstimate(
       Timestamp::Millis(now_ms),
       DataRate::BitsPerSec(
-          std::clamp(std::max(budget_.receiver_bps, probe_floor_bps_),
+          std::clamp(std::max({budget_.receiver_bps, probe_floor_bps_,
+                              acknowledged_bps_}),
                      kMinNetworkBps, kDefaultMaxNetworkBitrateBps)));
 }
 
 void WebQosController::OnReceiverReport(int64_t lost, int64_t expected,
                                         int rtt_ms, int64_t now_ms) {
-  last_feedback_ms_ = last_report_ms_ = now_ms;
+  last_report_ms_ = now_ms;
+  UpdateNetworkFeedback(lost, expected, rtt_ms, now_ms);
+}
+
+void WebQosController::UpdateNetworkFeedback(int64_t lost, int64_t expected,
+                                             int rtt_ms, int64_t now_ms) {
+  last_feedback_ms_ = now_ms;
   if (expected > 0 && expected <= 1000000) {
+    last_packet_feedback_ms_ = now_ms;
     lost = std::clamp<int64_t>(lost, 0, expected);
     budget_.loss_ratio = static_cast<double>(lost) / expected;
-    if (budget_.loss_ratio > 0.02) healthy_since_ms_ = -1;
+    if (budget_.loss_ratio > 0.02) {
+      ResetProbe();
+      last_loss_ms_ = now_ms;
+    }
     estimator_.UpdatePacketsLost(lost, expected, Timestamp::Millis(now_ms));
   }
   if (rtt_ms > 0 && rtt_ms <= 10000) {
     min_rtt_ms_ = min_rtt_ms_ ? std::min(min_rtt_ms_, rtt_ms) : rtt_ms;
-    if (rtt_ms > min_rtt_ms_ + 100 && rtt_ms > min_rtt_ms_ * 1.5)
-      BackOff(0.85, now_ms);
+    if (rtt_ms > min_rtt_ms_ + 100 && rtt_ms > min_rtt_ms_ * 1.5) {
+      if (rtt_pressure_since_ms_ < 0) rtt_pressure_since_ms_ = now_ms;
+      if (now_ms - rtt_pressure_since_ms_ >= 1000)
+        BackOff(0.85, now_ms);
+    } else {
+      rtt_pressure_since_ms_ = -1;
+    }
     budget_.rtt_ms = rtt_ms;
     estimator_.UpdateRtt(TimeDelta::Millis(rtt_ms), Timestamp::Millis(now_ms));
     estimator_.UpdatePropagationRtt(Timestamp::Millis(now_ms),
@@ -62,9 +121,15 @@ void WebQosController::OnReceiverReport(int64_t lost, int64_t expected,
   }
 }
 
-void WebQosController::BackOff(double factor, int64_t now_ms) {
+void WebQosController::ResetProbe() {
   healthy_since_ms_ = -1;
   probe_floor_bps_ = 0;
+  acknowledged_bps_ = 0;
+  recovery_probe_until_ms_ = -1;
+}
+
+void WebQosController::BackOff(double factor, int64_t now_ms) {
+  ResetProbe();
   if (last_backoff_ms_ >= 0 && now_ms - last_backoff_ms_ < 1000) return;
   last_backoff_ms_ = now_ms;
   estimator_.SetSendBitrate(
@@ -75,33 +140,65 @@ void WebQosController::BackOff(double factor, int64_t now_ms) {
       std::min(budget_.network_bps, estimator_.target_rate().bps<int>());
 }
 
-void WebQosController::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
+bool WebQosController::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
                                    double jitter_buffer_ms, double decode_ms,
-                                   double fps, bool frozen, int64_t now_ms) {
-  if (!std::isfinite(jitter_buffer_ms) || !std::isfinite(decode_ms) ||
-      !std::isfinite(fps) || jitter_buffer_ms < 0 || jitter_buffer_ms > 10000 ||
-      decode_ms < 0 || decode_ms > 10000 || fps < 0 || fps > 1000)
-    return;
+                                   double fps, bool frozen, int64_t now_ms,
+                                   int received_bps) {
+  if (expected < 0 || expected > 1000000 || lost < 0 || lost > expected ||
+      rtt_ms < 0 || rtt_ms > 10000 || received_bps < 0 ||
+      received_bps > 200000000 || !std::isfinite(jitter_buffer_ms) ||
+      !std::isfinite(decode_ms) || !std::isfinite(fps) ||
+      jitter_buffer_ms < 0 || jitter_buffer_ms > 10000 || decode_ms < 0 ||
+      decode_ms > 10000 || fps < 0 || fps > 1000)
+    return false;
   // Do not count the same loss interval again when standard RR is available.
-  if (last_report_ms_ < 0 || now_ms - last_report_ms_ > 2500) {
-    OnReceiverReport(lost, expected, rtt_ms, now_ms);
-    last_report_ms_ =
-        -1;  // Telemetry must not suppress the next fallback sample.
-  }
+  if (last_report_ms_ < 0 || now_ms - last_report_ms_ > 2500)
+    UpdateNetworkFeedback(lost, expected, rtt_ms, now_ms);
   last_feedback_ms_ = now_ms;
+  if (expected > 0) last_packet_feedback_ms_ = now_ms;
+  // Even when RR owns loss estimation, fresh browser loss must stop a probe.
+  if (expected > 0 && lost > expected * 0.02) {
+    ResetProbe();
+    last_loss_ms_ = now_ms;
+  }
+  // REMB can be application-limited even while RTP arrives losslessly at a
+  // much higher rate. Use recently measured delivery, never the sender's
+  // offered load, as a short-lived lower bound for that estimate.
+  if (received_bps > 0 && expected > 0 && lost <= expected * 0.02 &&
+      budget_.loss_ratio <= 0.02 &&
+      (min_rtt_ms_ == 0 || budget_.rtt_ms <= min_rtt_ms_ + 50) &&
+      (last_loss_ms_ < 0 || now_ms - last_loss_ms_ >= 3000)) {
+    if (received_bps >= acknowledged_bps_ || last_received_rate_ms_ < 0 ||
+        now_ms - last_received_rate_ms_ > 2000) {
+      acknowledged_bps_ = received_bps;
+      last_received_rate_ms_ = now_ms;
+    }
+  }
   // At 10 fps, a frame interval alone is 100 ms. Do not interpret the normal
   // low-frame-rate playout cadence as a growing network queue.
   const double excess_buffer_ms =
       std::max(0.0, jitter_buffer_ms - 1000.0 / std::max(5.0, fps));
   const bool growing_buffer =
       excess_buffer_ms > 100 && excess_buffer_ms > previous_jitter_ms_ + 20;
+  if (!growing_buffer || last_telemetry_ms_ < 0 ||
+      now_ms - last_telemetry_ms_ > 1500)
+    jitter_pressure_since_ms_ = -1;
+  else if (jitter_pressure_since_ms_ < 0)
+    jitter_pressure_since_ms_ = now_ms;
+  const bool sustained_buffer_growth = jitter_pressure_since_ms_ >= 0 &&
+      now_ms - jitter_pressure_since_ms_ >= 1500;
   const bool slow_decode = fps >= 5 && decode_ms * fps > 750;
   if (fps > 0) last_decode_progress_ms_ = now_ms;
-  const bool healthy = !frozen && !slow_decode && excess_buffer_ms < 80 &&
+  const bool healthy = !frozen && !slow_decode && !sustained_buffer_growth &&
                        last_decode_progress_ms_ >= 0 &&
                        now_ms - last_decode_progress_ms_ < 1500 &&
                        lost <= expected * 0.02 && budget_.loss_ratio <= 0.02 &&
                        (min_rtt_ms_ == 0 || budget_.rtt_ms <= min_rtt_ms_ + 50);
+  if (healthy && (application_limited_ || now_ms < recovery_probe_until_ms_) &&
+      expected > 0 &&
+      (last_loss_ms_ < 0 || now_ms - last_loss_ms_ >= 3000) &&
+      (last_backoff_ms_ < 0 || now_ms - last_backoff_ms_ >= 3000))
+    probe_floor_bps_ = std::max(probe_floor_bps_, budget_.network_bps);
   if (!healthy)
     healthy_since_ms_ = -1;
   else if (healthy_since_ms_ < 0)
@@ -109,23 +206,36 @@ void WebQosController::OnTelemetry(int64_t lost, int64_t expected, int rtt_ms,
   // Missing reference frames also freeze playback. Requesting an IDR belongs
   // to the media handler; a freeze alone proves neither congestion nor a slow
   // decoder. Avoid a freeze -> resize -> keyframe -> freeze feedback loop.
-  if (growing_buffer) BackOff(0.8, now_ms);
+  // Browser jitter-buffer delay includes its playout target and keyframe
+  // assembly, not just network queuing. REMB/RR already report network pressure.
+  // Cutting the rate again on each rising sample creates a ratchet on normal
+  // relay jitter and prevents a healthy, application-limited desktop recovering.
   if (slow_decode &&
       (last_pressure_ms_ < 0 || now_ms - last_pressure_ms_ >= 1000)) {
     budget_.decode_scale = std::max(0.25, budget_.decode_scale * 0.75);
     last_pressure_ms_ = now_ms;
-  } else if (!slow_decode && !frozen && !growing_buffer &&
+  } else if (!slow_decode && !frozen && !sustained_buffer_growth &&
              (last_pressure_ms_ < 0 || now_ms - last_pressure_ms_ > 5000) &&
              (last_telemetry_ms_ < 0 || now_ms - last_telemetry_ms_ >= 500)) {
     budget_.decode_scale = std::min(1.0, budget_.decode_scale + 0.025);
   }
   previous_jitter_ms_ = excess_buffer_ms;
   last_telemetry_ms_ = now_ms;
+  return true;
 }
 
 WebQosController::Budget WebQosController::Update(int64_t now_ms,
                                                   int queue_ms) {
+  if (now_ms - send_window_ms_ >= 1000) {
+    const auto sent_bps = sent_bytes_ * 8000 / (now_ms - send_window_ms_);
+    application_limited_ = sent_bps < budget_.network_bps * 0.65 && queue_ms < 50;
+    sent_bytes_ = 0;
+    send_window_ms_ = now_ms;
+  }
   budget_.feedback_age_ms = std::max<int64_t>(0, now_ms - last_feedback_ms_);
+  if (budget_.loss_ratio > 0.02 || last_received_rate_ms_ < 0 ||
+      now_ms - last_received_rate_ms_ > 2000)
+    acknowledged_bps_ = 0;
   // A stale low REMB must not cap a recovered route forever. With no fresh
   // feedback, the fallback below still prevents an uncontrolled ramp-up.
   if (last_remb_ms_ >= 0 && now_ms - last_remb_ms_ > 5000) {
@@ -154,10 +264,14 @@ WebQosController::Budget WebQosController::Update(int64_t now_ms,
   const bool can_probe =
       healthy_since_ms_ >= 0 && now_ms - healthy_since_ms_ >= 3000 &&
       last_telemetry_ms_ >= 0 && now_ms - last_telemetry_ms_ <= 1500 &&
+      (!application_limited_ || budget_.network_bps < kInitialNetworkBps) &&
       (last_backoff_ms_ < 0 || now_ms - last_backoff_ms_ >= 3000);
-  if (!can_probe)
+  // A transient playout/RTT sample pauses probing; it does not invalidate an
+  // already healthy rate. Real loss, sustained RTT growth, a lower REMB, or
+  // missing feedback revoke it. Otherwise a stable old REMB traps recovery.
+  if (budget_.feedback_age_ms > 1500 || budget_.loss_ratio > 0.02)
     probe_floor_bps_ = 0;
-  else if (last_probe_ms_ < 0 || now_ms - last_probe_ms_ >= 1000) {
+  if (can_probe && (last_probe_ms_ < 0 || now_ms - last_probe_ms_ >= 1000)) {
     probe_floor_bps_ = static_cast<int>(budget_.network_bps * 1.08) + 8000;
     last_probe_ms_ = now_ms;
   }
@@ -169,6 +283,8 @@ WebQosController::Budget WebQosController::Update(int64_t now_ms,
        now_ms - started_ms_ > 2000)) {
     desired = std::min(desired, kFallbackBps);
   }
+  const bool recovery_probe = now_ms < recovery_probe_until_ms_;
+  if (recovery_probe) desired = std::max(desired, kRecoveryProbeBps);
   // Apply decreases immediately; never jump to a large REMB during startup.
   const double seconds =
       std::clamp((now_ms - last_update_ms_) / 1000.0, 0.0, 1.0);
@@ -177,6 +293,8 @@ WebQosController::Budget WebQosController::Update(int64_t now_ms,
   budget_.network_bps =
       std::clamp(std::min(desired, budget_.network_bps + increase),
                  kMinNetworkBps, kDefaultMaxNetworkBitrateBps);
+  if (recovery_probe)
+    budget_.network_bps = std::max(budget_.network_bps, kRecoveryProbeBps);
   // Ten-millisecond Opus packets include substantial per-packet overhead.
   // Bound audio too on very weak links so it cannot starve screen updates.
   budget_.audio_bps = std::min(96000, budget_.network_bps * 2 / 5);

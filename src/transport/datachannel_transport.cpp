@@ -1,7 +1,6 @@
 #include "datachannel_transport.h"
 
 #include <algorithm>
-#include <cmath>
 #include <future>
 #include <sstream>
 #include <vector>
@@ -24,7 +23,7 @@ namespace minirtc {
 
 Stream::Stream(std::shared_ptr<::rtc::Track> track,
                std::shared_ptr<::rtc::RtcpSrReporter> sender)
-    : track_(track), sender_(sender), ssrc_(sender->rtpConfig->ssrc) {}
+    : track_(std::move(track)), ssrc_(sender->rtpConfig->ssrc) {}
 
 DataChannelTransport::DataChannelTransport(
     std::shared_ptr<SystemClock> clock,
@@ -77,10 +76,16 @@ void DataChannelTransport::SetVideoConfig(
   video_frame_rate_limit_ = media_config_.max_frame_rate;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference = video_degradation_preference;
-  media_config_.init_bitrate = media_config_.average_bitrate = 600000;
+  media_config_.init_bitrate = media_config_.average_bitrate =
+      media_handler_->Budget().video_bps;
   media_config_.min_bitrate = 16000;
   media_config_.audio_fec_enabled = true;
-  media_config_.key_frame_interval = media_config_.max_frame_rate * 3;
+  // Quality priority lets large desktop updates drain while capture is paused.
+  media_handler_->SetFrameDeadline(
+      video_degradation_preference ==
+              VideoDegradationPreference::MaintainResolution
+          ? 1000
+          : 250);
   resolution_adapter_ = std::make_unique<ResolutionAdapter>(
       video_quality, media_config_.max_frame_rate, video_content_type,
       video_degradation_preference);
@@ -93,85 +98,80 @@ int DataChannelTransport::UpdateVideoSettings(
       (frame_rate != 30 && frame_rate != 60) ||
       preference > VideoDegradationPreference::Balanced)
     return -1;
-  auto completion = std::make_shared<std::promise<int>>();
-  auto result = completion->get_future();
+  std::future<int> result;
   {
     std::lock_guard settings_lock(video_settings_mutex_);
     if (shutdown_ || !task_queue_encode_) return -1;
-    std::weak_ptr<DataChannelTransport> weak = shared_from_this();
-    task_queue_encode_->PostTask([weak, quality, frame_rate, preference,
-                                  completion] {
-      auto self = weak.lock();
-      if (!self || self->shutdown_) {
-        completion->set_value(-1);
-        return;
-      }
-      if (self->video_quality_ == quality &&
-          self->media_config_.max_frame_rate == frame_rate &&
-          self->media_config_.video_degradation_preference == preference) {
-        completion->set_value(0);
-        return;
-      }
-      auto config = self->media_config_;
-      config.max_frame_rate = frame_rate;
-      config.key_frame_interval = frame_rate * 3;
-      config.video_degradation_preference = preference;
-      // Prepare all replacements before applying anything, including encoders
-      // that do not support in-place FPS changes. Reply only after application.
-      std::unordered_map<std::string, std::shared_ptr<MediaCodec>> encoders;
-      std::vector<std::shared_ptr<MediaCodec>> retired;
-      std::unique_lock lock(self->video_streams_mutex_);
-      for (const auto& [id, stream] : self->video_streams_) {
-        if (!stream || !stream->codec_) continue;
-        auto encoder_config = config;
-        if (stream->adapted_width_ > 0 && stream->adapted_height_ > 0) {
-          encoder_config.init_width = stream->adapted_width_;
-          encoder_config.init_height = stream->adapted_height_;
-        }
-        encoder_config.init_bitrate =
-            self->media_handler_->Budget(stream->ssrc_).video_bps;
-        auto codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
-            self->clock_, encoder_config, self->hardware_acceleration_,
-            self->video_codec_type_);
-        if (!codec) {
-          completion->set_value(-1);
-          return;
-        }
-        encoders.emplace(id, std::move(codec));
-      }
-      if (self->shutdown_) {
-        completion->set_value(-1);
-        return;
-      }
-      self->media_config_ = config;
-      self->video_quality_ = quality;
-      self->resolution_adapter_->SetPreferences(quality, frame_rate, preference);
-      for (auto& [id, codec] : encoders) {
-        auto& stream = self->video_streams_.at(id);
-        retired.push_back(std::move(stream->codec_));
-        stream->codec_ = std::move(codec);
-        stream->applied_bitrate_ = stream->applied_frame_rate_ = 0;
-        stream->adapted_width_ = stream->adapted_height_ = 0;
-        {
-          std::lock_guard admission_lock(stream->video_admission_mutex_);
-          stream->video_frame_cadence_ = VideoFrameCadence();
-        }
-      }
-      self->video_frame_rate_limit_ = frame_rate;
-      lock.unlock();
-      self->RequestAllVideoKeyFrames();
-      retired.clear();
-      LOG_INFO("Web negotiated video settings: quality={} fps={} preference={}",
-               static_cast<int>(quality), frame_rate,
-               static_cast<int>(preference));
-      completion->set_value(0);
-    });
+    auto task = std::make_shared<std::packaged_task<int()>>(
+        [weak = weak_from_this(), quality, frame_rate, preference] {
+          auto self = weak.lock();
+          if (!self || self->shutdown_) return -1;
+          const bool reconfigure_codec =
+              self->media_config_.max_frame_rate != frame_rate ||
+              self->media_config_.video_degradation_preference != preference;
+          if (self->video_quality_ == quality && !reconfigure_codec) return 0;
+          auto config = self->media_config_;
+          config.max_frame_rate = frame_rate;
+          config.video_degradation_preference = preference;
+          // Prepare replacements atomically. A quality-only change affects the
+          // resolution adapter and does not need to recreate any encoder.
+          std::vector<
+              std::pair<std::shared_ptr<Stream>, std::shared_ptr<MediaCodec>>>
+              encoders;
+          std::unique_lock lock(self->video_streams_mutex_);
+          for (const auto& [id, stream] : self->video_streams_) {
+            if (!stream || !stream->codec_) continue;
+            auto codec = stream->codec_;
+            if (reconfigure_codec) {
+              auto encoder_config = config;
+              if (stream->adapted_width_ > 0 && stream->adapted_height_ > 0) {
+                encoder_config.init_width = stream->adapted_width_;
+                encoder_config.init_height = stream->adapted_height_;
+              }
+              encoder_config.init_bitrate = encoder_config.average_bitrate =
+                  self->media_handler_->Budget(stream->ssrc_).video_bps;
+              codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
+                  self->clock_, encoder_config, self->hardware_acceleration_,
+                  self->video_codec_type_);
+              if (!codec) return -1;
+            }
+            encoders.emplace_back(stream, std::move(codec));
+          }
+          if (self->shutdown_) return -1;
+          self->media_config_ = config;
+          self->video_quality_ = quality;
+          self->media_handler_->SetFrameDeadline(
+              preference == VideoDegradationPreference::MaintainResolution
+                  ? 1000
+                  : 250);
+          for (auto& [stream, codec] : encoders) {
+            stream->codec_.swap(codec);
+            stream->applied_bitrate_ = stream->requested_frame_rate_ = 0;
+            stream->adapted_frame_rate_ = frame_rate;
+            stream->adapted_width_ = stream->adapted_height_ = 0;
+            std::lock_guard admission_lock(stream->video_admission_mutex_);
+            stream->video_frame_cadence_ = VideoFrameCadence();
+          }
+          self->video_frame_rate_limit_ = frame_rate;
+          lock.unlock();
+          self->RequestAllVideoKeyFrames();
+          // Release replaced encoders outside the stream lock.
+          encoders.clear();
+          LOG_INFO(
+              "Web negotiated video settings: quality={} fps={} preference={}",
+              static_cast<int>(quality), frame_rate,
+              static_cast<int>(preference));
+          return 0;
+        });
+    result = task->get_future();
+    task_queue_encode_->PostTask([task] { (*task)(); });
   }
-  // A stopped queue discards the task and breaks the promise.
-  completion.reset();
+  // A stopped queue breaks the future; packaged_task also propagates failures
+  // immediately instead of leaving the caller waiting on an unset promise.
   try {
     return result.get();
-  } catch (const std::future_error&) {
+  } catch (const std::exception& error) {
+    LOG_WARN("Could not apply web video settings: {}", error.what());
     return -1;
   }
 }
@@ -250,7 +250,8 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     std::lock_guard lock(stream->video_admission_mutex_);
     if (!stream->video_frame_cadence_.Accept(
             clock_->CurrentTimeUs(),
-            std::min(video_frame_rate_limit_.load(), budget.max_fps))) {
+            std::min({video_frame_rate_limit_.load(), budget.max_fps,
+                      stream->adapted_frame_rate_.load()}))) {
       return 0;
     }
   }
@@ -298,11 +299,6 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       return -1;
     }
 
-    if (!codec) {
-      LOG_WARN("[{}] Codec is null, drop frame", stream_id);
-      return -1;
-    }
-
     const auto budget = self->media_handler_->Budget(stream->ssrc_);
     if (stream->applied_bitrate_ != budget.video_bps &&
         codec->SetTargetBitrate(budget.video_bps) == 0) {
@@ -312,23 +308,57 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     const bool keep_resolution =
         self->media_config_.video_degradation_preference ==
         VideoDegradationPreference::MaintainResolution;
-    const int effective_fps =
+    const int fps_limit =
         std::min(self->media_config_.max_frame_rate, budget.max_fps);
-    if (stream->applied_frame_rate_ != effective_fps &&
-        codec->SetTargetFrameRate(effective_fps) == 0) {
-      stream->applied_frame_rate_ = effective_fps;
+    // Match native quality priority: reduce temporal load under decoder/pacer
+    // pressure instead of mapping a conservative bitrate to tiny desktop pixels.
+    const int effective_fps = keep_resolution
+        ? std::max(1, static_cast<int>(fps_limit * budget.decode_scale))
+        : fps_limit;
+    stream->adapted_frame_rate_ = effective_fps;
+    if (stream->requested_frame_rate_ != effective_fps) {
+      // Optional encoder hint: unsupported/failed settings must not be retried
+      // on every frame. Admission still enforces FPS, regardless of support.
+      stream->requested_frame_rate_ = effective_fps;
+      codec->SetTargetFrameRate(effective_fps);
     }
     // The bandwidth mapping must use the admitted FPS, not capture's 60 fps.
-    // Resolution priority uses it only for upgrades or actual pipeline pressure.
+    // Keep the negotiated preference intact. MaintainResolution already maps
+    // to the source dimensions, bounded by the selected quality tier.
     self->resolution_adapter_->SetPreferences(
         self->video_quality_, effective_fps,
-        keep_resolution ? VideoDegradationPreference::Balanced
-                        : self->media_config_.video_degradation_preference);
+        self->media_config_.video_degradation_preference);
     int target_width = raw_frame.Width(), target_height = raw_frame.Height();
     self->resolution_adapter_->GetResolution(
         std::max(16000,
                  static_cast<int>(budget.video_bps * budget.decode_scale)),
         raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
+    // Only repeated IDRs that cannot fit the bounded pacer may temporarily
+    // reduce quality-priority pixels. Keep at least a readable 720p desktop,
+    // rather than mapping a transient bitrate estimate straight down to 180p.
+    const bool keyframe_recovery = keep_resolution && budget.keyframe_scale < 1;
+    if (keyframe_recovery) {
+      int floor_width = 0, floor_height = 0;
+      self->resolution_adapter_->GetStartupResolution(
+          raw_frame.Width(), raw_frame.Height(), &floor_width, &floor_height);
+      const int64_t floor_pixels = int64_t(floor_width) * floor_height;
+      const int64_t desired = std::max(floor_pixels, static_cast<int64_t>(
+          target_width * int64_t(target_height) * budget.keyframe_scale));
+      while (int64_t(target_width) * target_height > desired) {
+        const auto next = self->resolution_adapter_->GetNextLowerResolution(
+            target_width, target_height, raw_frame.Width(), raw_frame.Height());
+        if (next.first <= 0 || next.second <= 0 ||
+            int64_t(next.first) * next.second >= int64_t(target_width) * target_height)
+          break;
+        if (int64_t(next.first) * next.second < floor_pixels) {
+          target_width = floor_width;
+          target_height = floor_height;
+          break;
+        }
+        target_width = next.first;
+        target_height = next.second;
+      }
+    }
     const bool new_source =
         stream->source_width_ != static_cast<int>(raw_frame.Width()) ||
         stream->source_height_ != static_cast<int>(raw_frame.Height());
@@ -336,8 +366,9 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       // A conservative initial bandwidth estimate is not evidence that the
       // desktop needs 180p. Start with readable pixels; bounded keyframe/queue
       // recovery can still reduce them immediately on genuinely weak links.
-      self->resolution_adapter_->GetStartupResolution(
-          raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
+      if (!keep_resolution)
+        self->resolution_adapter_->GetStartupResolution(
+            raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
       stream->source_started_ms_ = now_ms;
       stream->downscale_since_ms_ = -1;
     }
@@ -350,14 +381,15 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       stream->downscale_since_ms_ = -1;
     else if (stream->downscale_since_ms_ < 0)
       stream->downscale_since_ms_ = now_ms;
-    const bool pipeline_pressure = budget.decode_scale < 0.95;
+    const bool pipeline_pressure = !keep_resolution && budget.decode_scale < 0.95;
     const bool bandwidth_downscale =
         !keep_resolution && now_ms - stream->source_started_ms_ >= 5000 &&
         stream->downscale_since_ms_ >= 0 &&
         now_ms - stream->downscale_since_ms_ >= 2000;
     if (target_width > 0 && target_height > 0 &&
         (new_source || !current_pixels ||
-         (downscale && (pipeline_pressure || bandwidth_downscale) &&
+         (downscale &&
+          (pipeline_pressure || bandwidth_downscale || keyframe_recovery) &&
           now_ms - stream->last_resize_ms_ >= 1000) ||
          (upscale && now_ms - stream->last_resize_ms_ >= 5000))) {
       LOG_INFO(
@@ -369,6 +401,7 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
           budget.decode_scale,
           new_source || !current_pixels ? "startup"
           : upscale                     ? "bandwidth_recovery"
+          : keyframe_recovery           ? "keyframe_budget"
           : pipeline_pressure           ? "pipeline_pressure"
                                         : "sustained_bandwidth");
       stream->adapted_width_ = target_width;
@@ -552,12 +585,15 @@ void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
       return;
     const int64_t expected = report.value("packets", int64_t{0});
     const int64_t lost = report.value("lost", int64_t{0});
-    if (expected < 0 || expected > 1000000 || lost < 0 || lost > expected)
+    const int rtt_ms = report.value("rtt_ms", 0);
+    const double jitter_ms = report.value("jitter_ms", 0.0);
+    const double decode_ms = report.value("decode_ms", 0.0);
+    const double fps = report.value("fps", 0.0);
+    const bool frozen = report.value("frozen", false);
+    if (!media_handler_->OnTelemetry(lost, expected, rtt_ms, jitter_ms,
+                                     decode_ms, fps, frozen,
+                                     report.value("received_bps", 0)))
       return;
-    media_handler_->OnTelemetry(
-        lost, expected, report.value("rtt_ms", 0),
-        report.value("jitter_ms", 0.0), report.value("decode_ms", 0.0),
-        report.value("fps", 0.0), report.value("frozen", false));
     feedback_sequence_ = sequence;
     last_feedback_ms_ = now;
     if (last_receiver_log_ms_ < 0 || now - last_receiver_log_ms_ >= 5000) {
@@ -575,10 +611,9 @@ void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
           "Web receiver: peer={} fps={} size={}x{} jitter_ms={} decode_ms={} "
           "frozen={} packets={} lost={} ice_local={} ice_remote={} "
           "browser_relay_protocol={}",
-          remote_id_, report.value("fps", 0.0), report.value("width", 0),
-          report.value("height", 0), report.value("jitter_ms", 0.0),
-          report.value("decode_ms", 0.0), report.value("frozen", false),
-          expected, lost, local_route.str(), remote_route.str(), relay_protocol);
+          remote_id_, fps, report.value("width", 0), report.value("height", 0),
+          jitter_ms, decode_ms, frozen, expected, lost, local_route.str(),
+          remote_route.str(), relay_protocol);
       last_receiver_log_ms_ = now;
     }
     std::shared_ptr<::rtc::DataChannel> channel;

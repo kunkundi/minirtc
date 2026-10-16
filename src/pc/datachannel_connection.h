@@ -56,8 +56,7 @@ class DataChannelConnection : public ConnectionInterface {
 
   std::shared_ptr<Stream> AddVideo(
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
-      const rtp::PAYLOAD_TYPE payload_type, const uint32_t ssrc,
-      const std::string cname, const std::string msid,
+      const uint32_t ssrc, const std::string cname, const std::string msid,
       const std::shared_ptr<WebMediaHandler>& media_handler,
       const std::function<void(void)> onOpen);
 
