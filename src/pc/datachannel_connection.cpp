@@ -74,6 +74,9 @@ int DataChannelConnection::Init() {
     peer_connection_config_.iceTransportPolicy = ::rtc::TransportPolicy::Relay;
   }
   // use trickle ice by default
+  // Offer TCP host candidates as a direct fallback when UDP is blocked.
+  // Relay-only sessions still obey iceTransportPolicy above.
+  peer_connection_config_.enableIceTcp = true;
   peer_connection_config_.disableAutoNegotiation = true;
   peer_connection_config_.disableAutoGathering = true;
 
@@ -275,7 +278,11 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
         pc->setRemoteDescription(remote_sdp);
         FlushRemoteIceCandidates();
 
-        pc->gatherLocalCandidates();
+        // New hosts gather immediately after the offer. Keep this fallback for
+        // transports whose gathering has not started yet.
+        if (pc->gatheringState() == ::rtc::PeerConnection::GatheringState::New) {
+          pc->gatherLocalCandidates();
+        }
       }
 
       break;
@@ -584,6 +591,9 @@ DataChannelConnection::CreateDataChannelConnection(
       ws->Send(message.dump());
       // LOG_INFO("[{}] send offer to [{}]: {}", info_.user_id, remote_user_id,
       //          message.dump());
+      // Signal the offer first, then gather in parallel with the browser's
+      // answer. Slow STUN/UPnP discovery must not wait for another signaling RTT.
+      peer_connection->gatherLocalCandidates();
     }
   }
 
