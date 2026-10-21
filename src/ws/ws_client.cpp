@@ -167,6 +167,8 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
   std::thread reconnect_thread([weak_self, delay_seconds,
                                 current_generation]() {
     if (auto self = weak_self.lock()) {
+      // Report the loss before waiting for backoff or stopping network workers.
+      self->SetStatus(WsReconnecting);
       {
         // use interruptible wait instead of sleep
         std::unique_lock<std::mutex> lock(self->reconnect_mtx_);
@@ -262,12 +264,9 @@ void WsClient::RegisterHandlers() {
         }
         return false;
       });
-  m_endpoint_->set_pong_timeout_handler(
-      [weak_self](websocketpp::connection_hdl hdl, std::string msg) {
-        if (auto self = weak_self.lock()) {
-          self->OnPongTimeout(hdl, msg);
-        }
-      });
+  // PingLoop owns a steady-clock deadline. websocketpp restarts its pong timer
+  // for every ping and cancels it for any pong, including unrelated replies.
+  m_endpoint_->set_pong_timeout(0);
   m_endpoint_->set_message_handler(
       [weak_self](websocketpp::connection_hdl hdl, client::message_ptr msg) {
         if (auto self = weak_self.lock()) {
@@ -315,13 +314,12 @@ int WsClient::ReConnect() {
     return -1;
   }
 
-  if (ws_status_ == WsReconnecting) {
-    LOG_DEBUG("Already reconnecting, ignore duplicate call.");
-    return 0;
-  }
-
+  // ScheduleReconnect serializes attempts and publishes WsReconnecting before
+  // its backoff wait; that status must not prevent the actual connection work.
   LOG_INFO("Reconnecting WebSocket...");
-  SetStatus(WsReconnecting);
+  if (ws_status_ != WsReconnecting) {
+    SetStatus(WsReconnecting);
+  }
 
   websocketpp::lib::error_code ec;
   if (!connection_handle_.expired()) {
@@ -401,31 +399,56 @@ void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
     JoinThread(ping_thread_);
   }
 
+  {
+    std::lock_guard<std::mutex> lock(ping_mtx_);
+    pending_ping_payload_.clear();
+  }
   running_ = true;
   ping_thread_ = std::thread(&WsClient::PingLoop, this, hdl);
   heartbeat_started_ = true;
 }
 
 void WsClient::PingLoop(websocketpp::connection_hdl hdl) {
+  constexpr auto kPongTimeout = std::chrono::seconds(5);
+  const auto interval = std::chrono::seconds(ping_interval_seconds_);
+  auto next_ping = std::chrono::steady_clock::now() + interval;
+  // StopThreads joins this worker before replacing the endpoint.
+  const auto endpoint = m_endpoint_;
+  std::unique_lock<std::mutex> lock(ping_mtx_);
   while (running_) {
-    std::unique_lock<std::mutex> lock(ping_mtx_);
-    cond_var_.wait_for(lock, std::chrono::seconds(ping_interval_seconds_),
-                       [this] { return !running_; });
+    cond_var_.wait_until(lock, next_ping, [this] { return !running_; });
     if (!running_) break;
 
-    if (hdl.expired()) {
-      LOG_WARN("Websocket connection expired, cannot ping");
+    websocketpp::lib::error_code ec;
+    auto con = endpoint->get_con_from_hdl(hdl, ec);
+    if (ec || !con || con->get_state() != websocketpp::session::state::open) {
+      LOG_WARN("WebSocket is unavailable for heartbeat");
       break;
     }
-    auto con = m_endpoint_->get_con_from_hdl(hdl);
-    if (con && con->get_state() == websocketpp::session::state::open) {
-      websocketpp::lib::error_code ec;
-      m_endpoint_->ping(hdl, "", ec);
-      if (ec) {
-        LOG_ERROR("Ping error: {}", ec.message());
-        break;
-      }
+
+    next_ping = std::chrono::steady_clock::now() + interval;
+    pending_ping_payload_ = std::to_string(++ping_sequence_);
+    endpoint->ping(hdl, pending_ping_payload_, ec);
+    if (ec) {
+      LOG_ERROR("Ping error: {}", ec.message());
+      break;
     }
+
+    // Do not send another ping while this one is outstanding. Only a matching
+    // pong or shutdown can end this wait; network activity cannot extend it.
+    const auto deadline = std::chrono::steady_clock::now() + kPongTimeout;
+    if (!cond_var_.wait_until(lock, deadline, [this] {
+          return !running_ || pending_ping_payload_.empty();
+        })) {
+      LOG_WARN("Pong timeout exceeded, reconnecting...");
+      break;
+    }
+  }
+  pending_ping_payload_.clear();
+  const bool connection_lost = running_.exchange(false);
+  lock.unlock();
+  if (connection_lost && !shutdown_) {
+    AsyncReConnect();
   }
 }
 
@@ -574,23 +597,24 @@ void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
   LOG_WARN("Connection closed (code={} reason={})",
            static_cast<int>(close_code),
            con ? con->get_remote_close_reason() : std::string());
-  if (!shutdown_) {
+  running_ = false;
+  cond_var_.notify_all();
+  if (!shutdown_ && ws_status_ != WsReconnecting) {
     AsyncReConnect();
   }
 }
 
 bool WsClient::OnPing(websocketpp::connection_hdl, std::string) { return true; }
 
-bool WsClient::OnPong(websocketpp::connection_hdl, std::string) {
-  timeout_count_ = 0;
-  return true;
-}
-
-void WsClient::OnPongTimeout(websocketpp::connection_hdl, std::string) {
-  if (++timeout_count_ >= 2) {
-    LOG_WARN("Pong timeout exceeded, reconnecting...");
-    AsyncReConnect();
+bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
+  std::lock_guard<std::mutex> lock(ping_mtx_);
+  if (hdl.owner_before(connection_handle_) ||
+      connection_handle_.owner_before(hdl) || msg != pending_ping_payload_) {
+    return true;
   }
+  pending_ping_payload_.clear();
+  cond_var_.notify_all();
+  return true;
 }
 
 void WsClient::OnMessage(websocketpp::connection_hdl, client::message_ptr msg) {

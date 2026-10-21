@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2024-09-10
- * Copyright (c) 2023 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _WS_CLIENT_H_
@@ -80,8 +80,6 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   bool OnPong(websocketpp::connection_hdl hdl, std::string msg);
 
-  void OnPongTimeout(websocketpp::connection_hdl hdl, std::string msg);
-
   void OnMessage(websocketpp::connection_hdl hdl, client::message_ptr msg);
 
  private:
@@ -132,9 +130,11 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   std::atomic<bool> heartbeat_started_{false};
   unsigned int ping_interval_seconds_ = 3;
+  // Protected by ping_mtx_. A new ping is sent only after the matching pong.
+  std::string pending_ping_payload_;
+  uint64_t ping_sequence_ = 0;
 
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
-  std::atomic<int> timeout_count_{0};
   std::atomic<bool> shutdown_{false};
   std::atomic<bool> is_reconnecting_{false};
   std::atomic<int> reconnect_attempts_{0};
