@@ -120,10 +120,9 @@ bool CheckIsCudaEncodeSupported() {
     return is_hardware_acceleration_supported.value();
   }
 
-  if (!CudaInitializer::Init()) {
+  if (LoadNvEncodeApi() != 0 || !CudaInitializer::Init()) {
     LOG_WARN(
-        "System not support hardware accelerated encode, use default software "
-        "encoder");
+        "NVIDIA encoding unavailable; trying the next encoder backend");
     is_hardware_acceleration_supported = false;
     return false;
   }
@@ -150,10 +149,9 @@ bool CheckIsCudaDecodeSupported() {
 
   CUresult cuResult;
 
-  if (!CudaInitializer::Init()) {
+  if (LoadNvDecodeApi() != 0 || !CudaInitializer::Init()) {
     LOG_WARN(
-        "System not support hardware accelerated decode, use default software "
-        "decoder");
+        "NVIDIA decoding unavailable; trying the next decoder backend");
     cached_result = false;
     return false;
   }
@@ -174,7 +172,7 @@ bool CheckIsCudaDecodeSupported() {
     return false;
   }
 
-  CUcontext context;
+  CUcontext context = nullptr;
   cuResult = cuCtxCreate_ld(&context, 0, cuDevice);
   if (cuResult != CUDA_SUCCESS) {
     LOG_ERROR("cuCtxCreate_ld failed");
@@ -182,6 +180,16 @@ bool CheckIsCudaDecodeSupported() {
     return false;
   }
 
-  return true;
+  CUVIDDECODECAPS caps{};
+  caps.eCodecType = cudaVideoCodec_H264;
+  caps.eChromaFormat = cudaVideoChromaFormat_420;
+  caps.nBitDepthMinus8 = 0;
+  const CUresult capability_result = cuvidGetDecoderCaps_ld(&caps);
+  CUcontext popped = nullptr;
+  const CUresult pop_result = cuCtxPopCurrent_ld(&popped);
+  const CUresult destroy_result = cuCtxDestroy_ld(context);
+  cached_result = capability_result == CUDA_SUCCESS && caps.bIsSupported &&
+                  pop_result == CUDA_SUCCESS && destroy_result == CUDA_SUCCESS;
+  return cached_result.value();
 }
 }  // namespace minirtc

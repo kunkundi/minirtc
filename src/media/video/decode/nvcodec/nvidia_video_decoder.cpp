@@ -166,20 +166,19 @@ NvidiaVideoDecoder::~NvidiaVideoDecoder() {
 }
 
 int NvidiaVideoDecoder::Init() {
-  CudaInitializer::Init();
+  if (LoadNvDecodeApi() != 0 || !CudaInitializer::Init()) return -1;
   int nGpu = 0;
   int iGpu = 0;
 
-  ck(cuDeviceGetCount_ld(&nGpu));
-  if (nGpu < 1) {
+  if (cuDeviceGetCount_ld(&nGpu) != CUDA_SUCCESS || nGpu < 1) {
     return -1;
   }
 
-  cuDeviceGet_ld(&cuda_device_, iGpu);
+  if (cuDeviceGet_ld(&cuda_device_, iGpu) != CUDA_SUCCESS) return -1;
 
   state_ = std::make_shared<NvidiaVideoDecoderState>();
-  cuCtxCreate_ld(&state_->cuda_context, 0, cuda_device_);
-  if (!state_->cuda_context) {
+  if (cuCtxCreate_ld(&state_->cuda_context, 0, cuda_device_) != CUDA_SUCCESS ||
+      !state_->cuda_context) {
     state_.reset();
     return -1;
   }

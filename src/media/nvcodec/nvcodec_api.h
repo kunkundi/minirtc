@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
- * @Date: 2024-08-12
- * Copyright (c) 2024 by DI JUNKUN, All Rights Reserved.
+ * @Date: 2026-10-22
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _NVCODEC_API_H_
@@ -150,6 +150,10 @@ extern TNvEncodeAPICreateInstance NvEncodeAPICreateInstance_ld;
 extern TNvEncodeAPIGetMaxSupportedVersion NvEncodeAPIGetMaxSupportedVersion_ld;
 
 int LoadNvCodecDll();
+// A failed load in one direction must not unload the other direction's API.
+int LoadCudaDriver();
+int LoadNvEncodeApi();
+int LoadNvDecodeApi();
 
 }  // namespace minirtc
 #endif

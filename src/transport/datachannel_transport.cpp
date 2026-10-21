@@ -704,19 +704,11 @@ int DataChannelTransport::CreateCodecs(std::shared_ptr<SystemClock> clock,
     }
     ret = CreateStreamCodecs(clock, false, VideoCodecType::AV1);
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
-#if defined(__APPLE__)
+#if defined(_WIN32) || defined(__APPLE__)
     ret = CreateStreamCodecs(clock, hardware_acceleration_,
                              VideoCodecType::H264);
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
-    bool use_hardware = false;
-    if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
-      use_hardware = true;
-    } else if (hardware_acceleration_) {
-      LOG_WARN(
-          "Hardware accelerated codec not available, use default software "
-          "codec");
-    }
-    ret = CreateStreamCodecs(clock, use_hardware, VideoCodecType::H264);
+    ret = CreateStreamCodecs(clock, hardware_acceleration_, VideoCodecType::H264);
 #else
     ret = CreateStreamCodecs(clock, false, VideoCodecType::H264);
 #endif

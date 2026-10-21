@@ -2984,21 +2984,9 @@ int IceTransportController::CreateStreamCodecs(
       }
       if (!context->codec) {
         if (context->type == StreamType::kVideo) {
-          context->codec = VideoDecoderFactory::CreateVideoDecoder(
+          context->codec = VideoDecoderFactory::CreateInitializedVideoDecoder(
               clock, hardware_acceleration, codec_type, native_video_output_);
-#if !defined(MINIRTC_IOS)
           if (!context->codec) {
-            context->codec =
-                VideoDecoderFactory::CreateVideoDecoder(
-                    clock, false, VideoCodecType::H264,
-                    native_video_output_);
-            LOG_ERROR(
-                "Create decoder for [{}] failed, try to use software H.264 "
-                "decoder",
-                channel_name);
-          }
-#endif
-          if (!context->codec || context->codec->Init()) {
             LOG_ERROR("Decoder [{}] init failed", channel_name);
             return -1;
           }
@@ -3049,19 +3037,12 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
     ret = CreateStreamCodecs(clock, false, VideoCodecType::AV1);
 #endif
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
-#if defined(__APPLE__) || defined(__ANDROID__) || defined(__OHOS__)
+#if defined(_WIN32) || defined(__APPLE__) || defined(__ANDROID__) || defined(__OHOS__)
     ret = CreateStreamCodecs(clock, hardware_acceleration_,
                              VideoCodecType::H264);
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
-    bool use_hardware = false;
-    if (hardware_acceleration_ && LoadNvCodecDll() == 0) {
-      use_hardware = true;
-    } else if (hardware_acceleration_) {
-      LOG_WARN(
-          "Hardware accelerated codec not available, use default software "
-          "codec");
-    }
-    ret = CreateStreamCodecs(clock, use_hardware, VideoCodecType::H264);
+    // Each factory probes and initializes its own direction independently.
+    ret = CreateStreamCodecs(clock, hardware_acceleration_, VideoCodecType::H264);
 #else
     ret = CreateStreamCodecs(clock, false, VideoCodecType::H264);
 #endif

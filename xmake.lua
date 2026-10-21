@@ -155,6 +155,8 @@ target("common")
     "src/common/api/ntp/*.cc")
     if not is_os("windows") then
         remove_files("src/common/rtc_base/win32.cc")
+    else
+        add_syslinks("winmm", {public = true})
     end
     add_includedirs("src/common", {public = true})
 
@@ -257,7 +259,9 @@ target("media")
         add_syslinks("native_media_codecbase", "native_media_core", "native_media_vdec", "hilog_ndk.z", {public = true})
     end
     if is_os("windows") then
-        add_files("src/media/video/encode/*.cpp",
+        add_files("src/media/wmf/*.cpp",
+        "src/media/video/encode/wmf/*.cpp",
+        "src/media/video/encode/*.cpp",
         "src/media/video/decode/*.cpp",
         "src/media/video/decode/wmf/*.cpp",
         "src/media/video/encode/openh264/*.cpp",
@@ -271,6 +275,8 @@ target("media")
         "src/media/video/decode/openh264",
         "src/media/video/encode/avt",
         "src/media/video/decode/dav1d", {public = true})
+        add_syslinks("d3d11", "dxgi", "dxguid", "mfplat", "mf", "mfuuid",
+            "wmcodecdspuuid", "ole32", "oleaut32", "strmiids", {public = true})
         if is_config("USE_CUDA", true) then
             add_files("src/media/video/encode/nvcodec/*.cpp",
             "src/media/video/decode/nvcodec/*.cpp",

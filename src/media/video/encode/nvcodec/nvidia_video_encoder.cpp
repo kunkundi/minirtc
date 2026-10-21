@@ -70,7 +70,7 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
           : NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY;
 
   try {
-    CudaInitializer::Init();
+    if (LoadNvEncodeApi() != 0 || !CudaInitializer::Init()) return -1;
     int num_of_gpu = 0;
     ck(cuDeviceGetCount_ld(&num_of_gpu));
     if (index_of_gpu_ < 0 || index_of_gpu_ >= num_of_gpu) {

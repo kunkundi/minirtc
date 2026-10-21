@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
- * @Date: 2024-09-10
- * Copyright (c) 2024 by DI JUNKUN, All Rights Reserved.
+ * @Date: 2026-10-22
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _NVCODEC_COMMON_H_
@@ -26,7 +26,7 @@ class CudaInitializer {
  public:
   static bool Init() {
     static bool initialized = []() {
-      if (LoadNvCodecDll() != 0) {
+      if (LoadCudaDriver() != 0) {
         return false;
       }
       CUresult res = cuInit_ld(0);

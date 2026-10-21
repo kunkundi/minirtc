@@ -14,7 +14,9 @@ namespace minirtc {
 // Successful loads are process-lifetime. Unloading NVIDIA's driver modules
 // while codecs or driver callbacks may still exist leaves cached entry points
 // dangling and lets one transport invalidate another.
-static bool nvcodec_dll_loaded = false;
+static bool cuda_driver_loaded = false;
+static bool nvencode_api_loaded = false;
+static bool nvdecode_api_loaded = false;
 static std::mutex nvcodec_dll_mutex;
 
 TcuInit cuInit_ld = NULL;
@@ -101,7 +103,7 @@ static void FreeLibraryHelper(void** library) {
   }
 }
 
-static void ResetNvCodecFunctions() {
+static void ResetCudaFunctions() {
   cuInit_ld = NULL;
   cuDeviceGet_ld = NULL;
   cuDeviceGetCount_ld = NULL;
@@ -128,7 +130,9 @@ static void ResetNvCodecFunctions() {
   cuGraphicsUnmapResources_ld = NULL;
   cuGraphicsResourceGetMappedPointer_ld = NULL;
 #endif
+}
 
+static void ResetNvDecodeFunctions() {
   cuvidCtxLockCreate_ld = NULL;
   cuvidGetDecoderCaps_ld = NULL;
   cuvidCreateDecoder_ld = NULL;
@@ -142,19 +146,11 @@ static void ResetNvCodecFunctions() {
   cuvidCreateVideoParser_ld = NULL;
   cuvidParseVideoData_ld = NULL;
   cuvidDestroyVideoParser_ld = NULL;
-
-  NvEncodeAPICreateInstance_ld = NULL;
-  NvEncodeAPIGetMaxSupportedVersion_ld = NULL;
 }
 
-static void CleanupFailedNvCodecLoad() {
-  // A failed load is the only safe time to unload these modules: the success
-  // flag has not been published, so no codec can be using their entry points.
-  FreeLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll));
-  FreeLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll));
-  FreeLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll));
-  ResetNvCodecFunctions();
-  nvcodec_dll_loaded = false;
+static void ResetNvEncodeFunctions() {
+  NvEncodeAPICreateInstance_ld = NULL;
+  NvEncodeAPIGetMaxSupportedVersion_ld = NULL;
 }
 
 static int LoadFunctionHelper(void* library, void** func,
@@ -171,16 +167,15 @@ static int LoadFunctionHelper(void* library, void** func,
   return 0;
 }
 
-int LoadNvCodecDll() {
+int LoadCudaDriver() {
   std::lock_guard<std::mutex> lock(nvcodec_dll_mutex);
 
-  if (nvcodec_dll_loaded) {
+  if (cuda_driver_loaded) {
     return 0;
   }
 
   if (LoadLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll), "nvcuda.dll",
                         "libcuda.so.1") != 0) {
-    CleanupFailedNvCodecLoad();
     return -1;
   }
 
@@ -219,13 +214,22 @@ int LoadNvCodecDll() {
           0 ||
       LoadFunctionHelper(nvcuda_dll, (void**)&cuMemcpy2DUnaligned_ld,
                          "cuMemcpy2DUnaligned_v2") != 0) {
-    CleanupFailedNvCodecLoad();
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuda_dll));
+    ResetCudaFunctions();
     return -1;
   }
 
+  cuda_driver_loaded = true;
+  return 0;
+}
+
+int LoadNvDecodeApi() {
+  if (LoadCudaDriver() != 0) return -1;
+  std::lock_guard<std::mutex> lock(nvcodec_dll_mutex);
+  if (nvdecode_api_loaded) return 0;
+
   if (LoadLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll), "nvcuvid.dll",
                         "libnvcuvid.so.1") != 0) {
-    CleanupFailedNvCodecLoad();
     return -1;
   }
 
@@ -255,13 +259,23 @@ int LoadNvCodecDll() {
                          "cuvidParseVideoData") != 0 ||
       LoadFunctionHelper(nvcuvid_dll, (void**)&cuvidDestroyVideoParser_ld,
                          "cuvidDestroyVideoParser") != 0) {
-    CleanupFailedNvCodecLoad();
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvcuvid_dll));
+    ResetNvDecodeFunctions();
     return -1;
   }
 
+  nvdecode_api_loaded = true;
+  LOG_INFO("Load NVDEC API success");
+  return 0;
+}
+
+int LoadNvEncodeApi() {
+  if (LoadCudaDriver() != 0) return -1;
+  std::lock_guard<std::mutex> lock(nvcodec_dll_mutex);
+  if (nvencode_api_loaded) return 0;
+
   if (LoadLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll),
                         "nvEncodeAPI64.dll", "libnvidia-encode.so.1") != 0) {
-    CleanupFailedNvCodecLoad();
     return -1;
   }
 
@@ -270,20 +284,25 @@ int LoadNvCodecDll() {
       LoadFunctionHelper(nvencodeapi_dll,
                          (void**)&NvEncodeAPIGetMaxSupportedVersion_ld,
                          "NvEncodeAPIGetMaxSupportedVersion") != 0) {
-    CleanupFailedNvCodecLoad();
+    FreeLibraryHelper(reinterpret_cast<void**>(&nvencodeapi_dll));
+    ResetNvEncodeFunctions();
     return -1;
   }
 
-  LOG_INFO("Load NvCodec API success");
-
-  nvcodec_dll_loaded = true;
-
+  nvencode_api_loaded = true;
+  LOG_INFO("Load NVENC API success");
   return 0;
+}
+
+int LoadNvCodecDll() {
+  const int encode = LoadNvEncodeApi();
+  const int decode = LoadNvDecodeApi();
+  return encode == 0 && decode == 0 ? 0 : -1;
 }
 
 #ifdef _WIN32
 int LoadCudaGraphicsInterop() {
-  if (LoadNvCodecDll() != 0) {
+  if (LoadCudaDriver() != 0) {
     return -1;
   }
 
