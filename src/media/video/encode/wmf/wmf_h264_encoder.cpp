@@ -258,17 +258,20 @@ class WmfH264Encoder::Impl {
     // the media thread. No callbacks or input references escape Encode().
     while (std::chrono::steady_clock::now() < deadline) {
       bool have_output = !async_;
+      bool received_event = false;
       if (async_) {
         ComPtr<IMFMediaEvent> event;
         hr = events_->GetEvent(MF_EVENT_FLAG_NO_WAIT, &event);
         if (hr != MF_E_NO_EVENTS_AVAILABLE) {
           if (FAILED(hr)) return hr;
+          received_event = true;
           HRESULT status = S_OK;
           hr = event->GetStatus(&status);
           if (FAILED(hr)) return hr;
           if (FAILED(status)) return status;
           MediaEventType type = MEUnknown;
-          event->GetType(&type);
+          hr = event->GetType(&type);
+          if (FAILED(hr)) return hr;
           if (type == METransformNeedInput) ++input_credit_;
           if (type == METransformHaveOutput) have_output = true;
         }
@@ -290,7 +293,10 @@ class WmfH264Encoder::Impl {
           if (FAILED(hr)) return hr;
           hr = encoder_->SetOutputType(output_id_, type.Get(), 0);
           if (FAILED(hr)) return hr;
-          // Re-run ProcessOutput for the same HaveOutput notification.
+          // An asynchronous MFT consumes the HaveOutput notification even
+          // when it reports a format change. Wait for the next notification;
+          // another ProcessOutput here fails with E_UNEXPECTED on Intel MFTs.
+          if (async_) continue;
           hr = wmf::ReadOutput(encoder_.Get(), output_id_, output);
         }
         if (FAILED(hr) && hr != MF_E_TRANSFORM_NEED_MORE_INPUT) return hr;
@@ -301,7 +307,10 @@ class WmfH264Encoder::Impl {
           return S_OK;
         }
       }
-      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      // Drain queued notifications without adding a timer delay per event.
+      // Only poll with a delay when idle; keep the bounded wait above.
+      if (!received_event)
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
   }
