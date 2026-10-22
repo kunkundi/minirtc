@@ -37,7 +37,7 @@ class OpenH264Decoder : public MediaCodec {
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;
 
-  std::string GetDecoderName() const override { return "OpenH264"; }
+  std::string GetDecoderName() const override { return "OpenH264 (H.264)"; }
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;

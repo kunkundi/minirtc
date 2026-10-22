@@ -353,6 +353,9 @@ int IceTransport::InitIceTransmission(
               ice_transport_controller_ &&
               ice_transport_controller_->IsSrtpActive();
           minirtc_net_traffic_stats.rtt_ms = rtt_ms.value_or(-1);
+          if (ice_transport_controller_)
+            ice_transport_controller_->PopulateVideoCodecStats(
+                minirtc_net_traffic_stats);
           on_receive_net_status_report_(
               user_id_.data(), user_id_.size(), TraversalMode(traversal_type_),
               &minirtc_net_traffic_stats, remote_user_id_.data(),

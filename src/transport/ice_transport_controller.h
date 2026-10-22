@@ -95,6 +95,7 @@ class IceTransportController
   void SetFecMode(FecMode mode) { fec_mode_.store(mode); }
   // DTLS readiness is published only after the SRTP sessions are installed.
   bool IsSrtpActive() const { return dtls_ready_.load(); }
+  void PopulateVideoCodecStats(MiniRtcNetTrafficStats& stats);
 
   uint32_t AddVideoSendChannel(const std::string& channel_name);
   uint32_t GetVideoRtxSsrc(const std::string& channel_name);

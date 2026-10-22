@@ -31,7 +31,7 @@ class Dav1dAv1Decoder : public MediaCodec {
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;
 
-  std::string GetDecoderName() const override { return "Dav1dAv1"; }
+  std::string GetDecoderName() const override { return "Dav1d (AV1)"; }
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;

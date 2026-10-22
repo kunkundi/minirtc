@@ -448,7 +448,7 @@ int WmfH264Encoder::GetResolution(int* width, int* height) const {
 std::string WmfH264Encoder::GetEncoderName() const {
   return impl_->worker_.Call([&]() -> std::string {
     return impl_->fallback_ ? impl_->fallback_->GetEncoderName()
-                            : "MediaFoundation(H264/HW)";
+                            : "Media Foundation (H.264, HW)";
   });
 }
 }  // namespace minirtc

@@ -58,7 +58,7 @@ class AomAv1Encoder : public MediaCodec {
     return 0;
   }
 
-  std::string GetEncoderName() const override { return "AomAV1"; }
+  std::string GetEncoderName() const override { return "LibAOM (AV1)"; }
 
  private:
   template <typename P>

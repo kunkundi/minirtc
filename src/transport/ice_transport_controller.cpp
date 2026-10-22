@@ -2,9 +2,11 @@
 
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <future>
 #include <limits>
 #include <memory>
+#include <set>
 #include <vector>
 
 #include "data_channel_send.h"
@@ -2912,6 +2914,42 @@ int IceTransportController::UpdateVideoSettings(
   }
 }
 
+void IceTransportController::PopulateVideoCodecStats(
+    MiniRtcNetTrafficStats& stats) {
+  // Copy ownership before asking a backend for its name. Some backends query
+  // their worker thread, so never hold a stream lock while doing that work.
+  std::vector<std::shared_ptr<MediaCodec>> encoders, decoders;
+  {
+    std::shared_lock lock(stream_senders_mutex_);
+    for (const auto& [_, context] : stream_senders_)
+      if (context && context->type == StreamType::kVideo && context->codec)
+        encoders.push_back(context->codec);
+  }
+  {
+    std::shared_lock lock(stream_receivers_mutex_);
+    for (const auto& [_, context] : stream_receivers_)
+      if (context && context->type == StreamType::kVideo && context->codec)
+        decoders.push_back(context->codec);
+  }
+  const auto names = [](const auto& codecs, bool encoding) {
+    std::set<std::string> unique;
+    for (const auto& codec : codecs) {
+      auto name = encoding ? codec->GetEncoderName() : codec->GetDecoderName();
+      if (!name.empty()) unique.insert(std::move(name));
+    }
+    std::string result;
+    for (const auto& name : unique) {
+      if (!result.empty()) result += " / ";
+      result += name;
+    }
+    return result;
+  };
+  std::snprintf(stats.video_encoder, sizeof(stats.video_encoder), "%s",
+                names(encoders, true).c_str());
+  std::snprintf(stats.video_decoder, sizeof(stats.video_decoder), "%s",
+                names(decoders, false).c_str());
+}
+
 int IceTransportController::CreateStreamCodecs(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     VideoCodecType codec_type) {
@@ -2923,7 +2961,7 @@ int IceTransportController::CreateStreamCodecs(
   bool audio_receiver_init_first_time = true;
 
   {
-    std::shared_lock lock(stream_senders_mutex_);
+    std::unique_lock lock(stream_senders_mutex_);
     for (auto& [channel_name, context] : stream_senders_) {
       if (!context) {
         LOG_ERROR("Failed to find stream sender [{}]", channel_name);
@@ -2976,7 +3014,7 @@ int IceTransportController::CreateStreamCodecs(
   }
 
   {
-    std::shared_lock lock(stream_receivers_mutex_);
+    std::unique_lock lock(stream_receivers_mutex_);
     for (auto& [channel_name, context] : stream_receivers_) {
       if (!context) {
         LOG_ERROR("Failed to find stream receiver [{}]", channel_name);

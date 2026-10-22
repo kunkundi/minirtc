@@ -386,7 +386,7 @@ int D3D11H264Decoder::Decode(
 std::string D3D11H264Decoder::GetDecoderName() const {
   return impl_->worker_.Call([&]() -> std::string {
     return impl_->fallback_ ? impl_->fallback_->GetDecoderName()
-                            : "D3D11VA(H264)";
+                            : "D3D11VA (H.264)";
   });
 }
 }  // namespace minirtc

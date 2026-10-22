@@ -424,7 +424,7 @@ int VideoToolboxDecoder::Impl::Decode(
   return (status == noErr) ? 0 : -1;
 }
 
-std::string VideoToolboxDecoder::Impl::GetDecoderName() const { return "VideoToolboxH264"; }
+std::string VideoToolboxDecoder::Impl::GetDecoderName() const { return "VideoToolbox (H.264)"; }
 
 bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
                                               const std::vector<uint8_t>& pps) {

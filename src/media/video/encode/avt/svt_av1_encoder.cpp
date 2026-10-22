@@ -387,7 +387,7 @@ int SvtAv1Encoder::GetResolution(int* width, int* height) const {
   return 0;
 }
 
-std::string SvtAv1Encoder::GetEncoderName() const { return "SvtAv1Encoder"; }
+std::string SvtAv1Encoder::GetEncoderName() const { return "SVT-AV1 (AV1)"; }
 
 int SvtAv1Encoder::ResetEncodeResolution(unsigned int width,
                                          unsigned int height) {

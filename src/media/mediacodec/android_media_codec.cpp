@@ -670,6 +670,8 @@ int AndroidMediaCodec::GetResolution(int* w, int* h) const {
 }
 std::string AndroidMediaCodec::GetName() const {
   std::lock_guard<std::mutex> lock(mutex_);
-  return state_ ? "MediaCodec/" + state_->name : "MediaCodec";
+  // Vendor component names remain in the configuration/output logs.
+  return type_ == VideoCodecType::AV1 ? "MediaCodec (AV1)"
+                                    : "MediaCodec (H.264)";
 }
 }  // namespace minirtc

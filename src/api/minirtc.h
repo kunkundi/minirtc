@@ -238,6 +238,10 @@ typedef struct MiniRtcNetTrafficStats {
   MiniRtcOutboundStats total_outbound_stats;
   bool srtp_active;
   double rtt_ms = -1; ///< -1 without a valid sample; zero RTT remains valid.
+  // Actual local video backends, including software fallback. Empty until
+  // available; distinct backends across streams are joined with " / ".
+  char video_encoder[128] = {};
+  char video_decoder[128] = {};
 } MiniRtcNetTrafficStats;
 
 /// Opaque owned handle. Create with CreatePeer; release only with DestroyPeer.

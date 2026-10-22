@@ -46,7 +46,9 @@ class WmfH264SoftwareDecoder : public MediaCodec {
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;
 
-  std::string GetDecoderName() const override { return "WMF(H264/SW)"; }
+  std::string GetDecoderName() const override {
+    return "Media Foundation (H.264, SW)";
+  }
 
  private:
   int CreateDecoder();

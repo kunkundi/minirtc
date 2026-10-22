@@ -40,7 +40,7 @@ class NvidiaVideoEncoder : public MediaCodec {
     return 0;
   }
 
-  std::string GetEncoderName() const override { return "NvidiaH264"; }
+  std::string GetEncoderName() const override { return "NVENC (H.264)"; }
 
  private:
   void ReleaseEncoderResources();

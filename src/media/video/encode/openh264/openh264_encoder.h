@@ -46,7 +46,7 @@ class OpenH264Encoder : public MediaCodec {
     return 0;
   }
 
-  std::string GetEncoderName() const override { return "OpenH264"; }
+  std::string GetEncoderName() const override { return "OpenH264 (H.264)"; }
 
  private:
   int InitEncoderParams(int width, int height);

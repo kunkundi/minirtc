@@ -32,7 +32,7 @@ class NvidiaVideoDecoder : public MediaCodec {
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;
 
-  std::string GetDecoderName() const override { return "NvidiaH264"; }
+  std::string GetDecoderName() const override { return "NVDEC (H.264)"; }
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;

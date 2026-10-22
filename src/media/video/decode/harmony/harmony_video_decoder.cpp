@@ -202,6 +202,10 @@ int HarmonyVideoDecoder::GetResolution(int* w, int* h) const {
   *w = width_; *h = height_; return *w && *h ? 0 : -1;
 }
 std::string HarmonyVideoDecoder::GetDecoderName() const {
-  std::lock_guard lock(mutex_); return software_ ? software_->GetDecoderName() : name_;
+  std::lock_guard lock(mutex_);
+  if (software_) return software_->GetDecoderName();
+  if (name_.empty()) return {};
+  // The full vendor component name remains in the hardware decoder logs.
+  return type_ == VideoCodecType::AV1 ? "OHCodec (AV1)" : "OHCodec (H.264)";
 }
 }

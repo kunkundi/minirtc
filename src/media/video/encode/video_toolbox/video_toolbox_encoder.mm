@@ -32,7 +32,7 @@ class VideoToolboxEncoder::Impl {
   int SetTargetFrameRate(int frame_rate);
   int SetPrioritizeEncodingSpeedOverQuality(bool prioritize_speed);
   int GetResolution(int* width, int* height);
-  std::string GetEncoderName() { return "VideoToolboxH264"; }
+  std::string GetEncoderName() { return "VideoToolbox (H.264)"; }
 
  private:
   struct FrameCallbackContext {
