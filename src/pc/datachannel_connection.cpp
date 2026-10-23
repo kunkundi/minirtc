@@ -152,8 +152,7 @@ int DataChannelConnection::SendDataFrame(const char* data, size_t size,
     return -1;
   }
 
-  dc_transport_->SendDataFrame(data, size, stream_id);
-  return 0;
+  return dc_transport_->SendDataFrame(data, size, stream_id);
 }
 
 int DataChannelConnection::SendReliableDataFrame(const char* data, size_t size,
@@ -557,8 +556,9 @@ DataChannelConnection::CreateDataChannelConnection(
     dc_transport->CreateCodecs(clock_, rtp::PAYLOAD_TYPE::H264,
                                info_.hardware_acceleration);
 
-    // One legacy control channel, with aliases for the registered data streams.
-    // Extra channels are created only after a new browser advertises support.
+    // Keep legacy input aliases on the control channel. File streams use the
+    // same registrations and binary packets as native peers, without a separate
+    // browser capability handshake.
     auto control = AddData(
         peer_connection, remote_user_id, callbacks_, make_weak_ptr(dc_transport),
         [this, remote_user_id, weak = make_weak_ptr(dc_transport)] {
@@ -573,8 +573,39 @@ DataChannelConnection::CreateDataChannelConnection(
               remote_user_id.size(), callbacks_.user_data);
         });
     dc_transport->AddDataStream("data-stream", control);
-    for (const auto& [stream_id, reliable] : media_stream_ids_.data)
-      dc_transport->AddDataStream(stream_id, control);
+    for (const auto& [stream_id, reliable] : media_stream_ids_.data) {
+      if (stream_id != "file" && stream_id != "file_feedback") {
+        dc_transport->AddDataStream(stream_id, control);
+        continue;
+      }
+      try {
+        ::rtc::DataChannelInit file_init;
+        file_init.protocol = "crossdesk-file-v1";
+        if (!reliable) {
+          file_init.reliability.unordered = true;
+          file_init.reliability.maxRetransmits = 0;
+        }
+        auto channel = peer_connection->createDataChannel(stream_id, file_init);
+        channel->onMessage([weak = make_weak_ptr(dc_transport), remote_user_id,
+                            callbacks = callbacks_, source = stream_id](auto data) {
+          auto owner = weak.lock();
+          if (!owner || !callbacks.on_receive_data_buffer ||
+              !std::holds_alternative<::rtc::binary>(data)) return;
+          const auto& bytes = std::get<::rtc::binary>(data);
+          // Packed header + uint16 UTF-8 name + at most a 64 KiB chunk;
+          // the desktop transfer engine validates offsets and flags.
+          if (source == "file" ? bytes.size() < 31 || bytes.size() > 31 + 65535 + 65536
+                               : bytes.size() != 28) return;
+          callbacks.on_receive_data_buffer(
+              reinterpret_cast<const char*>(bytes.data()), bytes.size(),
+              remote_user_id.data(), remote_user_id.size(), source.data(),
+              source.size(), callbacks.user_data);
+        });
+        dc_transport->AddDataStream(stream_id, channel);
+      } catch (const std::exception& error) {
+        LOG_WARN("Could not create browser data stream {}: {}", stream_id, error.what());
+      }
+    }
 
     dc_transport->GetPeerConnection()->setLocalDescription();
     std::string offer = dc_transport->GetPeerConnection()

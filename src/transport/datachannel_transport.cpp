@@ -557,7 +557,12 @@ int DataChannelTransport::SendDataFrame(const char* data, size_t size,
     return -1;
   }
 
-  data_channel->send(reinterpret_cast<const std::byte*>(data), size);
+  try {
+    data_channel->send(reinterpret_cast<const std::byte*>(data), size);
+  } catch (const std::exception& error) {
+    LOG_WARN("DataChannel send failed on {}: {}", stream_id, error.what());
+    return -1;
+  }
   // LOG_ERROR("[{}] Send data frame size {}", local_id_, size);
   return 0;
 }
