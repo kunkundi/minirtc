@@ -74,12 +74,14 @@ static int DtlsVerifyCallback(X509_STORE_CTX* ctx, void* arg) {
 
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
                    TurnMode turn_mode, bool enable_srtp,
-                   const IceServerConfiguration& ice_config)
+                   const IceServerConfiguration& ice_config,
+                   const DirectIcePolicy& direct_policy)
     : use_trickle_ice_(use_trickle_ice),
       use_reliable_ice_(use_reliable_ice),
       turn_mode_(turn_mode),
       enable_srtp_(enable_srtp),
       ice_config_(ice_config),
+      direct_policy_(direct_policy),
       controlling_(offer_peer),
       punch_offer_peer_(offer_peer) {}
 
@@ -117,7 +119,12 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                              nice_cb_recv_t on_recv,
                              nice_cb_dtls_done_t on_cb_dtls_done,
                              void* user_ptr) {
-  if (!ice_config_.Fresh()) return -1;
+  if (!direct_policy_.enabled() && !ice_config_.Fresh()) return -1;
+  if (direct_policy_.enabled() &&
+      (!IsDirectIpv4(direct_policy_.local_address) ||
+       !IsDirectIpv4(direct_policy_.remote_address) || use_reliable_ice_ ||
+       turn_mode_ != TurnMode::TurnDisabled || !enable_srtp_))
+    return -1;
   if (nice_thread_.joinable() || nice_inited_) {
     LOG_ERROR("Nice agent has already been created");
     return -1;
@@ -245,6 +252,33 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       return;
     }
 
+    if (direct_policy_.enabled()) {
+      const bool supports_policy =
+          g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
+                                       "direct-peer-address") != nullptr;
+      NiceAddress local{};
+      const bool valid = nice_address_set_from_string(
+          &local, direct_policy_.local_address.c_str());
+      if (!supports_policy || !valid ||
+          !nice_agent_add_local_address(agent, &local)) {
+        LOG_ERROR("Direct ICE requires the peer-address policy extension");
+        g_object_unref(agent);
+        agent_.store(nullptr);
+        g_main_loop_unref(loop);
+        gloop_.store(nullptr);
+        g_main_context_pop_thread_default(context);
+        g_main_context_unref(context);
+        gcontext_.store(nullptr);
+        init_failed_ = true;
+        notify_init(-1);
+        exit_nice_thread_ = true;
+        return;
+      }
+      g_object_set(agent, "ice-udp", TRUE, "ice-tcp", FALSE, "upnp", FALSE,
+                   "direct-peer-address", direct_policy_.remote_address.c_str(),
+                   nullptr);
+    }
+
     // Allow room for multi-interface candidates and promoted punch sockets.
     g_object_set(agent, "max-connectivity-checks", 512u, nullptr);
 
@@ -257,7 +291,8 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     for (const auto& server : ice_config_.servers) {
       if (!server.turn) stun_endpoints.push_back({server.host, server.port});
     }
-    if (!stun_endpoints.empty() && !IsTurnForced(turn_mode_)) {
+    if (!direct_policy_.enabled() && !stun_endpoints.empty() &&
+        !IsTurnForced(turn_mode_)) {
       if (g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
                                        "stun-servers")) {
         std::string endpoints;
@@ -286,7 +321,8 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     LOG_DEBUG("ICE UPnP mapping disabled in mobile builds");
 #else
     // Enable port mapping unless the caller explicitly requires relay-only ICE.
-    const bool enable_upnp = !IsTurnForced(turn_mode_);
+    const bool enable_upnp =
+        !direct_policy_.enabled() && !IsTurnForced(turn_mode_);
     g_object_set(agent, "upnp", enable_upnp,
                  "upnp-timeout", 3000u, nullptr);
     LOG_DEBUG("ICE UPnP mapping [{}], discovery timeout 3000 ms",
@@ -573,6 +609,7 @@ std::string IceAgent::GenerateLocalSdp() {
 }
 
 bool IceAgent::CanAdvertiseUdpPunch() const {
+  if (direct_policy_.enabled()) return false;
   auto* agent = agent_.load();
   return agent && !destroyed_ &&
          PunchEligible(punch_config_, PunchPlatformSupported(),
@@ -656,8 +693,8 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
   const bool has_upgrade_extension =
       g_object_class_find_property(G_OBJECT_GET_CLASS(agent_.load()),
                                    "relay-upgrade-timeout") != nullptr;
-  const bool upgrade = has_upgrade_extension && !use_reliable_ice_ &&
-                       SupportsRelayUpgrade(remote_sdp) &&
+  const bool upgrade = !direct_policy_.enabled() && has_upgrade_extension &&
+                       !use_reliable_ice_ && SupportsRelayUpgrade(remote_sdp) &&
                        !IsTurnForced(turn_mode_);
   p2p_enhancement_enabled_.store(
       upgrade && SupportsP2pEnhancement(remote_sdp) &&
@@ -1181,9 +1218,10 @@ int IceAgent::StartDtls(bool is_client) {
   return -1;
 }
 
-void IceAgent::FailDtlsHandshake() {
+void IceAgent::FailDtlsHandshake(MiniRtcDirectError error) {
   dtls_timer_.Stop();
   if (dtls_failed_.exchange(true) || destroyed_ || send_disabled_) return;
+  if (direct_policy_.enabled() && direct_error_) direct_error_(error);
   if (on_state_changed_) {
     on_state_changed_(agent_, stream_id_, 1, NICE_COMPONENT_STATE_FAILED,
                       user_ptr_);
@@ -1486,14 +1524,14 @@ bool IceAgent::CompleteDtlsHandshake() {
   X509* peer = SSL_get_peer_certificate(ssl_);
   if (!peer) {
     LOG_ERROR("DTLS peer certificate missing");
-    FailDtlsHandshake();
+    FailDtlsHandshake(MiniRtcDirectFingerprintMissing);
     return false;
   }
   const std::string fingerprint = ComputeFingerprint(peer);
   X509_free(peer);
   if (remote_fingerprint_.empty() || fingerprint != remote_fingerprint_) {
     LOG_ERROR("DTLS peer fingerprint mismatch");
-    FailDtlsHandshake();
+    FailDtlsHandshake(MiniRtcDirectFingerprintMismatch);
     return false;
   }
   dtls_peer_verified_ = true;

@@ -15,14 +15,14 @@
 #include "connection_interface.h"
 #include "datachannel_transport.h"
 #include "rtc/rtc.hpp"
-#include "ws_client.h"
+#include "signal_sender.h"
 
 namespace minirtc {
 
 class DataChannelConnection : public ConnectionInterface {
  public:
   DataChannelConnection(std::shared_ptr<SystemClock> clock,
-                        std::shared_ptr<WsClient> ws,
+                        std::shared_ptr<SignalSender> ws,
                         const ConnectionInfo& info,
                         const MediaStreamIds& media_stream_ids,
                         const ConnectionCallbacks& callbacks);
@@ -51,8 +51,8 @@ class DataChannelConnection : public ConnectionInterface {
  private:
   std::shared_ptr<DataChannelTransport> CreateDataChannelConnection(
       const ::rtc::Configuration& config, std::shared_ptr<SystemClock> clock,
-      std::weak_ptr<WsClient> wws, bool offer_peer, std::string transmission_id,
-      std::string remote_user_id);
+      std::weak_ptr<SignalSender> wws, bool offer_peer,
+      std::string transmission_id, std::string remote_user_id);
 
   std::shared_ptr<Stream> AddVideo(
       const std::shared_ptr<::rtc::PeerConnection> peer_connection,
@@ -82,7 +82,7 @@ class DataChannelConnection : public ConnectionInterface {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  std::shared_ptr<WsClient> ws_ = nullptr;
+  std::shared_ptr<SignalSender> ws_ = nullptr;
   ConnectionInfo info_;
   MediaStreamIds media_stream_ids_;
   ConnectionCallbacks callbacks_;
@@ -105,7 +105,6 @@ class DataChannelConnection : public ConnectionInterface {
   std::string local_transmission_id_ = "";
   std::string remote_transmission_id_ = "";
   std::vector<std::string> user_id_list_;
-  WsStatus ws_status_ = WsStatus::WsClosed;
   SignalStatus signal_status_ = SignalStatus::SignalClosed;
   std::mutex signal_status_mutex_;
   std::atomic<bool> leave_{false};

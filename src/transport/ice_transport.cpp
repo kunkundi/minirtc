@@ -275,7 +275,8 @@ void ConfigureMediaSection(std::string& sdp, const std::string& media_tag,
 IceTransport::IceTransport(
     std::shared_ptr<SystemClock> clock, bool offer_peer,
     std::string& transmission_id, std::string& user_id,
-    std::string& remote_user_id, std::shared_ptr<WsClient> ice_ws_transmission,
+    std::string& remote_user_id,
+    std::shared_ptr<SignalSender> ice_ws_transmission,
     std::function<void(std::string, const std::string&)> on_ice_status_change,
     void* user_data)
     : clock_(clock),
@@ -324,10 +325,10 @@ int IceTransport::SetLocalCapabilities(
 
 int IceTransport::InitIceTransmission(
     const IceServerConfiguration& ice_config) {
-  if (!ice_config.Fresh()) return -1;
-  ice_agent_ = std::make_unique<IceAgent>(offer_peer_, use_trickle_ice_,
-                                          use_reliable_ice_, turn_mode_,
-                                          enable_srtp_, ice_config);
+  if (!direct_policy_.enabled() && !ice_config.Fresh()) return -1;
+  ice_agent_ = std::make_unique<IceAgent>(
+      offer_peer_, use_trickle_ice_, use_reliable_ice_, turn_mode_,
+      enable_srtp_, ice_config, direct_policy_);
 
   ice_io_statistics_ = std::make_unique<IOStatistics>(
       [this](const IOStatistics::NetTrafficStats& net_traffic_stats) {
@@ -363,6 +364,7 @@ int IceTransport::InitIceTransmission(
         }
       });
 
+  ice_agent_->SetDirectErrorCallback(direct_error_);
   const int init_result = ice_agent_->CreateIceAgent(
       [](NiceAgent* agent, guint stream_id, guint component_id,
          NiceComponentState state, gpointer user_ptr) {
@@ -445,6 +447,17 @@ void IceTransport::OnIceStateChange(NiceAgent* agent, guint stream_id,
 
 void IceTransport::OnNewLocalCandidate(NiceAgent* agent, NiceCandidate* cand) {
   if (!use_trickle_ice_ || !cand) return;
+  if (direct_policy_.enabled()) {
+    char address[NICE_ADDRESS_STRING_LEN]{};
+    nice_address_to_string(&cand->addr, address);
+    if (cand->type != NICE_CANDIDATE_TYPE_HOST ||
+        cand->transport != NICE_CANDIDATE_TRANSPORT_UDP ||
+        cand->component_id != NICE_COMPONENT_TYPE_RTP ||
+        address != direct_policy_.local_address) {
+      if (direct_error_) direct_error_(MiniRtcDirectNetworkPolicyFailed);
+      return;
+    }
+  }
   std::lock_guard<std::mutex> lock(local_candidate_mutex_);
   if (local_gathering_done_sent_) return;
   gchar* sdp = nice_agent_generate_local_candidate_sdp(agent, cand);
@@ -583,7 +596,18 @@ void IceTransport::OnDtlsHandshakeDone(gpointer user_ptr) {
   if (enable_srtp_) {
     LOG_INFO("DTLS handshake done");
     if (ice_transport_controller_) {
-      ice_transport_controller_->OnDtlsHandshakeDone(user_ptr);
+      const int error =
+          ice_transport_controller_->OnDtlsHandshakeDone(user_ptr);
+      if (direct_policy_.enabled()) {
+        if (!ice_transport_controller_->IsSrtpActive()) {
+          if (direct_error_)
+            direct_error_(error ? static_cast<MiniRtcDirectError>(error)
+                                : MiniRtcDirectSrtpInstallFailed);
+          on_ice_status_change_("failed", remote_user_id_);
+        } else if (!secure_ready_reported_.exchange(true)) {
+          on_ice_status_change_("secure_ready", remote_user_id_);
+        }
+      }
     }
   }
 }
@@ -1053,6 +1077,11 @@ int IceTransport::SendOffer() {
     local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
   }
   AppendAudioDataSrtpCapability();
+  if (direct_policy_.enabled() &&
+      !ValidateDirectSdp(local_sdp_, direct_policy_.local_address)) {
+    if (direct_error_) direct_error_(MiniRtcDirectNetworkPolicyFailed);
+    return -1;
+  }
 
   json message = {{"type", "offer"},
                   {"transmission_id", transmission_id_},
@@ -1076,6 +1105,11 @@ int IceTransport::SendAnswer() {
     local_sdp_ = ice_agent_->AppendFingerprintLine(local_sdp_);
   }
   AppendAudioDataSrtpCapability();
+  if (direct_policy_.enabled() &&
+      !ValidateDirectSdp(local_sdp_, direct_policy_.local_address)) {
+    if (direct_error_) direct_error_(MiniRtcDirectNetworkPolicyFailed);
+    return -1;
+  }
 
   json message = {{"type", "answer"},
                   {"transmission_id", transmission_id_},
@@ -1382,6 +1416,10 @@ bool IceTransport::NegotiateSrtp(const std::string& remote_sdp,
   }
   const bool enable_srtp = enable_srtp_ && remote_has_fingerprint;
   const bool audio_data_srtp = enable_srtp && *capability;
+  if (direct_policy_.enabled() && (!enable_srtp || !audio_data_srtp)) {
+    if (direct_error_) direct_error_(MiniRtcDirectRequiredCryptoUnsupported);
+    return false;
+  }
   if (remote_capabilities_got_) {
     if (enable_srtp != enable_srtp_ ||
         audio_data_srtp != audio_data_srtp_enabled_) {

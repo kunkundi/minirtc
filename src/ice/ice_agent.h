@@ -22,6 +22,7 @@
 #include <thread>
 #include <vector>
 
+#include "direct_ice_policy.h"
 #include "dtls_handshake_timer.h"
 #include "gio/gnetworking.h"
 #include "glib.h"
@@ -73,9 +74,15 @@ typedef struct {
 
 class IceAgent {
  public:
+  void SetDirectErrorCallback(
+      std::function<void(MiniRtcDirectError)> callback) {
+    direct_error_ = std::move(callback);
+  }
+
   IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
            TurnMode turn_mode, bool enable_srtp,
-           const IceServerConfiguration& ice_config);
+           const IceServerConfiguration& ice_config,
+           const DirectIcePolicy& direct_policy = {});
   ~IceAgent();
 
   int CreateIceAgent(nice_cb_state_changed_t on_state_changed,
@@ -116,6 +123,8 @@ class IceAgent {
   bool enable_srtp_ = true;
 
   IceServerConfiguration ice_config_;
+  DirectIcePolicy direct_policy_;
+  std::function<void(MiniRtcDirectError)> direct_error_;
 
   bool has_video_stream_ = true;
   uint32_t n_video_streams_ = 1;
@@ -192,7 +201,8 @@ class IceAgent {
   // hanging in CONNECTED forever, so the deadline fails it instead.
   static constexpr int64_t kDtlsHandshakeTimeoutMs = 20000;
   DtlsHandshakeTimer dtls_timer_;
-  void FailDtlsHandshake();
+  void FailDtlsHandshake(
+      MiniRtcDirectError error = MiniRtcDirectDtlsHandshakeFailed);
   std::atomic<bool> remote_standard_srtp_key_layout_{false};
   std::string remote_fingerprint_;
   std::string punch_remote_ufrag_;

@@ -10,7 +10,7 @@ namespace minirtc {
 using nlohmann::json;
 
 MiniRtcConnection::MiniRtcConnection(std::shared_ptr<SystemClock> clock,
-                                     std::shared_ptr<WsClient> ws,
+                                     std::shared_ptr<SignalSender> ws,
                                      const ConnectionInfo& info,
                                      const MediaStreamIds& media_stream_ids,
                                      const ConnectionCallbacks& callbacks)
@@ -25,6 +25,7 @@ MiniRtcConnection::~MiniRtcConnection() {}
 int MiniRtcConnection::Init() {
   on_ice_status_change_ = [this](std::string ice_status,
                                  const std::string& user_id) {
+    if (info_.direct_policy.enabled() && ice_status == "ready") return;
     if ("connecting" == ice_status) {
       callbacks_.on_connection_status(ConnectionStatus::Connecting,
                                       user_id.data(), user_id.size(),
@@ -45,7 +46,7 @@ int MiniRtcConnection::Init() {
       //                       user_id.size(), callbacks_.user_data);
       // b_force_i_frame_ = true;
       LOG_INFO("Ice connected");
-    } else if ("ready" == ice_status) {
+    } else if ("ready" == ice_status || "secure_ready" == ice_status) {
       is_ice_transport_ready_ = true;
       b_force_i_frame_ = true;
       LOG_INFO("Ice ready");
@@ -259,7 +260,9 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       ice_transport_->SetOnReceiveNetStatusReportFunc(
           callbacks_.on_net_status_report);
 
-      if (ice_transport_->InitIceTransmission(*info_.ice_config) != 0) {
+      ice_transport_->SetDirectPolicy(info_.direct_policy, info_.direct_error);
+      if (ice_transport_->InitIceTransmission(
+              info_.ice_config.value_or(IceServerConfiguration{})) != 0) {
         is_ice_transport_ready_ = false;
         ice_transport_.reset();
         pending_ice_candidates_.clear();
@@ -323,7 +326,9 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       ice_transport_->SetOnReceiveNetStatusReportFunc(
           callbacks_.on_net_status_report);
 
-      if (ice_transport_->InitIceTransmission(*info_.ice_config) != 0) {
+      ice_transport_->SetDirectPolicy(info_.direct_policy, info_.direct_error);
+      if (ice_transport_->InitIceTransmission(
+              info_.ice_config.value_or(IceServerConfiguration{})) != 0) {
         is_ice_transport_ready_ = false;
         ice_transport_.reset();
         pending_ice_candidates_.clear();
@@ -346,6 +351,8 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       int ret = ice_transport_->SetRemoteSdp(remote_sdp);
       if (0 != ret) {
         LOG_ERROR("Set remote sdp failed");
+        if (info_.direct_policy.enabled())
+          on_ice_status_change_("failed", remote_user_id);
         break;
       }
       FlushRemoteIceCandidates();
@@ -365,6 +372,8 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
         int ret = ice_transport_->SetRemoteSdp(remote_sdp);
         if (0 != ret) {
           LOG_ERROR("Set remote sdp failed");
+          if (info_.direct_policy.enabled())
+            on_ice_status_change_("failed", remote_user_id);
           break;
         }
 

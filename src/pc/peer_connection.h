@@ -87,6 +87,12 @@ class PeerConnection {
 
  public:
   int Init(PeerConnectionParams params);
+  int InitDirect(PeerConnectionParams params,
+                 const MiniRtcDirectOptions& options);
+  int StartDirect(bool offerer);
+  int ReceiveDirect(const char* message, size_t size);
+  int CloseDirect();
+  void ReportDirectError(MiniRtcDirectError error);
   int UpdateConnectionSettings(bool hardware_acceleration, bool av1_encoding,
                                 TurnMode turn_mode);
 
@@ -215,6 +221,7 @@ class PeerConnection {
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
   std::shared_ptr<WsClient> ws_transport_ = nullptr;
+  std::shared_ptr<SignalSender> signal_sender_;
   std::function<void(const std::string&)> on_receive_ws_msg_ = nullptr;
   std::function<void(WsStatus)> on_ws_status_ = nullptr;
   unsigned int ws_connection_id_ = 0;
@@ -251,6 +258,21 @@ class PeerConnection {
   void* user_data_ = nullptr;
 
   bool inited_ = false;
+  bool direct_ = false;
+  bool direct_offerer_ = false;
+  bool direct_started_ = false;
+  bool direct_remote_sdp_ = false;
+  bool direct_remote_end_ = false;
+  size_t direct_received_bytes_ = 0;
+  size_t direct_received_messages_ = 0;
+  std::string direct_remote_ufrag_;
+  std::set<std::string> direct_candidates_;
+  std::mutex direct_mutex_;
+  std::atomic<bool> direct_closing_{false};
+  std::atomic<bool> direct_error_reported_{false};
+  std::atomic<bool> direct_terminal_reported_{false};
+  void (*direct_error_)(MiniRtcDirectError, void*) = nullptr;
+  void* direct_context_ = nullptr;
 
  private:
   bool b_force_i_frame_ = false;

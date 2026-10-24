@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "direct_ice_policy.h"
 #include "ice_server_config.h"
 #include "minirtc.h"
 
@@ -25,6 +26,8 @@ struct MediaStreamIds {
 };
 
 struct ConnectionInfo {
+  DirectIcePolicy direct_policy;
+  std::function<void(MiniRtcDirectError)> direct_error;
   std::optional<IceServerConfiguration> ice_config;
   std::string transmission_id;
   std::string user_id;
@@ -44,7 +47,10 @@ struct ConnectionInfo {
 };
 
 inline bool ConnectionIceConfigFresh(const ConnectionInfo& info) {
-  return info.ice_config && info.ice_config->Fresh();
+  return info.direct_policy.enabled()
+             ? IsDirectIpv4(info.direct_policy.local_address) &&
+                   IsDirectIpv4(info.direct_policy.remote_address)
+             : info.ice_config && info.ice_config->Fresh();
 }
 
 struct ConnectionCallbacks {

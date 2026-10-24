@@ -2592,20 +2592,21 @@ void IceTransportController::OnReceiveCompleteData(
 //   return oss.str();
 // }
 
-void IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
-  if (!enable_srtp_ || dtls_ready_.load()) {
-    return;
-  }
+int IceTransportController::OnDtlsHandshakeDone(void* user_ptr) {
+  if (!enable_srtp_ || dtls_ready_.load()) return 0;
   if (!ice_agent_ ||
       !ice_agent_->ExportSrtpKeys(local_key_, local_salt_, remote_key_,
-                                 remote_salt_, offer_peer_) ||
-      !InstallSrtpSessions()) {
-    LOG_ERROR("Failed to initialize SRTP sessions");
-    return;
+                                  remote_salt_, offer_peer_)) {
+    LOG_ERROR("Failed to export SRTP keys");
+    return MiniRtcDirectSrtpKeyExportFailed;
   }
-
+  if (!InstallSrtpSessions()) {
+    LOG_ERROR("Failed to initialize SRTP sessions");
+    return MiniRtcDirectSrtpInstallFailed;
+  }
   dtls_ready_.store(true);
   UpdateMediaTransportState();
+  return 0;
 }
 
 bool IceTransportController::InstallSrtpSessions() {

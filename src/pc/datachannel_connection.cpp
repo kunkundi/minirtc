@@ -19,7 +19,7 @@ std::weak_ptr<T> make_weak_ptr(std::shared_ptr<T> ptr) {
 }
 
 DataChannelConnection::DataChannelConnection(
-    std::shared_ptr<SystemClock> clock, std::shared_ptr<WsClient> ws,
+    std::shared_ptr<SystemClock> clock, std::shared_ptr<SignalSender> ws,
     const ConnectionInfo& info, const MediaStreamIds& media_stream_ids,
     const ConnectionCallbacks& callbacks)
     : clock_(clock),
@@ -379,8 +379,8 @@ void DataChannelConnection::ResetDataChannelTransport() {
 std::shared_ptr<DataChannelTransport>
 DataChannelConnection::CreateDataChannelConnection(
     const ::rtc::Configuration& config, std::shared_ptr<SystemClock> clock,
-    std::weak_ptr<WsClient> wws, bool offer_peer, std::string transmission_id,
-    std::string remote_user_id) {
+    std::weak_ptr<SignalSender> wws, bool offer_peer,
+    std::string transmission_id, std::string remote_user_id) {
   offer_peer_ = offer_peer;
   active_transmission_id_ = transmission_id;
   auto resolved_config = config;

@@ -13,14 +13,15 @@
 #include "clock/system_clock.h"
 #include "connection_interface.h"
 #include "ice_transport.h"
-#include "ws_client.h"
+#include "signal_sender.h"
 
 namespace minirtc {
 
 class MiniRtcConnection : public ConnectionInterface {
  public:
   MiniRtcConnection(std::shared_ptr<SystemClock> clock,
-                    std::shared_ptr<WsClient> ws, const ConnectionInfo& info,
+                    std::shared_ptr<SignalSender> ws,
+                    const ConnectionInfo& info,
                     const MediaStreamIds& media_stream_ids,
                     const ConnectionCallbacks& callbacks);
   virtual ~MiniRtcConnection();
@@ -55,7 +56,7 @@ class MiniRtcConnection : public ConnectionInterface {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
-  std::shared_ptr<WsClient> ws_ = nullptr;
+  std::shared_ptr<SignalSender> ws_ = nullptr;
   ConnectionInfo info_;
   MediaStreamIds media_stream_ids_;
   ConnectionCallbacks callbacks_;
@@ -82,7 +83,6 @@ class MiniRtcConnection : public ConnectionInterface {
   std::string local_transmission_id_ = "";
   std::string remote_transmission_id_ = "";
   std::vector<std::string> user_id_list_;
-  WsStatus ws_status_ = WsStatus::WsClosed;
   SignalStatus signal_status_ = SignalStatus::SignalClosed;
   std::mutex signal_status_mutex_;
   std::atomic<bool> leave_{false};

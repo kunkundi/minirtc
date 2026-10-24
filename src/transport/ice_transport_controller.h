@@ -155,7 +155,7 @@ class IceTransportController
   void OnReceiveCompleteData(const char* data, size_t size,
                              const std::string& channel_name);
 
-  void OnDtlsHandshakeDone(void* user_ptr);
+  int OnDtlsHandshakeDone(void* user_ptr);
 
  public:
   void OnSenderReport(const SenderReport& sender_report);

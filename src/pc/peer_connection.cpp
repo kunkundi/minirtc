@@ -389,6 +389,12 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   clock_ = std::make_shared<SystemClock>();
   ws_transport_ = std::make_shared<WsClient>(on_receive_ws_msg_, on_ws_status_);
+  signal_sender_ = std::make_shared<CallbackSignalSender>(
+      [ws = ws_transport_](const std::string& message) {
+        if (ws->GetStatus() != WsStatus::WsOpened) return -1;
+        ws->Send(message);
+        return 0;
+      });
   if (ws_transport_) {
     ws_transport_->Connect(uri_);
   }
@@ -617,6 +623,11 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
       return;
     }
 
+    if (direct_ && IsTerminalConnectionStatus(status) &&
+        direct_terminal_reported_.exchange(true))
+      return;
+    if (direct_ && !IsTerminalConnectionStatus(status) && direct_closing_)
+      return;
     if (IsTerminalConnectionStatus(status)) {
       // Retiring first serializes terminal transport callbacks against an
       // explicit leave or a bulk clear. The ICE worker owns an extra strong
@@ -651,12 +662,12 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
   };
 
   std::shared_ptr<ConnectionInterface> connection;
-  if (remote_user_id.find("web") == std::string::npos) {
+  if (direct_ || remote_user_id.find("web") == std::string::npos) {
     connection = std::make_shared<MiniRtcConnection>(
-        clock_, ws_transport_, info, media_stream_ids_, callbacks);
+        clock_, signal_sender_, info, media_stream_ids_, callbacks);
   } else {
     connection = std::make_shared<DataChannelConnection>(
-        clock_, ws_transport_, info, media_stream_ids_, callbacks);
+        clock_, signal_sender_, info, media_stream_ids_, callbacks);
   }
 
   *weak_connection = connection;
@@ -766,7 +777,8 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
   LOG_INFO("[{}] Clear [{}] peer connection(s), reason=[{}]", user_id_,
            connections.size(), reason);
   for (auto& [remote_user_id, connection] : connections) {
-    if (on_connection_status_) {
+    if (on_connection_status_ &&
+        (!direct_ || !direct_terminal_reported_.exchange(true))) {
       on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
                             remote_user_id.size(), user_data_);
     }

@@ -22,7 +22,7 @@
 #include "ringbuffer.h"
 #include "rtcp_packet_info.h"
 #include "rtp_packet.h"
-#include "ws_client.h"
+#include "signal_sender.h"
 
 namespace minirtc {
 class IceTransport {
@@ -42,7 +42,7 @@ class IceTransport {
       std::shared_ptr<SystemClock> clock, bool offer_peer,
       std::string& transmission_id, std::string& user_id,
       std::string& remote_user_id,
-      std::shared_ptr<WsClient> ice_ws_transmission,
+      std::shared_ptr<SignalSender> ice_ws_transmission,
       std::function<void(std::string, const std::string&)> on_ice_status_change,
       void* user_data);
   ~IceTransport();
@@ -60,6 +60,11 @@ class IceTransport {
                            std::vector<int>& video_payload_types,
                            std::vector<int>& audio_payload_types);
 
+  void SetDirectPolicy(const DirectIcePolicy& policy,
+                       std::function<void(MiniRtcDirectError)> error) {
+    direct_policy_ = policy;
+    direct_error_ = std::move(error);
+  }
   int InitIceTransmission(const IceServerConfiguration& ice_config);
 
   int DestroyIceTransmission();
@@ -261,7 +266,10 @@ class IceTransport {
   std::shared_ptr<SystemClock> clock_;
   std::shared_ptr<IceAgent> ice_agent_ = nullptr;
   std::atomic<bool> is_closed_{false};
-  std::shared_ptr<WsClient> ice_ws_transport_ = nullptr;
+  std::shared_ptr<SignalSender> ice_ws_transport_ = nullptr;
+  DirectIcePolicy direct_policy_;
+  std::function<void(MiniRtcDirectError)> direct_error_;
+  std::atomic<bool> secure_ready_reported_{false};
 
   OnReceiveVideo on_receive_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;

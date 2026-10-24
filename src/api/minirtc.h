@@ -398,6 +398,43 @@ MINIRTC_API void DestroyPeer(PeerPtr** peer_ptr);
  */
 MINIRTC_API int Init(PeerPtr* peer_ptr);
 
+/// Direct peers never log in, join a cloud session, or request STUN/TURN.
+/// The caller authenticates its signaling channel before initialization.
+/// Send receives native MiniRTC signaling JSON; copy/enqueue it before
+/// returning. Callback contexts remain alive until
+/// CloseDirectSession/DestroyPeer returns.
+typedef enum MiniRtcDirectError {
+  MiniRtcDirectInvalidSignal = 1,
+  MiniRtcDirectSignalSendFailed,
+  MiniRtcDirectDtlsHandshakeFailed,
+  MiniRtcDirectRequiredCryptoUnsupported,
+  MiniRtcDirectSrtpInstallFailed,
+  MiniRtcDirectNetworkPolicyFailed,
+  MiniRtcDirectFingerprintMissing,
+  MiniRtcDirectFingerprintMismatch,
+  MiniRtcDirectSrtpKeyExportFailed
+} MiniRtcDirectError;
+
+typedef struct MiniRtcDirectOptions {
+  uint32_t struct_size;
+  uint32_t version;  ///< Must be 1.
+  const char* local_id;
+  const char* remote_id;
+  const char* session_id;
+  const char* local_address;   ///< Authenticated WSS local IPv4.
+  const char* remote_address;  ///< Authenticated WSS peer IPv4.
+  bool offerer;
+  int (*send_signal)(const char*, size_t, void*);
+  void (*on_error)(MiniRtcDirectError, void*);
+  void* context;
+} MiniRtcDirectOptions;
+
+MINIRTC_API int InitDirectPeer(PeerPtr*, const MiniRtcDirectOptions*);
+MINIRTC_API int StartDirectSession(PeerPtr*, bool offerer);
+MINIRTC_API int ReceiveDirectSignal(PeerPtr*, const char*, size_t);
+/// Blocking, idempotent cleanup. Never call from a transport callback.
+MINIRTC_API int CloseDirectSession(PeerPtr*);
+
 /**
  * @brief Update codec and ICE defaults without reconnecting signaling.
  *

@@ -90,6 +90,39 @@ int Init(PeerPtr* peer_ptr) {
   return 0;
 }
 
+int InitDirectPeer(PeerPtr* peer, const MiniRtcDirectOptions* options) {
+  if (!peer || !peer->peer_connection || !options) return -1;
+  try {
+    return peer->peer_connection->InitDirect(peer->pc_params, *options);
+  } catch (...) {
+    return -1;
+  }
+}
+
+int StartDirectSession(PeerPtr* peer, bool offerer) {
+  if (!peer || !peer->peer_connection) return -1;
+  try {
+    return peer->peer_connection->StartDirect(offerer);
+  } catch (...) {
+    return -1;
+  }
+}
+
+int ReceiveDirectSignal(PeerPtr* peer, const char* message, size_t size) {
+  if (!peer || !peer->peer_connection) return -1;
+  try {
+    return peer->peer_connection->ReceiveDirect(message, size);
+  } catch (...) {
+    peer->peer_connection->ReportDirectError(MiniRtcDirectInvalidSignal);
+    return -1;
+  }
+}
+
+int CloseDirectSession(PeerPtr* peer) {
+  return peer && peer->peer_connection ? peer->peer_connection->CloseDirect()
+                                       : -1;
+}
+
 int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   int ret = -1;
   if (!peer_ptr || !peer_ptr->peer_connection) {
