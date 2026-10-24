@@ -1,0 +1,100 @@
+--- a/agent/agent-priv.h
++++ b/agent/agent-priv.h
+@@ -138,6 +138,8 @@
+   GMutex agent_mutex;             /* Mutex used for thread-safe lib */
+ 
+   gboolean full_mode;             /* property: full-mode */
++  gchar *direct_peer_ip; /* immutable before stream creation; NULL = managed ICE */
++  NiceAddress direct_peer_address;
+   gchar *stun_servers; /* optional bounded endpoint list */
+   guint stun_probe_sequence;
+   gchar *stun_server_ip;          /* property: STUN server IP */
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -106,6 +106,7 @@
+   PROP_STUN_SERVER,
+   PROP_STUN_SERVER_PORT,
+   PROP_STUN_SERVERS,
++  PROP_DIRECT_PEER_ADDRESS,
+   PROP_CONTROLLING_MODE,
+   PROP_FULL_MODE,
+   PROP_STUN_PACING_TIMER,
+@@ -513,6 +514,11 @@
+          "corresponding candidates pair gets selected.",
+          FALSE,
+          G_PARAM_READWRITE));
++
++  g_object_class_install_property (gobject_class, PROP_DIRECT_PEER_ADDRESS,
++      g_param_spec_string ("direct-peer-address", "Direct peer IPv4 address",
++          "Restrict candidates and inbound packets before triggered checks",
++          NULL, G_PARAM_READWRITE));
+ 
+   g_object_class_install_property (gobject_class, PROP_STUN_SERVERS,
+       g_param_spec_string ("stun-servers", "STUN servers",
+@@ -1475,6 +1481,9 @@
+       g_value_set_uint (value, agent->compatibility);
+       break;
+ 
++    case PROP_DIRECT_PEER_ADDRESS:
++      g_value_set_string (value, agent->direct_peer_ip);
++      break;
+     case PROP_STUN_SERVERS:
+       g_value_set_string (value, agent->stun_servers);
+       break;
+@@ -1723,6 +1732,17 @@
+       nice_agent_reset_all_stun_agents (agent, FALSE);
+       break;
+ 
++    case PROP_DIRECT_PEER_ADDRESS:
++      /* A configured policy cannot be weakened while packets are in flight. */
++      if (agent->streams || agent->direct_peer_ip) break;
++      agent->direct_peer_ip = g_value_dup_string (value);
++      nice_address_init (&agent->direct_peer_address);
++      if (agent->direct_peer_ip &&
++          (!nice_address_set_from_string (&agent->direct_peer_address,
++              agent->direct_peer_ip) ||
++           nice_address_ip_version (&agent->direct_peer_address) != 4))
++        nice_address_init (&agent->direct_peer_address);
++      break;
+     case PROP_STUN_SERVERS:
+       g_free (agent->stun_servers);
+       agent->stun_servers = g_value_dup_string (value);
+@@ -4649,6 +4669,13 @@
+   for (i = candidates; i && added >= 0; i = i->next) {
+     NiceCandidate *d = (NiceCandidate*) i->data;
+ 
++    if (agent->direct_peer_ip &&
++        (d->type != NICE_CANDIDATE_TYPE_HOST ||
++         d->transport != NICE_CANDIDATE_TRANSPORT_UDP || component->id != 1 ||
++         !nice_address_is_valid (&agent->direct_peer_address) ||
++         !nice_address_equal_no_port (&d->addr, &agent->direct_peer_address)))
++      return -1;
++
+     if (nice_address_is_valid (&d->addr) == TRUE) {
+       gboolean res =
+           priv_add_remote_candidate (agent,
+@@ -5025,6 +5052,16 @@
+         nice_address_get_port (message->from), message->length);
+   }
+ 
++  /* Apply the direct-address boundary BEFORE parsing STUN, learning
++   * peer-reflexive candidates, scheduling triggered checks, or replying. */
++  if (agent->direct_peer_ip &&
++      (nicesock->type != NICE_SOCKET_TYPE_UDP_BSD || component->id != 1 ||
++       !nice_address_is_valid (&agent->direct_peer_address) ||
++       !nice_address_equal_no_port (message->from, &agent->direct_peer_address))) {
++    retval = RECV_OOB;
++    goto done;
++  }
++
+   /* Examine RAW UDP only, before TURN can rewrite source/socket. Even a
+    * bare magic packet from a configured TURN server is not a direct hit. */
+   if (component->punch_endpoints && nicesock->type == NICE_SOCKET_TYPE_UDP_BSD) {
+@@ -6375,6 +6412,7 @@
+ 
+   g_free (agent->stun_server_ip);
+   agent->stun_server_ip = NULL;
++  g_clear_pointer (&agent->direct_peer_ip, g_free);
+   g_clear_pointer (&agent->stun_servers, g_free);
+ 
+   g_free (agent->proxy_ip);
