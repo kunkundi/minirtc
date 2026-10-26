@@ -7,7 +7,13 @@ package("websocketpp")
     add_urls("https://github.com/zaphoyd/websocketpp/archive/refs/tags/$(version).tar.gz",
              "https://github.com/zaphoyd/websocketpp.git")
     add_versions("0.8.2", "6ce889d85ecdc2d8fa07408d6787e7352510750daa66b5ad44aacb47bea76755")
-    
+    -- C++20 rejects template-ids in constructor/destructor declarations (CWG 2237).
+    add_patches("0.8.2", path.join(os.scriptdir(), "patches", "cpp20_constructors_0.8.2.patch"),
+        "00cb9fc3af60d3115ae66dfb6da7b3e3698a29b9644e4c7a5328cee465c98e10")
+    -- Use a new package hash so prebuilt images/caches cannot reuse unpatched headers.
+    add_configs("cpp20_compat_revision", {default = "1", type = "string", readonly = true,
+        description = "C++20-compatible constructor and destructor declarations"})
+
     add_configs("asio_standalone", {description = "Use standalone asio", default = true, type = "boolean"})
 
     add_deps("cmake~host", {host = true})
@@ -26,12 +32,25 @@ package("websocketpp")
     end)
 
     on_test(function (package)
-        assert(package:check_cxxsnippets({test = [[
+        for _, language in ipairs({"c++17", "c++20"}) do
+            assert(package:check_cxxsnippets({test = [[
             #include <websocketpp/config/asio_no_tls.hpp>
+            #include <websocketpp/config/asio_no_tls_client.hpp>
             #include <websocketpp/server.hpp>
-            typedef websocketpp::server<websocketpp::config::asio> server;
+            #include <websocketpp/client.hpp>
+            #ifndef _WIN32
+            #include <websocketpp/logger/syslog.hpp>
+            #endif
             void test() {
-                server echo_server;
+                websocketpp::server<websocketpp::config::asio> server;
+                websocketpp::client<websocketpp::config::asio_client> client;
+                #ifndef _WIN32
+                websocketpp::log::syslog<websocketpp::concurrency::basic,
+                    websocketpp::log::alevel> logger(websocketpp::log::alevel::all,
+                        websocketpp::log::channel_type_hint::access);
+                #endif
             }
-        ]]}, {configs = {languages = "c++17"}}))
+            ]]}, {configs = {languages = language}}),
+                "WebSocket++ client/server/logger compile check failed for " .. language)
+        end
     end)
