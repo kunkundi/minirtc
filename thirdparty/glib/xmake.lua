@@ -5,6 +5,8 @@ package("glib")
     if is_plat("iphoneos") then
         add_configs("ios_sandbox_revision", {default = "1", type = "string", readonly = true,
             description = "Disable unused system volume discovery on iOS"})
+        add_configs("ios_toolchain_revision", {default = "1", type = "string", readonly = true,
+            description = "Separate macOS build tools from iOS configure probes"})
     end
 
     add_urls("https://download.gnome.org/sources/glib/$(version).tar.xz", {alias = "home", version = function (version)
@@ -176,11 +178,22 @@ _g_unix_mount_points_get_from_file (const char *path, uint64_t *time_out, size_t
             import("lib.detect.find_tool")
             local host_cc = assert(find_tool("clang"), "host C compiler not found")
             local host_cxx = assert(find_tool("clang++"), "host C++ compiler not found")
+            local host_sdk = os.iorunv("xcrun", {"--sdk", "macosx", "--show-sdk-path"}):trim()
             local native_file = os.tmpfile() .. ".ini"
             io.writefile(native_file, format(
-                "[binaries]\nc = ['%s']\ncpp = ['%s']\n",
-                host_cc.program, host_cxx.program))
+                "[binaries]\nc = ['%s']\ncpp = ['%s']\n" ..
+                "[built-in options]\n" ..
+                "c_args = ['-isysroot', '%s']\ncpp_args = ['-isysroot', '%s']\n" ..
+                "c_link_args = ['-isysroot', '%s']\ncpp_link_args = ['-isysroot', '%s']\n",
+                host_cc.program, host_cxx.program, host_sdk, host_sdk, host_sdk, host_sdk))
             table.insert(configs, "--native-file=" .. native_file)
+            -- Both machines are Darwin/arm64, but macOS cannot execute iOS
+            -- configure probes. Let GLib use its cross-compilation defaults.
+            local cross_file = os.tmpfile() .. ".ini"
+            io.writefile(cross_file, "[properties]\nneeds_exe_wrapper = true\n" ..
+                "have_c99_vsnprintf = true\nhave_c99_snprintf = true\n" ..
+                "have_unix98_printf = true\n")
+            table.insert(configs, "--cross-file=" .. cross_file)
         end
         import("package.tools.meson").install(package, configs, opt)
         package:addenv("PATH", "bin")
