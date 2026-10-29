@@ -15,6 +15,8 @@
 #include <string>
 #include <string_view>
 
+#include "direct_address.h"
+
 namespace minirtc {
 enum class IcePolicy { ManagedServers, HostOnly };
 struct DirectIcePolicy {
@@ -23,26 +25,6 @@ struct DirectIcePolicy {
   std::string remote_address;
   bool enabled() const { return mode == IcePolicy::HostOnly; }
 };
-
-inline bool IsDirectIpv4(std::string_view address) {
-  unsigned octets[4]{};
-  size_t start = 0;
-  for (unsigned i = 0; i < 4; ++i) {
-    const size_t end = address.find('.', start);
-    const size_t stop = end == std::string_view::npos ? address.size() : end;
-    if (stop <= start || stop - start > 3 ||
-        (stop - start > 1 && address[start] == '0') ||
-        (i < 3) != (end != std::string_view::npos))
-      return false;
-    const auto result = std::from_chars(address.data() + start,
-                                        address.data() + stop, octets[i]);
-    if (result.ec != std::errc() || result.ptr != address.data() + stop ||
-        octets[i] > 255)
-      return false;
-    start = stop + 1;
-  }
-  return octets[0] != 0 && octets[0] != 127 && octets[0] < 224;
-}
 
 inline std::optional<std::string> NormalizeDirectCandidate(
     std::string candidate, const std::string& address) {
@@ -63,9 +45,22 @@ inline std::optional<std::string> NormalizeDirectCandidate(
   if (foundation.rfind("candidate:", 0) != 0 || foundation.size() <= 10 ||
       foundation.size() > 42 || component != 1 ||
       (transport != "UDP" && transport != "udp") || priority > UINT32_MAX ||
-      ip != address || !IsDirectIpv4(ip) || !port || port > 65535 ||
-      typ != "typ" || kind != "host")
+      !port || port > 65535 || typ != "typ" || kind != "host")
     return std::nullopt;
+  const auto candidate_address = ParseDirectAddress(ip, false);
+  const auto pinned_address = ParseDirectAddress(address);
+  if (!candidate_address || !pinned_address ||
+      ip.find('%') != std::string::npos ||
+      candidate_address->is_v4() != pinned_address->is_v4())
+    return std::nullopt;
+  auto expected = *pinned_address;
+  if (expected.is_v6()) {
+    auto v6 = expected.to_v6();
+    v6.scope_id(0);
+    expected = v6;
+  }
+  if (*candidate_address != expected) return std::nullopt;
+  ip = DirectAddressString(expected);
   // This native-only protocol does not negotiate candidate extensions.
   if (input >> extra) return std::nullopt;
   return foundation + " 1 UDP " + std::to_string(priority) + " " + ip + " " +

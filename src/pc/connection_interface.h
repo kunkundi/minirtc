@@ -48,8 +48,8 @@ struct ConnectionInfo {
 
 inline bool ConnectionIceConfigFresh(const ConnectionInfo& info) {
   return info.direct_policy.enabled()
-             ? IsDirectIpv4(info.direct_policy.local_address) &&
-                   IsDirectIpv4(info.direct_policy.remote_address)
+             ? IsDirectAddressPair(info.direct_policy.local_address,
+                                   info.direct_policy.remote_address)
              : info.ice_config && info.ice_config->Fresh();
 }
 

@@ -448,12 +448,15 @@ void IceTransport::OnIceStateChange(NiceAgent* agent, guint stream_id,
 void IceTransport::OnNewLocalCandidate(NiceAgent* agent, NiceCandidate* cand) {
   if (!use_trickle_ice_ || !cand) return;
   if (direct_policy_.enabled()) {
-    char address[NICE_ADDRESS_STRING_LEN]{};
-    nice_address_to_string(&cand->addr, address);
+    NiceAddress pinned{};
+    const bool valid = nice_address_set_from_string(
+        &pinned, direct_policy_.local_address.c_str());
     if (cand->type != NICE_CANDIDATE_TYPE_HOST ||
         cand->transport != NICE_CANDIDATE_TRANSPORT_UDP ||
-        cand->component_id != NICE_COMPONENT_TYPE_RTP ||
-        address != direct_policy_.local_address) {
+        cand->component_id != NICE_COMPONENT_TYPE_RTP || !valid ||
+        !nice_address_equal_no_port(&cand->addr, &pinned) ||
+        (nice_address_ip_version(&pinned) == 6 &&
+         cand->addr.s.ip6.sin6_scope_id != pinned.s.ip6.sin6_scope_id)) {
       if (direct_error_) direct_error_(MiniRtcDirectNetworkPolicyFailed);
       return;
     }

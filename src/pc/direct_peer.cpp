@@ -28,8 +28,7 @@ int PeerConnection::InitDirect(PeerConnectionParams params,
       !ValidIdentity(options.remote_id) || !ValidIdentity(options.session_id) ||
       std::strcmp(options.local_id, options.remote_id) == 0 ||
       !options.local_address || !options.remote_address ||
-      !IsDirectIpv4(options.local_address) ||
-      !IsDirectIpv4(options.remote_address))
+      !IsDirectAddressPair(options.local_address, options.remote_address))
     return -1;
   direct_ = true;
   direct_offerer_ = options.offerer;

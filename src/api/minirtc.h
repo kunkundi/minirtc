@@ -710,8 +710,10 @@ typedef struct MiniRtcDirectOptions {
   const char* local_id;
   const char* remote_id;
   const char* session_id;
-  const char* local_address;   ///< Authenticated WSS local IPv4.
-  const char* remote_address;  ///< Authenticated WSS peer IPv4.
+  const char* local_address;  ///< Authenticated WSS local IPv4/IPv6 (local zone
+                              ///< for link-local).
+  const char* remote_address;  ///< Authenticated WSS peer IPv4/IPv6 (local zone
+                               ///< for link-local).
   bool offerer;
   int (*send_signal)(const char*, size_t, void*);
   void (*on_error)(MiniRtcDirectError, void*);

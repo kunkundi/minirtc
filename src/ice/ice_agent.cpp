@@ -121,9 +121,10 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                              void* user_ptr) {
   if (!direct_policy_.enabled() && !ice_config_.Fresh()) return -1;
   if (direct_policy_.enabled() &&
-      (!IsDirectIpv4(direct_policy_.local_address) ||
-       !IsDirectIpv4(direct_policy_.remote_address) || use_reliable_ice_ ||
-       turn_mode_ != TurnMode::TurnDisabled || !enable_srtp_))
+      (!IsDirectAddressPair(direct_policy_.local_address,
+                            direct_policy_.remote_address) ||
+       use_reliable_ice_ || turn_mode_ != TurnMode::TurnDisabled ||
+       !enable_srtp_))
     return -1;
   if (nice_thread_.joinable() || nice_inited_) {
     LOG_ERROR("Nice agent has already been created");
@@ -255,7 +256,10 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
     if (direct_policy_.enabled()) {
       const bool supports_policy =
           g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
-                                       "direct-peer-address") != nullptr;
+                                       "direct-peer-address") != nullptr &&
+          (ParseDirectAddress(direct_policy_.local_address)->is_v4() ||
+           g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
+                                        "direct-peer-ipv6") != nullptr);
       NiceAddress local{};
       const bool valid = nice_address_set_from_string(
           &local, direct_policy_.local_address.c_str());

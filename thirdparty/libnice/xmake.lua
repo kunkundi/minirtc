@@ -15,7 +15,8 @@ package("libnice")
     add_patches("0.1.24", path.join(os.scriptdir(), "patches", "udp_punch_0.1.24.patch"),
         "569870d7fb948c1696bb93cf89cbbd8a189eac6df7631c4b87333e344f7c29e0")
     add_patches("0.1.24", path.join(os.scriptdir(), "patches", "direct_peer_0.1.24.patch"),
-        "7f2adb497c1c56096dd0fbfd86a8d39245bcf6b57790c8862bd732197f596627")
+        "314656b6d7ac276e867be3c308fc6f49255feae0aff9006861b0cd2ec110a774")
+    add_configs("direct_peer_ipv6", {description = "Pinned IPv6 peer and link-local scope", default = true, type = "boolean", readonly = true})
     add_configs("direct_peer", {description = "Pinned LAN peer address boundary", default = true, type = "boolean", readonly = true})
     add_configs("udp_punch_revision", {description = "MiniRTC bounded UDP punch backend", default = "1", type = "string", readonly = true})
     add_configs("turn_close_receive", {description = "Receive TURN replies while closing streams", default = true, type = "boolean", readonly = true})
