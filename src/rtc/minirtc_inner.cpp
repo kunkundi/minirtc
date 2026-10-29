@@ -380,10 +380,8 @@ int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
     return -1;
   }
 
-  peer_ptr->peer_connection->SendReliableDataFrameToPeer(
+  return peer_ptr->peer_connection->SendReliableDataFrameToPeer(
       data, size, stream_id, remote_peer_id, remote_peer_id_size);
-
-  return 0;
 }
 
 int64_t GetSystemTimeMicros(PeerPtr* peer_ptr) {

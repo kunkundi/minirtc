@@ -473,7 +473,11 @@ MINIRTC_API int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id);
  *
  * Use SendReliableDataFrame for a reliable stream and SendDataFrame otherwise.
  * Re-registering a name leaves its existing reliability setting unchanged.
- * Existing sessions are not renegotiated.
+ * Existing sessions are not renegotiated. Browser sessions map ordinary streams
+ * to separate DataChannels whose labels and callback source IDs are stream_id.
+ * Reliable channels are ordered; unreliable channels are unordered/no retries.
+ * Legacy control/input aliases retain the shared control channel. Applications
+ * own payload serialization, protocol versions, and processing acknowledgements.
  */
 MINIRTC_API int AddDataStream(PeerPtr* peer_ptr, const char* stream_id,
                               bool reliable);
@@ -642,8 +646,9 @@ MINIRTC_API int SendDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
                                     size_t remote_peer_id_size);
 
 /// Submit application bytes to one peer on a stream registered as reliable.
-/// Buffer/ID lifetime, caller validation duties, and return values follow
-/// SendDataFrameToPeer; zero does not acknowledge delivery.
+/// Buffer/ID lifetime and caller validation duties follow SendDataFrameToPeer.
+/// Returns -1 for an invalid peer or absent remote ID, otherwise the transport
+/// send result. Zero means accepted for sending, not acknowledged delivery.
 MINIRTC_API int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
                                             size_t size, const char* stream_id,
                                             const char* remote_peer_id,

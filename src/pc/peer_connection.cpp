@@ -973,7 +973,7 @@ int PeerConnection::SendReliableDataFrameToPeer(const char* data, size_t size,
   auto it = peer_connection_map_.find(
       std::string(remote_peer_id, remote_peer_id_size));
   if (it != peer_connection_map_.end() && it->second) {
-    it->second->SendReliableDataFrame(data, size, stream_id);
+    return it->second->SendReliableDataFrame(data, size, stream_id);
   } else {
     LOG_WARN("SendReliableDataFrame to remote peer [{}] failed, peer not found",
              std::string(remote_peer_id, remote_peer_id_size));

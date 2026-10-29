@@ -1,6 +1,7 @@
 #include "datachannel_connection.h"
 
 #include <utility>
+#include <variant>
 
 #include "common.h"
 #include "ice_server_resolver.h"
@@ -556,9 +557,8 @@ DataChannelConnection::CreateDataChannelConnection(
     dc_transport->CreateCodecs(clock_, rtp::PAYLOAD_TYPE::H264,
                                info_.hardware_acceleration);
 
-    // Keep legacy input aliases on the control channel. File streams use the
-    // same registrations and binary packets as native peers, without a separate
-    // browser capability handshake.
+    // Keep existing control/input aliases interoperable with older browsers.
+    // All other registered streams get their own channel, named by stream_id.
     auto control = AddData(
         peer_connection, remote_user_id, callbacks_, make_weak_ptr(dc_transport),
         [this, remote_user_id, weak = make_weak_ptr(dc_transport)] {
@@ -574,32 +574,40 @@ DataChannelConnection::CreateDataChannelConnection(
         });
     dc_transport->AddDataStream("data-stream", control);
     for (const auto& [stream_id, reliable] : media_stream_ids_.data) {
-      if (stream_id != "file" && stream_id != "file_feedback") {
+      if (stream_id == "data-stream" || stream_id == "ping-pong" ||
+          stream_id == "data" || stream_id == "mouse" ||
+          stream_id == "keyboard" || stream_id == "control_data") {
         dc_transport->AddDataStream(stream_id, control);
         continue;
       }
       try {
-        ::rtc::DataChannelInit file_init;
-        file_init.protocol = "crossdesk-file-v1";
+        ::rtc::DataChannelInit init;
+        // Preserve the existing file-channel contract for released web clients.
+        const bool legacy_file = stream_id == "file" || stream_id == "file_feedback";
+        if (legacy_file) init.protocol = "crossdesk-file-v1";
         if (!reliable) {
-          file_init.reliability.unordered = true;
-          file_init.reliability.maxRetransmits = 0;
+          init.reliability.unordered = true;
+          init.reliability.maxRetransmits = 0;
         }
-        auto channel = peer_connection->createDataChannel(stream_id, file_init);
+        auto channel = peer_connection->createDataChannel(stream_id, init);
         channel->onMessage([weak = make_weak_ptr(dc_transport), remote_user_id,
-                            callbacks = callbacks_, source = stream_id](auto data) {
+                            callbacks = callbacks_, source = stream_id,
+                            legacy_file](auto data) {
           auto owner = weak.lock();
-          if (!owner || !callbacks.on_receive_data_buffer ||
-              !std::holds_alternative<::rtc::binary>(data)) return;
-          const auto& bytes = std::get<::rtc::binary>(data);
-          // Packed header + uint16 UTF-8 name + at most a 64 KiB chunk;
-          // the desktop transfer engine validates offsets and flags.
-          if (source == "file" ? bytes.size() < 31 || bytes.size() > 31 + 65535 + 65536
-                               : bytes.size() != 28) return;
-          callbacks.on_receive_data_buffer(
-              reinterpret_cast<const char*>(bytes.data()), bytes.size(),
-              remote_user_id.data(), remote_user_id.size(), source.data(),
-              source.size(), callbacks.user_data);
+          if (!owner || !callbacks.on_receive_data_buffer) return;
+          if (legacy_file) {
+            if (!std::holds_alternative<::rtc::binary>(data)) return;
+            const auto size = std::get<::rtc::binary>(data).size();
+            // Packed header + uint16 UTF-8 name + at most a 64 KiB chunk.
+            if (source == "file" ? size < 31 || size > 31 + 65535 + 65536
+                                 : size != 28) return;
+          }
+          std::visit([&](const auto& bytes) {
+            callbacks.on_receive_data_buffer(
+                reinterpret_cast<const char*>(bytes.data()), bytes.size(),
+                remote_user_id.data(), remote_user_id.size(), source.data(),
+                source.size(), callbacks.user_data);
+          }, data);
         });
         dc_transport->AddDataStream(stream_id, channel);
       } catch (const std::exception& error) {
