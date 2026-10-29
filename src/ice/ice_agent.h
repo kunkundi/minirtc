@@ -24,7 +24,6 @@
 
 #include "direct_ice_policy.h"
 #include "dtls_handshake_timer.h"
-#include "gio/gnetworking.h"
 #include "glib.h"
 #include "ice_server_config.h"
 #include "minirtc.h"

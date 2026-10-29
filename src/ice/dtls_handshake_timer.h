@@ -7,7 +7,14 @@
 #ifndef _DTLS_HANDSHAKE_TIMER_H_
 #define _DTLS_HANDSHAKE_TIMER_H_
 
-#include <gio/gnetworking.h>
+// Only timeval is needed here. GIO's networking header exposes Windows
+// resolver macros that can break ASIO when included between its headers.
+#ifdef _WIN32
+#include <winsock2.h>
+#else
+#include <sys/time.h>
+#endif
+
 #include <glib.h>
 #include <openssl/err.h>
 #include <openssl/ssl.h>

@@ -12,6 +12,9 @@
 #include "log.h"
 #include "nice/punch.h"
 
+// Keep g_networking_init's Windows resolver macros out of public headers.
+#include <gio/gnetworking.h>
+
 // #define SAVE_IO_STREAM
 
 namespace minirtc {
