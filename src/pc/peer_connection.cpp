@@ -457,7 +457,7 @@ int PeerConnection::SendJoinRequestLocked(
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
     LOG_INFO("[{}] sends join transmission [{}] request", user_id_,
-             transmission_id);
+             transmission_id.substr(0, transmission_id.find('@')));
   }
 
   return 0;
@@ -479,7 +479,7 @@ int PeerConnection::Join(const std::string& transmission_id) {
     pending_join_transmission_id_ = transmission_id;
     leave_ = false;
     LOG_INFO("Queue join transmission [{}] until signal login completes",
-             transmission_id);
+             transmission_id.substr(0, transmission_id.find('@')));
     return 0;
   }
 
@@ -496,7 +496,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
     signal_status = signal_status_;
     if (pending_join_transmission_id_) {
       LOG_INFO("Cancel queued join transmission [{}]",
-               *pending_join_transmission_id_);
+               pending_join_transmission_id_->substr(0, pending_join_transmission_id_->find('@')));
       pending_join_transmission_id_.reset();
       cancelled_pending_join = true;
     } else if (SignalStatus::SignalConnected == signal_status_) {
@@ -506,7 +506,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
       if (ws_transport_) {
         ws_transport_->Send(message.dump());
         LOG_INFO("[{}] leave transmission [{}] notification queued",
-                 user_id_, transmission_id);
+                 user_id_, transmission_id.substr(0, transmission_id.find('@')));
       }
     }
     leave_ = true;
