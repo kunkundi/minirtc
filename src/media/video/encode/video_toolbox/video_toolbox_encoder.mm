@@ -58,6 +58,7 @@ class VideoToolboxEncoder::Impl {
   void CancelPendingFrameCallbacks();
   void FinishActiveCallback();
   void WaitForActiveCallbacks();
+  void RecordSessionFailure(OSStatus status, uint64_t generation);
 
  private:
   std::shared_ptr<SystemClock> clock_;
@@ -75,6 +76,11 @@ class VideoToolboxEncoder::Impl {
   VTCompressionSessionRef session_ = nullptr;
   mutex lock_;
   atomic<uint64_t> session_generation_{0};
+  // Readers in transport/adaptation must never wait for a VideoToolbox call.
+  // Publish both dimensions together so a resize cannot expose a mixed pair.
+  atomic<uint64_t> resolution_snapshot_{0};
+  atomic<uint64_t> failed_generation_{0};
+  int64_t next_recovery_attempt_ms_ = 0;
 
   mutex callback_lock_;
   condition_variable callback_cv_;
@@ -259,26 +265,31 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
 }
 
 int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
-  VTCompressionSessionRef new_session = nullptr;
-  if (CreateCompressionSession(width, height, &new_session) != 0) {
-    return -1;
-  }
-
   const int previous_width = width_;
   const int previous_height = height_;
+  // Revoke pending output before invalidation so it cannot be delivered as
+  // frames from the replacement session.
+  session_generation_.fetch_add(1);
+  CancelPendingFrameCallbacks();
   if (session_) {
-    // Pending frames belong to the old resolution. Drop them so an old
-    // callback cannot race with output from the newly selected session.
-    session_generation_.fetch_add(1);
-    CancelPendingFrameCallbacks();
     VTCompressionSessionInvalidate(session_);
     CFRelease(session_);
+    session_ = nullptr;
+  }
+
+  VTCompressionSessionRef new_session = nullptr;
+  if (CreateCompressionSession(width, height, &new_session) != 0) {
+    next_recovery_attempt_ms_ = clock_->CurrentTimeMs() + 1000;
+    return -1;
   }
 
   session_ = new_session;
   width_ = width;
   height_ = height;
   ResetCodecState();
+  resolution_snapshot_.store((static_cast<uint64_t>(width) << 32) |
+                             static_cast<uint32_t>(height));
+  next_recovery_attempt_ms_ = 0;
 
   LOG_INFO("VideoToolbox encoder resolution changed: {}x{} -> {}x{}", previous_width,
            previous_height, width_, height_);
@@ -401,7 +412,6 @@ static CVPixelBufferRef CreateNV12PixelBufferFromData(const char* data, size_t w
 int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
                                       function<int(const EncodedFrame&)> on_encoded_image) {
   lock_guard<mutex> guard(lock_);
-  if (!session_) return -1;
 
   const int raw_width = static_cast<int>(raw_frame.Width());
   const int raw_height = static_cast<int>(raw_frame.Height());
@@ -452,12 +462,23 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
     }
   }
 
-  if (raw_width != width_ || raw_height != height_) {
+  const bool recovering =
+      !session_ || failed_generation_.load() == session_generation_.load();
+  if (recovering && clock_->CurrentTimeMs() < next_recovery_attempt_ms_) {
+    CFRelease(pixel_buffer);
+    return -1;
+  }
+  if (recovering || raw_width != width_ || raw_height != height_) {
     if (ResetEncodeResolution(raw_width, raw_height) != 0) {
       CFRelease(pixel_buffer);
       LOG_ERROR("Failed to reset VideoToolbox encoder resolution to {}x{}",
                 raw_width, raw_height);
       return -1;
+    }
+    if (recovering) {
+      next_recovery_attempt_ms_ = clock_->CurrentTimeMs() + 1000;
+      LOG_INFO("VideoToolbox encoder session recovered at {}x{}", raw_width,
+               raw_height);
     }
   }
 
@@ -518,6 +539,7 @@ int VideoToolboxEncoder::Impl::Encode(const RawFrame& raw_frame,
   if (status != noErr) {
     CancelFrameCallback(frame_callback);
     restore_force_idr_request();
+    RecordSessionFailure(status, session_generation_.load());
     LOG_ERROR("VTCompressionSessionEncodeFrame failed: {}", status);
     return -2;
   }
@@ -605,6 +627,19 @@ void VideoToolboxEncoder::Impl::WaitForActiveCallbacks() {
   callback_cv_.wait(lock, [this] { return active_callbacks_ == 0; });
 }
 
+void VideoToolboxEncoder::Impl::RecordSessionFailure(OSStatus status,
+                                                    uint64_t generation) {
+  if (generation != session_generation_.load()) return;
+  auto failed = failed_generation_.load();
+  while (failed < generation) {
+    if (failed_generation_.compare_exchange_weak(failed, generation)) {
+      LOG_ERROR("VideoToolbox encoder session failed: status={}, generation={}; "
+                "recreating on the encode queue", status, generation);
+      return;
+    }
+  }
+}
+
 int VideoToolboxEncoder::Impl::ForceIdr() {
   force_idr_ = true;
   return 0;
@@ -659,10 +694,10 @@ int VideoToolboxEncoder::Impl::SetPrioritizeEncodingSpeedOverQuality(
 }
 
 int VideoToolboxEncoder::Impl::GetResolution(int* width, int* height) {
-  lock_guard<mutex> guard(lock_);
-  if (width) *width = width_;
-  if (height) *height = height_;
-  return 0;
+  const uint64_t resolution = resolution_snapshot_.load();
+  if (width) *width = static_cast<int>(resolution >> 32);
+  if (height) *height = static_cast<int>(resolution & 0xffffffffU);
+  return resolution != 0 ? 0 : -1;
 }
 
 void VideoToolboxEncoder::Impl::CompressionOutputCallback(void* outputCallbackRefCon,
@@ -685,7 +720,13 @@ void VideoToolboxEncoder::Impl::CompressionOutputCallback(void* outputCallbackRe
     ~ActiveCallbackGuard() { encoder->FinishActiveCallback(); }
   } callback_guard{encoder};
 
-  if (status != noErr || !sampleBuffer ||
+  if (status != noErr) {
+    // Never rebuild or acquire lock_ from an output callback: EncodeFrame and
+    // session invalidation can be waiting for this callback to return.
+    encoder->RecordSessionFailure(status, context.generation);
+    return;
+  }
+  if (!sampleBuffer ||
       !CMSampleBufferDataIsReady(sampleBuffer)) {
     return;
   }

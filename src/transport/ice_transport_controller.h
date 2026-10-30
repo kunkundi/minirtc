@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2025-02-11
- * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _ICE_TRANSPORT_CONTROLLER_H_
@@ -268,6 +268,8 @@ class IceTransportController
     int encode_exceed_count = 0;
     int encode_below_threshold_count = 0;
     bool encoding_speed_priority_enabled = false;
+    std::optional<uint64_t> encoding_speed_priority_update_generation;
+    bool encoding_speed_priority_update_failed = false;
     std::optional<int> mapped_target_width;
     std::optional<int> mapped_target_height;
     bool resolution_upgrade_network_blocked = false;

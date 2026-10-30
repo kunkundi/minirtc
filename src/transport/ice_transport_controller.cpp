@@ -1446,26 +1446,61 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   }
 
   auto set_encoding_speed_priority =
-      [&](bool prioritize_speed) -> std::optional<bool> {
-    std::shared_ptr<MediaCodec> codec = context->codec;
-    lock.unlock();
-    const int result =
-        codec ? codec->SetPrioritizeEncodingSpeedOverQuality(prioritize_speed)
-              : -1;
-    lock.lock();
-
-    auto current = stream_senders_.find(channel_name);
-    if (!is_running_.load() || current == stream_senders_.end() ||
-        current->second != context || context->codec != codec) {
-      return std::nullopt;
-    }
-    if (result != 0) {
+      [&](bool prioritize_speed) -> bool {
+    if (!task_queue_encode_ || context->encoding_speed_priority_update_failed)
       return false;
-    }
+    if (context->encoding_speed_priority_update_generation) return true;
 
-    context->encoding_speed_priority_enabled = prioritize_speed;
-    context->encode_exceed_count = 0;
-    context->encode_below_threshold_count = 0;
+    // This function runs from the encoder output callback. A synchronous
+    // property setter can wait for EncodeFrame/Invalidate, which can itself
+    // be waiting for this callback. Serialize it with Encode instead.
+    const auto generation = context->video_settings_generation;
+    context->encoding_speed_priority_update_generation = generation;
+    std::weak_ptr<IceTransportController> weak_self = shared_from_this();
+    std::weak_ptr<StreamContext> weak_context = context;
+    std::weak_ptr<MediaCodec> weak_codec = context->codec;
+    task_queue_encode_->PostTask([weak_self, weak_context, weak_codec,
+                                 channel_name, prioritize_speed, generation] {
+      auto self = weak_self.lock();
+      auto context = weak_context.lock();
+      auto codec = weak_codec.lock();
+      if (!self || !context || !codec) return;
+      std::unique_lock lock(self->stream_senders_mutex_);
+      const auto current = self->stream_senders_.find(channel_name);
+      if (!self->is_running_.load() ||
+          current == self->stream_senders_.end() ||
+          current->second != context || context->codec != codec ||
+          context->encoding_speed_priority_update_generation != generation)
+        return;
+      if (context->video_settings_generation != generation) {
+        context->encoding_speed_priority_update_generation.reset();
+        return;
+      }
+      lock.unlock();
+      const int result =
+          codec->SetPrioritizeEncodingSpeedOverQuality(prioritize_speed);
+      lock.lock();
+      if (context->encoding_speed_priority_update_generation != generation)
+        return;
+      context->encoding_speed_priority_update_generation.reset();
+      if (!self->is_running_.load() || context->codec != codec ||
+          context->video_settings_generation != generation)
+        return;
+      context->encoding_speed_priority_update_failed = result != 0;
+      if (result != 0) {
+        LOG_WARN("Encoder speed priority rejected for [{}]; using resolution "
+                 "adaptation", channel_name);
+        return;
+      }
+      context->encoding_speed_priority_enabled = prioritize_speed;
+      context->encode_exceed_count = 0;
+      context->encode_below_threshold_count = 0;
+      context->ResetEncodedFrameRateTracking();
+      context->ResetEncoderQualityTracking();
+      context->ResetEncodeQueueDelayTracking();
+      LOG_INFO("Encoder speed priority applied: channel={} enabled={}",
+               channel_name, prioritize_speed);
+    });
     return true;
   };
 
@@ -1475,19 +1510,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       context->codec &&
       media_config_.video_content_type == VideoContentType::ScreenContent &&
       context->codec->SupportsDynamicEncodingSpeedPriority()) {
-    const std::optional<bool> changed = set_encoding_speed_priority(true);
-    if (!changed.has_value()) {
-      return;
-    }
-    if (changed.value()) {
-      LOG_INFO(
-          "Encoding queue backlog; enable speed priority: channel={} delay_ms={}",
-          channel_name, queue_delay_ms);
-      // Give the faster encoder setting a fresh observation window before
-      // deciding whether balanced mode also needs a spatial downgrade.
-      context->ResetEncodedFrameRateTracking();
-      context->ResetEncoderQualityTracking();
-      context->ResetEncodeQueueDelayTracking();
+    if (set_encoding_speed_priority(true)) {
+      // The encode queue resets observation windows after applying the change.
       return;
     }
     // If the encoder rejects the property, fall through to the existing
@@ -1508,23 +1532,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       (context->normalized_qp_ewma < 0.0f ||
        context->normalized_qp_ewma <= kMaxNormalizedQpForUpgrade);
   if (balanced_pipeline_healthy) {
-    const std::optional<bool> changed = set_encoding_speed_priority(false);
-    if (!changed.has_value()) {
-      return;
-    }
-    if (changed.value()) {
-      LOG_INFO(
-          "Balanced pipeline healthy; restore encoder quality priority: "
-          "channel={} fps={} required_fps={} qp={} delay_avg_ms={} "
-          "delay_p95_ms={}",
-          channel_name, context->measured_encoded_frame_rate,
-          minimum_upgrade_frame_rate,
-          context->last_encoder_quality_stats.qp,
-          context->average_encode_queue_delay_ms,
-          context->p95_encode_queue_delay_ms);
-      context->ResetEncodedFrameRateTracking();
-      context->ResetEncoderQualityTracking();
-      context->ResetEncodeQueueDelayTracking();
+    if (set_encoding_speed_priority(false)) {
       return;
     }
   }
@@ -2807,8 +2815,20 @@ int IceTransportController::UpdateVideoSettings(
       completion->set_value(-1);
       return;
     }
-    // Release replaced hardware encoders outside the adaptation lock: their
-    // destructors wait for callbacks which acquire that same lock.
+    // Neither constructing nor destroying a hardware encoder may hold the
+    // adaptation lock. VideoToolbox calls can wait for output callbacks which
+    // acquire that lock, and a slow codec must not stall control/audio/capture.
+    struct PreparedEncoder {
+      std::string name;
+      std::shared_ptr<StreamContext> context;
+      std::shared_ptr<MediaCodec> previous;
+      MediaCodecConfig config;
+      std::shared_ptr<MediaCodec> codec;
+      int width = 0;
+      int height = 0;
+      bool speed_priority = false;
+    };
+    std::vector<PreparedEncoder> encoders;
     std::vector<std::shared_ptr<MediaCodec>> retired_encoders;
     std::unique_lock lock(self->stream_senders_mutex_);
     if (self->video_quality_ == quality &&
@@ -2822,7 +2842,6 @@ int IceTransportController::UpdateVideoSettings(
     config.video_degradation_preference = preference;
     ResolutionAdapter adapter(quality, frame_rate, config.video_content_type,
                               preference);
-    std::unordered_map<std::string, std::shared_ptr<MediaCodec>> encoders;
     for (auto& [name, context] : self->stream_senders_) {
       if (!context || context->type != StreamType::kVideo || !context->codec)
         continue;
@@ -2835,36 +2854,56 @@ int IceTransportController::UpdateVideoSettings(
                               context->source_height, &config.init_width,
                               &config.init_height);
       }
-      auto codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
-          self->clock_, config, self->video_encoder_hardware_,
+      encoders.push_back({name, context, context->codec, config});
+    }
+    lock.unlock();
+    for (auto& prepared : encoders) {
+      prepared.codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
+          self->clock_, prepared.config, self->video_encoder_hardware_,
           self->video_codec_type_);
-      if (!codec) {
+      if (!prepared.codec) {
         LOG_ERROR("Live video settings: encoder creation failed for [{}]",
-                  name);
+                  prepared.name);
         completion->set_value(-1);
         return;
       }
-      encoders.emplace(name, std::move(codec));
+      prepared.speed_priority =
+          preference == VideoDegradationPreference::MaintainFrameRate &&
+          prepared.codec->SupportsDynamicEncodingSpeedPriority() &&
+          prepared.codec->SetPrioritizeEncodingSpeedOverQuality(true) == 0;
+      prepared.codec->GetResolution(&prepared.width, &prepared.height);
+    }
+    lock.lock();
+    if (!self->is_running_.load()) {
+      completion->set_value(-1);
+      return;
+    }
+    for (const auto& prepared : encoders) {
+      const auto it = self->stream_senders_.find(prepared.name);
+      if (it == self->stream_senders_.end() || it->second != prepared.context ||
+          it->second->codec != prepared.previous) {
+        completion->set_value(-1);
+        return;
+      }
     }
     self->media_config_.max_frame_rate = frame_rate;
     self->media_config_.video_degradation_preference = preference;
     self->video_quality_ = quality;
     self->resolution_adapter_->SetPreferences(quality, frame_rate, preference);
     self->video_frame_cadences_.clear();
-    for (auto& [name, codec] : encoders) {
-      auto& context = self->stream_senders_.at(name);
+    for (auto& prepared : encoders) {
+      const auto& name = prepared.name;
+      auto& context = prepared.context;
       retired_encoders.push_back(std::move(context->codec));
-      context->codec = std::move(codec);
+      context->codec = std::move(prepared.codec);
       ++context->video_settings_generation;
       context->encoding_speed_priority_enabled =
-          preference == VideoDegradationPreference::MaintainFrameRate &&
-          context->codec->SupportsDynamicEncodingSpeedPriority() &&
-          context->codec->SetPrioritizeEncodingSpeedOverQuality(true) == 0;
-      int width = 0, height = 0;
-      if (context->codec->GetResolution(&width, &height) == 0 && width > 0 &&
-          height > 0) {
-        context->target_width = width;
-        context->target_height = height;
+          prepared.speed_priority;
+      context->encoding_speed_priority_update_generation.reset();
+      context->encoding_speed_priority_update_failed = false;
+      if (prepared.width > 0 && prepared.height > 0) {
+        context->target_width = prepared.width;
+        context->target_height = prepared.height;
       }
       context->bitrate_update_queued = false;
       context->initial_resolution_recovery = true;
@@ -2899,6 +2938,7 @@ int IceTransportController::UpdateVideoSettings(
           !UsesBoundedVideoQueue(self->media_config_));
     }
     lock.unlock();
+    encoders.clear();
     retired_encoders.clear();
     LOG_INFO("Live video settings: quality={}, fps={}, preference={}",
              static_cast<int>(quality), frame_rate,
@@ -3416,9 +3456,10 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
 
           int source_width = context->source_width;
           int source_height = context->source_height;
-          if ((source_width <= 0 || source_height <= 0) &&
-              context->codec->GetResolution(&source_width, &source_height) !=
-                  0) {
+          // A viewport change clears these dimensions until the next captured
+          // frame. Do not query the codec under stream_senders_mutex_: Encode
+          // can be waiting for an output callback that needs this same lock.
+          if (source_width <= 0 || source_height <= 0) {
             continue;
           }
 
