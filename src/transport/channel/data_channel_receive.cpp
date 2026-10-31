@@ -119,10 +119,7 @@ void DataChannelReceive::Destroy() {
 }
 
 int DataChannelReceive::OnReceiveRtpPacket(const char* data, size_t size) {
-  if (ice_io_statistics_) {
-    ice_io_statistics_->UpdateDataInboundBytes((uint32_t)size);
-  }
-
+  // RtpDataReceiver owns inbound byte and packet accounting.
   if (rtp_data_receiver_) {
     RtpPacket rtp_packet;
     rtp_packet.Build((uint8_t*)data, (uint32_t)size);
