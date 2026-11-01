@@ -289,6 +289,26 @@ typedef void (*OnSignalStatus)(SignalStatus status, const char* peer_id,
 typedef void (*OnSignalMessage)(const char* message, size_t size,
                                 void* user_data);
 
+enum class SignalExchangeStage { PrepareLogin, IncomingMessage };
+
+/**
+ * Optional application protocol adapter, called on the signaling thread.
+ * PrepareLogin receives the default login request on every WebSocket open.
+ * IncomingMessage runs before internal message handling, including login replies.
+ * Return 0 to keep normal processing; a positive byte count sends the JSON object
+ * written into response (replacing the login request or consuming the incoming
+ * message); return -1 to fail signaling authentication without a fallback.
+ * Never exceed response_capacity. Buffers are borrowed for this call only.
+ * With an adapter, the application owns authentication/reconnect credentials;
+ * MiniRTC does not apply its built-in reconnect-token/password fallback.
+ * The adapter owns protocol semantics, keys and persistence; MiniRTC transports
+ * opaque JSON and continues to handle standard successful/failed login replies.
+ */
+typedef int (*OnSignalExchange)(SignalExchangeStage stage,
+                               const char* message, size_t size,
+                               char* response, size_t response_capacity,
+                               void* user_data);
+
 /// Report state for the named remote peer. Supply a valid callback before Init;
 /// several signaling paths call it directly, including failed join responses.
 typedef void (*OnConnectionStatus)(ConnectionStatus status,
@@ -366,6 +386,7 @@ typedef struct {
   /// assignment/registration rules belong to the signaling service. Borrowed.
   const char* user_id;
   void* user_data; ///< Opaque caller-owned context forwarded to all callbacks.
+  OnSignalExchange on_signal_exchange; ///< Optional application protocol adapter.
 } Params;
 
 /**

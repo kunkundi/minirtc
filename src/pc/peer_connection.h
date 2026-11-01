@@ -78,6 +78,7 @@ typedef struct {
 
   const char* user_id;
   void* user_data;
+  OnSignalExchange on_signal_exchange;
 } PeerConnectionParams;
 
 class PeerConnection {
@@ -150,6 +151,7 @@ class PeerConnection {
 
  private:
   int Login();
+  int ExchangeSignal(SignalExchangeStage stage, const std::string& message);
   int SendJoinRequestLocked(const std::string& transmission_id);
   void SetSignalStatus(SignalStatus signal_status);
 
@@ -253,6 +255,7 @@ class PeerConnection {
 
   OnSignalStatus on_signal_status_ = nullptr;
   OnSignalMessage on_signal_message_ = nullptr;
+  OnSignalExchange on_signal_exchange_ = nullptr;
   OnConnectionStatus on_connection_status_ = nullptr;
   OnNetStatusReport on_net_status_report_ = nullptr;
   void* user_data_ = nullptr;

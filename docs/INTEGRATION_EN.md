@@ -137,6 +137,10 @@ Params MakeParams(const char* login_identity,
 
 ### Callbacks and threads
 
+The optional `Params::on_signal_exchange` callback adapts application-specific signaling authentication. `PrepareLogin` supplies the default login request on every WebSocket open; `IncomingMessage` supplies incoming messages before internal handling, including login results. Return `0` for normal processing, a positive number for the JSON bytes written into `response` (sent by the engine while consuming the current message), or `-1` to fail authentication without fallback. Respect the supplied output capacity and never destroy the peer synchronously inside the callback.
+
+With an adapter, the application owns authentication state and reconnect credentials; MiniRTC does not apply its built-in reconnect token or password fallback. Standard successful login replies still update engine connection state. Keys, tokens and authorization fields remain opaque to the engine. Clients without an adapter retain their existing behavior. The added `Params` field requires rebuilding both application and library; initialize configuration with `Params{}`.
+
 - **Provide valid `on_signal_status`, `on_connection_status`, and `on_net_status_report` callbacks.** Current paths invoke them directly; use matching no-op functions if you do not need their events.
 - Receive video through `on_receive_video_frame`, audio through `on_receive_audio_buffer`, and application data through `on_receive_data_buffer`. The legacy `on_receive_video_buffer` field is not wired into the current video-frame dispatch path.
 - `on_signal_message` receives messages not consumed by the internal signaling handler; it is not a tap for every raw signaling message.

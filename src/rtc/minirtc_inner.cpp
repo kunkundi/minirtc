@@ -63,6 +63,7 @@ PeerPtr* CreatePeer(const Params* params) {
 
   peer_ptr->pc_params.on_signal_status = params->on_signal_status;
   peer_ptr->pc_params.on_signal_message = params->on_signal_message;
+  peer_ptr->pc_params.on_signal_exchange = params->on_signal_exchange;
   peer_ptr->pc_params.on_connection_status = params->on_connection_status;
   peer_ptr->pc_params.on_net_status_report = params->on_net_status_report;
 

@@ -1,6 +1,7 @@
 #include "peer_connection.h"
 
 #include <chrono>
+#include <array>
 #include <regex>
 
 #include "INIReader.h"
@@ -325,8 +326,10 @@ int PeerConnection::Init(PeerConnectionParams params) {
   connection_callbacks_.user_data = user_data_;
 
   on_signal_message_ = params.on_signal_message;
+  on_signal_exchange_ = params.on_signal_exchange;
 
   on_receive_ws_msg_ = [this](const std::string& msg) {
+    if (ExchangeSignal(SignalExchangeStage::IncomingMessage, msg) != 0) return;
     auto j = json::parse(msg, nullptr, /*allow_exceptions=*/false);
     if (!j.is_discarded() && j.contains("type") && j["type"].is_string()) {
       std::string t = j["type"].get<std::string>();
@@ -421,6 +424,32 @@ int PeerConnection::UpdateConnectionSettings(bool hardware_acceleration,
   return 0;
 }
 
+int PeerConnection::ExchangeSignal(SignalExchangeStage stage, const std::string& message) {
+  if (!on_signal_exchange_) return 0;
+  std::array<char, 8192> response{};
+  int size = -1;
+  try {
+    size = on_signal_exchange_(stage, message.data(), message.size(),
+                               response.data(), response.size(), user_data_);
+  } catch (...) {
+    LOG_ERROR("Signaling protocol adapter failed");
+  }
+  if (size == 0) return 0;
+  if (size > 0 && static_cast<size_t>(size) <= response.size()) {
+    const auto payload = json::parse(response.data(), response.data() + size, nullptr, false);
+    if (payload.is_object() && payload.contains("type") && payload["type"].is_string() &&
+        SendSignalMessage(response.data(), size) == 0) return 1;
+  }
+  reconnect_login_.Clear();
+  {
+    std::lock_guard lock(signal_status_mutex_);
+    signal_status_ = SignalStatus::SignalFailed;
+    pending_join_transmission_id_.reset();
+  }
+  on_signal_status_(SignalStatus::SignalFailed, user_id_.data(), user_id_.size(), user_data_);
+  return -1;
+}
+
 int PeerConnection::Login() {
   if (WsStatus::WsOpened != ws_status_) {
     LOG_ERROR("Websocket not opened");
@@ -431,11 +460,16 @@ int PeerConnection::Login() {
 
   const auto now = std::chrono::duration_cast<std::chrono::seconds>(
       std::chrono::system_clock::now().time_since_epoch()).count();
-  json message = reconnect_login_.Request(user_id_with_pwd_, now);
+  json message = on_signal_exchange_
+      ? json{{"type", "login"}, {"user_id", user_id_with_pwd_}}
+      : reconnect_login_.Request(user_id_with_pwd_, now);
   message["session_resume_version"] = 1;
   message["ice_config_version"] = 1;
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
+
+  const int exchange = ExchangeSignal(SignalExchangeStage::PrepareLogin, message.dump());
+  if (exchange != 0) return exchange > 0 ? 0 : -1;
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
@@ -1162,7 +1196,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           password = "";
         }
 
-        reconnect_login_.Accepted(j, user_id_with_pwd_,
+        if (!on_signal_exchange_) reconnect_login_.Accepted(j, user_id_with_pwd_,
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
 
@@ -1186,7 +1220,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
                           user_id_.size(), user_data_);
         ReportSessions();
       } else if (j["status"].get<std::string>() == "fail") {
-        if (reconnect_login_.RetryPassword()) {
+        if (!on_signal_exchange_ && reconnect_login_.RetryPassword()) {
           LOG_INFO("Reconnect credential rejected; retrying password login");
           Login();
           break;

@@ -137,6 +137,10 @@ Params MakeParams(const char* login_identity,
 
 ### 回调与线程
 
+可选的 `Params::on_signal_exchange` 用于应用自定义信令认证协议。`PrepareLogin` 在每次 WebSocket 打开时提供默认登录请求，`IncomingMessage` 在内置处理前提供入站消息（包括登录结果）。返回 `0` 继续默认处理；正数表示写入 `response` 的 JSON 字节数，引擎发送该回复并消费当前消息；返回 `-1` 则报告认证失败，不自动回退。输出不得超过传入的容量，回调内不可同步销毁 Peer。
+
+配置此回调后，应用负责认证状态及重连凭据；MiniRTC 不使用内置重连令牌或密码回退。标准成功登录回复仍交由引擎更新连接状态。引擎不解释应用的密钥、令牌或授权字段，未配置回调的客户端保留原行为。`Params` 增加了字段，接入方需使用 `Params{}` 初始化，并重新编译应用及库。
+
 - **必须提供有效的 `on_signal_status`、`on_connection_status` 和 `on_net_status_report`。** 当前实现有直接调用这些回调的路径；不使用时也应提供同签名空函数。
 - 视频使用 `on_receive_video_frame`，音频使用 `on_receive_audio_buffer`，应用数据使用 `on_receive_data_buffer`。旧字段 `on_receive_video_buffer` 不接入当前视频帧分发路径。
 - `on_signal_message` 接收未被库内部信令处理器消费的消息；它不是全部原始信令的监听器。
