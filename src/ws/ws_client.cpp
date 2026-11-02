@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <chrono>
 #include <iostream>
+#include <random>
 #include <thread>
 #include <vector>
 #if defined(__ANDROID__)
@@ -158,22 +159,38 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
   reconnect_waiting_ = true;
   reconnect_now_ = force;
 
-  LOG_INFO("Will retry connection after {} seconds", delay_seconds);
+  auto delay = std::chrono::milliseconds::zero();
+  if (!force) {
+    // Add jitter rather than shortening the backoff, so spreading retries does
+    // not increase sustained load. A 60s base waits 60-90s; even the first
+    // automatic reconnect is spread over 0-1s. Manual retries remain immediate.
+    static thread_local std::mt19937 random_engine(std::random_device{}());
+    const int base_ms = delay_seconds * 1000;
+    const int jitter_ms = base_ms > 0 ? base_ms / 2 : 1000;
+    delay = std::chrono::milliseconds(
+        base_ms + std::uniform_int_distribution<int>(0, jitter_ms)(random_engine));
+  }
+
+  LOG_INFO("Will retry connection after {} ms (base backoff: {} seconds)",
+           delay.count(), delay_seconds);
 
   // capture current generation to detect cancellation
   uint64_t current_generation = reconnect_generation_.load();
 
   std::weak_ptr<WsClient> weak_self = shared_from_this();
-  std::thread reconnect_thread([weak_self, delay_seconds,
+  std::thread reconnect_thread([weak_self, delay,
                                 current_generation]() {
     if (auto self = weak_self.lock()) {
-      // Report the loss before waiting for backoff or stopping network workers.
-      self->SetStatus(WsReconnecting);
+      // Keep certificate failures visible during backoff instead of immediately
+      // replacing the actionable error with a generic reconnecting status.
+      if (self->GetStatus() != WsTlsCertError) {
+        self->SetStatus(WsReconnecting);
+      }
       {
         // use interruptible wait instead of sleep
         std::unique_lock<std::mutex> lock(self->reconnect_mtx_);
         self->reconnect_cv_.wait_for(
-            lock, std::chrono::seconds(delay_seconds),
+            lock, delay,
             [&self, current_generation]() {
               return self->shutdown_.load() || self->reconnect_now_ ||
                      self->reconnect_generation_.load() != current_generation;
@@ -286,6 +303,7 @@ int WsClient::Connect(const std::string& uri) {
 
   StopThreads();
 
+  tls_failure_count_ = 0;
   m_endpoint_ = std::make_shared<client>();
   SetStatus(WsOpening);
   m_endpoint_->init_asio();
@@ -341,7 +359,7 @@ void WsClient::AsyncReConnect() {
     return;
   }
 
-  // Exponential backoff: 0s, 1s, 2s, 4s, 8s ... capped at 60s
+  // Base backoff: 0s, 2s, 4s, 8s ... capped at 60s, then jittered by the scheduler.
   int attempt = reconnect_attempts_.fetch_add(1) + 1;
   int exponent = std::min(attempt - 1, 6);  // 2^6 = 64s
   int delay_seconds = (attempt <= 1) ? 0 : (1 << exponent);
@@ -538,7 +556,8 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
   websocketpp::lib::error_code ec =
       con ? con->get_ec() : websocketpp::lib::error_code();
 
-  bool is_tls_error = false;
+  const bool certificate_failed = tls_failure_count_.load() > 0;
+  bool is_tls_error = certificate_failed;
   if (con) {
     std::string ec_msg = error_msg;
     std::transform(ec_msg.begin(), ec_msg.end(), ec_msg.begin(), ::tolower);
@@ -560,17 +579,20 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
     LOG_ERROR("TLS connection failed: {} (TLS failure count: {})", error_msg,
               tls_failure_count_.load());
 
-    if (ws_status_ == WsTlsCertError) {
+    if (certificate_failed) {
+      if (GetStatus() != WsTlsCertError) {
+        SetStatus(WsTlsCertError);
+      }
       LOG_WARN(
-          "TLS certificate is not trusted. For self-hosted servers, install "
-          "the self-signed root certificate into the trusted root store.");
-      return;
+          "Server certificate verification failed; retrying automatically "
+          "with certificate verification enabled");
     }
 
     int attempts = reconnect_attempts_.fetch_add(1);
-    int delay_seconds = std::min(1 << attempts, 60);  // 1, 2, 4, 8, 16, 32, 60
+    // Clamp before shifting: certificate outages can last for many attempts.
+    int delay_seconds = std::min(1 << std::min(attempts, 6), 60);
 
-    LOG_INFO("Will retry TLS connection after {} seconds (attempt {})",
+    LOG_INFO("TLS reconnect base backoff: {} seconds (attempt {})",
              delay_seconds, attempts + 1);
 
     if (!shutdown_) {
