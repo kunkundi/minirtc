@@ -278,6 +278,15 @@ typedef void (*OnReceiveVideoFrame)(const MiniRtcVideoFrame* video_frame,
                                     const size_t source_id_size,
                                     void* user_data);
 
+/// Borrowed complete Annex B H.264 access unit before decoding. Return nonzero
+/// to request a remote keyframe (callers must rate-limit requests). Other codecs
+/// do not invoke this callback. Copy bytes before returning; never block here.
+typedef int (*OnReceiveEncodedVideo)(const uint8_t* data, size_t size,
+                                    int64_t timestamp_us,
+                                    const char* remote_peer_id, size_t peer_size,
+                                    const char* source_id, size_t source_size,
+                                    void* user_data);
+
 /// Report signaling/login state and the current local peer ID. The server may
 /// assign or change that ID at login. This callback must be set before Init.
 typedef void (*OnSignalStatus)(SignalStatus status, const char* peer_id,
@@ -387,6 +396,7 @@ typedef struct {
   const char* user_id;
   void* user_data; ///< Opaque caller-owned context forwarded to all callbacks.
   OnSignalExchange on_signal_exchange; ///< Optional application protocol adapter.
+  OnReceiveEncodedVideo on_receive_encoded_video; ///< Optional native H.264 tap.
 } Params;
 
 /**

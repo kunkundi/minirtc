@@ -79,6 +79,7 @@ typedef struct {
   const char* user_id;
   void* user_data;
   OnSignalExchange on_signal_exchange;
+  OnReceiveEncodedVideo on_receive_encoded_video;
 } PeerConnectionParams;
 
 class PeerConnection {

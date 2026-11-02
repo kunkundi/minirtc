@@ -118,7 +118,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     OnReceiveVideo on_receive_video,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
-                                    void* user_data) {
+                                    void* user_data,
+                                    OnReceiveEncodedVideo encoded) {
   offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
   video_rtx_enabled_ = video_rtx_enabled;
@@ -127,6 +128,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   audio_abs_send_time_ext_id_ = audio_abs_send_time_ext_id;
   audio_abs_recv_time_ext_id_ = audio_abs_recv_time_ext_id;
   on_receive_video_ = on_receive_video;
+  on_receive_encoded_video_ = encoded;
   on_receive_audio_ = on_receive_audio;
   on_receive_data_ = on_receive_data;
   user_data_ = user_data;
@@ -2528,6 +2530,15 @@ void IceTransportController::OnReceiveCompleteFrame(
       user_data = self->user_data_;
     }
 
+    if (self->on_receive_encoded_video_ &&
+        self->video_codec_type_ == VideoCodecType::H264 && received_frame &&
+        self->on_receive_encoded_video_(
+            received_frame->Buffer(), received_frame->Size(),
+            received_frame->CapturedTimestamp(), remote_user_id.data(),
+            remote_user_id.size(), channel_name.data(), channel_name.size(),
+            user_data) != 0 && transceiver) {
+      transceiver->RequestKeyFrame();
+    }
     int num_frame_returned = codec->Decode(
         std::move(received_frame),
         [on_receive_video, remote_user_id, channel_name,

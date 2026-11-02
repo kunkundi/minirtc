@@ -60,6 +60,7 @@ PeerPtr* CreatePeer(const Params* params) {
   peer_ptr->pc_params.on_receive_data_buffer = params->on_receive_data_buffer;
 
   peer_ptr->pc_params.on_receive_video_frame = params->on_receive_video_frame;
+  peer_ptr->pc_params.on_receive_encoded_video = params->on_receive_encoded_video;
 
   peer_ptr->pc_params.on_signal_status = params->on_signal_status;
   peer_ptr->pc_params.on_signal_message = params->on_signal_message;

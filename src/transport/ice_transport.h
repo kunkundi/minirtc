@@ -71,8 +71,10 @@ class IceTransport {
 
   void SetOnReceiveFunc(OnReceiveVideo on_receive_video,
                         OnReceiveAudio on_receive_audio,
-                        OnReceiveData on_receive_data) {
+                        OnReceiveData on_receive_data,
+                        OnReceiveEncodedVideo encoded = nullptr) {
     on_receive_video_ = on_receive_video;
+    on_receive_encoded_video_ = encoded;
     on_receive_audio_ = on_receive_audio;
     on_receive_data_ = on_receive_data;
   }
@@ -272,6 +274,7 @@ class IceTransport {
   std::atomic<bool> secure_ready_reported_{false};
 
   OnReceiveVideo on_receive_video_ = nullptr;
+  OnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;
   OnReceiveData on_receive_data_ = nullptr;
 

@@ -77,7 +77,8 @@ class IceTransportController
               std::optional<uint8_t> audio_abs_send_time_ext_id,
               std::optional<uint8_t> audio_abs_recv_time_ext_id,
               OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
-              OnReceiveData on_receive_data, void* user_data);
+              OnReceiveData on_receive_data, void* user_data,
+              OnReceiveEncodedVideo encoded = nullptr);
   void Destroy();
 
   // SRTP is negotiated from the local setting and the remote SDP before
@@ -470,6 +471,7 @@ class IceTransportController
   MediaCodecConfig media_config_;
 
   OnReceiveVideo on_receive_video_ = nullptr;
+  OnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;
   OnReceiveData on_receive_data_ = nullptr;
 

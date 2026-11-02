@@ -318,6 +318,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   user_data_ = params.user_data;
 
   connection_callbacks_.on_receive_video_frame = params.on_receive_video_frame;
+  connection_callbacks_.on_receive_encoded_video = params.on_receive_encoded_video;
   connection_callbacks_.on_receive_audio_buffer =
       params.on_receive_audio_buffer;
   connection_callbacks_.on_receive_data_buffer = params.on_receive_data_buffer;

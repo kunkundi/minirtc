@@ -61,6 +61,7 @@ struct ConnectionCallbacks {
       on_connection_status;
   OnNetStatusReport on_net_status_report;
   void* user_data = nullptr;
+  OnReceiveEncodedVideo on_receive_encoded_video = nullptr;
 };
 
 struct IceWorkMsg {
