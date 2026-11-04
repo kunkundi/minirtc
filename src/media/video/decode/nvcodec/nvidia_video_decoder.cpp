@@ -6,6 +6,7 @@
 
 #include "log.h"
 #include "minirtc.h"
+#include "openh264_decoder.h"
 
 // #define SAVE_DECODED_NV12_STREAM
 // #define SAVE_RECEIVED_H264_STREAM
@@ -219,6 +220,10 @@ int NvidiaVideoDecoder::Init() {
 int NvidiaVideoDecoder::Decode(
     std::unique_ptr<ReceivedFrame> received_frame,
     std::function<void(const DecodedFrame*)> on_receive_decoded_frame) {
+  if (software_decoder_) {
+    return software_decoder_->Decode(std::move(received_frame),
+                                     std::move(on_receive_decoded_frame));
+  }
   if (!state_ || !state_->decoder) {
     return -1;
   }
@@ -230,7 +235,27 @@ int NvidiaVideoDecoder::Decode(
   fwrite((unsigned char*)data, 1, size, file_h264_);
 #endif
 
-  int num_frame_returned = state_->decoder->Decode(data, (int)size);
+  int num_frame_returned = 0;
+  try {
+    num_frame_returned = state_->decoder->Decode(data, (int)size);
+  } catch (const NVDECException& error) {
+    LOG_WARN("NVDEC runtime failure, code={}: {}",
+             static_cast<int>(error.getErrorCode()), error.what());
+    auto software = std::make_unique<OpenH264Decoder>(clock_, native_video_output_);
+    if (software->Init() != 0) {
+      LOG_ERROR("OpenH264 runtime fallback initialization failed");
+      return -1;
+    }
+    software_decoder_ = std::move(software);
+    using_software_decoder_.store(true, std::memory_order_release);
+    // Native frames already delivered to the renderer retain their own state.
+    state_.reset();
+    LOG_WARN("Use video decoder [OpenH264 (H.264)] after NVDEC runtime failure; "
+             "requesting a new key frame");
+    // The transport requests a key frame on a negative Decode result. The
+    // failed input may be a P frame: do not feed it into the fresh decoder.
+    return -1;
+  }
   for (size_t i = 0; i < num_frame_returned; ++i) {
     cudaVideoSurfaceFormat format = state_->decoder->GetOutputFormat();
     if (format == cudaVideoSurfaceFormat_NV12) {

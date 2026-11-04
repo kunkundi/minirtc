@@ -7,6 +7,7 @@
 #ifndef _NVIDIA_VIDEO_DECODER_H_
 #define _NVIDIA_VIDEO_DECODER_H_
 
+#include <atomic>
 #include <functional>
 #include <memory>
 
@@ -32,12 +33,18 @@ class NvidiaVideoDecoder : public MediaCodec {
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;
 
-  std::string GetDecoderName() const override { return "NVDEC (H.264)"; }
+  std::string GetDecoderName() const override {
+    return using_software_decoder_.load(std::memory_order_acquire)
+               ? "OpenH264 (H.264)"
+               : "NVDEC (H.264)";
+  }
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
   bool native_video_output_ = false;
   std::shared_ptr<NvidiaVideoDecoderState> state_;
+  std::unique_ptr<MediaCodec> software_decoder_;
+  std::atomic<bool> using_software_decoder_{false};
   CUdevice cuda_device_ = 0;
   DecodedFrame* decoded_frame_ = nullptr;
   bool get_first_keyframe_ = false;
