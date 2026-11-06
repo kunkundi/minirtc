@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2025-07-21
- * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _LOG_H_
@@ -32,6 +32,10 @@ namespace minirtc {
 constexpr auto LOGGER_NAME = "minirtc";
 
 void InitLogger(const std::string& log_dir);
+
+// Configure custom output before first use. Later calls replace it safely while
+// the asynchronous logger is running.
+void InitLogger(const std::string& log_dir, spdlog::sink_ptr sink);
 
 std::shared_ptr<spdlog::logger> get_logger();
 

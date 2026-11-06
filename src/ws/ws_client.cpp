@@ -701,6 +701,16 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
       con ? con->get_ec() : websocketpp::lib::error_code();
 
   const bool certificate_failed = tls_failure_count_.load() > 0;
+  const bool wrapped_transport_error =
+      ec == websocketpp::transport::error::pass_through ||
+      ec == websocketpp::transport::error::tls_error;
+  const auto transport_error = con && wrapped_transport_error
+                                   ? con->get_transport_ec()
+                                   : websocketpp::lib::asio::error_code();
+  // Fixed fields are safe for credential-filtered controller diagnostics.
+  LOG_WARN("Signaling transport failure: category={} code={} transport_category={} transport_code={} certificate_failed={}",
+           ec.category().name(), ec.value(), transport_error.category().name(),
+           transport_error.value(), certificate_failed);
   bool is_tls_error = certificate_failed;
   if (con) {
     std::string ec_msg = error_msg;
@@ -751,6 +761,7 @@ void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
   const websocketpp::close::status::value close_code =
       con ? con->get_remote_close_code()
           : websocketpp::close::status::blank;
+  LOG_WARN("Signaling transport closed: code={}", static_cast<int>(close_code));
   LOG_WARN("Connection closed (code={} reason={})",
            static_cast<int>(close_code),
            con ? con->get_remote_close_reason() : std::string());
