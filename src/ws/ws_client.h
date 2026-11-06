@@ -8,7 +8,9 @@
 #define _WS_CLIENT_H_
 
 #include <atomic>
+#include <chrono>
 #include <condition_variable>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -20,7 +22,15 @@
 #include "websocketpp/common/memory.hpp"
 #include "websocketpp/config/asio_client.hpp"
 
-typedef websocketpp::client<websocketpp::config::asio_tls_client> client;
+struct WsClientConfig : websocketpp::config::asio_tls_client {
+  struct transport_config
+      : websocketpp::config::asio_tls_client::transport_config {
+    static const long timeout_socket_post_init = 10000;
+  };
+  using transport_type =
+      websocketpp::transport::asio::endpoint<transport_config>;
+};
+typedef websocketpp::client<WsClientConfig> client;
 typedef websocketpp::lib::shared_ptr<websocketpp::lib::asio::ssl::context>
     ssl_context_ptr;
 
@@ -90,6 +100,25 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   static bool LogTlsVerificationError(X509_STORE_CTX* store_ctx);
 
+  using Clock = std::chrono::steady_clock;
+  struct Callback {
+    uint64_t generation;
+    Clock::time_point queued;
+    size_t bytes;
+    std::function<void(WsClient&)> run;
+  };
+  struct CallbackQueue {
+    std::mutex mutex;
+    std::condition_variable ready;
+    std::deque<Callback> jobs;
+    uint64_t generation = 0;
+    size_t bytes = 0;
+    bool executing = false;
+    bool stopping = false;
+  };
+  void StartCallbacks();
+  void InvalidateCallbacks();
+  bool QueueCallback(std::function<void(WsClient&)> callback, size_t bytes = 0);
   void RegisterHandlers();
 
   void StopThreads();
@@ -105,6 +134,12 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void ScheduleReconnect(int delay_seconds, bool force = false);
 
  private:
+  struct Transport {
+    std::shared_ptr<client> endpoint;
+    websocketpp::connection_hdl handle;
+  };
+  Transport GetTransport();
+  std::mutex transport_mutex_;
   // Also owned by the I/O worker until run() returns.
   std::shared_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
@@ -123,6 +158,9 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::mutex shutdown_mtx_;
 
   std::string uri_;
+  std::shared_ptr<CallbackQueue> callbacks_ = std::make_shared<CallbackQueue>();
+  std::thread callback_thread_;
+  std::atomic<int64_t> callback_queue_ms_{0}, callback_execution_ms_{0};
 
   std::atomic<bool> running_{false};
   std::mutex ping_mtx_;
@@ -133,6 +171,11 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   // Protected by ping_mtx_. A new ping is sent only after the matching pong.
   std::string pending_ping_payload_;
   uint64_t ping_sequence_ = 0;
+  Clock::time_point connection_opened_at_{}, ping_queued_at_{},
+      ping_dispatched_at_{};
+  Clock::time_point next_heartbeat_report_{};
+  int64_t last_pong_rtt_ms_ = 0;
+  bool ping_send_failed_ = false, connection_stable_ = false;
 
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
   std::atomic<bool> shutdown_{false};

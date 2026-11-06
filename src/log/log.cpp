@@ -1,5 +1,7 @@
 #include "log.h"
 
+#include <spdlog/async.h>
+
 #include <filesystem>
 
 namespace minirtc {
@@ -7,6 +9,7 @@ namespace {
 std::string g_log_dir = "logs";
 std::once_flag g_logger_once_flag;
 std::mutex g_logger_mutex;
+std::shared_ptr<spdlog::details::thread_pool> g_log_pool;
 std::shared_ptr<spdlog::logger> g_logger;
 
 std::string NormalizeLogDirectory(const std::string& log_dir) {
@@ -43,8 +46,10 @@ std::shared_ptr<spdlog::logger> get_logger() {
     sinks.push_back(std::make_shared<spdlog::sinks::stdout_color_sink_mt>());
     sinks.push_back(file_sink);
 
-    g_logger = std::make_shared<spdlog::logger>(LOGGER_NAME, sinks.begin(),
-                                                sinks.end());
+    g_log_pool = std::make_shared<spdlog::details::thread_pool>(8192, 1);
+    g_logger = std::make_shared<spdlog::async_logger>(
+        LOGGER_NAME, sinks.begin(), sinks.end(), g_log_pool,
+        spdlog::async_overflow_policy::overrun_oldest);
     g_logger->set_level(SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
                            ? spdlog::level::debug
                            : spdlog::level::info);

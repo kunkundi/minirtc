@@ -19,6 +19,8 @@ WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
     : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
 namespace {
+thread_local const WsClient* active_callback_client = nullptr;
+
 void JoinThread(std::thread& thread) {
   if (!thread.joinable()) {
     return;
@@ -39,9 +41,13 @@ void JoinThread(std::thread& thread) {
 WsClient::~WsClient() { Shutdown(); }
 
 void WsClient::Shutdown() {
+  // A callback may request shutdown while another thread is already draining
+  // it.
+  if (active_callback_client == this && shutdown_) return;
   std::lock_guard<std::mutex> shutdown_lock(shutdown_mtx_);
   if (shutdown_.load() && !m_endpoint_ && !m_thread_.joinable() &&
-      !ping_thread_.joinable() && !reconnect_thread_.joinable()) {
+      !ping_thread_.joinable() && !reconnect_thread_.joinable() &&
+      !callback_thread_.joinable()) {
     return;
   }
   LOG_INFO("WebSocket shutdown started");
@@ -57,6 +63,7 @@ void WsClient::Shutdown() {
   running_ = false;
   cond_var_.notify_all();
   reconnect_cv_.notify_all();
+  callbacks_->ready.notify_all();
 
   std::vector<std::thread> reconnect_threads;
   {
@@ -91,7 +98,19 @@ void WsClient::Shutdown() {
   JoinThread(m_thread_);
   LOG_DEBUG("WebSocket I/O worker stopped");
 
-  m_endpoint_.reset();
+  {
+    std::lock_guard lock(callbacks_->mutex);
+    callbacks_->stopping = true;
+    callbacks_->jobs.clear();
+    callbacks_->bytes = 0;
+  }
+  callbacks_->ready.notify_all();
+  JoinThread(callback_thread_);
+  {
+    std::lock_guard lock(transport_mutex_);
+    m_endpoint_.reset();
+    connection_handle_.reset();
+  }
   heartbeat_started_ = false;
   LOG_INFO("WebSocket shutdown completed");
 }
@@ -111,9 +130,97 @@ void WsClient::StopThreads() {
     m_endpoint_->stop();
   }
   JoinThread(m_thread_);
+  InvalidateCallbacks();
 
-  m_endpoint_.reset();
+  {
+    std::lock_guard lock(transport_mutex_);
+    m_endpoint_.reset();
+    connection_handle_.reset();
+  }
   heartbeat_started_ = false;
+}
+
+void WsClient::StartCallbacks() {
+  if (callback_thread_.joinable()) return;
+  auto queue = callbacks_;
+  std::weak_ptr<WsClient> weak_self = shared_from_this();
+  callback_thread_ = std::thread([queue, weak_self] {
+    std::unique_lock lock(queue->mutex);
+    while (!queue->stopping) {
+      queue->ready.wait(
+          lock, [&] { return queue->stopping || !queue->jobs.empty(); });
+      if (queue->stopping) break;
+      auto job = std::move(queue->jobs.front());
+      queue->jobs.pop_front();
+      queue->bytes -= job.bytes;
+      if (job.generation != queue->generation) continue;
+      queue->executing = true;
+      lock.unlock();
+      if (auto self = weak_self.lock()) {
+        if (!self->shutdown_) {
+          active_callback_client = self.get();
+          const auto started = Clock::now();
+          self->callback_queue_ms_ =
+              std::chrono::duration_cast<std::chrono::milliseconds>(started -
+                                                                    job.queued)
+                  .count();
+          try {
+            job.run(*self);
+          } catch (const std::exception&) {
+            // Message bodies and parser errors can contain credentials.
+            LOG_ERROR("WebSocket application callback failed");
+            self->AsyncReConnect();
+          } catch (...) {
+            LOG_ERROR(
+                "WebSocket application callback failed with unknown exception");
+            self->AsyncReConnect();
+          }
+          self->callback_execution_ms_ =
+              std::chrono::duration_cast<std::chrono::milliseconds>(
+                  Clock::now() - started)
+                  .count();
+          if (self->callback_execution_ms_ >= 1000 ||
+              self->callback_queue_ms_ >= 1000)
+            LOG_WARN("WebSocket callback delayed: queue_ms={} execution_ms={}",
+                     self->callback_queue_ms_.load(),
+                     self->callback_execution_ms_.load());
+          active_callback_client = nullptr;
+        }
+      }
+      lock.lock();
+      queue->executing = false;
+      queue->ready.notify_all();
+    }
+  });
+}
+
+void WsClient::InvalidateCallbacks() {
+  std::unique_lock lock(callbacks_->mutex);
+  ++callbacks_->generation;
+  callbacks_->jobs.clear();
+  callbacks_->bytes = 0;
+  if (active_callback_client != this)
+    callbacks_->ready.wait(lock, [&] {
+      // A callback can initiate Shutdown while a reconnect is draining it.
+      // Shutdown owns the final join, and Connect rejects terminal shutdown.
+      return !callbacks_->executing || shutdown_.load();
+    });
+}
+
+bool WsClient::QueueCallback(std::function<void(WsClient&)> callback,
+                             size_t bytes) {
+  std::lock_guard lock(callbacks_->mutex);
+  if (shutdown_ || callbacks_->stopping) return false;
+  // Reserve a few slots for connection status transitions during overload.
+  const size_t limit = bytes ? 128 : 144;
+  if (callbacks_->jobs.size() >= limit ||
+      bytes > 1024 * 1024 - callbacks_->bytes)
+    return false;
+  callbacks_->jobs.push_back(
+      {callbacks_->generation, Clock::now(), bytes, std::move(callback)});
+  callbacks_->bytes += bytes;
+  callbacks_->ready.notify_one();
+  return true;
 }
 
 void WsClient::CleanupPendingThreads() {
@@ -156,14 +263,21 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
     LOG_DEBUG("Reconnect already in progress, skipping.");
     return;
   }
+  if (delay_seconds < 0) {
+    const int attempt = std::min(reconnect_attempts_.load() + 1, 6);
+    reconnect_attempts_ = attempt;
+    delay_seconds = std::min(1 << attempt, 60);
+    LOG_INFO("Scheduling signaling reconnect: attempt={} base_seconds={}",
+             attempt, delay_seconds);
+  }
   reconnect_waiting_ = true;
   reconnect_now_ = force;
 
   auto delay = std::chrono::milliseconds::zero();
   if (!force) {
     // Add jitter rather than shortening the backoff, so spreading retries does
-    // not increase sustained load. A 60s base waits 60-90s; even the first
-    // automatic reconnect is spread over 0-1s. Manual retries remain immediate.
+    // not increase sustained load. A 60s base waits 60-90s.
+    // Manual retries remain immediate.
     static thread_local std::mt19937 random_engine(std::random_device{}());
     const int base_ms = delay_seconds * 1000;
     const int jitter_ms = base_ms > 0 ? base_ms / 2 : 1000;
@@ -297,14 +411,17 @@ int WsClient::Connect(const std::string& uri) {
     return -1;
   }
 
-  uri_ = uri;
-
   LOG_INFO("Connecting WebSocket: {}", uri);
 
   StopThreads();
+  uri_ = uri;
 
+  StartCallbacks();
   tls_failure_count_ = 0;
-  m_endpoint_ = std::make_shared<client>();
+  {
+    std::lock_guard lock(transport_mutex_);
+    m_endpoint_ = std::make_shared<client>();
+  }
   SetStatus(WsOpening);
   m_endpoint_->init_asio();
   m_endpoint_->start_perpetual();
@@ -340,12 +457,13 @@ int WsClient::ReConnect() {
   }
 
   websocketpp::lib::error_code ec;
-  if (!connection_handle_.expired()) {
-    auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
+  const auto transport = GetTransport();
+  if (transport.endpoint && !transport.handle.expired()) {
+    auto con = transport.endpoint->get_con_from_hdl(transport.handle, ec);
     if (!ec && con && con->get_state() == websocketpp::session::state::open) {
-      m_endpoint_->close(connection_handle_,
-                         websocketpp::close::status::going_away, "Reconnect",
-                         ec);
+      transport.endpoint->close(transport.handle,
+                                websocketpp::close::status::going_away,
+                                "Reconnect", ec);
     }
   }
 
@@ -359,14 +477,7 @@ void WsClient::AsyncReConnect() {
     return;
   }
 
-  // Base backoff: 0s, 2s, 4s, 8s ... capped at 60s, then jittered by the scheduler.
-  int attempt = reconnect_attempts_.fetch_add(1) + 1;
-  int exponent = std::min(attempt - 1, 6);  // 2^6 = 64s
-  int delay_seconds = (attempt <= 1) ? 0 : (1 << exponent);
-  delay_seconds = std::min(delay_seconds, 60);
-
-  LOG_INFO("AsyncReConnect: scheduling reconnect (attempt {})", attempt);
-  ScheduleReconnect(delay_seconds);
+  ScheduleReconnect(-1);
 }
 
 void WsClient::ForceReconnect() {
@@ -378,19 +489,25 @@ void WsClient::Close() {
   Shutdown();
 }
 
+WsClient::Transport WsClient::GetTransport() {
+  std::lock_guard lock(transport_mutex_);
+  return {m_endpoint_, connection_handle_};
+}
+
 void WsClient::Send(const std::string& message) {
   websocketpp::lib::error_code ec;
-  if (!m_endpoint_) {
+  const auto transport = GetTransport();
+  if (!transport.endpoint) {
     LOG_WARN("Send failed: WebSocket endpoint is unavailable");
     return;
   }
-  auto con = m_endpoint_->get_con_from_hdl(connection_handle_, ec);
+  auto con = transport.endpoint->get_con_from_hdl(transport.handle, ec);
   if (ec || !con || con->get_state() != websocketpp::session::state::open) {
     LOG_WARN("Send failed: not connected or error: {}", ec.message());
     return;
   }
-  m_endpoint_->send(connection_handle_, message,
-                    websocketpp::frame::opcode::text, ec);
+  transport.endpoint->send(transport.handle, message,
+                           websocketpp::frame::opcode::text, ec);
   if (ec) {
     // Signaling payloads may contain passwords or reconnect bearer tokens.
     LOG_ERROR("Sending message error: {}", ec.message());
@@ -402,7 +519,7 @@ WsStatus WsClient::GetStatus() { return ws_status_; }
 void WsClient::SetStatus(WsStatus status) {
   ws_status_ = status;
   if (!shutdown_ && on_ws_status_) {
-    on_ws_status_(status);
+    QueueCallback([status](WsClient& self) { self.on_ws_status_(status); });
   }
 }
 
@@ -420,6 +537,10 @@ void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
   {
     std::lock_guard<std::mutex> lock(ping_mtx_);
     pending_ping_payload_.clear();
+    connection_opened_at_ = Clock::now();
+    next_heartbeat_report_ = connection_opened_at_ + std::chrono::seconds(60);
+    connection_stable_ = false;
+    last_pong_rtt_ms_ = 0;
   }
   running_ = true;
   ping_thread_ = std::thread(&WsClient::PingLoop, this, hdl);
@@ -427,47 +548,68 @@ void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
 }
 
 void WsClient::PingLoop(websocketpp::connection_hdl hdl) {
-  constexpr auto kPongTimeout = std::chrono::seconds(5);
+  constexpr auto kWarningTimeout = std::chrono::seconds(5);
+  constexpr auto kPongTimeout = std::chrono::seconds(15);
   const auto interval = std::chrono::seconds(ping_interval_seconds_);
-  auto next_ping = std::chrono::steady_clock::now() + interval;
-  // StopThreads joins this worker before replacing the endpoint.
+  auto next_ping = Clock::now() + interval;
   const auto endpoint = m_endpoint_;
-  std::unique_lock<std::mutex> lock(ping_mtx_);
+  std::weak_ptr<WsClient> weak_self = shared_from_this();
+  std::unique_lock lock(ping_mtx_);
   while (running_) {
     cond_var_.wait_until(lock, next_ping, [this] { return !running_; });
     if (!running_) break;
-
-    websocketpp::lib::error_code ec;
-    auto con = endpoint->get_con_from_hdl(hdl, ec);
-    if (ec || !con || con->get_state() != websocketpp::session::state::open) {
-      LOG_WARN("WebSocket is unavailable for heartbeat");
-      break;
-    }
-
-    next_ping = std::chrono::steady_clock::now() + interval;
+    ping_queued_at_ = Clock::now();
+    ping_dispatched_at_ = {};
+    ping_send_failed_ = false;
+    next_ping = ping_queued_at_ + interval;
     pending_ping_payload_ = std::to_string(++ping_sequence_);
-    endpoint->ping(hdl, pending_ping_payload_, ec);
-    if (ec) {
-      LOG_ERROR("Ping error: {}", ec.message());
-      break;
+    const auto payload = pending_ping_payload_;
+    endpoint->get_io_service().post([weak_self, endpoint, hdl, payload] {
+      auto self = weak_self.lock();
+      if (!self) return;
+      std::lock_guard lock(self->ping_mtx_);
+      if (!self->running_ || self->pending_ping_payload_ != payload) return;
+      self->ping_dispatched_at_ = Clock::now();
+      websocketpp::lib::error_code ec;
+      endpoint->ping(hdl, payload, ec);
+      if (ec) {
+        LOG_WARN("WebSocket ping dispatch failed: {}", ec.message());
+        self->ping_send_failed_ = true;
+        self->cond_var_.notify_all();
+      }
+    });
+    const auto finished = [this] {
+      return !running_ || ping_send_failed_ || pending_ping_payload_.empty();
+    };
+    if (!cond_var_.wait_until(lock, ping_queued_at_ + kWarningTimeout,
+                              finished)) {
+      const auto queue_ms =
+          ping_dispatched_at_ == Clock::time_point{}
+              ? -1
+              : std::chrono::duration_cast<std::chrono::milliseconds>(
+                    ping_dispatched_at_ - ping_queued_at_)
+                    .count();
+      LOG_WARN(
+          "WebSocket heartbeat delayed: seq={} io_queue_ms={} "
+          "callback_queue_ms={} callback_execution_ms={} timeout_ms=15000",
+          ping_sequence_, queue_ms, callback_queue_ms_.load(),
+          callback_execution_ms_.load());
+      if (!cond_var_.wait_until(lock, ping_queued_at_ + kPongTimeout,
+                                finished)) {
+        LOG_WARN(
+            "Pong timeout exceeded: seq={} dispatched={} last_rtt_ms={}; "
+            "reconnecting",
+            ping_sequence_, ping_dispatched_at_ != Clock::time_point{},
+            last_pong_rtt_ms_);
+        break;
+      }
     }
-
-    // Do not send another ping while this one is outstanding. Only a matching
-    // pong or shutdown can end this wait; network activity cannot extend it.
-    const auto deadline = std::chrono::steady_clock::now() + kPongTimeout;
-    if (!cond_var_.wait_until(lock, deadline, [this] {
-          return !running_ || pending_ping_payload_.empty();
-        })) {
-      LOG_WARN("Pong timeout exceeded, reconnecting...");
-      break;
-    }
+    if (ping_send_failed_) break;
   }
   pending_ping_payload_.clear();
   const bool connection_lost = running_.exchange(false);
   lock.unlock();
-  if (connection_lost && !shutdown_) {
-    AsyncReConnect();
-  }
+  if (connection_lost && !shutdown_) AsyncReConnect();
 }
 
 // void WsClient::OnSocketInit(client *, websocketpp::connection_hdl) {
@@ -536,19 +678,21 @@ bool WsClient::OnTlsVerify(bool preverified,
 
 void WsClient::OnOpen(client* c, websocketpp::connection_hdl hdl) {
   // Ignore callbacks during shutdown or from a replaced endpoint.
-  if (shutdown_ || c != m_endpoint_.get()) {
+  if (shutdown_ || c != GetTransport().endpoint.get()) {
     return;
   }
   LOG_INFO("WebSocket connection opened");
-  connection_handle_ = hdl;
+  {
+    std::lock_guard lock(transport_mutex_);
+    connection_handle_ = hdl;
+  }
   SetStatus(WsOpened);
-  reconnect_attempts_ = 0;
   tls_failure_count_ = 0;
   RestartPingThread(hdl);
 }
 
 void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
-  if (shutdown_ || c != m_endpoint_.get()) {
+  if (shutdown_ || c != GetTransport().endpoint.get()) {
     return;
   }
   auto con = c->get_con_from_hdl(hdl);
@@ -588,16 +732,7 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
           "with certificate verification enabled");
     }
 
-    int attempts = reconnect_attempts_.fetch_add(1);
-    // Clamp before shifting: certificate outages can last for many attempts.
-    int delay_seconds = std::min(1 << std::min(attempts, 6), 60);
-
-    LOG_INFO("TLS reconnect base backoff: {} seconds (attempt {})",
-             delay_seconds, attempts + 1);
-
-    if (!shutdown_) {
-      ScheduleReconnect(delay_seconds);
-    }
+    if (!shutdown_) ScheduleReconnect(-1);
   } else {
     LOG_WARN("Connection failed (non-TLS error): {}", error_msg);
     if (!shutdown_) {
@@ -607,7 +742,7 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
 }
 
 void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
-  if (c != m_endpoint_.get()) {
+  if (c != GetTransport().endpoint.get()) {
     return;
   }
   auto con = c->get_con_from_hdl(hdl);
@@ -630,9 +765,32 @@ bool WsClient::OnPing(websocketpp::connection_hdl, std::string) { return true; }
 
 bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
   std::lock_guard<std::mutex> lock(ping_mtx_);
-  if (hdl.owner_before(connection_handle_) ||
-      connection_handle_.owner_before(hdl) || msg != pending_ping_payload_) {
+  const auto transport = GetTransport();
+  if (!running_ || pending_ping_payload_.empty() ||
+      hdl.owner_before(transport.handle) ||
+      transport.handle.owner_before(hdl) || msg != pending_ping_payload_) {
     return true;
+  }
+  const auto now = Clock::now();
+  last_pong_rtt_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
+                          now - ping_queued_at_)
+                          .count();
+  if (!connection_stable_ &&
+      now - connection_opened_at_ >= std::chrono::seconds(60)) {
+    connection_stable_ = true;
+    reconnect_attempts_ = 0;
+    LOG_INFO("Signaling connection stable; reconnect backoff reset");
+  }
+  if (now >= next_heartbeat_report_ || last_pong_rtt_ms_ >= 5000) {
+    const auto queue_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                              ping_dispatched_at_ - ping_queued_at_)
+                              .count();
+    LOG_INFO(
+        "WebSocket heartbeat: seq={} rtt_ms={} io_queue_ms={} "
+        "callback_queue_ms={} callback_execution_ms={}",
+        ping_sequence_, last_pong_rtt_ms_, queue_ms, callback_queue_ms_.load(),
+        callback_execution_ms_.load());
+    next_heartbeat_report_ = now + std::chrono::seconds(60);
   }
   pending_ping_payload_.clear();
   cond_var_.notify_all();
@@ -640,8 +798,13 @@ bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
 }
 
 void WsClient::OnMessage(websocketpp::connection_hdl, client::message_ptr msg) {
-  if (on_receive_msg_) {
-    on_receive_msg_(msg->get_payload());
+  if (!on_receive_msg_ || shutdown_) return;
+  const auto& payload = msg->get_payload();
+  if (!QueueCallback(
+          [payload](WsClient& self) { self.on_receive_msg_(payload); },
+          payload.size())) {
+    LOG_WARN("WebSocket application queue full; reconnecting");
+    AsyncReConnect();
   }
 }
 }  // namespace minirtc
