@@ -70,6 +70,10 @@ local libnice_configs = {
 }
 -- iOS uses VideoToolbox exclusively for H.264; software AV1 remains available.
 if is_iphoneos then
+    -- The iOS build prepares host Python with pip, setuptools and wheel.
+    -- Xmake 3.1.1's strict library dependency check otherwise tries to rebuild
+    -- system Python because it has no Xmake dependency manifest.
+    add_requireconfs("**.python", {system = true})
     -- Host Python needs the certificate bundle as data. System-library probing
     -- would incorrectly pass the iOS deployment target to the macOS compiler.
     add_requireconfs("**.ca-certificates", {system = false})
