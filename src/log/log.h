@@ -33,10 +33,6 @@ constexpr auto LOGGER_NAME = "minirtc";
 
 void InitLogger(const std::string& log_dir);
 
-// Configure custom output before first use. Later calls replace it safely while
-// the asynchronous logger is running.
-void InitLogger(const std::string& log_dir, spdlog::sink_ptr sink);
-
 std::shared_ptr<spdlog::logger> get_logger();
 
 #define LOG_TRACE(...) SPDLOG_LOGGER_TRACE(get_logger(), __VA_ARGS__)

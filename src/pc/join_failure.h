@@ -9,15 +9,11 @@
 
 namespace minirtc {
 
-enum class JoinFailureKind {
-  PasswordRequired,
-  AuthenticationFailed,
-  NoSuchTransmission,
-  RemoteUnavailable,
-  Throttled,
-  Busy,
-  NotAuthenticated,
-  Unknown
+using JoinFailureKind = MiniRtcJoinFailureKind;
+struct JoinFailure {
+  JoinFailureKind kind = JoinFailureKind::Unknown;
+  ConnectionStatus status = ConnectionStatus::Failed;
+  int retry_after = 0;
 };
 
 inline JoinFailureKind ClassifyJoinFailure(std::string_view reason,
@@ -62,12 +58,6 @@ inline ConnectionStatus JoinFailureStatus(std::string_view reason,
       return ConnectionStatus::Failed;
   }
 }
-
-struct JoinFailure {
-  JoinFailureKind kind = JoinFailureKind::Unknown;
-  ConnectionStatus status = ConnectionStatus::Failed;
-  int retry_after = 0;
-};
 
 inline JoinFailure ParseJoinFailure(const nlohmann::json& message) {
   auto field = [&](const char* key) -> std::string_view {

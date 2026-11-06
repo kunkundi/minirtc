@@ -136,10 +136,13 @@ elseif is_os("macosx") or is_iphoneos then
         "Foundation", "SystemConfiguration")
 end
 
+-- Internal implementation headers are private to MiniRTC build targets.
+add_includedirs("src/log")
+
 target("log")
     set_kind("object")
     add_files("src/log/log.cpp")
-    add_includedirs("src/log", {public = true})
+    add_includedirs("src/api")
 
 target("common")
     set_kind("object")
@@ -397,7 +400,7 @@ target("minirtc")
 
     end
 
-    add_installfiles("src/api/*.h", {prefixdir = "include"})
+    add_installfiles("src/api/minirtc.h", {prefixdir = "include"})
     -- add_rules("utils.symbols.export_list", {symbols = {
     --     "CreatePeer",
     --     "DestroyPeer",
