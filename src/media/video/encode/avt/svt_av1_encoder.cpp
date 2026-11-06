@@ -171,7 +171,7 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.frame_rate_denominator = 1;
   enc_config_.enc_mode =
       video_degradation_preference_ ==
-              VideoDegradationPreference::MaintainFrameRate
+              MiniRtcVideoDegradationPreference::MaintainFrameRate
           ? 10
           : 8;
   enc_config_.rate_control_mode = SVT_AV1_RC_MODE_CBR;
@@ -183,7 +183,7 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.min_qp_allowed = 10;
   enc_config_.intra_period_length = key_frame_interval_;
   enc_config_.screen_content_mode =
-      video_content_type_ == VideoContentType::ScreenContent ? 1 : 0;
+      video_content_type_ == MiniRtcVideoContentType::ScreenContent ? 1 : 0;
   // enc_config_.intra_refresh_type = SVT_AV1_KF_REFRESH;
   enc_config_.level = 52;
   // enc_config_.qp = 63;

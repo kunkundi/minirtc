@@ -58,12 +58,14 @@ Xmake resolves dependencies on the first build. The result is `libminirtc.a` or 
 
 ## Integrate into an application
 
+Public functions, types, callbacks and unscoped enum values use the `MiniRtc` prefix. The header groups type/configuration definitions first, followed by lifecycle, signaling, stream, media, data, direct-session and utility functions. Consumers migrate to the new names and rebuild against the matching library.
+
 Public functions and data types are declared in `minirtc.h`, the header installed by the SDK. Use `MiniRtcConfigureLogging` for log callbacks and thresholds. Address parsing, join-rejection parsing, and Android JavaVM configuration are also available through this header.
 
-1. Zero-initialize `Params`, then set the signaling endpoint, identity, codec options, TURN mode, SRTP, and callbacks.
+1. Zero-initialize `MiniRtcParams`, then set the signaling endpoint, identity, codec options, TURN mode, SRTP, and callbacks.
 2. Create a peer, check the result, and register video, audio, and data streams before session negotiation.
-3. Call `Init` and wait for `SignalConnected`; a zero return value alone does not mean login succeeded.
-4. Join the remote session and wait for `Connected` before sending frames or data.
+3. Call `MiniRtcInit` and wait for `MiniRtcSignalConnected`; a zero return value alone does not mean login succeeded.
+4. Join the remote session and wait for `MiniRtcConnectionConnected` before sending frames or data.
 5. Stop application capture and sending, leave the session, and destroy the peer when finished.
 
 Start with the [configuration example and callback rules](docs/INTEGRATION_EN.md#integration), then consult the [public header](src/api/minirtc.h). The three status/report callbacks are required by current call paths. Old samples under `tests/` are not a current integration tutorial.

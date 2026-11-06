@@ -96,7 +96,7 @@ class WmfH264Encoder::Impl {
     SetUint(api_.Get(), CODECAPI_AVEncMPVGOPSize, config_.key_frame_interval);
     SetUint(api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed,
             config_.video_degradation_preference ==
-                    VideoDegradationPreference::MaintainFrameRate
+                    MiniRtcVideoDegradationPreference::MaintainFrameRate
                 ? 0
                 : 50);
 

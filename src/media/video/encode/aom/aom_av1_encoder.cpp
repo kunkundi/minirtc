@@ -147,7 +147,7 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   max_fps_ = config.max_frame_rate;
   disable_frame_dropping_ =
       config.video_degradation_preference ==
-      VideoDegradationPreference::MaintainFrameRate;
+      MiniRtcVideoDegradationPreference::MaintainFrameRate;
 
   // Initialize encoder configuration structure with default values
   aom_codec_err_t ret = aom_codec_enc_config_default(
@@ -205,7 +205,7 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
   SET_ENCODER_PARAM_OR_RETURN_ERROR(
       AOME_SET_CPUUSED,
       config.video_degradation_preference ==
-              VideoDegradationPreference::MaintainFrameRate
+              MiniRtcVideoDegradationPreference::MaintainFrameRate
           ? 11
           : 8);  // 6 - 11; larger values favor throughput.
   SET_ENCODER_PARAM_OR_RETURN_ERROR(AV1E_SET_ENABLE_CDEF, 0);
@@ -228,12 +228,12 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
 
   SET_ENCODER_PARAM_OR_RETURN_ERROR(
       AV1E_SET_TUNE_CONTENT,
-      config.video_content_type == VideoContentType::ScreenContent
+      config.video_content_type == MiniRtcVideoContentType::ScreenContent
           ? AOM_CONTENT_SCREEN
           : AOM_CONTENT_DEFAULT);
   SET_ENCODER_PARAM_OR_RETURN_ERROR(
       AV1E_SET_ENABLE_PALETTE,
-      config.video_content_type == VideoContentType::ScreenContent ? 1 : 0);
+      config.video_content_type == MiniRtcVideoContentType::ScreenContent ? 1 : 0);
 
   // if (aom_av1_encoder_config_.g_threads == 8) {
   //   // Values passed to AV1E_SET_TILE_ROWS and AV1E_SET_TILE_COLUMNS are

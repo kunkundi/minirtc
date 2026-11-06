@@ -33,7 +33,7 @@ xmake f -p linux -a x86_64 -m release \
 xmake b minirtc
 ```
 
-On Windows, use `--USE_CUDA=true` with `CUDA_PATH` or `--CUDA_DIR`. A CUDA build also requires `hardware_acceleration=true` in `Params` to request the hardware path. VideoToolbox on Apple platforms does not require CUDA.
+On Windows, use `--USE_CUDA=true` with `CUDA_PATH` or `--CUDA_DIR`. A CUDA build also requires `hardware_acceleration=true` in `MiniRtcParams` to request the hardware path. VideoToolbox on Apple platforms does not require CUDA.
 
 ### iOS
 
@@ -59,7 +59,7 @@ xmake b minirtc
 
 All Android support lives in this repository. An embedding application can include its `xmake.lua` directly while keeping build and package caches in a separate directory. Before creating a peer, the Android host must export its system TrustManager roots to an app-owned PEM file and set `SSL_CERT_FILE` to that path. MiniRTC loads that file explicitly and verifies the certificate chain and hostname. Android uses the same decode task submission logic as the other platforms; compressed-frame queue length and waiting time are currently unbounded.
 
-To send AV1, set `Params::av1_encoding=true`, add a video stream and submit NV12 frames. With hardware acceleration enabled, MediaCodec is tried first and falls back to SVT-AV1; with it disabled, encoding uses SVT-AV1 directly. Real-time performance depends on the selected codec, device, resolution, and frame rate.
+To send AV1, set `MiniRtcParams::av1_encoding=true`, add a video stream and submit NV12 frames. With hardware acceleration enabled, MediaCodec is tried first and falls back to SVT-AV1; with it disabled, encoding uses SVT-AV1 directly. Real-time performance depends on the selected codec, device, resolution, and frame rate.
 
 ### HarmonyOS
 
@@ -89,41 +89,40 @@ Useful commands: `xmake f --menu` shows options, `xmake b -vy minirtc` enables v
 
 Use [src/api/minirtc.h](../src/api/minirtc.h) as the API reference. The current lifecycle is:
 
-1. Zero-initialize with `Params params{}`, then set endpoints, media options, and callbacks. `Params` has no application-level defaults; zero initialization does not enable TURN or SRTP.
-2. Call `CreatePeer(&params)` and check the result. Register streams with `AddVideoStream`, `AddAudioStream`, and `AddDataStream` before negotiating a session.
-3. Call `Init(peer)` to start asynchronous signaling. **A zero return value does not mean login succeeded**; wait for `SignalConnected` through `on_signal_status`.
-4. The initiating peer calls `JoinConnection(peer, "remote-id@password")` to join a CrossDesk session. `user_id` is the local login identity, not the remote target ID. Identity registration and password rules are defined by the signaling service.
-5. After `on_connection_status` reports `Connected`, send media or data using the registered stream names. API return values do not confirm remote delivery.
-6. Call `LeaveConnection` to leave the session. Stop application capture and sending tasks before calling `if (peer) DestroyPeer(&peer);`. Destruction clears the pointer.
+1. Zero-initialize with `MiniRtcParams params{}`, then set endpoints, media options, and callbacks. `MiniRtcParams` has no application-level defaults; zero initialization does not enable TURN or SRTP.
+2. Call `MiniRtcCreatePeer(&params)` and check the result. Register streams with `MiniRtcAddVideoStream`, `MiniRtcAddAudioStream`, and `MiniRtcAddDataStream` before negotiating a session.
+3. Call `MiniRtcInit(peer)` to start asynchronous signaling. **A zero return value does not mean login succeeded**; wait for `MiniRtcSignalConnected` through `on_signal_status`.
+4. The initiating peer calls `MiniRtcJoinConnection(peer, "remote-id@password")` to join a CrossDesk session. `user_id` is the local login identity, not the remote target ID. Identity registration and password rules are defined by the signaling service.
+5. After `on_connection_status` reports `MiniRtcConnectionConnected`, send media or data using the registered stream names. API return values do not confirm remote delivery.
+6. Call `MiniRtcLeaveConnection` to leave the session. Stop application capture and sending tasks before calling `if (peer) MiniRtcDestroyPeer(&peer);`. Destruction clears the pointer.
 
 ### Configuration example
 
-This function builds parameters for direct configuration; it does not open a network connection. Replace the example IP. Implement the callbacks in your application and add the required media/data receive callbacks before calling `CreatePeer`.
+This function builds parameters for direct configuration; it does not open a network connection. Replace the example IP. Implement the callbacks in your application and add the required media/data receive callbacks before calling `MiniRtcCreatePeer`.
 
 ```cpp
 #include <cstdio>
 #include "minirtc.h"
 
-Params MakeParams(const char* login_identity,
-                  OnSignalStatus on_signal,
-                  OnConnectionStatus on_connection,
-                  OnNetStatusReport on_stats,
-                  void* context) {
-  Params params{};
+MiniRtcParams MakeParams(const char* login_identity,
+                         MiniRtcOnSignalStatus on_signal,
+                         MiniRtcOnConnectionStatus on_connection,
+                         MiniRtcOnNetStatusReport on_stats, void* context) {
+  MiniRtcParams params{};
   params.use_cfg_file = false;
-  std::snprintf(params.signal_server_ip, sizeof(params.signal_server_ip),
-                "%s", "203.0.113.10");
+  std::snprintf(params.signal_server_ip, sizeof(params.signal_server_ip), "%s",
+                "203.0.113.10");
   params.signal_server_port = 9099;
   params.hardware_acceleration = true;
   params.native_video_output = false;
   params.av1_encoding = false;
-  params.turn_mode = TurnAutoUdpTcp;
+  params.turn_mode = MiniRtcTurnAutoUdpTcp;
   params.enable_srtp = true;
-  params.video_content_type = VideoContentType::ScreenContent;
-  params.video_quality = QualityHigh;
+  params.video_content_type = MiniRtcVideoContentType::ScreenContent;
+  params.video_quality = MiniRtcVideoQualityHigh;
   params.video_frame_rate = 60;
   params.video_degradation_preference =
-      VideoDegradationPreference::MaintainResolution;
+      MiniRtcVideoDegradationPreference::MaintainResolution;
   params.on_signal_status = on_signal;
   params.on_connection_status = on_connection;
   params.on_net_status_report = on_stats;
@@ -133,18 +132,18 @@ Params MakeParams(const char* login_identity,
 }
 ```
 
-`signal_server_ip` takes a hostname or IP **without `wss://`, a port, or a path**; the library constructs the WSS URL. STUN / TURN host fields also omit URL prefixes. Ports `9099` / `3478` come from CrossDesk Server's Compose defaults, not defaults built into `Params`.
+`signal_server_ip` accepts a hostname, an IP address, a host/path, or a `wss://` / `https://` URL. An explicit port in the address takes precedence over `signal_server_port`. Use `MiniRtcParseSignalServerAddress` to validate and split the address. The example port `9099` is supplied by the application.
 
 ### Callbacks and threads
 
-The optional `Params::on_signal_exchange` callback adapts application-specific signaling authentication. `PrepareLogin` supplies the default login request on every WebSocket open; `IncomingMessage` supplies incoming messages before internal handling, including login results. Return `0` for normal processing, a positive number for the JSON bytes written into `response` (sent by the engine while consuming the current message), or `-1` to fail authentication without fallback. Respect the supplied output capacity and never destroy the peer synchronously inside the callback.
+The optional `MiniRtcParams::on_signal_exchange` callback adapts application-specific signaling authentication. `PrepareLogin` supplies the default login request on every WebSocket open; `IncomingMessage` supplies incoming messages before internal handling, including login results. Return `0` for normal processing, a positive number for the JSON bytes written into `response` (sent by the engine while consuming the current message), or `-1` to fail authentication without fallback. Respect the supplied output capacity and never destroy the peer synchronously inside the callback.
 
-With an adapter, the application owns authentication state and reconnect credentials; MiniRTC does not apply its built-in reconnect token or password fallback. Standard successful login replies still update engine connection state. Keys, tokens and authorization fields remain opaque to the engine. Clients without an adapter retain their existing behavior. The added `Params` field requires rebuilding both application and library; initialize configuration with `Params{}`.
+With an adapter, the application owns authentication state and reconnect credentials; MiniRTC does not apply its built-in reconnect token or password fallback. Standard successful login replies still update engine connection state. Keys, tokens and authorization fields remain opaque to the engine. Clients without an adapter retain their existing behavior. The added `MiniRtcParams` field requires rebuilding both application and library; initialize configuration with `MiniRtcParams{}`.
 
 - **Provide valid `on_signal_status`, `on_connection_status`, and `on_net_status_report` callbacks.** Current paths invoke them directly; use matching no-op functions if you do not need their events.
 - Receive video through `on_receive_video_frame`, audio through `on_receive_audio_buffer`, and application data through `on_receive_data_buffer`. The legacy `on_receive_video_buffer` field is not wired into the current video-frame dispatch path.
 - `on_signal_message` receives messages not consumed by the internal signaling handler; it is not a tap for every raw signaling message.
-- Callbacks can run on internal worker threads. Dispatch UI work to the application thread, copy or retain data as needed, and avoid destroying a peer synchronously inside its callback. Keep `user_data` valid until destruction completes, and keep the `user_id` string alive at least until `Init` has read it.
+- Callbacks can run on internal worker threads. Dispatch UI work to the application thread, copy or retain data as needed, and avoid destroying a peer synchronously inside its callback. Keep `user_data` valid until destruction completes, and keep the `user_id` string alive at least until `MiniRtcInit` has read it.
 - Read identifiers and buffers using their supplied lengths, without relying on an extra `\0` terminator. Network-report pointers are also borrowed for the callback duration.
 
 <a id="frames"></a>
@@ -156,11 +155,11 @@ With an adapter, the application owns authentication state and reconnect credent
 | CPU video input | `MiniRtcVideoFrame`: packed NV12, positive even dimensions, at least `width × height × 3 / 2` bytes |
 | Native video | `MiniRtcNativeVideoFrame`: inspect `type` for CPU NV12, CUDA NV12, `CVPixelBuffer`, or Android MediaCodec output |
 | Audio input | `MiniRtcAudioFrame`: 48 kHz, mono, 16-bit PCM, 10 ms per frame: 480 samples / 960 bytes |
-| Timestamps | Capture timestamps use monotonic microseconds; use `GetSystemTimeMicros(peer)`, not Unix milliseconds |
-| Unreliable data | Register with `AddDataStream(..., false)` and use `SendDataFrame` |
-| Reliable data | Register with `AddDataStream(..., true)` and use `SendReliableDataFrame` |
+| Timestamps | Capture timestamps use monotonic microseconds; use `MiniRtcGetSystemTimeMicros(peer)`, not Unix milliseconds |
+| Unreliable data | Register with `MiniRtcAddDataStream(..., false)` and use `MiniRtcSendDataFrame` |
+| Reliable data | Register with `MiniRtcAddDataStream(..., true)` and use `MiniRtcSendReliableDataFrame` |
 
-Frame/data sending APIs have corresponding `*ToPeer` variants for a specific remote peer. `RequestVideoKeyFrame` / `RequestAllVideoKeyFrames` request keyframes from local sending encoders; they are not general remote-decoder recovery commands.
+Frame/data sending APIs have corresponding `*ToPeer` variants for a specific remote peer. `MiniRtcRequestVideoKeyFrame` / `MiniRtcRequestAllVideoKeyFrames` request keyframes from local sending encoders; they are not general remote-decoder recovery commands.
 
 With native output, `MiniRtcVideoFrame::data` may be null even though `size` still contains the logical NV12 size. Check `native_frame` first. If packed CPU data is needed, check that `copy_to_nv12` exists and check its result; do not dereference CUDA addresses as CPU pointers. Android MediaCodec output has no `copy_to_nv12`: use `payload.android_media_codec.render(owner, ANativeWindow*)`, which consumes the output buffer once. This output-only frame cannot be submitted as encoder input, and codec resets invalidate retained tokens.
 
@@ -176,30 +175,30 @@ With native output, `MiniRtcVideoFrame::data` may be null even though `size` sti
 
 Current clients advertise `ice_config_version: 1`. The server supplies a complete, expiring `ice` list per connection; it replaces local STUN / TURN endpoints. Configure extra or backup endpoints with the server's `CROSSDESK_ICE_SERVERS`. An explicitly empty list allows host candidates only; a forced-relay mode still requires a matching TURN endpoint.
 
-After negotiating this capability, MiniRTC rejects missing, invalid, or expired per-connection configuration. With older servers, it accepts fresh legacy `turn` credentials; without either usable format, connection setup fails. Static fields in `Params` do not override a server-issued list. See [connection setup](../src/pc/peer_connection.cpp) and the [ICE schema](../src/ice/ice_server_config.h).
+After negotiating this capability, MiniRTC rejects missing, invalid, or expired per-connection configuration. With older servers, it accepts fresh legacy `turn` credentials; without either usable format, connection setup fails. Static fields in `MiniRtcParams` do not override a server-issued list. See [connection setup](../src/pc/peer_connection.cpp) and the [ICE schema](../src/ice/ice_server_config.h).
 
 ### TURN, UPnP, and virtual interfaces
 
 | `turn_mode` | Behavior |
 | --- | --- |
-| `TurnDisabled` | Direct / STUN candidates only |
-| `TurnAutoUdpTcp` | Direct candidates plus TURN UDP / TCP fallback |
-| `TurnForceUdp` | TURN UDP relay only |
-| `TurnForceTcp` | TURN TCP relay only |
+| `MiniRtcTurnDisabled` | Direct / STUN candidates only |
+| `MiniRtcTurnAutoUdpTcp` | Direct candidates plus TURN UDP / TCP fallback |
+| `MiniRtcTurnForceUdp` | TURN UDP relay only |
+| `MiniRtcTurnForceTcp` | TURN TCP relay only |
 
 - With the current CrossDesk Server, login and negotiation messages carry temporary TURN credentials. MiniRTC validates `host`, `port`, `username`, `password`, and `expires_at` on receipt, then updates configuration for subsequent connections. Do not embed `COTURN_AUTH_SECRET` in the application.
-- The example leaves static TURN endpoints and credentials empty and uses server-issued values. Relay connections require correctly configured Coturn, a reachable advertised address, and valid credentials. `TurnAutoUdpTcp` does not deploy a relay service.
+- The example leaves static TURN endpoints and credentials empty and uses server-issued values. Relay connections require correctly configured Coturn, a reachable advertised address, and valid credentials. `MiniRtcTurnAutoUdpTcp` does not deploy a relay service.
 - Desktop libnice builds enable UPnP and can attempt gateway mapping outside forced-relay modes. The iOS, Android, and HarmonyOS recipes disable UPnP; support also depends on the gateway.
 - The matching libnice patches let supported native peers keep trying to upgrade a relayed connection to P2P. Forced-relay modes do not perform this upgrade; it is not an unconditional switch available for every peer.
 - Several virtual-interface prefixes are excluded by default, including Docker, TUN / TAP, WireGuard, Tailscale, and ZeroTier. To gather candidates through those interfaces, reconfigure and build with `--MINIRTC_INCLUDE_VIRTUAL_ICE_INTERFACES=true`. See the [libnice recipe](../thirdparty/libnice/xmake.lua) for the list and patches.
 
 ### TLS and INI configuration
 
-Signaling uses WSS with system certificate trust support. For a self-signed server, trust its root certificate on the application device and check certificate validity and hostname / IP matching. Certificate failures are reported as `SignalTlsCertError`. See [CrossDesk Server](https://github.com/kunkundi/crossdesk-server) for deployment and ports.
+Signaling uses WSS with system certificate trust support. For a self-signed server, trust its root certificate on the application device and check certificate validity and hostname / IP matching. Certificate failures are reported as `MiniRtcSignalTlsCertError`. See [CrossDesk Server](https://github.com/kunkundi/crossdesk-server) for deployment and ports.
 
-With `use_cfg_file=true`, server and media settings are read from the INI file at `cfg_path`; corresponding direct `Params` fields are not used as per-field fallback values. `cfg_path` is a fixed character array, so copy the path into it. Callbacks, `user_id`, and `user_data` still come from `Params`.
+With `use_cfg_file=true`, server and media settings are read from the INI file at `cfg_path`; corresponding direct `MiniRtcParams` fields are not used as per-field fallback values. `cfg_path` is a fixed character array, so copy the path into it. Callbacks, `user_id`, and `user_data` still come from `MiniRtcParams`.
 
-[config/config.ini](../config/config.ini) is a historical example containing old endpoints and static TURN credentials, not a ready-to-use current deployment configuration. INI defaults also differ from zero-initialized `Params`. Refer to [PeerConnection::Init](../src/pc/peer_connection.cpp) for supported fields and parsing rules.
+[config/config.ini](../config/config.ini) is a historical example containing old endpoints and static TURN credentials, not a ready-to-use current deployment configuration. INI defaults also differ from zero-initialized `MiniRtcParams`. Refer to [PeerConnection::Init](../src/pc/peer_connection.cpp) for supported fields and parsing rules.
 
 <a id="validation"></a>
 
@@ -207,7 +206,7 @@ With `use_cfg_file=true`, server and media settings are read from the INI file a
 
 | Symptom | What to check |
 | --- | --- |
-| `Init` succeeds but login does not | Observe signaling callbacks and check WSS endpoint, reachability, and certificate trust |
+| `MiniRtcInit` succeeds but login does not | Observe signaling callbacks and check WSS endpoint, reachability, and certificate trust |
 | Crash during login | Verify the three required callbacks and application-context lifetime |
 | Login works but a session fails | Check both peers' service, remote ID / password, TURN credentials, UDP / TCP, and relay ports |
 | Black video with native output | Handle `native_frame`, not only `data`; verify type, stride, owner lifetime, and renderer |

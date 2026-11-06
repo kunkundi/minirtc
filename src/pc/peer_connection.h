@@ -30,23 +30,23 @@
 
 namespace minirtc {
 
-typedef void (*OnReceiveBuffer)(const char*, size_t, const char*, const size_t,
+typedef void (*MiniRtcOnReceiveBuffer)(const char*, size_t, const char*, const size_t,
                                 const char*, const size_t, void*);
 
-typedef void (*OnReceiveVideoFrame)(const MiniRtcVideoFrame* video_frame, const char*,
+typedef void (*MiniRtcOnReceiveVideoFrame)(const MiniRtcVideoFrame* video_frame, const char*,
                                     const size_t, const char*, const size_t,
                                     void*);
 
-typedef void (*OnSignalStatus)(SignalStatus, const char*, const size_t, void*);
+typedef void (*MiniRtcOnSignalStatus)(MiniRtcSignalStatus, const char*, const size_t, void*);
 
-typedef void (*OnConnectionStatus)(ConnectionStatus, const char*, const size_t,
+typedef void (*MiniRtcOnConnectionStatus)(MiniRtcConnectionStatus, const char*, const size_t,
                                    void*);
 
-typedef void (*OnNetStatusReport)(const char*, const size_t, TraversalMode,
+typedef void (*MiniRtcOnNetStatusReport)(const char*, const size_t, MiniRtcTraversalMode,
                                   const MiniRtcNetTrafficStats*, const char*,
                                   const size_t, void*);
 
-typedef void (*OnSignalMessage)(const char*, size_t, void*);
+typedef void (*MiniRtcOnSignalMessage)(const char*, size_t, void*);
 
 typedef struct {
   bool use_cfg_file;
@@ -57,29 +57,29 @@ typedef struct {
   bool hardware_acceleration;
   bool native_video_output;
   bool av1_encoding;
-  TurnMode turn_mode;
+  MiniRtcTurnMode turn_mode;
   bool enable_srtp;
-  VideoContentType video_content_type;
+  MiniRtcVideoContentType video_content_type;
 
-  VideoQuality video_quality;
+  MiniRtcVideoQuality video_quality;
   uint32_t video_frame_rate;
-  VideoDegradationPreference video_degradation_preference;
+  MiniRtcVideoDegradationPreference video_degradation_preference;
 
-  OnReceiveBuffer on_receive_video_buffer;
-  OnReceiveBuffer on_receive_audio_buffer;
-  OnReceiveBuffer on_receive_data_buffer;
+  MiniRtcOnReceiveBuffer on_receive_video_buffer;
+  MiniRtcOnReceiveBuffer on_receive_audio_buffer;
+  MiniRtcOnReceiveBuffer on_receive_data_buffer;
 
-  OnReceiveVideoFrame on_receive_video_frame;
+  MiniRtcOnReceiveVideoFrame on_receive_video_frame;
 
-  OnSignalStatus on_signal_status;
-  OnSignalMessage on_signal_message;
-  OnConnectionStatus on_connection_status;
-  OnNetStatusReport on_net_status_report;
+  MiniRtcOnSignalStatus on_signal_status;
+  MiniRtcOnSignalMessage on_signal_message;
+  MiniRtcOnConnectionStatus on_connection_status;
+  MiniRtcOnNetStatusReport on_net_status_report;
 
   const char* user_id;
   void* user_data;
-  OnSignalExchange on_signal_exchange;
-  OnReceiveEncodedVideo on_receive_encoded_video;
+  MiniRtcOnSignalExchange on_signal_exchange;
+  MiniRtcOnReceiveEncodedVideo on_receive_encoded_video;
 } PeerConnectionParams;
 
 class PeerConnection {
@@ -96,7 +96,7 @@ class PeerConnection {
   int CloseDirect();
   void ReportDirectError(MiniRtcDirectError error);
   int UpdateConnectionSettings(bool hardware_acceleration, bool av1_encoding,
-                                TurnMode turn_mode);
+                                MiniRtcTurnMode turn_mode);
 
   int Join(const std::string& transmission_id);
 
@@ -112,7 +112,7 @@ class PeerConnection {
 
   int Destroy();
 
-  SignalStatus GetSignalStatus();
+  MiniRtcSignalStatus GetSignalStatus();
 
   int SendVideoFrame(const MiniRtcVideoFrame* video_frame, const char* stream_id);
   int RequestVideoKeyFrame(const char* stream_id);
@@ -121,9 +121,9 @@ class PeerConnection {
   int SetVideoSendPaused(const std::string& remote_id, bool paused);
   int SetAudioSendPaused(const std::string& remote_id, bool paused);
   int UpdateVideoResolution(const std::string& remote_id, int width, int height);
-  int UpdateVideoSettings(const std::string& remote_id, VideoQuality quality,
+  int UpdateVideoSettings(const std::string& remote_id, MiniRtcVideoQuality quality,
                           int frame_rate,
-                          VideoDegradationPreference preference);
+                          MiniRtcVideoDegradationPreference preference);
   int SendAudioFrame(const MiniRtcAudioFrame* audio_frame, const char* stream_id);
   int SendDataFrame(const char* data, size_t size, const char* stream_id);
   int SendReliableDataFrame(const char* data, size_t size,
@@ -152,9 +152,9 @@ class PeerConnection {
 
  private:
   int Login();
-  int ExchangeSignal(SignalExchangeStage stage, const std::string& message);
+  int ExchangeSignal(MiniRtcSignalExchangeStage stage, const std::string& message);
   int SendJoinRequestLocked(const std::string& transmission_id);
-  void SetSignalStatus(SignalStatus signal_status);
+  void SetSignalStatus(MiniRtcSignalStatus signal_status);
 
   void ProcessSignal(const std::string& signal);
   bool ApplyTurnCredentials(const nlohmann::json& message);
@@ -162,13 +162,13 @@ class PeerConnection {
                            const std::string& transmission_id,
                            const std::string& remote_user_id,
                            ConnectionInfo& info);
-  bool IsTerminalConnectionStatus(ConnectionStatus status) const;
+  bool IsTerminalConnectionStatus(MiniRtcConnectionStatus status) const;
   std::shared_ptr<ConnectionInterface> CreateManagedPeerConnection(
       const std::string& remote_user_id, const ConnectionInfo& info);
   bool RetirePeerConnection(
       const std::string& remote_user_id,
       const std::shared_ptr<ConnectionInterface>& connection,
-      ConnectionStatus status);
+      MiniRtcConnectionStatus status);
   bool IsCurrentPeerConnection(
       const std::string& remote_user_id,
       const std::shared_ptr<ConnectionInterface>& connection);
@@ -204,18 +204,18 @@ class PeerConnection {
   bool hardware_acceleration_ = false;
   bool native_video_output_ = false;
   bool av1_encoding_ = false;
-  TurnMode turn_mode_ = TurnMode::TurnDisabled;
+  MiniRtcTurnMode turn_mode_ = MiniRtcTurnMode::MiniRtcTurnDisabled;
   bool enable_srtp_ = true;
-  VideoContentType video_content_type_ = VideoContentType::ScreenContent;
-  VideoQuality video_quality_ = VideoQuality::QualityHigh;
+  MiniRtcVideoContentType video_content_type_ = MiniRtcVideoContentType::ScreenContent;
+  MiniRtcVideoQuality video_quality_ = MiniRtcVideoQuality::MiniRtcVideoQualityHigh;
   int video_frame_rate_ = 60;
-  VideoDegradationPreference video_degradation_preference_ =
-      VideoDegradationPreference::MaintainResolution;
+  MiniRtcVideoDegradationPreference video_degradation_preference_ =
+      MiniRtcVideoDegradationPreference::MaintainResolution;
   bool trickle_ice_ = true;
   bool reliable_ice_ = false;
   bool try_rejoin_with_turn_ = false;
   int reconnect_count_ = 0;
-  TraversalMode mode_ = TraversalMode::P2P;
+  MiniRtcTraversalMode mode_ = MiniRtcTraversalMode::MiniRtcTraversalP2P;
 
   std::vector<int> video_payload_types_ = {rtp::PAYLOAD_TYPE::H264,
                                            rtp::PAYLOAD_TYPE::AV1};
@@ -237,7 +237,7 @@ class PeerConnection {
   std::string remote_transmission_id_ = "";
   std::vector<std::string> user_id_list_;
   WsStatus ws_status_ = WsStatus::WsClosed;
-  SignalStatus signal_status_ = SignalStatus::SignalClosed;
+  MiniRtcSignalStatus signal_status_ = MiniRtcSignalStatus::MiniRtcSignalClosed;
   std::mutex signal_status_mutex_;
   std::optional<std::string> pending_join_transmission_id_;
   std::atomic<bool> leave_{false};
@@ -248,17 +248,17 @@ class PeerConnection {
       nullptr;
   bool ice_ready_ = false;
 
-  OnReceiveBuffer on_receive_video_buffer_ = nullptr;
-  OnReceiveBuffer on_receive_audio_buffer_ = nullptr;
-  OnReceiveBuffer on_receive_data_buffer_ = nullptr;
+  MiniRtcOnReceiveBuffer on_receive_video_buffer_ = nullptr;
+  MiniRtcOnReceiveBuffer on_receive_audio_buffer_ = nullptr;
+  MiniRtcOnReceiveBuffer on_receive_data_buffer_ = nullptr;
 
-  OnReceiveVideoFrame on_receive_video_frame_ = nullptr;
+  MiniRtcOnReceiveVideoFrame on_receive_video_frame_ = nullptr;
 
-  OnSignalStatus on_signal_status_ = nullptr;
-  OnSignalMessage on_signal_message_ = nullptr;
-  OnSignalExchange on_signal_exchange_ = nullptr;
-  OnConnectionStatus on_connection_status_ = nullptr;
-  OnNetStatusReport on_net_status_report_ = nullptr;
+  MiniRtcOnSignalStatus on_signal_status_ = nullptr;
+  MiniRtcOnSignalMessage on_signal_message_ = nullptr;
+  MiniRtcOnSignalExchange on_signal_exchange_ = nullptr;
+  MiniRtcOnConnectionStatus on_connection_status_ = nullptr;
+  MiniRtcOnNetStatusReport on_net_status_report_ = nullptr;
   void* user_data_ = nullptr;
 
   bool inited_ = false;

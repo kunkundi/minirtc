@@ -41,9 +41,9 @@ constexpr size_t kStartupKeyFrameMaxBytes = 128 * 1024;
 constexpr int64_t kStartupKeyFrameTimeoutMs = 1500;
 
 bool UsesBoundedVideoQueue(const MediaCodecConfig& config) {
-  return config.video_content_type == VideoContentType::ScreenContent &&
+  return config.video_content_type == MiniRtcVideoContentType::ScreenContent &&
          config.video_degradation_preference !=
-             VideoDegradationPreference::MaintainResolution;
+             MiniRtcVideoDegradationPreference::MaintainResolution;
 }
 
 }  // namespace
@@ -51,9 +51,9 @@ bool UsesBoundedVideoQueue(const MediaCodecConfig& config) {
 IceTransportController::IceTransportController(
     std::shared_ptr<SystemClock> clock, std::shared_ptr<IceAgent> ice_agent,
     std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp,
-    VideoQuality video_quality, int video_frame_rate,
-    VideoContentType video_content_type,
-    VideoDegradationPreference video_degradation_preference)
+    MiniRtcVideoQuality video_quality, int video_frame_rate,
+    MiniRtcVideoContentType video_content_type,
+    MiniRtcVideoDegradationPreference video_degradation_preference)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
@@ -119,7 +119,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
                                     void* user_data,
-                                    OnReceiveEncodedVideo encoded) {
+                                    MiniRtcOnReceiveEncodedVideo encoded) {
   offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
   video_rtx_enabled_ = video_rtx_enabled;
@@ -170,7 +170,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(
-      media_config_.video_content_type == VideoContentType::ScreenContent
+      media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent
           ? kDesktopPacerQueueLimitMs
           : 2000));
   paced_sender_->SetAllowProbeWithoutMediaPacket(false);
@@ -752,7 +752,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       return 0;
     context->capture_input_frame_total.fetch_add(1,
                                                  std::memory_order_relaxed);
-    if (media_config_.video_content_type == VideoContentType::ScreenContent &&
+    if (media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
         paced_sender_ &&
         (paced_sender_->ExpectedQueueTime() >=
              TimeDelta::Millis(kDesktopFrameAdmissionQueueMs) ||
@@ -1003,9 +1003,9 @@ bool IceTransportController::PrepareStartupKeyframe(
   if (!context->startup_resolution_attempted) {
     context->startup_resolution_attempted = true;
     int width = 0, height = 0;
-    if (media_config_.video_content_type == VideoContentType::ScreenContent &&
+    if (media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
         media_config_.video_degradation_preference ==
-            VideoDegradationPreference::Balanced &&
+            MiniRtcVideoDegradationPreference::Balanced &&
         !context->resolution_upgrade_network_blocked && resolution_adapter_ &&
         resolution_adapter_->GetStartupResolution(context->source_width,
                                                   context->source_height,
@@ -1069,12 +1069,12 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   std::unique_lock lock(stream_senders_mutex_);
   const bool maintain_frame_rate =
       media_config_.video_degradation_preference ==
-      VideoDegradationPreference::MaintainFrameRate;
+      MiniRtcVideoDegradationPreference::MaintainFrameRate;
   const bool maintain_resolution =
       media_config_.video_degradation_preference ==
-      VideoDegradationPreference::MaintainResolution;
+      MiniRtcVideoDegradationPreference::MaintainResolution;
   const bool balanced = media_config_.video_degradation_preference ==
-                        VideoDegradationPreference::Balanced;
+                        MiniRtcVideoDegradationPreference::Balanced;
   const int minimum_frame_rate = VideoAdaptationPolicy::MinimumFrameRate(
       media_config_.max_frame_rate, balanced);
   const int minimum_upgrade_frame_rate =
@@ -1092,7 +1092,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
           : (balanced ? std::max(4, frame_budget_ms / 2) : 8);
   const bool balanced_screen_content =
       balanced &&
-      media_config_.video_content_type == VideoContentType::ScreenContent;
+      media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent;
   constexpr int kCriticalFrameRate = 20;
   constexpr int kUpgradeProbeInputWaitMs = 5000;
   constexpr int kQueueDelayWindowMs = 1000;
@@ -1510,7 +1510,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       !context->encoding_speed_priority_enabled &&
       (sustained_encode_backlog || startup_critical_encode_backlog) &&
       context->codec &&
-      media_config_.video_content_type == VideoContentType::ScreenContent &&
+      media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
       context->codec->SupportsDynamicEncodingSpeedPriority()) {
     if (set_encoding_speed_priority(true)) {
       // The encode queue resets observation windows after applying the change.
@@ -2011,8 +2011,8 @@ int IceTransportController::OnVideoEncoded(
       // Never send over budget or grant this retry to an unproven upgrade.
       const bool retry_same_resolution =
           media_config_.video_degradation_preference ==
-              VideoDegradationPreference::Balanced &&
-          media_config_.video_content_type == VideoContentType::ScreenContent &&
+              MiniRtcVideoDegradationPreference::Balanced &&
+          media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
           !context->resolution_upgrade_probe_active &&
           !context->awaiting_budget_keyframe &&
           !context->resolution_upgrade_network_blocked &&
@@ -2804,8 +2804,8 @@ int IceTransportController::UpdateVideoResolution(int width, int height) {
 }
 
 int IceTransportController::UpdateVideoSettings(
-    VideoQuality quality, int frame_rate,
-    VideoDegradationPreference preference) {
+    MiniRtcVideoQuality quality, int frame_rate,
+    MiniRtcVideoDegradationPreference preference) {
   if (!is_running_.load() || !task_queue_encode_) return -1;
   {
     std::shared_lock lock(stream_senders_mutex_);
@@ -2879,7 +2879,7 @@ int IceTransportController::UpdateVideoSettings(
         return;
       }
       prepared.speed_priority =
-          preference == VideoDegradationPreference::MaintainFrameRate &&
+          preference == MiniRtcVideoDegradationPreference::MaintainFrameRate &&
           prepared.codec->SupportsDynamicEncodingSpeedPriority() &&
           prepared.codec->SetPrioritizeEncodingSpeedOverQuality(true) == 0;
       prepared.codec->GetResolution(&prepared.width, &prepared.height);
@@ -3031,7 +3031,7 @@ int IceTransportController::CreateStreamCodecs(
             return -1;
           }
           if (media_config_.video_degradation_preference ==
-                  VideoDegradationPreference::MaintainFrameRate &&
+                  MiniRtcVideoDegradationPreference::MaintainFrameRate &&
               context->codec->SupportsDynamicEncodingSpeedPriority() &&
               context->codec->SetPrioritizeEncodingSpeedOverQuality(true) ==
                   0) {
@@ -3439,13 +3439,13 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
         const auto& network_estimate = *video_network_estimate_;
         const bool maintain_frame_rate =
             media_config_.video_degradation_preference ==
-            VideoDegradationPreference::MaintainFrameRate;
+            MiniRtcVideoDegradationPreference::MaintainFrameRate;
         const bool allow_spatial_downgrade =
             media_config_.video_degradation_preference !=
-            VideoDegradationPreference::MaintainResolution;
+            MiniRtcVideoDegradationPreference::MaintainResolution;
         const bool is_screen_content =
             media_config_.video_content_type ==
-            VideoContentType::ScreenContent;
+            MiniRtcVideoContentType::ScreenContent;
         const int64_t network_rtt_ms =
             network_estimate.round_trip_time.IsFinite()
                 ? network_estimate.round_trip_time.ms()

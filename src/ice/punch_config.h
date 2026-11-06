@@ -15,7 +15,7 @@ namespace minirtc {
 // Unsupported platforms or invalid budgets disable punching.
 enum class PunchMode { Off, PoolWide };
 
-// Copied into each connection, then held const. No public Params ABI change.
+// Copied into each connection, then held const. No public MiniRtcParams ABI change.
 struct PunchConfig {
   PunchMode mode = PunchMode::Off;
   uint32_t trigger_delay_ms = 1500;

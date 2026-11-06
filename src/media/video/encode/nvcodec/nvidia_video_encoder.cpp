@@ -60,12 +60,12 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   max_payload_size_ = config.max_payload_size;
   preset_guid_ =
       config.video_degradation_preference ==
-              VideoDegradationPreference::MaintainFrameRate
+              MiniRtcVideoDegradationPreference::MaintainFrameRate
           ? NV_ENC_PRESET_P1_GUID
           : NV_ENC_PRESET_P7_GUID;
   tuning_info_ =
       config.video_degradation_preference ==
-              VideoDegradationPreference::MaintainFrameRate
+              MiniRtcVideoDegradationPreference::MaintainFrameRate
           ? NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY
           : NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_LOW_LATENCY;
 

@@ -65,9 +65,9 @@ class MediaCodecConfig {
         max_frame_rate(MINIRTC_MAX_FRAME_RATE),
         key_frame_interval(MINIRTC_KEY_FRAME_INTERVAL),
         max_payload_size(MINIRTC_MAX_PAYLOAD_SIZE),
-        video_content_type(VideoContentType::ScreenContent),
+        video_content_type(MiniRtcVideoContentType::ScreenContent),
         video_degradation_preference(
-            VideoDegradationPreference::MaintainResolution) {}
+            MiniRtcVideoDegradationPreference::MaintainResolution) {}
   ~MediaCodecConfig() {}
 
   bool audio_fec_enabled = false;
@@ -81,8 +81,8 @@ class MediaCodecConfig {
   int max_frame_rate;
   int key_frame_interval;
   int max_payload_size;
-  VideoContentType video_content_type;
-  VideoDegradationPreference video_degradation_preference;
+  MiniRtcVideoContentType video_content_type;
+  MiniRtcVideoDegradationPreference video_degradation_preference;
 };
 
 class MediaCodec {

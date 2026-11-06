@@ -37,13 +37,13 @@ struct ConnectionInfo {
   bool native_video_output;
   bool trickle_ice;
   bool reliable_ice;
-  TurnMode turn_mode;
+  MiniRtcTurnMode turn_mode;
   bool enable_srtp;
-  VideoContentType video_content_type;
+  MiniRtcVideoContentType video_content_type;
   bool av1_encoding;
-  VideoQuality video_quality;
+  MiniRtcVideoQuality video_quality;
   int video_frame_rate;
-  VideoDegradationPreference video_degradation_preference;
+  MiniRtcVideoDegradationPreference video_degradation_preference;
 };
 
 inline bool ConnectionIceConfigFresh(const ConnectionInfo& info) {
@@ -54,14 +54,14 @@ inline bool ConnectionIceConfigFresh(const ConnectionInfo& info) {
 }
 
 struct ConnectionCallbacks {
-  OnReceiveVideoFrame on_receive_video_frame;
-  OnReceiveBuffer on_receive_audio_buffer;
-  OnReceiveBuffer on_receive_data_buffer;
-  std::function<void(ConnectionStatus, const char*, size_t, void*)>
+  MiniRtcOnReceiveVideoFrame on_receive_video_frame;
+  MiniRtcOnReceiveBuffer on_receive_audio_buffer;
+  MiniRtcOnReceiveBuffer on_receive_data_buffer;
+  std::function<void(MiniRtcConnectionStatus, const char*, size_t, void*)>
       on_connection_status;
-  OnNetStatusReport on_net_status_report;
+  MiniRtcOnNetStatusReport on_net_status_report;
   void* user_data = nullptr;
-  OnReceiveEncodedVideo on_receive_encoded_video = nullptr;
+  MiniRtcOnReceiveEncodedVideo on_receive_encoded_video = nullptr;
 };
 
 struct IceWorkMsg {
@@ -106,8 +106,8 @@ class ConnectionInterface {
   virtual int SetVideoSendPaused(bool) { return -1; }
   virtual int SetAudioSendPaused(bool) { return -1; }
   virtual int UpdateVideoResolution(int, int) { return -1; }
-  virtual int UpdateVideoSettings(VideoQuality, int,
-                                  VideoDegradationPreference) {
+  virtual int UpdateVideoSettings(MiniRtcVideoQuality, int,
+                                  MiniRtcVideoDegradationPreference) {
     return -1;
   }
   virtual int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,

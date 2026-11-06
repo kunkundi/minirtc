@@ -63,9 +63,9 @@ class OpenH264Encoder : public MediaCodec {
   int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int max_payload_size_ = 1150;
   int max_fps_ = 30;
-  VideoContentType video_content_type_ = VideoContentType::ScreenContent;
-  VideoDegradationPreference video_degradation_preference_ =
-      VideoDegradationPreference::MaintainFrameRate;
+  MiniRtcVideoContentType video_content_type_ = MiniRtcVideoContentType::ScreenContent;
+  MiniRtcVideoDegradationPreference video_degradation_preference_ =
+      MiniRtcVideoDegradationPreference::MaintainFrameRate;
   std::vector<std::vector<uint8_t>> encoded_packets_;
   unsigned char* encoded_image_ = nullptr;
   FILE* file_h264_ = nullptr;

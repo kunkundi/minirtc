@@ -155,10 +155,10 @@ inline bool ParseIceServerConfiguration(const nlohmann::json& ice,
 }
 
 inline bool IceTurnTransportAllowed(const IceServerEndpoint& server,
-                                    TurnMode mode) {
-  return server.turn && mode != TurnMode::TurnDisabled &&
-         (mode != TurnMode::TurnForceUdp || !server.tcp) &&
-         (mode != TurnMode::TurnForceTcp || server.tcp);
+                                    MiniRtcTurnMode mode) {
+  return server.turn && mode != MiniRtcTurnMode::MiniRtcTurnDisabled &&
+         (mode != MiniRtcTurnMode::MiniRtcTurnForceUdp || !server.tcp) &&
+         (mode != MiniRtcTurnMode::MiniRtcTurnForceTcp || server.tcp);
 }
 
 }  // namespace minirtc

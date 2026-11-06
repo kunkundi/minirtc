@@ -66,9 +66,9 @@ DataChannelTransport::~DataChannelTransport() {
 }
 
 void DataChannelTransport::SetVideoConfig(
-    VideoQuality video_quality, int video_frame_rate,
-    VideoContentType video_content_type,
-    VideoDegradationPreference video_degradation_preference) {
+    MiniRtcVideoQuality video_quality, int video_frame_rate,
+    MiniRtcVideoContentType video_content_type,
+    MiniRtcVideoDegradationPreference video_degradation_preference) {
   video_quality_ = video_quality;
   // Use a conservative fallback until the controller negotiates live settings.
   media_config_.max_frame_rate =
@@ -83,7 +83,7 @@ void DataChannelTransport::SetVideoConfig(
   // Quality priority lets large desktop updates drain while capture is paused.
   media_handler_->SetFrameDeadline(
       video_degradation_preference ==
-              VideoDegradationPreference::MaintainResolution
+              MiniRtcVideoDegradationPreference::MaintainResolution
           ? 1000
           : 250);
   resolution_adapter_ = std::make_unique<ResolutionAdapter>(
@@ -92,11 +92,11 @@ void DataChannelTransport::SetVideoConfig(
 }
 
 int DataChannelTransport::UpdateVideoSettings(
-    VideoQuality quality, int frame_rate,
-    VideoDegradationPreference preference) {
-  if (quality < QualityLow || quality > QualityHigh ||
+    MiniRtcVideoQuality quality, int frame_rate,
+    MiniRtcVideoDegradationPreference preference) {
+  if (quality < MiniRtcVideoQualityLow || quality > MiniRtcVideoQualityHigh ||
       (frame_rate != 30 && frame_rate != 60) ||
-      preference > VideoDegradationPreference::Balanced)
+      preference > MiniRtcVideoDegradationPreference::Balanced)
     return -1;
   std::future<int> result;
   {
@@ -141,7 +141,7 @@ int DataChannelTransport::UpdateVideoSettings(
           self->media_config_ = config;
           self->video_quality_ = quality;
           self->media_handler_->SetFrameDeadline(
-              preference == VideoDegradationPreference::MaintainResolution
+              preference == MiniRtcVideoDegradationPreference::MaintainResolution
                   ? 1000
                   : 250);
           for (auto& [stream, codec] : encoders) {
@@ -307,7 +307,7 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     const auto now_ms = self->clock_->CurrentTimeMs();
     const bool keep_resolution =
         self->media_config_.video_degradation_preference ==
-        VideoDegradationPreference::MaintainResolution;
+        MiniRtcVideoDegradationPreference::MaintainResolution;
     const int fps_limit =
         std::min(self->media_config_.max_frame_rate, budget.max_fps);
     // Match native quality priority: reduce temporal load under decoder/pacer

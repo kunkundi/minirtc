@@ -60,7 +60,7 @@ int PeerConnection::InitDirect(PeerConnectionParams params,
   connection_info_.native_video_output = params.native_video_output;
   connection_info_.trickle_ice = true;
   connection_info_.reliable_ice = false;
-  connection_info_.turn_mode = TurnMode::TurnDisabled;
+  connection_info_.turn_mode = MiniRtcTurnMode::MiniRtcTurnDisabled;
   connection_info_.enable_srtp = true;
   connection_info_.video_content_type = params.video_content_type;
   connection_info_.av1_encoding = params.av1_encoding;
@@ -106,7 +106,7 @@ void PeerConnection::ReportDirectError(MiniRtcDirectError error) {
   direct_closing_ = true;
   if (direct_error_) direct_error_(error, direct_context_);
   if (!direct_terminal_reported_.exchange(true) && on_connection_status_)
-    on_connection_status_(ConnectionStatus::Failed, remote_user_id_.data(),
+    on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionFailed, remote_user_id_.data(),
                           remote_user_id_.size(), user_data_);
 }
 

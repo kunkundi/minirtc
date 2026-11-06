@@ -18,11 +18,11 @@ namespace minirtc {
 
 class ResolutionAdapter {
  public:
-  ResolutionAdapter(VideoQuality video_quality, int video_frame_rate,
-                    VideoContentType video_content_type =
-                        VideoContentType::ScreenContent,
-                    VideoDegradationPreference video_degradation_preference =
-                        VideoDegradationPreference::MaintainResolution);
+  ResolutionAdapter(MiniRtcVideoQuality video_quality, int video_frame_rate,
+                    MiniRtcVideoContentType video_content_type =
+                        MiniRtcVideoContentType::ScreenContent,
+                    MiniRtcVideoDegradationPreference video_degradation_preference =
+                        MiniRtcVideoDegradationPreference::MaintainResolution);
   ~ResolutionAdapter();
 
  public:
@@ -52,8 +52,8 @@ class ResolutionAdapter {
 
   // Call under the transport's adaptation lock. Scaling scratch buffers and
   // the adapter lifetime remain untouched while the encoder queue uses them.
-  void SetPreferences(VideoQuality quality, int frame_rate,
-                      VideoDegradationPreference preference) {
+  void SetPreferences(MiniRtcVideoQuality quality, int frame_rate,
+                      MiniRtcVideoDegradationPreference preference) {
     video_quality_ = quality;
     video_frame_rate_ = frame_rate;
     video_degradation_preference_ = preference;
@@ -75,10 +75,10 @@ class ResolutionAdapter {
  private:
   std::vector<uint8_t> tmp_buffer_;
   std::vector<uint8_t> scale_scratch_buffer_;
-  VideoQuality video_quality_;
+  MiniRtcVideoQuality video_quality_;
   int video_frame_rate_;
-  VideoContentType video_content_type_;
-  VideoDegradationPreference video_degradation_preference_;
+  MiniRtcVideoContentType video_content_type_;
+  MiniRtcVideoDegradationPreference video_degradation_preference_;
 };
 }  // namespace minirtc
 

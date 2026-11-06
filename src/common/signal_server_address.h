@@ -96,7 +96,7 @@ inline std::optional<SignalServerAddress> ParseSignalServerAddress(
         port < 1 || port > 65535) return std::nullopt;
     result.port = port;
   }
-  // Params::signal_server_ip is a 256-byte, null-terminated buffer.
+  // MiniRtcParams::signal_server_ip is a 256-byte, null-terminated buffer.
   if (result.Address().size() >= 256) return std::nullopt;
   return result;
 }

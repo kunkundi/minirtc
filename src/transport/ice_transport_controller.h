@@ -60,10 +60,10 @@ class IceTransportController
   IceTransportController(std::shared_ptr<SystemClock> clock,
                          std::shared_ptr<IceAgent> ice_agent,
                          std::shared_ptr<IOStatistics> ice_io_statistics,
-                         bool enable_srtp, VideoQuality video_quality,
+                         bool enable_srtp, MiniRtcVideoQuality video_quality,
                          int video_frame_rate,
-                         VideoContentType video_content_type,
-                         VideoDegradationPreference
+                         MiniRtcVideoContentType video_content_type,
+                         MiniRtcVideoDegradationPreference
                              video_degradation_preference);
   ~IceTransportController();
 
@@ -78,7 +78,7 @@ class IceTransportController
               std::optional<uint8_t> audio_abs_recv_time_ext_id,
               OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
               OnReceiveData on_receive_data, void* user_data,
-              OnReceiveEncodedVideo encoded = nullptr);
+              MiniRtcOnReceiveEncodedVideo encoded = nullptr);
   void Destroy();
 
   // SRTP is negotiated from the local setting and the remote SDP before
@@ -92,7 +92,7 @@ class IceTransportController
   void SetAudioDataSrtpEnabled(bool enabled) {
     audio_data_srtp_enabled_ = enable_srtp_ && enabled;
   }
-  // Internal runtime override; public Params ABI remains unchanged.
+  // Internal runtime override; public MiniRtcParams ABI remains unchanged.
   void SetFecMode(FecMode mode) { fec_mode_.store(mode); }
   // DTLS readiness is published only after the SRTP sessions are installed.
   bool IsSrtpActive() const { return dtls_ready_.load(); }
@@ -122,8 +122,8 @@ class IceTransportController
   int SetVideoSendPaused(bool paused);
   int SetAudioSendPaused(bool paused);
   int UpdateVideoResolution(int width, int height);
-  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
-                          VideoDegradationPreference preference);
+  int UpdateVideoSettings(MiniRtcVideoQuality quality, int frame_rate,
+                          MiniRtcVideoDegradationPreference preference);
 
   void FullIntraRequest();
   void FullIntraRequest(const std::string& channel_name) {
@@ -471,7 +471,7 @@ class IceTransportController
   MediaCodecConfig media_config_;
 
   OnReceiveVideo on_receive_video_ = nullptr;
-  OnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
+  MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;
   OnReceiveData on_receive_data_ = nullptr;
 
@@ -508,7 +508,7 @@ class IceTransportController
   // Physical viewport bound for this peer; guarded by stream_senders_mutex_.
   int video_resolution_width_ = 0;
   int video_resolution_height_ = 0;
-  VideoQuality video_quality_;
+  MiniRtcVideoQuality video_quality_;
 
   std::vector<uint8_t> local_key_;
   std::vector<uint8_t> local_salt_;

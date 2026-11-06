@@ -27,7 +27,7 @@
 namespace minirtc {
 class IceTransport {
  public:
-  typedef enum { VIDEO = 96, AUDIO = 97, DATA = 120 } DATA_TYPE;
+  typedef enum { MiniRtcDataTypeVideo = 96, MiniRtcDataTypeAudio = 97, MiniRtcDataTypeData = 120 } MiniRtcDataType;
   typedef enum { H264 = 96, AV1 = 99 } VIDEO_TYPE;
   enum VideoFrameType {
     kEmptyFrame = 0,
@@ -51,10 +51,10 @@ class IceTransport {
   int SetLocalCapabilities(bool hardware_acceleration,
                            bool native_video_output,
                            bool use_trickle_ice, bool use_reliable_ice,
-                           TurnMode turn_mode, bool enable_srtp,
-                           VideoContentType video_content_type,
-                           VideoQuality video_quality, int video_frame_rate,
-                           VideoDegradationPreference
+                           MiniRtcTurnMode turn_mode, bool enable_srtp,
+                           MiniRtcVideoContentType video_content_type,
+                           MiniRtcVideoQuality video_quality, int video_frame_rate,
+                           MiniRtcVideoDegradationPreference
                                video_degradation_preference,
                            rtp::PAYLOAD_TYPE prefered_video_payload_type,
                            std::vector<int>& video_payload_types,
@@ -72,7 +72,7 @@ class IceTransport {
   void SetOnReceiveFunc(OnReceiveVideo on_receive_video,
                         OnReceiveAudio on_receive_audio,
                         OnReceiveData on_receive_data,
-                        OnReceiveEncodedVideo encoded = nullptr) {
+                        MiniRtcOnReceiveEncodedVideo encoded = nullptr) {
     on_receive_video_ = on_receive_video;
     on_receive_encoded_video_ = encoded;
     on_receive_audio_ = on_receive_audio;
@@ -80,7 +80,7 @@ class IceTransport {
   }
 
   void SetOnReceiveNetStatusReportFunc(
-      std::function<void(const char*, const size_t, TraversalMode,
+      std::function<void(const char*, const size_t, MiniRtcTraversalMode,
                          const MiniRtcNetTrafficStats*, const char*, const size_t,
                          void*)>
           on_receive_net_status_report) {
@@ -101,8 +101,8 @@ class IceTransport {
   int SetVideoSendPaused(bool paused);
   int SetAudioSendPaused(bool paused);
   int UpdateVideoResolution(int width, int height);
-  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
-                          VideoDegradationPreference preference);
+  int UpdateVideoSettings(MiniRtcVideoQuality quality, int frame_rate,
+                          MiniRtcVideoDegradationPreference preference);
 
   int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                      const std::string& stream_name);
@@ -211,14 +211,14 @@ class IceTransport {
   bool native_video_output_ = false;
   bool use_trickle_ice_ = true;
   bool use_reliable_ice_ = false;
-  TurnMode turn_mode_ = TurnMode::TurnDisabled;
+  MiniRtcTurnMode turn_mode_ = MiniRtcTurnMode::MiniRtcTurnDisabled;
   bool enable_srtp_ = true;
   bool audio_data_srtp_enabled_ = false;
-  VideoContentType video_content_type_ = VideoContentType::ScreenContent;
-  VideoQuality video_quality_ = QualityHigh;
+  MiniRtcVideoContentType video_content_type_ = MiniRtcVideoContentType::ScreenContent;
+  MiniRtcVideoQuality video_quality_ = MiniRtcVideoQualityHigh;
   int video_frame_rate_ = 60;
-  VideoDegradationPreference video_degradation_preference_ =
-      VideoDegradationPreference::MaintainResolution;
+  MiniRtcVideoDegradationPreference video_degradation_preference_ =
+      MiniRtcVideoDegradationPreference::MaintainResolution;
 
   std::vector<std::string> video_stream_ids_;
   std::vector<std::string> audio_stream_ids_;
@@ -274,14 +274,14 @@ class IceTransport {
   std::atomic<bool> secure_ready_reported_{false};
 
   OnReceiveVideo on_receive_video_ = nullptr;
-  OnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
+  MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;
   OnReceiveData on_receive_data_ = nullptr;
 
   std::function<void(std::string, const std::string&)> on_ice_status_change_ =
       nullptr;
 
-  std::function<void(const char*, const size_t, TraversalMode,
+  std::function<void(const char*, const size_t, MiniRtcTraversalMode,
                      const MiniRtcNetTrafficStats*, const char*, const size_t, void*)>
       on_receive_net_status_report_ = nullptr;
 

@@ -2,7 +2,7 @@
 #include "../pc/join_failure.h"
 
 MiniRtcJoinFailure MiniRtcParseJoinFailure(const char* message, size_t size) {
-  const MiniRtcJoinFailure unknown{MiniRtcJoinFailureKind::Unknown, Failed, 0};
+  const MiniRtcJoinFailure unknown{MiniRtcJoinFailureKind::Unknown, MiniRtcConnectionFailed, 0};
   if (!message) return unknown;
   try {
     const auto value = nlohmann::json::parse(message, message + size, nullptr, false);

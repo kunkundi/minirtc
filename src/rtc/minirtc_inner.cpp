@@ -19,7 +19,7 @@ bool IsValidAudioFrameInput(const MiniRtcAudioFrame* audio_frame) {
 
 }  // namespace
 
-PeerPtr* CreatePeer(const Params* params) {
+MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params) {
   if (!params) {
     std::cerr << "Params is null" << std::endl;
     return nullptr;
@@ -31,7 +31,7 @@ PeerPtr* CreatePeer(const Params* params) {
     InitLogger("logs");
   }
 
-  PeerPtr* peer_ptr = new PeerPtr;
+  MiniRtcPeerPtr* peer_ptr = new MiniRtcPeerPtr;
 #ifdef USE_LIBDATACHANNEL_CONNECTION
   peer_ptr->peer_connection = new DataChannelConnection();
 #else
@@ -44,8 +44,7 @@ PeerPtr* CreatePeer(const Params* params) {
     peer_ptr->pc_params.signal_server_ip = params->signal_server_ip;
     peer_ptr->pc_params.signal_server_port = params->signal_server_port;
     peer_ptr->pc_params.hardware_acceleration = params->hardware_acceleration;
-    peer_ptr->pc_params.native_video_output =
-        params->native_video_output;
+    peer_ptr->pc_params.native_video_output = params->native_video_output;
     peer_ptr->pc_params.av1_encoding = params->av1_encoding;
     peer_ptr->pc_params.turn_mode = params->turn_mode;
     peer_ptr->pc_params.enable_srtp = params->enable_srtp;
@@ -60,7 +59,8 @@ PeerPtr* CreatePeer(const Params* params) {
   peer_ptr->pc_params.on_receive_data_buffer = params->on_receive_data_buffer;
 
   peer_ptr->pc_params.on_receive_video_frame = params->on_receive_video_frame;
-  peer_ptr->pc_params.on_receive_encoded_video = params->on_receive_encoded_video;
+  peer_ptr->pc_params.on_receive_encoded_video =
+      params->on_receive_encoded_video;
 
   peer_ptr->pc_params.on_signal_status = params->on_signal_status;
   peer_ptr->pc_params.on_signal_message = params->on_signal_message;
@@ -74,7 +74,7 @@ PeerPtr* CreatePeer(const Params* params) {
   return peer_ptr;
 }
 
-void DestroyPeer(PeerPtr** peer_ptr) {
+void MiniRtcDestroyPeer(MiniRtcPeerPtr** peer_ptr) {
   (*peer_ptr)->peer_connection->Destroy();
   delete (*peer_ptr)->peer_connection;
   (*peer_ptr)->peer_connection = nullptr;
@@ -82,7 +82,7 @@ void DestroyPeer(PeerPtr** peer_ptr) {
   *peer_ptr = nullptr;
 }
 
-int Init(PeerPtr* peer_ptr) {
+int MiniRtcInit(MiniRtcPeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -92,7 +92,8 @@ int Init(PeerPtr* peer_ptr) {
   return 0;
 }
 
-int InitDirectPeer(PeerPtr* peer, const MiniRtcDirectOptions* options) {
+int MiniRtcInitDirectPeer(MiniRtcPeerPtr* peer,
+                          const MiniRtcDirectOptions* options) {
   if (!peer || !peer->peer_connection || !options) return -1;
   try {
     return peer->peer_connection->InitDirect(peer->pc_params, *options);
@@ -101,7 +102,7 @@ int InitDirectPeer(PeerPtr* peer, const MiniRtcDirectOptions* options) {
   }
 }
 
-int StartDirectSession(PeerPtr* peer, bool offerer) {
+int MiniRtcStartDirectSession(MiniRtcPeerPtr* peer, bool offerer) {
   if (!peer || !peer->peer_connection) return -1;
   try {
     return peer->peer_connection->StartDirect(offerer);
@@ -110,7 +111,8 @@ int StartDirectSession(PeerPtr* peer, bool offerer) {
   }
 }
 
-int ReceiveDirectSignal(PeerPtr* peer, const char* message, size_t size) {
+int MiniRtcReceiveDirectSignal(MiniRtcPeerPtr* peer, const char* message,
+                               size_t size) {
   if (!peer || !peer->peer_connection) return -1;
   try {
     return peer->peer_connection->ReceiveDirect(message, size);
@@ -120,12 +122,13 @@ int ReceiveDirectSignal(PeerPtr* peer, const char* message, size_t size) {
   }
 }
 
-int CloseDirectSession(PeerPtr* peer) {
+int MiniRtcCloseDirectSession(MiniRtcPeerPtr* peer) {
   return peer && peer->peer_connection ? peer->peer_connection->CloseDirect()
                                        : -1;
 }
 
-int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id) {
+int MiniRtcJoinConnection(MiniRtcPeerPtr* peer_ptr,
+                          const char* transmission_id) {
   int ret = -1;
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
@@ -137,8 +140,10 @@ int JoinConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   return ret;
 }
 
-int UpdateConnectionSettings(PeerPtr* peer_ptr, bool hardware_acceleration,
-                              bool av1_encoding, TurnMode turn_mode) {
+int MiniRtcUpdateConnectionSettings(MiniRtcPeerPtr* peer_ptr,
+                                    bool hardware_acceleration,
+                                    bool av1_encoding,
+                                    MiniRtcTurnMode turn_mode) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     return -1;
   }
@@ -146,7 +151,8 @@ int UpdateConnectionSettings(PeerPtr* peer_ptr, bool hardware_acceleration,
       hardware_acceleration, av1_encoding, turn_mode);
 }
 
-int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id) {
+int MiniRtcLeaveConnection(MiniRtcPeerPtr* peer_ptr,
+                           const char* transmission_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -157,8 +163,9 @@ int LeaveConnection(PeerPtr* peer_ptr, const char* transmission_id) {
   return 0;
 }
 
-int DisconnectPeerConnection(PeerPtr* peer_ptr, const char* transmission_id,
-                              const char* remote_user_id) {
+int MiniRtcDisconnectPeerConnection(MiniRtcPeerPtr* peer_ptr,
+                                    const char* transmission_id,
+                                    const char* remote_user_id) {
   if (!peer_ptr || !peer_ptr->peer_connection || !transmission_id ||
       !*transmission_id || !remote_user_id || !*remote_user_id) {
     return -1;
@@ -167,7 +174,7 @@ int DisconnectPeerConnection(PeerPtr* peer_ptr, const char* transmission_id,
                                                    remote_user_id);
 }
 
-int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id) {
+int MiniRtcAddVideoStream(MiniRtcPeerPtr* peer_ptr, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -175,7 +182,7 @@ int AddVideoStream(PeerPtr* peer_ptr, const char* stream_id) {
   return peer_ptr->peer_connection->AddVideoStream(stream_id);
 }
 
-int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id) {
+int MiniRtcAddAudioStream(MiniRtcPeerPtr* peer_ptr, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -183,7 +190,8 @@ int AddAudioStream(PeerPtr* peer_ptr, const char* stream_id) {
   return peer_ptr->peer_connection->AddAudioStream(stream_id);
 }
 
-int AddDataStream(PeerPtr* peer_ptr, const char* stream_id, bool reliable) {
+int MiniRtcAddDataStream(MiniRtcPeerPtr* peer_ptr, const char* stream_id,
+                         bool reliable) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -191,8 +199,9 @@ int AddDataStream(PeerPtr* peer_ptr, const char* stream_id, bool reliable) {
   return peer_ptr->peer_connection->AddDataStream(stream_id, reliable);
 }
 
-int SendVideoFrame(PeerPtr* peer_ptr, const MiniRtcVideoFrame* video_frame,
-                   const char* stream_id) {
+int MiniRtcSendVideoFrame(MiniRtcPeerPtr* peer_ptr,
+                          const MiniRtcVideoFrame* video_frame,
+                          const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -208,7 +217,8 @@ int SendVideoFrame(PeerPtr* peer_ptr, const MiniRtcVideoFrame* video_frame,
   return 0;
 }
 
-int RequestVideoKeyFrame(PeerPtr* peer_ptr, const char* stream_id) {
+int MiniRtcRequestVideoKeyFrame(MiniRtcPeerPtr* peer_ptr,
+                                const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -217,46 +227,51 @@ int RequestVideoKeyFrame(PeerPtr* peer_ptr, const char* stream_id) {
   return peer_ptr->peer_connection->RequestVideoKeyFrame(stream_id);
 }
 
-int UpdateVideoSettings(PeerPtr* peer_ptr, const char* remote_id,
-                        size_t remote_id_size, VideoQuality quality,
-                        int frame_rate, VideoDegradationPreference preference) {
+int MiniRtcUpdateVideoSettings(MiniRtcPeerPtr* peer_ptr, const char* remote_id,
+                               size_t remote_id_size,
+                               MiniRtcVideoQuality quality, int frame_rate,
+                               MiniRtcVideoDegradationPreference preference) {
   if (!peer_ptr || !peer_ptr->peer_connection || !remote_id ||
-      !remote_id_size || quality < QualityLow || quality > QualityHigh ||
+      !remote_id_size || quality < MiniRtcVideoQualityLow ||
+      quality > MiniRtcVideoQualityHigh ||
       (frame_rate != 30 && frame_rate != 60) ||
-      preference > VideoDegradationPreference::Balanced)
+      preference > MiniRtcVideoDegradationPreference::Balanced)
     return -1;
   return peer_ptr->peer_connection->UpdateVideoSettings(
       std::string(remote_id, remote_id_size), quality, frame_rate, preference);
 }
 
-int UpdateVideoBitrateLimit(PeerPtr* peer_ptr, const char* remote_id,
-                            size_t remote_id_size, int max_bitrate_bps) {
-  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size ||
-      max_bitrate_bps < 0 || max_bitrate_bps > 100'000'000)
+int MiniRtcUpdateVideoBitrateLimit(MiniRtcPeerPtr* peer_ptr,
+                                   const char* remote_id, size_t remote_id_size,
+                                   int max_bitrate_bps) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id ||
+      !remote_id_size || max_bitrate_bps < 0 || max_bitrate_bps > 100'000'000)
     return -1;
   return peer_ptr->peer_connection->UpdateVideoBitrateLimit(
       std::string(remote_id, remote_id_size), max_bitrate_bps);
 }
 
-int SetVideoSendPaused(PeerPtr* peer_ptr, const char* remote_id,
-                       size_t remote_id_size, bool paused) {
+int MiniRtcSetVideoSendPaused(MiniRtcPeerPtr* peer_ptr, const char* remote_id,
+                              size_t remote_id_size, bool paused) {
   if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size)
     return -1;
   return peer_ptr->peer_connection->SetVideoSendPaused(
       std::string(remote_id, remote_id_size), paused);
 }
 
-int SetAudioSendPaused(PeerPtr* peer_ptr, const char* remote_id,
-                       size_t remote_id_size, bool paused) {
+int MiniRtcSetAudioSendPaused(MiniRtcPeerPtr* peer_ptr, const char* remote_id,
+                              size_t remote_id_size, bool paused) {
   if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size)
     return -1;
   return peer_ptr->peer_connection->SetAudioSendPaused(
       std::string(remote_id, remote_id_size), paused);
 }
 
-int UpdateVideoResolution(PeerPtr* peer_ptr, const char* remote_id,
-                          size_t remote_id_size, int width, int height) {
-  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id || !remote_id_size ||
+int MiniRtcUpdateVideoResolution(MiniRtcPeerPtr* peer_ptr,
+                                 const char* remote_id, size_t remote_id_size,
+                                 int width, int height) {
+  if (!peer_ptr || !peer_ptr->peer_connection || !remote_id ||
+      !remote_id_size ||
       !((width == 0 && height == 0) ||
         (width >= 2 && height >= 2 && width <= 16384 && height <= 16384)))
     return -1;
@@ -264,7 +279,7 @@ int UpdateVideoResolution(PeerPtr* peer_ptr, const char* remote_id,
       std::string(remote_id, remote_id_size), width, height);
 }
 
-int RequestAllVideoKeyFrames(PeerPtr* peer_ptr) {
+int MiniRtcRequestAllVideoKeyFrames(MiniRtcPeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -273,8 +288,9 @@ int RequestAllVideoKeyFrames(PeerPtr* peer_ptr) {
   return peer_ptr->peer_connection->RequestAllVideoKeyFrames();
 }
 
-int SendAudioFrame(PeerPtr* peer_ptr, const MiniRtcAudioFrame* audio_frame,
-                   const char* stream_id) {
+int MiniRtcSendAudioFrame(MiniRtcPeerPtr* peer_ptr,
+                          const MiniRtcAudioFrame* audio_frame,
+                          const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -288,8 +304,8 @@ int SendAudioFrame(PeerPtr* peer_ptr, const MiniRtcAudioFrame* audio_frame,
   return peer_ptr->peer_connection->SendAudioFrame(audio_frame, stream_id);
 }
 
-int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
-                  const char* stream_id) {
+int MiniRtcSendDataFrame(MiniRtcPeerPtr* peer_ptr, const char* data,
+                         size_t size, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -305,8 +321,8 @@ int SendDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
   return 0;
 }
 
-int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
-                          const char* stream_id) {
+int MiniRtcSendReliableDataFrame(MiniRtcPeerPtr* peer_ptr, const char* data,
+                                 size_t size, const char* stream_id) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -322,9 +338,11 @@ int SendReliableDataFrame(PeerPtr* peer_ptr, const char* data, size_t size,
   return 0;
 }
 
-int SendVideoFrameToPeer(PeerPtr* peer_ptr, const MiniRtcVideoFrame* video_frame,
-                         const char* stream_id, const char* remote_peer_id,
-                         size_t remote_peer_id_size) {
+int MiniRtcSendVideoFrameToPeer(MiniRtcPeerPtr* peer_ptr,
+                                const MiniRtcVideoFrame* video_frame,
+                                const char* stream_id,
+                                const char* remote_peer_id,
+                                size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -341,10 +359,11 @@ int SendVideoFrameToPeer(PeerPtr* peer_ptr, const MiniRtcVideoFrame* video_frame
   return 0;
 }
 
-int SendAudioFrameToPeer(PeerPtr* peer_ptr,
-                         const MiniRtcAudioFrame* audio_frame,
-                         const char* stream_id, const char* remote_peer_id,
-                         size_t remote_peer_id_size) {
+int MiniRtcSendAudioFrameToPeer(MiniRtcPeerPtr* peer_ptr,
+                                const MiniRtcAudioFrame* audio_frame,
+                                const char* stream_id,
+                                const char* remote_peer_id,
+                                size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -359,9 +378,10 @@ int SendAudioFrameToPeer(PeerPtr* peer_ptr,
       audio_frame, stream_id, remote_peer_id, remote_peer_id_size);
 }
 
-int SendDataFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,
-                        const char* stream_id, const char* remote_peer_id,
-                        size_t remote_peer_id_size) {
+int MiniRtcSendDataFrameToPeer(MiniRtcPeerPtr* peer_ptr, const char* data,
+                               size_t size, const char* stream_id,
+                               const char* remote_peer_id,
+                               size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -373,10 +393,11 @@ int SendDataFrameToPeer(PeerPtr* peer_ptr, const char* data, size_t size,
   return 0;
 }
 
-int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
-                                size_t size, const char* stream_id,
-                                const char* remote_peer_id,
-                                size_t remote_peer_id_size) {
+int MiniRtcSendReliableDataFrameToPeer(MiniRtcPeerPtr* peer_ptr,
+                                       const char* data, size_t size,
+                                       const char* stream_id,
+                                       const char* remote_peer_id,
+                                       size_t remote_peer_id_size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -386,7 +407,7 @@ int SendReliableDataFrameToPeer(PeerPtr* peer_ptr, const char* data,
       data, size, stream_id, remote_peer_id, remote_peer_id_size);
 }
 
-int64_t GetSystemTimeMicros(PeerPtr* peer_ptr) {
+int64_t MiniRtcGetSystemTimeMicros(MiniRtcPeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -394,7 +415,8 @@ int64_t GetSystemTimeMicros(PeerPtr* peer_ptr) {
   return peer_ptr->peer_connection->GetSystemTimeMicros();
 }
 
-int SendSignalMessage(PeerPtr* peer_ptr, const char* message, size_t size) {
+int MiniRtcSendSignalMessage(MiniRtcPeerPtr* peer_ptr, const char* message,
+                             size_t size) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;
@@ -402,7 +424,7 @@ int SendSignalMessage(PeerPtr* peer_ptr, const char* message, size_t size) {
   return peer_ptr->peer_connection->SendSignalMessage(message, size);
 }
 
-int ReconnectSignal(PeerPtr* peer_ptr) {
+int MiniRtcReconnectSignal(MiniRtcPeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");
     return -1;

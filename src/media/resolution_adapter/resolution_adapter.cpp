@@ -60,8 +60,8 @@ constexpr float kDownscaleStep = 0.88f;
 // jumping across multiple spatial steps at once.
 constexpr float kUpscaleStep = 1.0f / kDownscaleStep;
 
-libyuv::FilterMode ScaleFilterForContent(VideoContentType content_type) {
-  return content_type == VideoContentType::ScreenContent
+libyuv::FilterMode ScaleFilterForContent(MiniRtcVideoContentType content_type) {
+  return content_type == MiniRtcVideoContentType::ScreenContent
              ? libyuv::kFilterBox
              : libyuv::kFilterLinear;
 }
@@ -170,10 +170,10 @@ bool BuildStrictAspectResolution(int src_w, int src_h, int64_t target_area,
 }
 }  // namespace
 
-ResolutionAdapter::ResolutionAdapter(VideoQuality video_quality,
+ResolutionAdapter::ResolutionAdapter(MiniRtcVideoQuality video_quality,
                                      int video_frame_rate,
-                                     VideoContentType video_content_type,
-                                     VideoDegradationPreference
+                                     MiniRtcVideoContentType video_content_type,
+                                     MiniRtcVideoDegradationPreference
                                          video_degradation_preference)
     : video_quality_(video_quality),
       video_frame_rate_(std::clamp(video_frame_rate, 15, 60)),
@@ -184,9 +184,9 @@ ResolutionAdapter::~ResolutionAdapter() {}
 
 int ResolutionAdapter::GetMaxPixelsForQuality() const {
   switch (video_quality_) {
-    case QualityHigh:
+    case MiniRtcVideoQualityHigh:
       return 3840 * 2160;  // up to 4K
-    case QualityMedium:
+    case MiniRtcVideoQualityMedium:
       return 1920 * 1080;  // up to 1080p
     default:
       return 1280 * 720;  // up to 720p
@@ -194,24 +194,24 @@ int ResolutionAdapter::GetMaxPixelsForQuality() const {
 }
 
 float ResolutionAdapter::GetBitrateCoefficient() const {
-  if (video_content_type_ != VideoContentType::ScreenContent) {
+  if (video_content_type_ != MiniRtcVideoContentType::ScreenContent) {
     return kLegacyBitrateCoeff;
   }
   const float frame_rate_scale =
       std::sqrt(static_cast<float>(video_frame_rate_) / kReferenceFrameRate);
   float headroom = 1.0f;
   if (video_degradation_preference_ ==
-      VideoDegradationPreference::MaintainFrameRate) {
+      MiniRtcVideoDegradationPreference::MaintainFrameRate) {
     headroom = kMaintainFrameRateHeadroom;
   } else if (video_degradation_preference_ ==
-             VideoDegradationPreference::Balanced) {
+             MiniRtcVideoDegradationPreference::Balanced) {
     headroom = kBalancedHeadroom;
   }
   return kBitrateCoeff30Fps * frame_rate_scale * headroom;
 }
 
 float ResolutionAdapter::GetBitrateAlpha() const {
-  return video_content_type_ == VideoContentType::ScreenContent
+  return video_content_type_ == MiniRtcVideoContentType::ScreenContent
              ? kBitrateAlpha
              : kLegacyBitrateAlpha;
 }
@@ -298,7 +298,7 @@ int ResolutionAdapter::GetResolution(int target_bitrate, int current_width,
 
   const float estimated_pixels_f =
       video_degradation_preference_ ==
-              VideoDegradationPreference::MaintainResolution
+              MiniRtcVideoDegradationPreference::MaintainResolution
           ? static_cast<float>(max_pixels)
           : std::pow(
                 static_cast<float>(target_bitrate) / GetBitrateCoefficient(),

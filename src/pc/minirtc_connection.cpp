@@ -27,21 +27,21 @@ int MiniRtcConnection::Init() {
                                  const std::string& user_id) {
     if (info_.direct_policy.enabled() && ice_status == "ready") return;
     if ("connecting" == ice_status) {
-      callbacks_.on_connection_status(ConnectionStatus::Connecting,
+      callbacks_.on_connection_status(MiniRtcConnectionStatus::MiniRtcConnectionConnecting,
                                       user_id.data(), user_id.size(),
                                       callbacks_.user_data);
     } else if ("gathering" == ice_status) {
-      callbacks_.on_connection_status(ConnectionStatus::Gathering,
+      callbacks_.on_connection_status(MiniRtcConnectionStatus::MiniRtcConnectionGathering,
                                       user_id.data(), user_id.size(),
                                       callbacks_.user_data);
     } else if ("disconnected" == ice_status) {
-      callbacks_.on_connection_status(ConnectionStatus::Disconnected,
+      callbacks_.on_connection_status(MiniRtcConnectionStatus::MiniRtcConnectionDisconnected,
                                       user_id.data(), user_id.size(),
                                       callbacks_.user_data);
     } else if ("connected" == ice_status) {
       // std::string transmission_id = std::string(user_id, user_id_size);
       // is_ice_transport_ready_ = true;
-      // callbacks_.on_connection_status(ConnectionStatus::Connected,
+      // callbacks_.on_connection_status(MiniRtcConnectionStatus::Connected,
       // user_id.data(),
       //                       user_id.size(), callbacks_.user_data);
       // b_force_i_frame_ = true;
@@ -50,20 +50,20 @@ int MiniRtcConnection::Init() {
       is_ice_transport_ready_ = true;
       b_force_i_frame_ = true;
       LOG_INFO("Ice ready");
-      callbacks_.on_connection_status(ConnectionStatus::Connected,
+      callbacks_.on_connection_status(MiniRtcConnectionStatus::MiniRtcConnectionConnected,
                                       user_id.data(), user_id.size(),
                                       callbacks_.user_data);
     } else if ("closed" == ice_status) {
       is_ice_transport_ready_ = false;
       LOG_INFO("Ice closed");
-      callbacks_.on_connection_status(ConnectionStatus::Closed, user_id.data(),
+      callbacks_.on_connection_status(MiniRtcConnectionStatus::MiniRtcConnectionClosed, user_id.data(),
                                       user_id.size(), callbacks_.user_data);
     } else if ("failed" == ice_status) {
       is_ice_transport_ready_ = false;
       // if (offer_peer_ && try_rejoin_with_turn_) {
       //   if (reconnect_count_ > 3) {
       //     LOG_INFO("Recreate with turn exceed max count, give up");
-      //     callbacks_.on_connection_status(ConnectionStatus::Failed,
+      //     callbacks_.on_connection_status(MiniRtcConnectionStatus::Failed,
       //                                     user_id.data(), user_id.size(),
       //                                     callbacks_.user_data);
       //   } else {
@@ -71,7 +71,7 @@ int MiniRtcConnection::Init() {
       //         "Ice failed, destroy ice agent and rereate it with TURN
       //         enabled");
 
-      //     info_.turn_mode = TurnMode::TurnAutoUdpTcp;
+      //     info_.turn_mode = MiniRtcTurnMode::TurnAutoUdpTcp;
       //     info_.reliable_ice = false;
 
       //     if (offer_peer_) {
@@ -85,7 +85,7 @@ int MiniRtcConnection::Init() {
       //   }
       // } else {
       LOG_INFO("Ice failed");
-      callbacks_.on_connection_status(ConnectionStatus::Failed, user_id.data(),
+      callbacks_.on_connection_status(MiniRtcConnectionStatus::MiniRtcConnectionFailed, user_id.data(),
                                       user_id.size(), callbacks_.user_data);
       // }
     } else {
@@ -133,8 +133,8 @@ int MiniRtcConnection::UpdateVideoResolution(int width, int height) {
 }
 
 int MiniRtcConnection::UpdateVideoSettings(
-    VideoQuality quality, int frame_rate,
-    VideoDegradationPreference preference) {
+    MiniRtcVideoQuality quality, int frame_rate,
+    MiniRtcVideoDegradationPreference preference) {
   return ice_transport_ ? ice_transport_->UpdateVideoSettings(
                               quality, frame_rate, preference)
                         : -1;

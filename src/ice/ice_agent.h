@@ -79,7 +79,7 @@ class IceAgent {
   }
 
   IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-           TurnMode turn_mode, bool enable_srtp,
+           MiniRtcTurnMode turn_mode, bool enable_srtp,
            const IceServerConfiguration& ice_config,
            const DirectIcePolicy& direct_policy = {});
   ~IceAgent();
@@ -118,7 +118,7 @@ class IceAgent {
  public:
   bool use_trickle_ice_ = true;
   bool use_reliable_ice_ = false;
-  TurnMode turn_mode_ = TurnMode::TurnDisabled;
+  MiniRtcTurnMode turn_mode_ = MiniRtcTurnMode::MiniRtcTurnDisabled;
   bool enable_srtp_ = true;
 
   IceServerConfiguration ice_config_;

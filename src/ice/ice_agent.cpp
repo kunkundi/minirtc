@@ -38,25 +38,25 @@ bool AddTurnRelay(NiceAgent* agent, guint stream_id, const std::string& address,
   return false;
 }
 
-const char* TurnModeName(TurnMode mode) {
+const char* TurnModeName(MiniRtcTurnMode mode) {
   switch (mode) {
-    case TurnMode::TurnDisabled:
+    case MiniRtcTurnMode::MiniRtcTurnDisabled:
       return "disabled";
-    case TurnMode::TurnAutoUdpTcp:
+    case MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp:
       return "auto_udp_tcp";
-    case TurnMode::TurnForceUdp:
+    case MiniRtcTurnMode::MiniRtcTurnForceUdp:
       return "force_udp";
-    case TurnMode::TurnForceTcp:
+    case MiniRtcTurnMode::MiniRtcTurnForceTcp:
       return "force_tcp";
     default:
       return "invalid";
   }
 }
 
-bool IsTurnEnabled(TurnMode mode) { return mode != TurnMode::TurnDisabled; }
+bool IsTurnEnabled(MiniRtcTurnMode mode) { return mode != MiniRtcTurnMode::MiniRtcTurnDisabled; }
 
-bool IsTurnForced(TurnMode mode) {
-  return mode == TurnMode::TurnForceUdp || mode == TurnMode::TurnForceTcp;
+bool IsTurnForced(MiniRtcTurnMode mode) {
+  return mode == MiniRtcTurnMode::MiniRtcTurnForceUdp || mode == MiniRtcTurnMode::MiniRtcTurnForceTcp;
 }
 
 }  // namespace
@@ -76,7 +76,7 @@ static int DtlsVerifyCallback(X509_STORE_CTX* ctx, void* arg) {
 }
 
 IceAgent::IceAgent(bool offer_peer, bool use_trickle_ice, bool use_reliable_ice,
-                   TurnMode turn_mode, bool enable_srtp,
+                   MiniRtcTurnMode turn_mode, bool enable_srtp,
                    const IceServerConfiguration& ice_config,
                    const DirectIcePolicy& direct_policy)
     : use_trickle_ice_(use_trickle_ice),
@@ -126,7 +126,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   if (direct_policy_.enabled() &&
       (!IsDirectAddressPair(direct_policy_.local_address,
                             direct_policy_.remote_address) ||
-       use_reliable_ice_ || turn_mode_ != TurnMode::TurnDisabled ||
+       use_reliable_ice_ || turn_mode_ != MiniRtcTurnMode::MiniRtcTurnDisabled ||
        !enable_srtp_))
     return -1;
   if (nice_thread_.joinable() || nice_inited_) {
@@ -621,7 +621,7 @@ bool IceAgent::CanAdvertiseUdpPunch() const {
   return agent && !destroyed_ &&
          PunchEligible(punch_config_, PunchPlatformSupported(),
                        nice_agent_punch_get_v1_abi(), use_reliable_ice_,
-                       turn_mode_ == TurnMode::TurnAutoUdpTcp, n_components_) &&
+                       turn_mode_ == MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp, n_components_) &&
          g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
                                       "relay-upgrade-timeout") &&
          g_object_class_find_property(G_OBJECT_GET_CLASS(agent),

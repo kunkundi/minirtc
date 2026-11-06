@@ -18,161 +18,161 @@ using nlohmann::json;
 
 namespace {
 
-const char* ConnectionStatusToString(ConnectionStatus status) {
+const char* ConnectionStatusToString(MiniRtcConnectionStatus status) {
   switch (status) {
-    case ConnectionStatus::Connecting:
+    case MiniRtcConnectionStatus::MiniRtcConnectionConnecting:
       return "connecting";
-    case ConnectionStatus::Connected:
+    case MiniRtcConnectionStatus::MiniRtcConnectionConnected:
       return "connected";
-    case ConnectionStatus::Gathering:
+    case MiniRtcConnectionStatus::MiniRtcConnectionGathering:
       return "gathering";
-    case ConnectionStatus::Disconnected:
+    case MiniRtcConnectionStatus::MiniRtcConnectionDisconnected:
       return "disconnected";
-    case ConnectionStatus::Failed:
+    case MiniRtcConnectionStatus::MiniRtcConnectionFailed:
       return "failed";
-    case ConnectionStatus::Closed:
+    case MiniRtcConnectionStatus::MiniRtcConnectionClosed:
       return "closed";
-    case ConnectionStatus::IncorrectPassword:
+    case MiniRtcConnectionStatus::MiniRtcConnectionIncorrectPassword:
       return "incorrect_password";
-    case ConnectionStatus::NoSuchTransmissionId:
+    case MiniRtcConnectionStatus::MiniRtcConnectionNoSuchTransmissionId:
       return "no_such_transmission_id";
-    case ConnectionStatus::RemoteUnavailable:
+    case MiniRtcConnectionStatus::MiniRtcConnectionRemoteUnavailable:
       return "remote_unavailable";
     default:
       return "unknown";
   }
 }
 
-const char* SignalStatusToString(SignalStatus status) {
+const char* SignalStatusToString(MiniRtcSignalStatus status) {
   switch (status) {
-    case SignalStatus::SignalConnecting:
+    case MiniRtcSignalStatus::MiniRtcSignalConnecting:
       return "connecting";
-    case SignalStatus::SignalConnected:
+    case MiniRtcSignalStatus::MiniRtcSignalConnected:
       return "connected";
-    case SignalStatus::SignalFailed:
+    case MiniRtcSignalStatus::MiniRtcSignalFailed:
       return "failed";
-    case SignalStatus::SignalClosed:
+    case MiniRtcSignalStatus::MiniRtcSignalClosed:
       return "closed";
-    case SignalStatus::SignalReconnecting:
+    case MiniRtcSignalStatus::MiniRtcSignalReconnecting:
       return "reconnecting";
-    case SignalStatus::SignalServerClosed:
+    case MiniRtcSignalStatus::MiniRtcSignalServerClosed:
       return "server_closed";
-    case SignalStatus::SignalTlsCertError:
+    case MiniRtcSignalStatus::MiniRtcSignalTlsCertError:
       return "tls_cert_error";
     default:
       return "unknown";
   }
 }
 
-bool IsValidTurnMode(TurnMode mode) {
-  return mode >= TurnMode::TurnDisabled && mode <= TurnMode::TurnForceTcp;
+bool IsValidTurnMode(MiniRtcTurnMode mode) {
+  return mode >= MiniRtcTurnMode::MiniRtcTurnDisabled && mode <= MiniRtcTurnMode::MiniRtcTurnForceTcp;
 }
 
 int NormalizeVideoFrameRate(int frame_rate) {
   return frame_rate == 30 ? 30 : 60;
 }
 
-VideoContentType ParseVideoContentType(const std::string& value) {
+MiniRtcVideoContentType ParseVideoContentType(const std::string& value) {
   if (value == "realtime_video") {
-    return VideoContentType::RealtimeVideo;
+    return MiniRtcVideoContentType::RealtimeVideo;
   }
   if (value != "screen_content") {
     LOG_WARN("Invalid video content type [{}], using screen_content", value);
   }
-  return VideoContentType::ScreenContent;
+  return MiniRtcVideoContentType::ScreenContent;
 }
 
-VideoContentType NormalizeVideoContentType(VideoContentType value) {
-  if (value == VideoContentType::RealtimeVideo ||
-      value == VideoContentType::ScreenContent) {
+MiniRtcVideoContentType NormalizeVideoContentType(MiniRtcVideoContentType value) {
+  if (value == MiniRtcVideoContentType::RealtimeVideo ||
+      value == MiniRtcVideoContentType::ScreenContent) {
     return value;
   }
   LOG_WARN("Invalid video content type [{}], using screen_content",
            static_cast<int>(value));
-  return VideoContentType::ScreenContent;
+  return MiniRtcVideoContentType::ScreenContent;
 }
 
-VideoDegradationPreference ParseVideoDegradationPreference(
+MiniRtcVideoDegradationPreference ParseVideoDegradationPreference(
     const std::string& value) {
   if (value == "maintain_resolution" || value == "quality_priority") {
-    return VideoDegradationPreference::MaintainResolution;
+    return MiniRtcVideoDegradationPreference::MaintainResolution;
   }
   if (value == "balanced") {
-    return VideoDegradationPreference::Balanced;
+    return MiniRtcVideoDegradationPreference::Balanced;
   }
   if (value != "maintain_frame_rate" && value != "frame_rate_priority") {
     LOG_WARN(
         "Invalid video degradation preference [{}], using "
         "maintain_resolution",
         value);
-    return VideoDegradationPreference::MaintainResolution;
+    return MiniRtcVideoDegradationPreference::MaintainResolution;
   }
-  return VideoDegradationPreference::MaintainFrameRate;
+  return MiniRtcVideoDegradationPreference::MaintainFrameRate;
 }
 
-VideoDegradationPreference NormalizeVideoDegradationPreference(
-    VideoDegradationPreference value) {
-  if (value == VideoDegradationPreference::MaintainFrameRate ||
-      value == VideoDegradationPreference::MaintainResolution ||
-      value == VideoDegradationPreference::Balanced) {
+MiniRtcVideoDegradationPreference NormalizeVideoDegradationPreference(
+    MiniRtcVideoDegradationPreference value) {
+  if (value == MiniRtcVideoDegradationPreference::MaintainFrameRate ||
+      value == MiniRtcVideoDegradationPreference::MaintainResolution ||
+      value == MiniRtcVideoDegradationPreference::Balanced) {
     return value;
   }
   LOG_WARN(
       "Invalid video degradation preference [{}], using "
       "maintain_resolution",
       static_cast<int>(value));
-  return VideoDegradationPreference::MaintainResolution;
+  return MiniRtcVideoDegradationPreference::MaintainResolution;
 }
 
 const char* VideoDegradationPreferenceToString(
-    VideoDegradationPreference value) {
+    MiniRtcVideoDegradationPreference value) {
   switch (value) {
-    case VideoDegradationPreference::MaintainFrameRate:
+    case MiniRtcVideoDegradationPreference::MaintainFrameRate:
       return "maintain_frame_rate";
-    case VideoDegradationPreference::Balanced:
+    case MiniRtcVideoDegradationPreference::Balanced:
       return "balanced";
-    case VideoDegradationPreference::MaintainResolution:
+    case MiniRtcVideoDegradationPreference::MaintainResolution:
     default:
       return "maintain_resolution";
   }
 }
 
-const char* TurnModeToString(TurnMode mode) {
+const char* TurnModeToString(MiniRtcTurnMode mode) {
   switch (mode) {
-    case TurnMode::TurnDisabled:
+    case MiniRtcTurnMode::MiniRtcTurnDisabled:
       return "disabled";
-    case TurnMode::TurnAutoUdpTcp:
+    case MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp:
       return "auto_udp_tcp";
-    case TurnMode::TurnForceUdp:
+    case MiniRtcTurnMode::MiniRtcTurnForceUdp:
       return "force_udp";
-    case TurnMode::TurnForceTcp:
+    case MiniRtcTurnMode::MiniRtcTurnForceTcp:
       return "force_tcp";
     default:
       return "invalid";
   }
 }
 
-TurnMode ParseTurnMode(const std::string& mode, bool legacy_enabled) {
+MiniRtcTurnMode ParseTurnMode(const std::string& mode, bool legacy_enabled) {
   if (mode.empty()) {
-    return legacy_enabled ? TurnMode::TurnAutoUdpTcp
-                          : TurnMode::TurnDisabled;
+    return legacy_enabled ? MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp
+                          : MiniRtcTurnMode::MiniRtcTurnDisabled;
   }
   if (mode == "disabled" || mode == "0") {
-    return TurnMode::TurnDisabled;
+    return MiniRtcTurnMode::MiniRtcTurnDisabled;
   }
   if (mode == "auto" || mode == "auto_udp_tcp" || mode == "1") {
-    return TurnMode::TurnAutoUdpTcp;
+    return MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp;
   }
   if (mode == "force_udp" || mode == "2") {
-    return TurnMode::TurnForceUdp;
+    return MiniRtcTurnMode::MiniRtcTurnForceUdp;
   }
   if (mode == "force_tcp" || mode == "3") {
-    return TurnMode::TurnForceTcp;
+    return MiniRtcTurnMode::MiniRtcTurnForceTcp;
   }
 
   LOG_WARN("Invalid TURN mode [{}], falling back to legacy enable flag", mode);
-  return legacy_enabled ? TurnMode::TurnAutoUdpTcp
-                        : TurnMode::TurnDisabled;
+  return legacy_enabled ? MiniRtcTurnMode::MiniRtcTurnAutoUdpTcp
+                        : MiniRtcTurnMode::MiniRtcTurnDisabled;
 }
 
 }  // namespace
@@ -230,11 +230,11 @@ int PeerConnection::Init(PeerConnectionParams params) {
     video_degradation_preference_ = ParseVideoDegradationPreference(
         cfg_video_degradation_preference_);
     if (cfg_video_quality_ == "low") {
-      video_quality_ = VideoQuality::QualityLow;
+      video_quality_ = MiniRtcVideoQuality::MiniRtcVideoQualityLow;
     } else if (cfg_video_quality_ == "medium") {
-      video_quality_ = VideoQuality::QualityMedium;
+      video_quality_ = MiniRtcVideoQuality::MiniRtcVideoQualityMedium;
     } else {
-      video_quality_ = VideoQuality::QualityHigh;
+      video_quality_ = MiniRtcVideoQuality::MiniRtcVideoQualityHigh;
     }
   } else {
     cfg_signal_server_ip_ = params.signal_server_ip;
@@ -247,7 +247,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
     } else {
       LOG_WARN("Invalid TURN mode value [{}], disabling TURN",
                static_cast<int>(params.turn_mode));
-      turn_mode_ = TurnMode::TurnDisabled;
+      turn_mode_ = MiniRtcTurnMode::MiniRtcTurnDisabled;
     }
     enable_srtp_ = params.enable_srtp;
     video_content_type_ = NormalizeVideoContentType(params.video_content_type);
@@ -301,7 +301,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
            VideoDegradationPreferenceToString(
                video_degradation_preference_));
   LOG_INFO("Video content type [{}]",
-           video_content_type_ == VideoContentType::ScreenContent
+           video_content_type_ == MiniRtcVideoContentType::ScreenContent
                ? "screen_content"
                : "realtime_video");
   LOG_INFO("TURN mode [{}]", TurnModeToString(turn_mode_));
@@ -330,7 +330,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   on_signal_exchange_ = params.on_signal_exchange;
 
   on_receive_ws_msg_ = [this](const std::string& msg) {
-    if (ExchangeSignal(SignalExchangeStage::IncomingMessage, msg) != 0) return;
+    if (ExchangeSignal(MiniRtcSignalExchangeStage::IncomingMessage, msg) != 0) return;
     auto j = json::parse(msg, nullptr, /*allow_exceptions=*/false);
     if (!j.is_discarded() && j.contains("type") && j["type"].is_string()) {
       std::string t = j["type"].get<std::string>();
@@ -352,8 +352,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
   on_ws_status_ = [this](WsStatus ws_status) {
     if (WsStatus::WsOpening == ws_status) {
       ws_status_ = WsStatus::WsOpening;
-      SetSignalStatus(SignalStatus::SignalConnecting);
-      on_signal_status_(SignalStatus::SignalConnecting, user_id_.data(),
+      SetSignalStatus(MiniRtcSignalStatus::MiniRtcSignalConnecting);
+      on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalConnecting, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsOpened == ws_status) {
       ws_status_ = WsStatus::WsOpened;
@@ -361,32 +361,32 @@ int PeerConnection::Init(PeerConnectionParams params) {
       Login();
     } else if (WsStatus::WsFailed == ws_status) {
       ws_status_ = WsStatus::WsFailed;
-      SetSignalStatus(SignalStatus::SignalFailed);
+      SetSignalStatus(MiniRtcSignalStatus::MiniRtcSignalFailed);
       ClearPeerConnections("signal failed");
-      on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
+      on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalFailed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsClosed == ws_status) {
       ws_status_ = WsStatus::WsClosed;
-      SetSignalStatus(SignalStatus::SignalClosed);
+      SetSignalStatus(MiniRtcSignalStatus::MiniRtcSignalClosed);
       ClearPeerConnections("signal closed");
-      on_signal_status_(SignalStatus::SignalClosed, user_id_.data(),
+      on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalClosed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsReconnecting == ws_status) {
       ws_status_ = WsStatus::WsReconnecting;
-      SetSignalStatus(SignalStatus::SignalReconnecting);
-      on_signal_status_(SignalStatus::SignalReconnecting, user_id_.data(),
+      SetSignalStatus(MiniRtcSignalStatus::MiniRtcSignalReconnecting);
+      on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalReconnecting, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsServerClosed == ws_status) {
       ws_status_ = WsStatus::WsServerClosed;
-      SetSignalStatus(SignalStatus::SignalServerClosed);
+      SetSignalStatus(MiniRtcSignalStatus::MiniRtcSignalServerClosed);
       ClearPeerConnections("signal server closed");
-      on_signal_status_(SignalStatus::SignalServerClosed, user_id_.data(),
+      on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalServerClosed, user_id_.data(),
                         user_id_.size(), user_data_);
     } else if (WsStatus::WsTlsCertError == ws_status) {
       ws_status_ = WsStatus::WsTlsCertError;
-      SetSignalStatus(SignalStatus::SignalTlsCertError);
+      SetSignalStatus(MiniRtcSignalStatus::MiniRtcSignalTlsCertError);
       ClearPeerConnections("signal TLS certificate error");
-      on_signal_status_(SignalStatus::SignalTlsCertError, user_id_.data(),
+      on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalTlsCertError, user_id_.data(),
                         user_id_.size(), user_data_);
     }
   };
@@ -406,7 +406,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   StartIceWorker();
 
   // do {
-  // } while (SignalStatus::SignalConnected != GetSignalStatus());
+  // } while (MiniRtcSignalStatus::SignalConnected != GetSignalStatus());
 
   LOG_INFO("[{}] Init finish", user_id_);
 
@@ -416,7 +416,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
 int PeerConnection::UpdateConnectionSettings(bool hardware_acceleration,
                                               bool av1_encoding,
-                                              TurnMode turn_mode) {
+                                              MiniRtcTurnMode turn_mode) {
   if (!IsValidTurnMode(turn_mode)) return -1;
   std::lock_guard lock(connection_info_mutex_);
   connection_info_.hardware_acceleration = hardware_acceleration;
@@ -425,7 +425,7 @@ int PeerConnection::UpdateConnectionSettings(bool hardware_acceleration,
   return 0;
 }
 
-int PeerConnection::ExchangeSignal(SignalExchangeStage stage, const std::string& message) {
+int PeerConnection::ExchangeSignal(MiniRtcSignalExchangeStage stage, const std::string& message) {
   if (!on_signal_exchange_) return 0;
   std::array<char, 8192> response{};
   int size = -1;
@@ -444,10 +444,10 @@ int PeerConnection::ExchangeSignal(SignalExchangeStage stage, const std::string&
   reconnect_login_.Clear();
   {
     std::lock_guard lock(signal_status_mutex_);
-    signal_status_ = SignalStatus::SignalFailed;
+    signal_status_ = MiniRtcSignalStatus::MiniRtcSignalFailed;
     pending_join_transmission_id_.reset();
   }
-  on_signal_status_(SignalStatus::SignalFailed, user_id_.data(), user_id_.size(), user_data_);
+  on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalFailed, user_id_.data(), user_id_.size(), user_data_);
   return -1;
 }
 
@@ -469,7 +469,7 @@ int PeerConnection::Login() {
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
 
-  const int exchange = ExchangeSignal(SignalExchangeStage::PrepareLogin, message.dump());
+  const int exchange = ExchangeSignal(MiniRtcSignalExchangeStage::PrepareLogin, message.dump());
   if (exchange != 0) return exchange > 0 ? 0 : -1;
 
   if (ws_transport_) {
@@ -498,19 +498,19 @@ int PeerConnection::SendJoinRequestLocked(
   return 0;
 }
 
-void PeerConnection::SetSignalStatus(SignalStatus signal_status) {
+void PeerConnection::SetSignalStatus(MiniRtcSignalStatus signal_status) {
   std::lock_guard<std::mutex> lock(signal_status_mutex_);
   signal_status_ = signal_status;
 }
 
 int PeerConnection::Join(const std::string& transmission_id) {
   std::lock_guard<std::mutex> lock(signal_status_mutex_);
-  if (SignalStatus::SignalConnected == signal_status_) {
+  if (MiniRtcSignalStatus::MiniRtcSignalConnected == signal_status_) {
     return SendJoinRequestLocked(transmission_id);
   }
 
-  if (signal_status_ == SignalStatus::SignalConnecting ||
-      signal_status_ == SignalStatus::SignalReconnecting) {
+  if (signal_status_ == MiniRtcSignalStatus::MiniRtcSignalConnecting ||
+      signal_status_ == MiniRtcSignalStatus::MiniRtcSignalReconnecting) {
     pending_join_transmission_id_ = transmission_id;
     leave_ = false;
     LOG_INFO("Queue join transmission [{}] until signal login completes",
@@ -525,7 +525,7 @@ int PeerConnection::Join(const std::string& transmission_id) {
 
 int PeerConnection::Leave(const std::string& transmission_id) {
   bool cancelled_pending_join = false;
-  SignalStatus signal_status;
+  MiniRtcSignalStatus signal_status;
   {
     std::lock_guard<std::mutex> lock(signal_status_mutex_);
     signal_status = signal_status_;
@@ -534,7 +534,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
                pending_join_transmission_id_->substr(0, pending_join_transmission_id_->find('@')));
       pending_join_transmission_id_.reset();
       cancelled_pending_join = true;
-    } else if (SignalStatus::SignalConnected == signal_status_) {
+    } else if (MiniRtcSignalStatus::MiniRtcSignalConnected == signal_status_) {
       json message = {{"type", "user_leave_transmission"},
                       {"user_id", user_id_},
                       {"transmission_id", transmission_id}};
@@ -548,9 +548,9 @@ int PeerConnection::Leave(const std::string& transmission_id) {
   }
 
   if (!cancelled_pending_join &&
-      SignalStatus::SignalConnected != signal_status) {
-    if (signal_status == SignalStatus::SignalConnecting ||
-        signal_status == SignalStatus::SignalReconnecting) {
+      MiniRtcSignalStatus::MiniRtcSignalConnected != signal_status) {
+    if (signal_status == MiniRtcSignalStatus::MiniRtcSignalConnecting ||
+        signal_status == MiniRtcSignalStatus::MiniRtcSignalReconnecting) {
       LOG_WARN("Signal not ready for leave yet, status=[{}]",
                SignalStatusToString(signal_status));
     } else {
@@ -592,8 +592,8 @@ int PeerConnection::DisconnectPeer(const std::string& transmission_id,
     }
   }
   if (RetirePeerConnection(remote_user_id, connection,
-                           ConnectionStatus::Closed) && on_connection_status_) {
-    on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+                           MiniRtcConnectionStatus::MiniRtcConnectionClosed) && on_connection_status_) {
+    on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionClosed, remote_user_id.data(),
                           remote_user_id.size(), user_data_);
   }
   return result;
@@ -633,15 +633,15 @@ int PeerConnection::Destroy() {
   return 0;
 }
 
-SignalStatus PeerConnection::GetSignalStatus() {
+MiniRtcSignalStatus PeerConnection::GetSignalStatus() {
   std::lock_guard<std::mutex> l(signal_status_mutex_);
   return signal_status_;
 }
 
-bool PeerConnection::IsTerminalConnectionStatus(ConnectionStatus status) const {
-  return status == ConnectionStatus::Disconnected ||
-         status == ConnectionStatus::Failed ||
-         status == ConnectionStatus::Closed;
+bool PeerConnection::IsTerminalConnectionStatus(MiniRtcConnectionStatus status) const {
+  return status == MiniRtcConnectionStatus::MiniRtcConnectionDisconnected ||
+         status == MiniRtcConnectionStatus::MiniRtcConnectionFailed ||
+         status == MiniRtcConnectionStatus::MiniRtcConnectionClosed;
 }
 
 std::shared_ptr<ConnectionInterface>
@@ -650,7 +650,7 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
   auto weak_connection = std::make_shared<std::weak_ptr<ConnectionInterface>>();
   ConnectionCallbacks callbacks = connection_callbacks_;
   callbacks.on_connection_status = [this, remote_user_id, weak_connection](
-                                       ConnectionStatus status,
+                                       MiniRtcConnectionStatus status,
                                        const char* peer_id, size_t peer_id_size,
                                        void* user_data) {
     auto connection = weak_connection->lock();
@@ -684,7 +684,7 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
       return;
     }
 
-    if (status == ConnectionStatus::Connected) {
+    if (status == MiniRtcConnectionStatus::MiniRtcConnectionConnected) {
       {
         std::unique_lock lock(peer_connection_map_mutex_);
         connected_peers_.insert(remote_user_id);
@@ -712,7 +712,7 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
 bool PeerConnection::RetirePeerConnection(
     const std::string& remote_user_id,
     const std::shared_ptr<ConnectionInterface>& connection,
-    ConnectionStatus status) {
+    MiniRtcConnectionStatus status) {
   std::unique_lock lock(peer_connection_map_mutex_);
   auto it = peer_connection_map_.find(remote_user_id);
   if (it != peer_connection_map_.end() && it->second == connection) {
@@ -779,9 +779,9 @@ PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
 
   if (connection && connection->Init() != 0) {
     if (RetirePeerConnection(remote_user_id, connection,
-                             ConnectionStatus::Failed) &&
+                             MiniRtcConnectionStatus::MiniRtcConnectionFailed) &&
         on_connection_status_) {
-      on_connection_status_(ConnectionStatus::Failed, remote_user_id.data(),
+      on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionFailed, remote_user_id.data(),
                             remote_user_id.size(), user_data_);
     }
     return nullptr;
@@ -814,7 +814,7 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
   for (auto& [remote_user_id, connection] : connections) {
     if (on_connection_status_ &&
         (!direct_ || !direct_terminal_reported_.exchange(true))) {
-      on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+      on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionClosed, remote_user_id.data(),
                             remote_user_id.size(), user_data_);
     }
     connection->ReleaseAllIceTransmission();
@@ -889,8 +889,8 @@ int PeerConnection::UpdateVideoResolution(const std::string& remote_id,
 }
 
 int PeerConnection::UpdateVideoSettings(const std::string& remote_id,
-                                        VideoQuality quality, int frame_rate,
-                                        VideoDegradationPreference preference) {
+                                        MiniRtcVideoQuality quality, int frame_rate,
+                                        MiniRtcVideoDegradationPreference preference) {
   std::shared_lock lock(peer_connection_map_mutex_);
   const auto it = peer_connection_map_.find(remote_id);
   if (it == peer_connection_map_.end() || !it->second) return -1;
@@ -1038,7 +1038,7 @@ int PeerConnection::ForceSignalReconnect() {
   }
   // A live WebSocket can still have a failed login. Only an authenticated
   // signaling connection is a no-op; the transport status alone is not enough.
-  if (SignalStatus::SignalConnected == GetSignalStatus()) {
+  if (MiniRtcSignalStatus::MiniRtcSignalConnected == GetSignalStatus()) {
     return 0;
   }
   ws_transport_->ForceReconnect();
@@ -1136,8 +1136,8 @@ bool PeerConnection::BuildConnectionInfo(const json& message,
     LOG_WARN("No fresh ICE configuration was supplied by signaling");
     return false;
   }
-  if ((info.turn_mode == TurnMode::TurnForceUdp ||
-       info.turn_mode == TurnMode::TurnForceTcp) &&
+  if ((info.turn_mode == MiniRtcTurnMode::MiniRtcTurnForceUdp ||
+       info.turn_mode == MiniRtcTurnMode::MiniRtcTurnForceTcp) &&
       std::none_of(config.servers.begin(), config.servers.end(),
                    [&](const auto& server) {
                      return IceTurnTransportAllowed(server, info.turn_mode);
@@ -1204,12 +1204,12 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         MiniRtcNetTrafficStats net_traffic_stats{};
 
         on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
-                              TraversalMode::UnknownMode, &net_traffic_stats,
+                              MiniRtcTraversalMode::MiniRtcTraversalUnknown, &net_traffic_stats,
                               user_id_.data(), user_id_.size(), user_data_);
         LOG_INFO("Login success with id [{}]", user_id_);
         {
           std::lock_guard<std::mutex> lock(signal_status_mutex_);
-          signal_status_ = SignalStatus::SignalConnected;
+          signal_status_ = MiniRtcSignalStatus::MiniRtcSignalConnected;
           if (pending_join_transmission_id_) {
             std::string transmission_id =
                 std::move(*pending_join_transmission_id_);
@@ -1217,7 +1217,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
             SendJoinRequestLocked(transmission_id);
           }
         }
-        on_signal_status_(SignalStatus::SignalConnected, user_id_.data(),
+        on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalConnected, user_id_.data(),
                           user_id_.size(), user_data_);
         ReportSessions();
       } else if (j["status"].get<std::string>() == "fail") {
@@ -1233,10 +1233,10 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         LOG_WARN("Login failed with id [{}], due to [{}]", user_id_, reason);
         {
           std::lock_guard<std::mutex> lock(signal_status_mutex_);
-          signal_status_ = SignalStatus::SignalFailed;
+          signal_status_ = MiniRtcSignalStatus::MiniRtcSignalFailed;
           pending_join_transmission_id_.reset();
         }
-        on_signal_status_(SignalStatus::SignalFailed, user_id_.data(),
+        on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalFailed, user_id_.data(),
                           user_id_.size(), user_data_);
       }
       break;
@@ -1285,7 +1285,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 
         ConnectionInfo info;
         if (!BuildConnectionInfo(j, transmission_id, remote_user_id, info)) {
-          on_connection_status_(ConnectionStatus::Failed, remote_user_id.data(),
+          on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionFailed, remote_user_id.data(),
                                 remote_user_id.size(), user_data_);
           break;
         }
@@ -1325,7 +1325,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 
         ConnectionInfo info;
         if (!BuildConnectionInfo(j, transmission_id, remote_user_id, info)) {
-          on_connection_status_(ConnectionStatus::Failed, remote_user_id.data(),
+          on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionFailed, remote_user_id.data(),
                                 remote_user_id.size(), user_data_);
           break;
         }
@@ -1338,7 +1338,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         msg.remote_user_id = remote_user_id;
         msg.remote_sdp = remote_sdp;
         PushIceWorkMsg(msg);
-        on_connection_status_(ConnectionStatus::Connecting,
+        on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionConnecting,
                               remote_user_id.data(), remote_user_id.size(),
                               user_data_);
       } else {
@@ -1362,7 +1362,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         msg.remote_user_id = remote_user_id;
         msg.remote_sdp = remote_sdp;
         PushIceWorkMsg(msg);
-        on_connection_status_(ConnectionStatus::Connecting,
+        on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionConnecting,
                               remote_user_id.data(), remote_user_id.size(),
                               user_data_);
       } else {
@@ -1538,7 +1538,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           "transmission",
           user_id_, remote_user_id);
       if (on_connection_status_) {
-        on_connection_status_(ConnectionStatus::Closed, remote_user_id.data(),
+        on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionClosed, remote_user_id.data(),
                               remote_user_id.size(), user_data_);
       }
       // The map entry is already gone, so any transport callback emitted by

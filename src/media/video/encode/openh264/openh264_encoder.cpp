@@ -83,7 +83,7 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
 
   ret = openh264_encoder_->GetDefaultParams(&encoder_params_);
   encoder_params_.iUsageType =
-      video_content_type_ == VideoContentType::ScreenContent
+      video_content_type_ == MiniRtcVideoContentType::ScreenContent
           ? SCREEN_CONTENT_REAL_TIME
           : CAMERA_VIDEO_REAL_TIME;
 
@@ -97,7 +97,7 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   encoder_params_.fMaxFrameRate = max_fps_;
   encoder_params_.iComplexityMode =
       video_degradation_preference_ ==
-              VideoDegradationPreference::MaintainFrameRate
+              MiniRtcVideoDegradationPreference::MaintainFrameRate
           ? LOW_COMPLEXITY
           : MEDIUM_COMPLEXITY;
   // Frame-rate priority lowers resolution before the encoder is allowed to
@@ -105,7 +105,7 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   // before spending more bandwidth on every captured frame.
   encoder_params_.bEnableFrameSkip =
       video_degradation_preference_ !=
-      VideoDegradationPreference::MaintainFrameRate;
+      MiniRtcVideoDegradationPreference::MaintainFrameRate;
   encoder_params_.uiIntraPeriod = key_frame_interval_;
   encoder_params_.eSpsPpsIdStrategy = SPS_LISTING;
   encoder_params_.uiMaxNalSize = max_payload_size_;

@@ -75,11 +75,11 @@ class DataChannelTransport
   void Shutdown();
 
   void SetVideoConfig(
-      VideoQuality video_quality, int video_frame_rate,
-      VideoContentType video_content_type,
-      VideoDegradationPreference video_degradation_preference);
-  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
-                          VideoDegradationPreference preference);
+      MiniRtcVideoQuality video_quality, int video_frame_rate,
+      MiniRtcVideoContentType video_content_type,
+      MiniRtcVideoDegradationPreference video_degradation_preference);
+  int UpdateVideoSettings(MiniRtcVideoQuality quality, int frame_rate,
+                          MiniRtcVideoDegradationPreference preference);
   std::shared_ptr<WebMediaHandler> MediaHandler() const {
     return media_handler_;
   }
@@ -141,7 +141,7 @@ class DataChannelTransport
   std::shared_mutex data_streams_mutex_;
 
   MediaCodecConfig media_config_;
-  VideoQuality video_quality_ = VideoQuality::QualityHigh;
+  MiniRtcVideoQuality video_quality_ = MiniRtcVideoQuality::MiniRtcVideoQualityHigh;
   VideoCodecType video_codec_type_ = VideoCodecType::H264;
   std::atomic<int> video_frame_rate_limit_{30};
   std::mutex video_settings_mutex_;

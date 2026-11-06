@@ -70,8 +70,8 @@ int DataChannelConnection::Init() {
       peer_connection_config_.iceServers.emplace_back(server.host, server.port);
     }
   }
-  if (info_.turn_mode == TurnMode::TurnForceUdp ||
-      info_.turn_mode == TurnMode::TurnForceTcp) {
+  if (info_.turn_mode == MiniRtcTurnMode::MiniRtcTurnForceUdp ||
+      info_.turn_mode == MiniRtcTurnMode::MiniRtcTurnForceTcp) {
     peer_connection_config_.iceTransportPolicy = ::rtc::TransportPolicy::Relay;
   }
   // use trickle ice by default
@@ -136,8 +136,8 @@ int DataChannelConnection::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
 }
 
 int DataChannelConnection::UpdateVideoSettings(
-    VideoQuality quality, int frame_rate,
-    VideoDegradationPreference preference) {
+    MiniRtcVideoQuality quality, int frame_rate,
+    MiniRtcVideoDegradationPreference preference) {
   return dc_ready_ && dc_transport_
              ? dc_transport_->UpdateVideoSettings(quality, frame_rate, preference)
              : -1;
@@ -175,7 +175,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       !ConnectionIceConfigFresh(info_)) {
     LOG_WARN("ICE credentials expired before data connection creation");
     callbacks_.on_connection_status(
-        ConnectionStatus::Failed, info_.remote_user_id.data(),
+        MiniRtcConnectionStatus::MiniRtcConnectionFailed, info_.remote_user_id.data(),
         info_.remote_user_id.size(), callbacks_.user_data);
     return;
   }
@@ -387,11 +387,11 @@ DataChannelConnection::CreateDataChannelConnection(
   auto resolved_config = config;
   const auto relays =
       ResolveTurnServerEndpoints(*info_.ice_config, info_.turn_mode);
-  const bool forced = info_.turn_mode == TurnMode::TurnForceUdp ||
-                      info_.turn_mode == TurnMode::TurnForceTcp;
+  const bool forced = info_.turn_mode == MiniRtcTurnMode::MiniRtcTurnForceUdp ||
+                      info_.turn_mode == MiniRtcTurnMode::MiniRtcTurnForceTcp;
   if (!ConnectionIceConfigFresh(info_) || (forced && relays.empty())) {
     callbacks_.on_connection_status(
-        ConnectionStatus::Failed, remote_user_id.data(), remote_user_id.size(),
+        MiniRtcConnectionStatus::MiniRtcConnectionFailed, remote_user_id.data(), remote_user_id.size(),
         callbacks_.user_data);
     return nullptr;
   }
@@ -472,14 +472,14 @@ DataChannelConnection::CreateDataChannelConnection(
 
   peer_connection->onStateChange(
       [this, remote_user_id](::rtc::PeerConnection::State state) {
-        ConnectionStatus ice_state;
+        MiniRtcConnectionStatus ice_state;
         switch (state) {
           case ::rtc::PeerConnection::State::New:
-            ice_state = ConnectionStatus::Connecting;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionConnecting;
             LOG_INFO("PeerConnection state: New");
             break;
           case ::rtc::PeerConnection::State::Connecting:
-            ice_state = ConnectionStatus::Connecting;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionConnecting;
             dc_ready_ = false;
             LOG_INFO("PeerConnection state: Checking");
             break;
@@ -489,26 +489,26 @@ DataChannelConnection::CreateDataChannelConnection(
             if (!dc_transport_ || !dc_transport_->IsControlChannelOpen() ||
                 dc_ready_.exchange(true))
               return;
-            ice_state = ConnectionStatus::Connected;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionConnected;
             LOG_INFO("PeerConnection state: Connected");
             break;
           case ::rtc::PeerConnection::State::Disconnected:
-            ice_state = ConnectionStatus::Disconnected;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionDisconnected;
             dc_ready_ = false;
             LOG_INFO("PeerConnection state: Disconnected");
             break;
           case ::rtc::PeerConnection::State::Failed:
-            ice_state = ConnectionStatus::Failed;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionFailed;
             dc_ready_ = false;
             LOG_ERROR("PeerConnection state: Failed");
             break;
           case ::rtc::PeerConnection::State::Closed:
-            ice_state = ConnectionStatus::Closed;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionClosed;
             dc_ready_ = false;
             LOG_INFO("PeerConnection state: Closed");
             break;
           default:
-            ice_state = ConnectionStatus::Failed;
+            ice_state = MiniRtcConnectionStatus::MiniRtcConnectionFailed;
             LOG_FATAL("PeerConnection state: Unknown");
             break;
         }
@@ -569,7 +569,7 @@ DataChannelConnection::CreateDataChannelConnection(
               dc_ready_.exchange(true))
             return;
           callbacks_.on_connection_status(
-              ConnectionStatus::Connected, remote_user_id.data(),
+              MiniRtcConnectionStatus::MiniRtcConnectionConnected, remote_user_id.data(),
               remote_user_id.size(), callbacks_.user_data);
         });
     dc_transport->AddDataStream("data-stream", control);

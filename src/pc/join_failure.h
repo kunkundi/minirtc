@@ -12,7 +12,7 @@ namespace minirtc {
 using JoinFailureKind = MiniRtcJoinFailureKind;
 struct JoinFailure {
   JoinFailureKind kind = JoinFailureKind::Unknown;
-  ConnectionStatus status = ConnectionStatus::Failed;
+  MiniRtcConnectionStatus status = MiniRtcConnectionStatus::MiniRtcConnectionFailed;
   int retry_after = 0;
 };
 
@@ -44,18 +44,18 @@ inline JoinFailureKind ClassifyJoinFailure(std::string_view reason,
   return JoinFailureKind::Unknown;
 }
 
-inline ConnectionStatus JoinFailureStatus(std::string_view reason,
+inline MiniRtcConnectionStatus JoinFailureStatus(std::string_view reason,
                                           std::string_view code = {}) {
   switch (ClassifyJoinFailure(reason, code)) {
     case JoinFailureKind::PasswordRequired:
     case JoinFailureKind::AuthenticationFailed:
-      return ConnectionStatus::IncorrectPassword;
+      return MiniRtcConnectionStatus::MiniRtcConnectionIncorrectPassword;
     case JoinFailureKind::NoSuchTransmission:
-      return ConnectionStatus::NoSuchTransmissionId;
+      return MiniRtcConnectionStatus::MiniRtcConnectionNoSuchTransmissionId;
     case JoinFailureKind::RemoteUnavailable:
-      return ConnectionStatus::RemoteUnavailable;
+      return MiniRtcConnectionStatus::MiniRtcConnectionRemoteUnavailable;
     default:
-      return ConnectionStatus::Failed;
+      return MiniRtcConnectionStatus::MiniRtcConnectionFailed;
   }
 }
 

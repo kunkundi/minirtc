@@ -11,13 +11,13 @@ void HostReceiveBuffer(const char* data, size_t size, const char* user_id,
 }
 
 int main(int argc, char** argv) {
-  Params params;
+  MiniRtcParams params;
   params.cfg_path = "../../../../config/config.ini";
   params.on_receive_buffer = HostReceiveBuffer;
 
   std::string transmission_id = "000000";
   std::string user_id = argv[1];
-  PeerPtr* peer = CreatePeer(&params);
+  MiniRtcPeerPtr* peer = MiniRtcCreatePeer(&params);
   CreateConnection(peer, transmission_id.c_str(), user_id.c_str());
 
   std::string msg = "Hello world";
@@ -26,7 +26,7 @@ int main(int argc, char** argv) {
   // while (i--) {
   //   getchar();
   //   std::cout << "Send msg: " << msg << std::endl;
-  //   SendData(peer, DATA_TYPE::USER, msg.data(), msg.size());
+  //   SendData(peer, MiniRtcDataType::USER, msg.data(), msg.size());
   // }
 
   // getchar();

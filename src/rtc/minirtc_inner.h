@@ -9,7 +9,7 @@
 
 using namespace minirtc;
 
-struct Peer {
+struct MiniRtcPeer {
   PeerConnection* peer_connection;
   PeerConnectionParams pc_params;
 };

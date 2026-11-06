@@ -401,14 +401,6 @@ target("minirtc")
     end
 
     add_installfiles("src/api/minirtc.h", {prefixdir = "include"})
-    -- add_rules("utils.symbols.export_list", {symbols = {
-    --     "CreatePeer",
-    --     "DestroyPeer",
-    --     "Init",
-    --     "CreateConnection",
-    --     "JoinConnection",
-    --     "LeaveConnection",
-    --     "SendData"}})
 
     -- add_rules("utils.symbols.export_all", {export_classes = true})
 -- after_install(function (target)

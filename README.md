@@ -58,12 +58,14 @@ xmake b minirtc
 
 ## 接入应用
 
+公开函数、类型、回调及全局枚举项统一使用 `MiniRtc` 前缀。头文件先定义类型与配置，再按生命周期、信令、流、媒体、数据、直连和辅助操作组织函数。调用方需迁移到新名称，并使用匹配的库重新构建。
+
 公开函数与数据类型统一声明在 `minirtc.h`，SDK 安装该头文件。日志回调和级别通过 `MiniRtcConfigureLogging` 配置，地址与连接拒绝解析、Android JavaVM 设置也通过该入口提供。
 
-1. 清零 `Params`，填写信令地址、本机身份、编解码选项、TURN 模式、SRTP 和回调。
+1. 清零 `MiniRtcParams`，填写信令地址、本机身份、编解码选项、TURN 模式、SRTP 和回调。
 2. 创建 Peer 并检查结果，在协商前注册视频、音频和数据流。
-3. 调用 `Init`，等待 `SignalConnected`；返回 0 本身不表示登录成功。
-4. 加入远程会话，等待 `Connected` 后再发送帧或数据。
+3. 调用 `MiniRtcInit`，等待 `MiniRtcSignalConnected`；返回 0 本身不表示登录成功。
+4. 加入远程会话，等待 `MiniRtcConnectionConnected` 后再发送帧或数据。
 5. 结束时停止应用侧采集和发送、退出会话，再销毁 Peer。
 
 从 [初始化示例与回调约定](docs/INTEGRATION.md#integration) 开始，并以 [公开头文件](src/api/minirtc.h) 为接口依据。当前调用路径要求三个状态 / 报告回调有效；`tests/` 中的旧示例不能作为现行接入教程。

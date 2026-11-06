@@ -298,11 +298,11 @@ IceTransport::~IceTransport() {
 
 int IceTransport::SetLocalCapabilities(
     bool hardware_acceleration, bool native_video_output,
-    bool use_trickle_ice, bool use_reliable_ice, TurnMode turn_mode,
+    bool use_trickle_ice, bool use_reliable_ice, MiniRtcTurnMode turn_mode,
     bool enable_srtp,
-    VideoContentType video_content_type, VideoQuality video_quality,
+    MiniRtcVideoContentType video_content_type, MiniRtcVideoQuality video_quality,
     int video_frame_rate,
-    VideoDegradationPreference video_degradation_preference,
+    MiniRtcVideoDegradationPreference video_degradation_preference,
     rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types) {
@@ -358,7 +358,7 @@ int IceTransport::InitIceTransmission(
             ice_transport_controller_->PopulateVideoCodecStats(
                 minirtc_net_traffic_stats);
           on_receive_net_status_report_(
-              user_id_.data(), user_id_.size(), TraversalMode(traversal_type_),
+              user_id_.data(), user_id_.size(), MiniRtcTraversalMode(traversal_type_),
               &minirtc_net_traffic_stats, remote_user_id_.data(),
               remote_user_id_.size(), user_data_);
         }
@@ -589,7 +589,7 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
 
   if (on_receive_net_status_report_) {
     on_receive_net_status_report_(user_id_.data(), user_id_.size(),
-                                TraversalMode(traversal_type_),
+                                MiniRtcTraversalMode(traversal_type_),
                                 &net_traffic_stats, remote_user_id_.data(),
                                 remote_user_id_.size(), user_data_);
   }
@@ -1848,8 +1848,8 @@ int IceTransport::UpdateVideoResolution(int width, int height) {
   return ice_transport_controller_ ? ice_transport_controller_->UpdateVideoResolution(width, height) : -1;
 }
 
-int IceTransport::UpdateVideoSettings(VideoQuality quality, int frame_rate,
-                                      VideoDegradationPreference preference) {
+int IceTransport::UpdateVideoSettings(MiniRtcVideoQuality quality, int frame_rate,
+                                      MiniRtcVideoDegradationPreference preference) {
   return ice_transport_controller_
              ? ice_transport_controller_->UpdateVideoSettings(
                    quality, frame_rate, preference)

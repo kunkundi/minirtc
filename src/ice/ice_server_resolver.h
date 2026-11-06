@@ -61,7 +61,7 @@ inline std::vector<std::string> ResolveTurnServerAddresses(
 }
 
 inline std::vector<IceServerEndpoint> ResolveTurnServerEndpoints(
-    const IceServerConfiguration& config, TurnMode mode) {
+    const IceServerConfiguration& config, MiniRtcTurnMode mode) {
   std::map<std::string, std::vector<std::string>> hosts;
   std::vector<const IceServerEndpoint*> endpoints;
   for (const auto& server : config.servers) {

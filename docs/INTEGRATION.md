@@ -33,7 +33,7 @@ xmake f -p linux -a x86_64 -m release \
 xmake b minirtc
 ```
 
-Windows 可使用 `--USE_CUDA=true` 配合 `CUDA_PATH` 或 `--CUDA_DIR` 指定 SDK。编入 CUDA 后仍需在 `Params` 中设置 `hardware_acceleration=true`；Apple 的 VideoToolbox 不需要 CUDA。
+Windows 可使用 `--USE_CUDA=true` 配合 `CUDA_PATH` 或 `--CUDA_DIR` 指定 SDK。编入 CUDA 后仍需在 `MiniRtcParams` 中设置 `hardware_acceleration=true`；Apple 的 VideoToolbox 不需要 CUDA。
 
 ### iOS
 
@@ -59,7 +59,7 @@ xmake b minirtc
 
 Android 适配直接维护在本仓库内。宿主工程可直接包含本仓库的 `xmake.lua`，同时为构建产物和依赖缓存设置独立目录。创建 Peer 前，Android 宿主需将系统 TrustManager 根证书导出到应用私有 PEM 文件，并将 `SSL_CERT_FILE` 设置为该路径；MiniRTC 显式加载此文件并校验证书链及主机名。Android 与其他平台使用相同的解码任务提交逻辑，当前未限制压缩帧的解码排队长度和等待时间。
 
-AV1 发送端设置 `Params::av1_encoding=true`，添加视频流后提交 NV12 帧。启用硬件加速时先尝试 MediaCodec，失败后回退 SVT-AV1；关闭硬件加速时直接使用 SVT-AV1。实时性能取决于实际选中的编解码器、设备、分辨率和帧率。
+AV1 发送端设置 `MiniRtcParams::av1_encoding=true`，添加视频流后提交 NV12 帧。启用硬件加速时先尝试 MediaCodec，失败后回退 SVT-AV1；关闭硬件加速时直接使用 SVT-AV1。实时性能取决于实际选中的编解码器、设备、分辨率和帧率。
 
 ### HarmonyOS
 
@@ -89,41 +89,40 @@ xmake install -o build/install minirtc
 
 以 [src/api/minirtc.h](../src/api/minirtc.h) 为接口依据。当前流程是：
 
-1. 使用 `Params params{}` 清零，填写地址、媒体选项和回调。`Params` 没有应用级默认配置，零初始化也不会自动启用 TURN 或 SRTP。
-2. `CreatePeer(&params)` 创建实例；检查返回值。注册 `AddVideoStream`、`AddAudioStream` 和 `AddDataStream`，在会话协商前固定流名称。
-3. 调用 `Init(peer)` 启动异步信令连接。**返回 0 不表示登录成功**；以 `on_signal_status` 收到 `SignalConnected` 为准。
-4. 发起方使用 `JoinConnection(peer, "远端ID@密码")` 加入 CrossDesk 会话。`user_id` 是本地登录身份，不能用远端目标 ID 替代；具体身份注册与密码规则由信令服务决定。
-5. `on_connection_status` 收到 `Connected` 后，根据已注册的流名称发送媒体或数据。API 返回值不代表远端已收到内容。
-6. 退出会话调用 `LeaveConnection`；停止应用侧采集和发送任务，再用 `if (peer) DestroyPeer(&peer);` 销毁实例。销毁后指针置空。
+1. 使用 `MiniRtcParams params{}` 清零，填写地址、媒体选项和回调。`MiniRtcParams` 没有应用级默认配置，零初始化也不会自动启用 TURN 或 SRTP。
+2. `MiniRtcCreatePeer(&params)` 创建实例；检查返回值。注册 `MiniRtcAddVideoStream`、`MiniRtcAddAudioStream` 和 `MiniRtcAddDataStream`，在会话协商前固定流名称。
+3. 调用 `MiniRtcInit(peer)` 启动异步信令连接。**返回 0 不表示登录成功**；以 `on_signal_status` 收到 `MiniRtcSignalConnected` 为准。
+4. 发起方使用 `MiniRtcJoinConnection(peer, "远端ID@密码")` 加入 CrossDesk 会话。`user_id` 是本地登录身份，不能用远端目标 ID 替代；具体身份注册与密码规则由信令服务决定。
+5. `on_connection_status` 收到 `MiniRtcConnectionConnected` 后，根据已注册的流名称发送媒体或数据。API 返回值不代表远端已收到内容。
+6. 退出会话调用 `MiniRtcLeaveConnection`；停止应用侧采集和发送任务，再用 `if (peer) MiniRtcDestroyPeer(&peer);` 销毁实例。销毁后指针置空。
 
 ### 初始化配置示例
 
-以下函数构造直接配置模式的参数，不发起网络连接。替换示例 IP；回调由应用实现，在 `CreatePeer` 前补充需要的媒体和数据接收回调。
+以下函数构造直接配置模式的参数，不发起网络连接。替换示例 IP；回调由应用实现，在 `MiniRtcCreatePeer` 前补充需要的媒体和数据接收回调。
 
 ```cpp
 #include <cstdio>
 #include "minirtc.h"
 
-Params MakeParams(const char* login_identity,
-                  OnSignalStatus on_signal,
-                  OnConnectionStatus on_connection,
-                  OnNetStatusReport on_stats,
-                  void* context) {
-  Params params{};
+MiniRtcParams MakeParams(const char* login_identity,
+                         MiniRtcOnSignalStatus on_signal,
+                         MiniRtcOnConnectionStatus on_connection,
+                         MiniRtcOnNetStatusReport on_stats, void* context) {
+  MiniRtcParams params{};
   params.use_cfg_file = false;
-  std::snprintf(params.signal_server_ip, sizeof(params.signal_server_ip),
-                "%s", "203.0.113.10");
+  std::snprintf(params.signal_server_ip, sizeof(params.signal_server_ip), "%s",
+                "203.0.113.10");
   params.signal_server_port = 9099;
   params.hardware_acceleration = true;
   params.native_video_output = false;
   params.av1_encoding = false;
-  params.turn_mode = TurnAutoUdpTcp;
+  params.turn_mode = MiniRtcTurnAutoUdpTcp;
   params.enable_srtp = true;
-  params.video_content_type = VideoContentType::ScreenContent;
-  params.video_quality = QualityHigh;
+  params.video_content_type = MiniRtcVideoContentType::ScreenContent;
+  params.video_quality = MiniRtcVideoQualityHigh;
   params.video_frame_rate = 60;
   params.video_degradation_preference =
-      VideoDegradationPreference::MaintainResolution;
+      MiniRtcVideoDegradationPreference::MaintainResolution;
   params.on_signal_status = on_signal;
   params.on_connection_status = on_connection;
   params.on_net_status_report = on_stats;
@@ -133,18 +132,18 @@ Params MakeParams(const char* login_identity,
 }
 ```
 
-`signal_server_ip` 填主机名或 IP，**不带 `wss://`、端口或路径**；库会拼接 WSS 地址。STUN / TURN 主机字段也不带 URL 前缀。示例 `9099` / `3478` 来自 CrossDesk Server 的 Compose 默认值，不是 `Params` 自带的默认端口。
+`signal_server_ip` 支持主机名、IP、主机与路径，以及 `wss://` / `https://` URL。地址中显式指定的端口优先于 `signal_server_port`。可通过 `MiniRtcParseSignalServerAddress` 校验并拆分地址。示例端口 `9099` 由应用填写。
 
 ### 回调与线程
 
-可选的 `Params::on_signal_exchange` 用于应用自定义信令认证协议。`PrepareLogin` 在每次 WebSocket 打开时提供默认登录请求，`IncomingMessage` 在内置处理前提供入站消息（包括登录结果）。返回 `0` 继续默认处理；正数表示写入 `response` 的 JSON 字节数，引擎发送该回复并消费当前消息；返回 `-1` 则报告认证失败，不自动回退。输出不得超过传入的容量，回调内不可同步销毁 Peer。
+可选的 `MiniRtcParams::on_signal_exchange` 用于应用自定义信令认证协议。`PrepareLogin` 在每次 WebSocket 打开时提供默认登录请求，`IncomingMessage` 在内置处理前提供入站消息（包括登录结果）。返回 `0` 继续默认处理；正数表示写入 `response` 的 JSON 字节数，引擎发送该回复并消费当前消息；返回 `-1` 则报告认证失败，不自动回退。输出不得超过传入的容量，回调内不可同步销毁 Peer。
 
-配置此回调后，应用负责认证状态及重连凭据；MiniRTC 不使用内置重连令牌或密码回退。标准成功登录回复仍交由引擎更新连接状态。引擎不解释应用的密钥、令牌或授权字段，未配置回调的客户端保留原行为。`Params` 增加了字段，接入方需使用 `Params{}` 初始化，并重新编译应用及库。
+配置此回调后，应用负责认证状态及重连凭据；MiniRTC 不使用内置重连令牌或密码回退。标准成功登录回复仍交由引擎更新连接状态。引擎不解释应用的密钥、令牌或授权字段，未配置回调的客户端保留原行为。`MiniRtcParams` 增加了字段，接入方需使用 `MiniRtcParams{}` 初始化，并重新编译应用及库。
 
 - **必须提供有效的 `on_signal_status`、`on_connection_status` 和 `on_net_status_report`。** 当前实现有直接调用这些回调的路径；不使用时也应提供同签名空函数。
 - 视频使用 `on_receive_video_frame`，音频使用 `on_receive_audio_buffer`，应用数据使用 `on_receive_data_buffer`。旧字段 `on_receive_video_buffer` 不接入当前视频帧分发路径。
 - `on_signal_message` 接收未被库内部信令处理器消费的消息；它不是全部原始信令的监听器。
-- 回调可来自内部工作线程。将 UI 操作投递到应用线程，及时复制或保留需要的数据，并避免在回调内同步销毁 Peer。`user_data` 在 Peer 完全销毁前必须有效；`user_id` 指向的字符串至少保持到 `Init` 完成读取。
+- 回调可来自内部工作线程。将 UI 操作投递到应用线程，及时复制或保留需要的数据，并避免在回调内同步销毁 Peer。`user_data` 在 Peer 完全销毁前必须有效；`user_id` 指向的字符串至少保持到 `MiniRtcInit` 完成读取。
 - 标识和缓冲区按回调给出的长度读取，不依赖额外的 `\0` 终止符。网络报告的指针也是回调期间借用的。
 
 <a id="frames"></a>
@@ -156,11 +155,11 @@ Params MakeParams(const char* login_identity,
 | CPU 视频输入 | `MiniRtcVideoFrame`：连续 NV12，正偶数宽高，至少 `width × height × 3 / 2` 字节 |
 | 原生视频 | `MiniRtcNativeVideoFrame`：按 `type` 区分 CPU NV12、CUDA NV12、`CVPixelBuffer` 或 Android MediaCodec 输出 |
 | 音频输入 | `MiniRtcAudioFrame`：48 kHz、单声道、16-bit PCM，每帧 10 ms，即 480 个采样 / 960 字节 |
-| 时间戳 | 采集时间使用单调时钟微秒；可用 `GetSystemTimeMicros(peer)`，不要混用 Unix 毫秒 |
-| 普通数据 | `AddDataStream(..., false)` 配合 `SendDataFrame` |
-| 可靠数据 | `AddDataStream(..., true)` 配合 `SendReliableDataFrame` |
+| 时间戳 | 采集时间使用单调时钟微秒；可用 `MiniRtcGetSystemTimeMicros(peer)`，不要混用 Unix 毫秒 |
+| 普通数据 | `MiniRtcAddDataStream(..., false)` 配合 `MiniRtcSendDataFrame` |
+| 可靠数据 | `MiniRtcAddDataStream(..., true)` 配合 `MiniRtcSendReliableDataFrame` |
 
-所有发送接口都有相应的 `*ToPeer` 形式用于指定远端。`RequestVideoKeyFrame` / `RequestAllVideoKeyFrames` 用于请求本地发送编码器产生关键帧，不是通用的远端解码恢复命令。
+所有发送接口都有相应的 `*ToPeer` 形式用于指定远端。`MiniRtcRequestVideoKeyFrame` / `MiniRtcRequestAllVideoKeyFrames` 用于请求本地发送编码器产生关键帧，不是通用的远端解码恢复命令。
 
 启用原生输出后，`MiniRtcVideoFrame::data` 可以为空，即使 `size` 仍为逻辑 NV12 大小。接收端应先检查 `native_frame`；需要连续 CPU 数据时先检查 `copy_to_nv12` 是否存在，再调用并检查返回值，不能直接解引用 CUDA 地址。Android MediaCodec 输出没有 `copy_to_nv12`，应使用 `payload.android_media_codec.render(owner, ANativeWindow*)`，该操作只消费一次输出缓冲区；此类型不能作为编码输入，编解码器重置后保留的令牌会失效。
 
@@ -176,30 +175,30 @@ Params MakeParams(const char* login_identity,
 
 当前客户端上报 `ice_config_version: 1`，由服务端为每次连接下发带有效期的完整 `ice` 列表，替代本地 STUN / TURN 地址。额外或备用节点应配置在服务端的 `CROSSDESK_ICE_SERVERS`。显式空列表表示仅使用本地候选；强制中继模式仍要求列表中存在匹配的 TURN 节点。
 
-协商该能力后，MiniRTC 会拒绝缺失、格式错误或过期的会话配置。兼容旧服务端时可接收未过期的旧 `turn` 凭据；两种有效配置都没有时，连接建立失败。`Params` 的静态地址不会覆盖服务端列表。实现见 [连接配置](../src/pc/peer_connection.cpp) 与 [ICE 数据结构](../src/ice/ice_server_config.h)。
+协商该能力后，MiniRTC 会拒绝缺失、格式错误或过期的会话配置。兼容旧服务端时可接收未过期的旧 `turn` 凭据；两种有效配置都没有时，连接建立失败。`MiniRtcParams` 的静态地址不会覆盖服务端列表。实现见 [连接配置](../src/pc/peer_connection.cpp) 与 [ICE 数据结构](../src/ice/ice_server_config.h)。
 
 ### TURN、UPnP 与虚拟网卡
 
 | `turn_mode` | 行为 |
 | --- | --- |
-| `TurnDisabled` | 仅直连 / STUN 候选 |
-| `TurnAutoUdpTcp` | 直连候选，加 TURN UDP / TCP 回退 |
-| `TurnForceUdp` | 仅 TURN UDP 中继 |
-| `TurnForceTcp` | 仅 TURN TCP 中继 |
+| `MiniRtcTurnDisabled` | 仅直连 / STUN 候选 |
+| `MiniRtcTurnAutoUdpTcp` | 直连候选，加 TURN UDP / TCP 回退 |
+| `MiniRtcTurnForceUdp` | 仅 TURN UDP 中继 |
+| `MiniRtcTurnForceTcp` | 仅 TURN TCP 中继 |
 
 - 与当前 CrossDesk Server 配合时，登录和协商消息会携带临时 TURN 凭据。库收到时校验 `host`、`port`、`username`、`password`、`expires_at`，更新后续连接配置；无需把 `COTURN_AUTH_SECRET` 写入应用。
-- 示例参数将静态 TURN 地址与用户名 / 密码留空，使用服务端下发值。需要中继时，服务端必须正确配置 Coturn、公布可达地址并签发有效凭据；`TurnAutoUdpTcp` 本身不会部署中继服务。
+- 示例参数将静态 TURN 地址与用户名 / 密码留空，使用服务端下发值。需要中继时，服务端必须正确配置 Coturn、公布可达地址并签发有效凭据；`MiniRtcTurnAutoUdpTcp` 本身不会部署中继服务。
 - 桌面 libnice 构建启用 UPnP，可在非强制中继模式尝试网关映射。iOS、Android 和 HarmonyOS 配方禁用 UPnP；实际映射能力还取决于网关。
 - 匹配的 libnice 补丁允许受支持的原生对端在使用中继后继续尝试升级到 P2P；强制中继模式不执行这种升级。不要将其理解为所有对端都能无条件切回直连。
 - 默认忽略若干虚拟接口前缀，包括 Docker、TUN / TAP、WireGuard、Tailscale、ZeroTier。需要通过这些接口收集候选时，以 `--MINIRTC_INCLUDE_VIRTUAL_ICE_INTERFACES=true` 重新配置并构建。列表与补丁见 [libnice 配方](../thirdparty/libnice/xmake.lua)。
 
 ### TLS 与 INI 配置
 
-信令通过 WSS 连接，证书验证使用系统信任能力。自签服务端需要在运行应用的设备上信任根证书；排查证书有效期与主机名 / IP，证书错误通过 `SignalTlsCertError` 报告。服务部署和端口说明见 [CrossDesk Server](https://github.com/kunkundi/crossdesk-server)。
+信令通过 WSS 连接，证书验证使用系统信任能力。自签服务端需要在运行应用的设备上信任根证书；排查证书有效期与主机名 / IP，证书错误通过 `MiniRtcSignalTlsCertError` 报告。服务部署和端口说明见 [CrossDesk Server](https://github.com/kunkundi/crossdesk-server)。
 
-`use_cfg_file=true` 时，从 `cfg_path` 指向的 INI 读取服务器与媒体配置，直接填写的对应 `Params` 字段不会作为逐项回退值。`cfg_path` 是固定字符数组，应复制路径内容；回调、`user_id`、`user_data` 仍由 `Params` 提供。
+`use_cfg_file=true` 时，从 `cfg_path` 指向的 INI 读取服务器与媒体配置，直接填写的对应 `MiniRtcParams` 字段不会作为逐项回退值。`cfg_path` 是固定字符数组，应复制路径内容；回调、`user_id`、`user_data` 仍由 `MiniRtcParams` 提供。
 
-[config/config.ini](../config/config.ini) 是历史配置示例，包含旧地址和静态 TURN 凭据，不能直接作为当前部署配置使用。INI 缺省值与 `Params{}` 的零值也不同；支持的字段与解析规则以 [PeerConnection::Init](../src/pc/peer_connection.cpp) 为准。
+[config/config.ini](../config/config.ini) 是历史配置示例，包含旧地址和静态 TURN 凭据，不能直接作为当前部署配置使用。INI 缺省值与 `MiniRtcParams{}` 的零值也不同；支持的字段与解析规则以 [PeerConnection::Init](../src/pc/peer_connection.cpp) 为准。
 
 <a id="validation"></a>
 
@@ -207,7 +206,7 @@ Params MakeParams(const char* login_identity,
 
 | 现象 | 检查方向 |
 | --- | --- |
-| `Init` 返回成功但未登录 | 等待信令状态回调，检查 WSS 地址、服务可达性及证书 |
+| `MiniRtcInit` 返回成功但未登录 | 等待信令状态回调，检查 WSS 地址、服务可达性及证书 |
 | 登录时崩溃 | 检查三个必需回调是否有效，以及上下文生命周期 |
 | 可登录但无法建立会话 | 检查双方服务、远端 ID / 密码、TURN 凭据、UDP / TCP 与中继端口 |
 | 启用原生输出后黑屏 | 不要只读取 `data`；检查帧类型、stride、所有者生命周期及渲染路径 |

@@ -37,8 +37,8 @@ class DataChannelConnection : public ConnectionInterface {
                      const char* stream_id) override;
   int RequestVideoKeyFrame(const char* stream_id) override;
   int RequestAllVideoKeyFrames() override;
-  int UpdateVideoSettings(VideoQuality quality, int frame_rate,
-                          VideoDegradationPreference preference) override;
+  int UpdateVideoSettings(MiniRtcVideoQuality quality, int frame_rate,
+                          MiniRtcVideoDegradationPreference preference) override;
   int SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
                      const char* stream_id) override;
   int SendDataFrame(const char* data, size_t size,
@@ -105,7 +105,7 @@ class DataChannelConnection : public ConnectionInterface {
   std::string local_transmission_id_ = "";
   std::string remote_transmission_id_ = "";
   std::vector<std::string> user_id_list_;
-  SignalStatus signal_status_ = SignalStatus::SignalClosed;
+  MiniRtcSignalStatus signal_status_ = MiniRtcSignalStatus::MiniRtcSignalClosed;
   std::mutex signal_status_mutex_;
   std::atomic<bool> leave_{false};
   std::string sdp_without_cands_ = "";
