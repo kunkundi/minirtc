@@ -4,7 +4,7 @@
 
 #include <cstring>
 
-int ParseMiniRtcSignalServerAddress(const char* input, size_t input_size,
+int MiniRtcParseSignalServerAddress(const char* input, size_t input_size,
                                    MiniRtcSignalServerAddress* output) {
   if (!input || !output) return -1;
   try {
@@ -19,7 +19,7 @@ int ParseMiniRtcSignalServerAddress(const char* input, size_t input_size,
     return 0;
   } catch (...) { return -1; }
 }
-int NormalizeMiniRtcDirectAddress(const char* input, size_t input_size,
+int MiniRtcNormalizeDirectAddress(const char* input, size_t input_size,
                                  char* output, size_t output_capacity) {
   if (!input || !output) return -1;
   try {
@@ -31,7 +31,7 @@ int NormalizeMiniRtcDirectAddress(const char* input, size_t input_size,
     return 0;
   } catch (...) { return -1; }
 }
-int IsMiniRtcDirectAddressPair(const char* local, size_t local_size,
+int MiniRtcIsDirectAddressPair(const char* local, size_t local_size,
                               const char* remote, size_t remote_size) {
   if (!local || !remote) return 0;
   try { return minirtc::IsDirectAddressPair({local, local_size}, {remote, remote_size}) ? 1 : 0; }

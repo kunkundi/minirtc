@@ -1,7 +1,7 @@
 #include "minirtc.h"
 #include "../pc/join_failure.h"
 
-MiniRtcJoinFailure ParseMiniRtcJoinFailure(const char* message, size_t size) {
+MiniRtcJoinFailure MiniRtcParseJoinFailure(const char* message, size_t size) {
   const MiniRtcJoinFailure unknown{MiniRtcJoinFailureKind::Unknown, Failed, 0};
   if (!message) return unknown;
   try {

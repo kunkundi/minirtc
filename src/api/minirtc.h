@@ -133,7 +133,7 @@ enum MiniRtcLogLevel : int32_t {
   MiniRtcLogOff,
 };
 
-/// Borrowed diagnostic record, valid for the duration of OnMiniRtcLog.
+/// Borrowed diagnostic record, valid for the duration of MiniRtcOnLog.
 typedef struct {
   MiniRtcLogLevel level;
   int64_t timestamp_us; ///< Microseconds since the Unix epoch.
@@ -143,7 +143,7 @@ typedef struct {
   size_t message_size;
 } MiniRtcLogRecord;
 
-typedef void (*OnMiniRtcLog)(const MiniRtcLogRecord* record, void* user_data);
+typedef void (*MiniRtcOnLog)(const MiniRtcLogRecord* record, void* user_data);
 
 /**
  * @brief Configure process-wide logging, including before the first CreatePeer.
@@ -164,8 +164,8 @@ typedef void (*OnMiniRtcLog)(const MiniRtcLogRecord* record, void* user_data);
  * callback, or -3 when the output could not be configured. Configure before
  * CreatePeer to route startup diagnostics through the selected output.
  */
-MINIRTC_API int ConfigureMiniRtcLogging(MiniRtcLogLevel level,
-                                      OnMiniRtcLog callback, void* user_data);
+MINIRTC_API int MiniRtcConfigureLogging(MiniRtcLogLevel level,
+                                      MiniRtcOnLog callback, void* user_data);
 
 /// Parsed secure signaling endpoint. host preserves IPv6 brackets. target is
 /// empty for the root path; an initial query is normalized to start with '/'.
@@ -179,30 +179,30 @@ typedef struct {
 /// Parse a host, host/path, or wss/https URL, trimming outer whitespace. On
 /// success write a fully initialized result and return 0; invalid input or
 /// output pointers return -1. Input is borrowed for the call and read by size.
-MINIRTC_API int ParseMiniRtcSignalServerAddress(
+MINIRTC_API int MiniRtcParseSignalServerAddress(
     const char* input, size_t input_size, MiniRtcSignalServerAddress* output);
 
 /// Validate a numeric unicast direct-peer address and write canonical text with
 /// a numeric IPv6 scope. Link-local IPv6 requires a local zone. output_capacity
 /// includes the trailing NUL; 129 bytes accommodates every accepted address.
 /// Return 0 on success, -1 for invalid input or insufficient output capacity.
-MINIRTC_API int NormalizeMiniRtcDirectAddress(
+MINIRTC_API int MiniRtcNormalizeDirectAddress(
     const char* input, size_t input_size, char* output, size_t output_capacity);
 
 /// Return 1 for a compatible pair of valid direct-peer addresses, 0 otherwise.
 /// Families must match; IPv6 link-local scope and classification must match.
-MINIRTC_API int IsMiniRtcDirectAddressPair(
+MINIRTC_API int MiniRtcIsDirectAddressPair(
     const char* local, size_t local_size, const char* remote, size_t remote_size);
 
 /// Supply Android's JavaVM* as an opaque pointer from JNI_OnLoad before creating
 /// peers. The VM must outlive all peers/codecs. A null pointer clears the VM and
 /// leaves software codecs available. Returns 0 on Android, -1 on other platforms.
-MINIRTC_API int SetMiniRtcAndroidJavaVm(void* java_vm);
+MINIRTC_API int MiniRtcSetAndroidJavaVm(void* java_vm);
 
 /// Parse a borrowed JSON join rejection. Recognized error_code values take
 /// precedence over legacy reason strings. Invalid/missing data returns an
 /// Unknown/Failed result with zero retry_after. Exceptions are contained.
-MINIRTC_API MiniRtcJoinFailure ParseMiniRtcJoinFailure(const char* message,
+MINIRTC_API MiniRtcJoinFailure MiniRtcParseJoinFailure(const char* message,
                                                      size_t message_size);
 
 /// NV12 planes in CPU memory. Strides are bytes per row, including padding.

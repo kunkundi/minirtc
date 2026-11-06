@@ -15,7 +15,7 @@ std::mutex g_configuration_mutex;
 std::shared_ptr<spdlog::sinks::dist_sink_mt> g_output;
 std::shared_ptr<spdlog::details::thread_pool> g_log_pool;
 std::shared_ptr<spdlog::logger> g_logger;
-OnMiniRtcLog g_callback = nullptr;
+MiniRtcOnLog g_callback = nullptr;
 void* g_callback_data = nullptr;
 MiniRtcLogLevel g_level = SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
                              ? MiniRtcLogDebug : MiniRtcLogInfo;
@@ -27,7 +27,7 @@ constexpr spdlog::level::level_enum kLevels[] = {
 
 class CallbackSink final : public spdlog::sinks::base_sink<std::mutex> {
  public:
-  CallbackSink(OnMiniRtcLog callback, void* user_data)
+  CallbackSink(MiniRtcOnLog callback, void* user_data)
       : callback_(callback), user_data_(user_data) {}
  private:
   void sink_it_(const spdlog::details::log_msg& message) override {
@@ -42,7 +42,7 @@ class CallbackSink final : public spdlog::sinks::base_sink<std::mutex> {
     g_in_callback = false;
   }
   void flush_() override {}
-  OnMiniRtcLog callback_;
+  MiniRtcOnLog callback_;
   void* user_data_;
 };
 
@@ -54,14 +54,14 @@ std::string NormalizeLogDirectory(const std::string& log_dir) {
 }
 std::vector<spdlog::sink_ptr> Outputs(const std::string& directory,
                                     MiniRtcLogLevel level,
-                                    OnMiniRtcLog callback, void* user_data) {
+                                    MiniRtcOnLog callback, void* user_data) {
   if (level == MiniRtcLogOff) return {};
   if (callback) return {std::make_shared<CallbackSink>(callback, user_data)};
   return {std::make_shared<spdlog::sinks::stdout_color_sink_mt>(),
           std::make_shared<spdlog::sinks::rotating_file_sink_mt>(
               directory + "/minirtc.log", 5 * 1024 * 1024, 3)};
 }
-int ConfigureLogging(MiniRtcLogLevel level, OnMiniRtcLog callback, void* user_data) {
+int ConfigureLogging(MiniRtcLogLevel level, MiniRtcOnLog callback, void* user_data) {
   if (level < MiniRtcLogTrace || level > MiniRtcLogOff) return -1;
   if (g_in_callback) return -2;
   std::lock_guard configuration_lock(g_configuration_mutex);
@@ -121,7 +121,7 @@ std::shared_ptr<spdlog::logger> get_logger() {
 }
 }  // namespace minirtc
 
-int ConfigureMiniRtcLogging(MiniRtcLogLevel level, OnMiniRtcLog callback,
+int MiniRtcConfigureLogging(MiniRtcLogLevel level, MiniRtcOnLog callback,
                            void* user_data) {
   try { return minirtc::ConfigureLogging(level, callback, user_data); }
   catch (...) { return -3; }

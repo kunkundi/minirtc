@@ -58,7 +58,7 @@ xmake b minirtc
 
 ## 接入应用
 
-公开函数与数据类型统一声明在 `minirtc.h`，SDK 安装该头文件。日志回调和级别通过 `ConfigureMiniRtcLogging` 配置，地址与连接拒绝解析、Android JavaVM 设置也通过该入口提供。
+公开函数与数据类型统一声明在 `minirtc.h`，SDK 安装该头文件。日志回调和级别通过 `MiniRtcConfigureLogging` 配置，地址与连接拒绝解析、Android JavaVM 设置也通过该入口提供。
 
 1. 清零 `Params`，填写信令地址、本机身份、编解码选项、TURN 模式、SRTP 和回调。
 2. 创建 Peer 并检查结果，在协商前注册视频、音频和数据流。

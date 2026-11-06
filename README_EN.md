@@ -58,7 +58,7 @@ Xmake resolves dependencies on the first build. The result is `libminirtc.a` or 
 
 ## Integrate into an application
 
-Public functions and data types are declared in `minirtc.h`, the header installed by the SDK. Use `ConfigureMiniRtcLogging` for log callbacks and thresholds. Address parsing, join-rejection parsing, and Android JavaVM configuration are also available through this header.
+Public functions and data types are declared in `minirtc.h`, the header installed by the SDK. Use `MiniRtcConfigureLogging` for log callbacks and thresholds. Address parsing, join-rejection parsing, and Android JavaVM configuration are also available through this header.
 
 1. Zero-initialize `Params`, then set the signaling endpoint, identity, codec options, TURN mode, SRTP, and callbacks.
 2. Create a peer, check the result, and register video, audio, and data streams before session negotiation.
