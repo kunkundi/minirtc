@@ -70,6 +70,9 @@ local libnice_configs = {
 }
 -- iOS uses VideoToolbox exclusively for H.264; software AV1 remains available.
 if is_iphoneos then
+    -- Host Python needs the certificate bundle as data. System-library probing
+    -- would incorrectly pass the iOS deployment target to the macOS compiler.
+    add_requireconfs("**.ca-certificates", {system = false})
     add_defines("MINIRTC_IOS=1")
     add_requires("asio 1.32.0", "nlohmann_json 3.11.3", "spdlog 1.14.1",
         "websocketpp 0.8.2", "libsrtp v2.7.0",
@@ -128,9 +131,6 @@ elseif is_os("linux") or is_harmony then
     add_syslinks("pthread")
 elseif is_os("macosx") or is_iphoneos then
     -- add_ldflags("-fsanitize=address")
-    if is_arch("x86_64") then
-        add_ldflags("-Wl,-ld_classic")
-    end
     add_cxflags("-Wno-unused-variable")
     add_frameworks("VideoToolbox", "CoreMedia", "CoreVideo", "Security",
         "Foundation", "SystemConfiguration")
