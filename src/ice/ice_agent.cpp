@@ -10,6 +10,7 @@
 #include "ice_server_resolver.h"
 #include "ice_utils.h"
 #include "log.h"
+#include "nice/interfaces.h"
 #include "nice/punch.h"
 
 // Keep g_networking_init's Windows resolver macros out of public headers.
@@ -20,6 +21,31 @@
 namespace minirtc {
 
 namespace {
+
+void PreferUnscopedLocalAddresses(NiceAgent* agent) {
+  // Signaled candidates do not identify the peer's local interface/zone.
+  // Link-local pairs can pass initial checks but lose the reverse data or
+  // consent path on multi-interface hosts. Keep scoped IPv6 in direct_policy;
+  // ordinary signaling uses IPv4/global/ULA addresses when they are available.
+  GList* interfaces = nice_interfaces_get_local_ips(FALSE);
+  std::vector<NiceAddress> addresses;
+  size_t link_local_count = 0;
+  for (GList* item = interfaces; item; item = item->next) {
+    NiceAddress address{};
+    if (!nice_address_set_from_string(&address, static_cast<const char*>(item->data))) continue;
+    if (nice_address_ip_version(&address) == 6 && nice_address_is_linklocal(&address)) {
+      ++link_local_count;
+    } else {
+      addresses.push_back(address);
+    }
+  }
+  g_list_free_full(interfaces, g_free);
+  // Preserve the existing gather behavior on link-local-only networks.
+  if (!link_local_count || addresses.empty()) return;
+  for (auto& address : addresses) nice_agent_add_local_address(agent, &address);
+  LOG_INFO("ICE local address policy: excluded {} IPv6 link-local addresses; retained {} addresses",
+           link_local_count, addresses.size());
+}
 
 bool AddTurnRelay(NiceAgent* agent, guint stream_id, const std::string& address,
                   guint port, const std::string& username,
@@ -284,6 +310,8 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       g_object_set(agent, "ice-udp", TRUE, "ice-tcp", FALSE, "upnp", FALSE,
                    "direct-peer-address", direct_policy_.remote_address.c_str(),
                    nullptr);
+    } else {
+      PreferUnscopedLocalAddresses(agent);
     }
 
     // Allow room for multi-interface candidates and promoted punch sockets.
