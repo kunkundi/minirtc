@@ -7,6 +7,8 @@ package("glib")
             description = "Disable unused system volume discovery on iOS"})
         add_configs("ios_toolchain_revision", {default = "1", type = "string", readonly = true,
             description = "Separate macOS build tools from iOS configure probes"})
+        add_configs("ios_pipe_revision", {default = "1", type = "string", readonly = true,
+            description = "Use pipe and fcntl on iOS deployment targets without pipe2"})
     end
 
     add_urls("https://download.gnome.org/sources/glib/$(version).tar.xz", {alias = "home", version = function (version)
@@ -124,8 +126,12 @@ package("glib")
             -- MiniRTC uses GIO networking, not system volume enumeration or
             -- filesystem capacity queries. Do not ship those optional APIs on
             -- iOS or declare a privacy purpose the application does not have.
+            -- Meson's link-only probe also finds pipe2 in new Apple SDKs, even
+            -- though it is weak-linked and absent on older iOS releases. GLib
+            -- calls it without an availability check when creating ICE's main
+            -- context. Use its existing pipe + fcntl fallback on all iOS builds.
             io.replace("meson.build", "if cc.has_function(f)",
-                "if f not in ['statfs', 'statvfs', 'getfsstat', 'getvfsstat', 'getfsent'] and cc.has_function(f)",
+                "if f not in ['statfs', 'statvfs', 'getfsstat', 'getvfsstat', 'getfsent', 'pipe2'] and cc.has_function(f)",
                 {plain = true})
             local used_space = "      g_file_info_set_attribute_uint64 (info, G_FILE_ATTRIBUTE_FILESYSTEM_USED, block_size * (statfs_buffer.f_blocks - statfs_buffer.f_bfree));"
             io.replace("gio/glocalfile.c", used_space,
