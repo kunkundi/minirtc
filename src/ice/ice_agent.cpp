@@ -60,7 +60,8 @@ bool AddTurnRelay(NiceAgent* agent, guint stream_id, const std::string& address,
     return true;
   }
 
-  LOG_WARN("libnice rejected TURN/{} relay [{}:{}]", transport, address, port);
+  LOG_WARN("libnice rejected TURN/{} relay", transport);
+  LOG_DEBUG("Rejected TURN/{} relay [{}:{}]", transport, address, port);
   return false;
 }
 
@@ -405,10 +406,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
       }
 
       if (!relay_registered || !ice_config_.Fresh()) {
-        LOG_WARN(
-            "No TURN endpoint could be registered from signaling configuration "
-            "[{}]",
-            ice_config_.id);
+        LOG_WARN("No TURN endpoint could be registered from signaling configuration");
         if (IsTurnForced(turn_mode_) || !ice_config_.Fresh()) {
           init_failed_.store(true);
           g_object_unref(agent);
@@ -759,7 +757,7 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
   } else {
     punch_remote_supported_ = false;
     punch_retry_supported_ = false;
-    LOG_ERROR("Failed to parse remote sdp: [{}]", fingerprints->sdp);
+    LOG_ERROR("Failed to parse remote SDP");
     return -1;
   }
 }
@@ -773,7 +771,7 @@ int IceAgent::AddRemoteCandidate(const std::string& candidate_sdp) {
   NiceCandidate* candidate = nice_agent_parse_remote_candidate_sdp(
       agent_, stream_id_, candidate_sdp.c_str());
   if (candidate == nullptr) {
-    LOG_ERROR("Failed to parse remote ICE candidate: [{}]", candidate_sdp);
+    LOG_ERROR("Failed to parse remote ICE candidate");
     return -1;
   }
 
@@ -800,7 +798,7 @@ int IceAgent::AddRemoteCandidate(const std::string& candidate_sdp) {
   nice_candidate_free(candidate);
 
   if (added <= 0) {
-    LOG_ERROR("libnice rejected remote ICE candidate: [{}]", candidate_sdp);
+    LOG_ERROR("libnice rejected remote ICE candidate");
     return -1;
   }
 
@@ -862,11 +860,12 @@ void IceAgent::OnStunMappingStatic(NiceAgent*, NiceCandidate* sample,
     analysis = AnalyzeNatMappings(samples);
   }
   LOG_INFO(
-      "ICE STUN sample base={} server={}:{} mapped={}:{} sequence={} "
-      "samples={} mapping={} port_pattern={} step={}",
-      key, server_ip, server_port, mapped, nice_address_get_port(&sample->addr),
+      "ICE STUN sample: sequence={} samples={} mapping={} "
+      "port_pattern={} step={}",
       sequence, analysis.samples, analysis.mapping, analysis.port_pattern,
       analysis.port_step);
+  LOG_DEBUG("ICE STUN sample base={} server={}:{} mapped={}:{}", key, server_ip,
+            server_port, mapped, nice_address_get_port(&sample->addr));
 }
 
 void IceAgent::ProbePredictedRemoteCandidates() {

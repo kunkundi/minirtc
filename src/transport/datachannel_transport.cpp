@@ -393,11 +393,10 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
           now_ms - stream->last_resize_ms_ >= 1000) ||
          (upscale && now_ms - stream->last_resize_ms_ >= 5000))) {
       LOG_INFO(
-          "Web video adaptation: peer={} stream={} {}x{} -> {}x{} "
-          "video_bps={} fps={} scale={} reason={}",
-          self->remote_id_, stream_id, stream->adapted_width_,
-          stream->adapted_height_, target_width, target_height,
-          budget.video_bps, effective_fps,
+          "Web video adaptation: stream={} {}x{} -> {}x{} video_bps={} fps={} "
+          "scale={} reason={}",
+          stream_id, stream->adapted_width_, stream->adapted_height_,
+          target_width, target_height, budget.video_bps, effective_fps,
           budget.decode_scale,
           new_source || !current_pixels ? "startup"
           : upscale                     ? "bandwidth_recovery"
@@ -506,8 +505,7 @@ int DataChannelTransport::SendAudioFrame(const MiniRtcAudioFrame* audio_frame,
     return -1;
   }
   if (!track->isOpen()) {
-    LOG_ERROR("[{}] Track is closed, drop audio frame size {}", local_id_,
-              audio_frame->size);
+    LOG_ERROR("Track is closed, drop audio frame size {}", audio_frame->size);
     return -1;
   }
 
@@ -552,8 +550,7 @@ int DataChannelTransport::SendDataFrame(const char* data, size_t size,
   }
 
   if (!data_channel->isOpen()) {
-    LOG_ERROR("[{}] DataChannel is closed, drop data frame size", local_id_,
-              size);
+    LOG_ERROR("DataChannel is closed, drop data frame size {}", size);
     return -1;
   }
 

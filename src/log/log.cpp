@@ -90,9 +90,11 @@ void InitLogger(const std::string& log_dir) {
   std::lock_guard<std::mutex> lock(g_logger_mutex);
   if (g_logger) {
     if (directory != g_log_dir) {
-      g_logger->warn("InitLogger called after logger initialized. Ignoring "
-                     "log_dir: {}, using previous log_dir: {}",
-                     directory, g_log_dir);
+      g_logger->warn(
+          "InitLogger called after logger initialized. Keeping existing log "
+          "directory");
+      SPDLOG_LOGGER_DEBUG(g_logger, "Ignoring log directory {}, keeping {}",
+                          directory, g_log_dir);
     }
     return;
   }
@@ -114,8 +116,10 @@ std::shared_ptr<spdlog::logger> get_logger() {
     spdlog::register_logger(logger);
     g_output = std::move(output);
     g_logger = std::move(logger);
-    if (!g_callback)
-      g_logger->info("Logger initialized: path={}", g_log_dir + "/minirtc.log");
+    if (!g_callback) {
+      g_logger->info("Logger initialized");
+      SPDLOG_LOGGER_DEBUG(g_logger, "Log file: {}", g_log_dir + "/minirtc.log");
+    }
   });
   return g_logger;
 }

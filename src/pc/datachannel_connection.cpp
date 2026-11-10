@@ -186,9 +186,8 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     case IceWorkMsg::Type::RetryWithTurn:
     case IceWorkMsg::Type::UserJoinTransmission: {
       std::string remote_user_id = msg.remote_user_id;
-      LOG_INFO("[{}] Receive notification: user id [{}] join transmission",
-               (void*)this, remote_user_id);
-      LOG_INFO("Create transmission to user [{}]", remote_user_id);
+      LOG_INFO("Remote user joined transmission");
+      LOG_INFO("Create remote transmission");
       auto early_candidates = std::move(pending_ice_candidates_);
       ResetDataChannelTransport();
       pending_ice_candidates_ = std::move(early_candidates);
@@ -200,10 +199,9 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     }
     case IceWorkMsg::Type::UserLeaveTransmission: {
       std::string remote_user_id = msg.remote_user_id;
-      LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
-               (void*)this, remote_user_id);
+      LOG_INFO("Remote user left transmission");
 
-      LOG_INFO("Terminate transmission to user [{}]", remote_user_id);
+      LOG_INFO("Terminate remote transmission");
 
       break;
     }
@@ -211,7 +209,7 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       std::string transmission_id = msg.transmission_id;
       std::string remote_user_id = msg.remote_user_id;
 
-      LOG_INFO("Receive offer from user [{}]", remote_user_id);
+      LOG_INFO("Received remote offer");
 
       auto early_candidates = std::move(pending_ice_candidates_);
       ResetDataChannelTransport();
@@ -235,7 +233,8 @@ void DataChannelConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
         dc->onClosed([label]() { LOG_INFO("DataChannel closed: {}", label); });
         dc->onMessage([](auto data) {
           if (std::holds_alternative<std::string>(data)) {
-            LOG_INFO("Received message: {}", std::get<std::string>(data));
+            LOG_DEBUG("Received text message: {} bytes",
+                      std::get<std::string>(data).size());
           }
         });
         // Keep the incoming channel alive with this transport, not a local
@@ -347,8 +346,8 @@ void DataChannelConnection::ApplyRemoteIceCandidate(const IceWorkMsg& msg) {
     } else {
       pc->addRemoteCandidate(::rtc::Candidate(signal->sdp));
     }
-  } catch (const std::exception& error) {
-    LOG_WARN("Could not add DataChannel ICE candidate: {}", error.what());
+  } catch (const std::exception&) {
+    LOG_WARN("Could not add DataChannel ICE candidate");
   }
 }
 

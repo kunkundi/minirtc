@@ -217,12 +217,14 @@ bool VerifyWithAppleSystemTrust(X509_STORE_CTX* store_ctx,
     CFErrorRef error = nullptr;
     trusted = SecTrustEvaluateWithError(trust, &error);
     if (!trusted && error) {
+      LOG_ERROR("Apple system trust evaluation failed: code={}",
+                CFErrorGetCode(error));
       CFStringRef description = CFErrorCopyDescription(error);
       char buffer[512] = {};
       if (description && CFStringGetCString(description, buffer,
                                             sizeof(buffer),
                                             kCFStringEncodingUTF8)) {
-        LOG_ERROR("Apple system trust evaluation failed: {}", buffer);
+        LOG_DEBUG("Apple system trust evaluation details: {}", buffer);
       }
       if (description) {
         CFRelease(description);

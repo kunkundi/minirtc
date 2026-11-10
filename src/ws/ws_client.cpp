@@ -411,7 +411,7 @@ int WsClient::Connect(const std::string& uri) {
     return -1;
   }
 
-  LOG_INFO("Connecting WebSocket: {}", uri);
+  LOG_INFO("Connecting WebSocket");
 
   StopThreads();
   uri_ = uri;
@@ -762,9 +762,6 @@ void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
       con ? con->get_remote_close_code()
           : websocketpp::close::status::blank;
   LOG_WARN("Signaling transport closed: code={}", static_cast<int>(close_code));
-  LOG_WARN("Connection closed (code={} reason={})",
-           static_cast<int>(close_code),
-           con ? con->get_remote_close_reason() : std::string());
   running_ = false;
   cond_var_.notify_all();
   if (!shutdown_ && ws_status_ != WsReconnecting) {

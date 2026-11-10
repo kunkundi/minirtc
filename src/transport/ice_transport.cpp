@@ -411,8 +411,9 @@ void IceTransport::OnIceStateChange(NiceAgent* agent, guint stream_id,
                                     NiceComponentState state,
                                     gpointer user_ptr) {
   if (!is_closed_) {
-    LOG_INFO("[{}->{}] state_change: {}", user_id_, remote_user_id_,
-             nice_component_state_to_string(state));
+    LOG_INFO("ICE state change: {}", nice_component_state_to_string(state));
+    LOG_DEBUG("[{}->{}] ICE state change: {}", user_id_, remote_user_id_,
+              nice_component_state_to_string(state));
     state_.store(state);
     const IcePathAvailabilityChange availability_change =
         component_state_tracker_.Update(state);
@@ -434,10 +435,8 @@ void IceTransport::OnIceStateChange(NiceAgent* agent, guint stream_id,
       }
     } else if (component_state_tracker_.IsUsable() &&
                state != NICE_COMPONENT_STATE_READY) {
-      LOG_INFO(
-          "[{}->{}] ICE recheck entered [{}]; retaining established media "
-          "path",
-          user_id_, remote_user_id_, nice_component_state_to_string(state));
+      LOG_INFO("ICE recheck entered [{}]; retaining established media path",
+               nice_component_state_to_string(state));
     }
 
     on_ice_status_change_(nice_component_state_to_string(state),
@@ -504,8 +503,8 @@ void IceTransport::OnGatheringDone(NiceAgent* agent, guint stream_id,
   }
   g_slist_free_full(candidates,
                     reinterpret_cast<GDestroyNotify>(nice_candidate_free));
-  LOG_INFO("[{}->{}] gather_done host={} srflx={} relay={}", user_id_,
-           remote_user_id_, host_count, srflx_count, relay_count);
+  LOG_INFO("ICE gathering done: host={} srflx={} relay={}", host_count,
+           srflx_count, relay_count);
 
   if (use_trickle_ice_) {
     std::lock_guard<std::mutex> lock(local_candidate_mutex_);
@@ -547,12 +546,13 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     LOG_WARN("Selected ICE pair is not available yet");
     return;
   }
-  LOG_INFO(
-      "selected ICE path local={}/{} {} remote={}/{} {}",
-      CandidateTypeName(local->type), CandidateTransportName(local->transport),
-      CandidateAddress(local->addr), CandidateTypeName(remote->type),
-      CandidateTransportName(remote->transport),
-      CandidateAddress(remote->addr));
+  LOG_INFO("Selected ICE path: local={}/{} remote={}/{}",
+           CandidateTypeName(local->type),
+           CandidateTransportName(local->transport),
+           CandidateTypeName(remote->type),
+           CandidateTransportName(remote->transport));
+  LOG_DEBUG("Selected ICE addresses: local={} remote={}",
+            CandidateAddress(local->addr), CandidateAddress(remote->addr));
   if (local->type == NICE_CANDIDATE_TYPE_RELAYED ||
       remote->type == NICE_CANDIDATE_TYPE_RELAYED) {
     LOG_INFO("Traversal using relay server");
@@ -562,15 +562,15 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
       guint upgrade_window_ms = 0;
       g_object_get(agent, "relay-upgrade-timeout", &upgrade_window_ms, nullptr);
       if (upgrade_window_ms > 0) {
-        LOG_INFO("[{}->{}] Keep relay active while checking direct paths for up to {} ms",
-                 user_id_, remote_user_id_, upgrade_window_ms);
+        LOG_INFO(
+            "Keep relay active while checking direct paths for up to {} ms",
+            upgrade_window_ms);
       }
     }
     traversal_type_ = TraversalType::TRelay;
   } else {
     if (traversal_type_ == TraversalType::TRelay) {
-      LOG_INFO("[{}->{}] ICE relay upgraded to P2P without restarting media",
-               user_id_, remote_user_id_);
+      LOG_INFO("ICE relay upgraded to P2P without restarting media");
     }
     LOG_INFO("Traversal using p2p");
     traversal_type_ = TraversalType::TP2P;
@@ -900,7 +900,7 @@ bool IceTransport::HandleExtendedReport(const RtcpCommonHeader& block) {
 }
 
 int IceTransport::DestroyIceTransmission() {
-  LOG_INFO("[{}->{}] Destroy ice transmission", user_id_, remote_user_id_);
+  LOG_INFO("Destroy ICE transmission");
   is_closed_ = true;
 
   if (on_ice_status_change_) {
@@ -932,7 +932,7 @@ int IceTransport::SetTransmissionId(const std::string& transmission_id) {
 }
 
 int IceTransport::JoinTransmission() {
-  LOG_INFO("[{}] Join transmission", user_id_);
+  LOG_INFO("Join transmission");
 
   if (use_trickle_ice_) {
     SendOffer();
@@ -1042,8 +1042,7 @@ int IceTransport::AddRemoteCandidate(const std::string& candidate_sdp,
     return -1;
   }
 
-  LOG_DEBUG("[{}->{}] added remote ICE candidate [{}]", user_id_,
-            remote_user_id_, signal->sdp);
+  LOG_DEBUG("[{}->{}] added remote ICE candidate", user_id_, remote_user_id_);
   return 0;
 }
 
@@ -1051,8 +1050,7 @@ int IceTransport::SetRemoteCandidateGatheringDone(
     const std::string& candidate_ufrag) {
   if (!candidate_ufrag.empty() && !remote_ice_username_.empty() &&
       candidate_ufrag != remote_ice_username_) {
-    LOG_WARN("Ignoring stale ICE gathering completion for ufrag [{}]",
-             candidate_ufrag);
+    LOG_WARN("Ignoring stale ICE gathering completion from another generation");
     return 0;
   }
 
@@ -1094,7 +1092,7 @@ int IceTransport::SendOffer() {
   LOG_DEBUG("Generated offer SDP: {} bytes", local_sdp_.size());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
-    LOG_INFO("[{}->{}] send offer", user_id_, remote_user_id_);
+    LOG_INFO("Sending offer");
   }
   return 0;
 }
@@ -1122,7 +1120,7 @@ int IceTransport::SendAnswer() {
   LOG_DEBUG("Generated answer SDP: {} bytes", local_sdp_.size());
   if (ice_ws_transport_) {
     ice_ws_transport_->Send(message.dump());
-    LOG_INFO("[{}->{}] send answer", user_id_, remote_user_id_);
+    LOG_INFO("Sending answer");
   }
 
   return 0;

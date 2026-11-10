@@ -229,8 +229,7 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     case IceWorkMsg::Type::UserJoinTransmission: {
       std::string remote_user_id = msg.remote_user_id;
       std::string transmission_id = msg.transmission_id;
-      LOG_INFO("[{}] Receive notification: user id [{}] join transmission",
-               info_.user_id, remote_user_id);
+      LOG_INFO("Remote user joined transmission");
 
       if (remote_user_id == info_.user_id) {
         break;
@@ -292,10 +291,9 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
     }
     case IceWorkMsg::Type::UserLeaveTransmission: {
       std::string remote_user_id = msg.remote_user_id;
-      LOG_INFO("[{}] Receive notification: user id [{}] leave transmission",
-               (void*)this, remote_user_id);
+      LOG_INFO("Remote user left transmission");
       ReleaseAllIceTransmission();
-      LOG_INFO("Terminate transmission to user [{}]", remote_user_id);
+      LOG_INFO("Terminate remote transmission");
       break;
     }
     case IceWorkMsg::Type::Offer: {

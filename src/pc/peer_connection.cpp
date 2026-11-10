@@ -288,8 +288,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   LOG_INFO("Read config success, use configure file [{}]", params.use_cfg_file);
 
-  LOG_INFO("Signal server ip [{}] port [{}]", cfg_signal_server_ip_,
-           cfg_signal_server_port_);
+  LOG_DEBUG("Signal server ip [{}] port [{}]", cfg_signal_server_ip_,
+            cfg_signal_server_port_);
 
   LOG_INFO("Hardware accelerated codec [{}]",
            hardware_acceleration_ ? "ON" : "OFF");
@@ -408,7 +408,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
   // do {
   // } while (MiniRtcSignalStatus::SignalConnected != GetSignalStatus());
 
-  LOG_INFO("[{}] Init finish", user_id_);
+  LOG_INFO("Peer initialization finished");
 
   inited_ = true;
   return 0;
@@ -474,7 +474,7 @@ int PeerConnection::Login() {
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
-    LOG_INFO("[{}] send login request to signal server", user_id_);
+    LOG_INFO("Sending login request to signal server");
   }
   return ret;
 }
@@ -491,8 +491,9 @@ int PeerConnection::SendJoinRequestLocked(
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
-    LOG_INFO("[{}] sends join transmission [{}] request", user_id_,
-             transmission_id.substr(0, transmission_id.find('@')));
+    LOG_INFO("Sending join transmission request");
+    LOG_DEBUG("[{}] Join transmission [{}]", user_id_,
+              transmission_id.substr(0, transmission_id.find('@')));
   }
 
   return 0;
@@ -513,8 +514,7 @@ int PeerConnection::Join(const std::string& transmission_id) {
       signal_status_ == MiniRtcSignalStatus::MiniRtcSignalReconnecting) {
     pending_join_transmission_id_ = transmission_id;
     leave_ = false;
-    LOG_INFO("Queue join transmission [{}] until signal login completes",
-             transmission_id.substr(0, transmission_id.find('@')));
+    LOG_INFO("Queue join transmission until signal login completes");
     return 0;
   }
 
@@ -530,8 +530,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
     std::lock_guard<std::mutex> lock(signal_status_mutex_);
     signal_status = signal_status_;
     if (pending_join_transmission_id_) {
-      LOG_INFO("Cancel queued join transmission [{}]",
-               pending_join_transmission_id_->substr(0, pending_join_transmission_id_->find('@')));
+      LOG_INFO("Cancel queued join transmission");
       pending_join_transmission_id_.reset();
       cancelled_pending_join = true;
     } else if (MiniRtcSignalStatus::MiniRtcSignalConnected == signal_status_) {
@@ -540,8 +539,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
                       {"transmission_id", transmission_id}};
       if (ws_transport_) {
         ws_transport_->Send(message.dump());
-        LOG_INFO("[{}] leave transmission [{}] notification queued",
-                 user_id_, transmission_id.substr(0, transmission_id.find('@')));
+        LOG_INFO("Leave transmission notification queued");
       }
     }
     leave_ = true;
@@ -736,8 +734,8 @@ bool PeerConnection::RetirePeerConnection(
         ws_transport_->Send(report.dump());
       session_tickets_.erase(ticket);
     }
-    LOG_INFO("[{}] Retire peer connection for user [{}] after status [{}]",
-             user_id_, remote_user_id, ConnectionStatusToString(status));
+    LOG_INFO("Retire peer connection after status [{}]",
+             ConnectionStatusToString(status));
     ice_work_cv_.notify_one();
     return true;
   }
@@ -764,8 +762,7 @@ PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
     if (it != peer_connection_map_.end()) {
       replaced = it->second;
       peer_connection_map_.erase(it);
-      LOG_WARN("[{}] Replace existing peer connection for user [{}] on {}",
-               user_id_, remote_user_id, context);
+      LOG_WARN("Replace existing peer connection on {}", context);
     }
     connected_peers_.erase(remote_user_id);
 
@@ -809,8 +806,8 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
     return;
   }
 
-  LOG_INFO("[{}] Clear [{}] peer connection(s), reason=[{}]", user_id_,
-           connections.size(), reason);
+  LOG_INFO("Clear [{}] peer connection(s), reason=[{}]", connections.size(),
+           reason);
   for (auto& [remote_user_id, connection] : connections) {
     if (on_connection_status_ &&
         (!direct_ || !direct_terminal_reported_.exchange(true))) {
@@ -956,8 +953,7 @@ int PeerConnection::SendVideoFrameToPeer(const MiniRtcVideoFrame* video_frame,
   if (it != peer_connection_map_.end() && it->second) {
     it->second->SendVideoFrame(video_frame, stream_id);
   } else {
-    LOG_WARN("SendVideoFrame to remote peer [{}] failed, peer not found",
-             std::string(remote_peer_id, remote_peer_id_size));
+    LOG_WARN("SendVideoFrame failed, remote peer not found");
     return -1;
   }
 
@@ -974,8 +970,7 @@ int PeerConnection::SendAudioFrameToPeer(const MiniRtcAudioFrame* audio_frame,
   if (it != peer_connection_map_.end() && it->second) {
     it->second->SendAudioFrame(audio_frame, stream_id);
   } else {
-    LOG_WARN("SendAudioFrame to remote peer [{}] failed, peer not found",
-             std::string(remote_peer_id, remote_peer_id_size));
+    LOG_WARN("SendAudioFrame failed, remote peer not found");
     return -1;
   }
 
@@ -992,8 +987,7 @@ int PeerConnection::SendDataFrameToPeer(const char* data, size_t size,
   if (it != peer_connection_map_.end() && it->second) {
     it->second->SendDataFrame(data, size, stream_id);
   } else {
-    LOG_WARN("SendDataFrame to remote peer [{}] failed, peer not found",
-             std::string(remote_peer_id, remote_peer_id_size));
+    LOG_WARN("SendDataFrame failed, remote peer not found");
     return -1;
   }
 
@@ -1010,8 +1004,7 @@ int PeerConnection::SendReliableDataFrameToPeer(const char* data, size_t size,
   if (it != peer_connection_map_.end() && it->second) {
     return it->second->SendReliableDataFrame(data, size, stream_id);
   } else {
-    LOG_WARN("SendReliableDataFrame to remote peer [{}] failed, peer not found",
-             std::string(remote_peer_id, remote_peer_id_size));
+    LOG_WARN("SendReliableDataFrame failed, remote peer not found");
     return -1;
   }
 
@@ -1148,9 +1141,8 @@ bool PeerConnection::BuildConnectionInfo(const json& message,
     return false;
   }
   LOG_INFO(
-      "Using per-connection ICE configuration [{}], endpoints [{}], expires "
-      "[{}]",
-      config.id, config.servers.size(), config.expires_at);
+      "Using per-connection ICE configuration, endpoints [{}], expires [{}]",
+      config.servers.size(), config.expires_at);
   info.ice_config = std::move(config);
   return true;
 }
@@ -1206,7 +1198,8 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
                               MiniRtcTraversalMode::MiniRtcTraversalUnknown, &net_traffic_stats,
                               user_id_.data(), user_id_.size(), user_data_);
-        LOG_INFO("Login success with id [{}]", user_id_);
+        LOG_INFO("Login successful");
+        LOG_DEBUG("Local user id: [{}]", user_id_);
         {
           std::lock_guard<std::mutex> lock(signal_status_mutex_);
           signal_status_ = MiniRtcSignalStatus::MiniRtcSignalConnected;
@@ -1226,11 +1219,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           Login();
           break;
         }
-        auto reason = std::string("Unknown error");
-        if (j.contains("reason") && j["reason"].is_string()) {
-          reason = j["reason"].get<std::string>();
-        }
-        LOG_WARN("Login failed with id [{}], due to [{}]", user_id_, reason);
+        LOG_WARN("Login failed");
         {
           std::lock_guard<std::mutex> lock(signal_status_mutex_);
           signal_status_ = MiniRtcSignalStatus::MiniRtcSignalFailed;
@@ -1245,12 +1234,9 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       if (j["status"].get<std::string>() == "success") {
         local_transmission_id_ = j["transmission_id"].get<std::string>();
         user_id_ = local_transmission_id_;
-        LOG_INFO("Create transmission success with id [{}]",
-                 local_transmission_id_);
+        LOG_INFO("Create transmission successful");
       } else if (j["status"].get<std::string>() == "fail") {
-        LOG_WARN("Create transmission failed with id [{}], due to [{}]",
-                 local_transmission_id_,
-                 j["reason"].get<std::string>().c_str());
+        LOG_WARN("Create transmission failed");
       }
       break;
     }
@@ -1258,11 +1244,8 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       std::string transmission_id = j["transmission_id"].get<std::string>();
       std::string status = j["status"].get<std::string>();
       if (status == "failed") {
-        std::string reason = "Unknown error";
-        if (j.contains("reason") && j["reason"].is_string()) {
-          reason = j["reason"].get<std::string>();
-        }
-        LOG_ERROR("{}", reason);
+        LOG_ERROR("Join transmission failed: status={}",
+                  ConnectionStatusToString(ParseJoinFailure(j).status));
         // Expose structured rejection details before the status notification,
         // without extending the callback ABI used by existing applications.
         if (on_signal_message_) {
@@ -1316,7 +1299,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 
       if (j.contains("sdp")) {
         std::string remote_sdp = j["sdp"].get<std::string>();
-        LOG_INFO("[{}] receive offer from [{}]", user_id_, remote_user_id);
+        LOG_INFO("Received remote offer");
 
         if (remote_user_id.empty()) {
           LOG_ERROR("Invalid offer msg without remote user id");
@@ -1354,7 +1337,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 
       if (j.contains("sdp")) {
         std::string remote_sdp = j["sdp"].get<std::string>();
-        LOG_INFO("[{}] receive answer from [{}]", user_id_, remote_user_id);
+        LOG_INFO("Received remote answer");
 
         IceWorkMsg msg;
         msg.type = IceWorkMsg::Type::Answer;
@@ -1442,8 +1425,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       if (j.value("status", "fail") == "success") {
         ApplyTurnCredentials(j);
       } else {
-        LOG_WARN("Failed to refresh dynamic TURN credentials: [{}]",
-                 j.value("reason", "Unknown error"));
+        LOG_WARN("Failed to refresh dynamic TURN credentials");
       }
       break;
     }
@@ -1533,10 +1515,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       }
     }
     if (connection) {
-      LOG_INFO(
-          "[{}] Remove peer connection for user [{}] after leave "
-          "transmission",
-          user_id_, remote_user_id);
+      LOG_INFO("Remove peer connection after leave transmission");
       if (on_connection_status_) {
         on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionClosed, remote_user_id.data(),
                               remote_user_id.size(), user_data_);
