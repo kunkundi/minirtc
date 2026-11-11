@@ -30,7 +30,8 @@ package("libsrtp")
 
     if is_plat("windows", "mingw") then
         add_syslinks("ws2_32")
-    else
+    elseif not is_plat("android") then
+        -- Android provides pthread functions in libc, without a separate libpthread.
         add_syslinks("pthread")
     end
 
