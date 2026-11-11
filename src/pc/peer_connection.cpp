@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <array>
+#include <exception>
 #include <regex>
 
 #include "INIReader.h"
@@ -1466,10 +1467,19 @@ void PeerConnection::StartIceWorker() {
 
       lck.unlock();
 
-      if (connection_to_cleanup) {
-        connection_to_cleanup->ReleaseAllIceTransmission();
-      } else if (has_msg) {
-        ProcessIceWorkMsg(msg);
+      try {
+        if (connection_to_cleanup) {
+          connection_to_cleanup->ReleaseAllIceTransmission();
+        } else if (has_msg) {
+          ProcessIceWorkMsg(msg);
+        }
+      } catch (const std::exception& error) {
+        // Connection task failures are retired below. Also contain exceptions
+        // from cleanup and application status callbacks at the thread boundary.
+        LOG_ERROR("ICE worker task failed");
+        LOG_DEBUG("ICE worker exception: {}", error.what());
+      } catch (...) {
+        LOG_ERROR("ICE worker task failed with an unknown exception");
       }
     }
 
@@ -1535,7 +1545,27 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       }
     }
     if (connection) {
-      connection->ProcessIceWorkMsg(msg);
+      try {
+        connection->ProcessIceWorkMsg(msg);
+        return;
+      } catch (const std::exception& error) {
+        LOG_ERROR("ICE connection task failed");
+        LOG_DEBUG("ICE task {} for [{}]: {}", static_cast<int>(msg.type),
+                  msg.remote_user_id, error.what());
+      } catch (...) {
+        LOG_ERROR("ICE connection task failed with an unknown exception");
+      }
+
+      // Retire only the failed generation. Queue teardown on this worker so
+      // partial initialization cannot leave an unusable peer in the map, and
+      // late transport callbacks cannot report a second terminal transition.
+      const auto status = MiniRtcConnectionStatus::MiniRtcConnectionFailed;
+      if (RetirePeerConnection(msg.remote_user_id, connection, status) &&
+          (!direct_ || !direct_terminal_reported_.exchange(true)) &&
+          on_connection_status_) {
+        on_connection_status_(status, msg.remote_user_id.data(),
+                              msg.remote_user_id.size(), user_data_);
+      }
     }
   }
 }

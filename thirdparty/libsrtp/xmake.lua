@@ -10,6 +10,12 @@ package("libsrtp")
     add_versions("2.6.0", "f1886f72eff1d8aa82ada40b2fc3d342a3ecaf0f8988cb63d4af234fccf2253d")
     add_versions("2.5.0", "8a43ef8e9ae2b665292591af62aa1a4ae41e468b6d98d8258f91478735da4e09")
 
+    add_patches("v2.7.0", path.join(os.scriptdir(), "patches", "shared_init_2.7.0.patch"),
+        "99795384ffcd263909884b5229dde513db013123b26929a4b806d2ef9ab65472")
+    -- Give the patched lifetime semantics a distinct package identity so
+    -- native and Web transports cannot reuse the old non-idempotent archive.
+    add_configs("shared_init", {description = "Serialize and reference-count SRTP initialization", default = true, type = "boolean", readonly = true})
+
     add_configs("openssl", {description = "Enable OpenSSL crypto engine", default = true, type = "boolean"})
     add_configs("mbedtls", {description = "Enable MbedTLS crypto engine", default = false, type = "boolean"})
     add_configs("nss", {description = "Enable NSS crypto engine", default = false, type = "boolean", readonly = true})
@@ -24,6 +30,8 @@ package("libsrtp")
 
     if is_plat("windows", "mingw") then
         add_syslinks("ws2_32")
+    else
+        add_syslinks("pthread")
     end
 
     -- libsrtp 2.7.0 requires CMake 3.21 or newer. Keep the version
@@ -58,7 +66,7 @@ package("libsrtp")
         table.insert(configs, "-DENABLE_SANITIZE_ADDR=" .. (package:config("asan") and "ON" or "OFF"))
         table.insert(configs, "-DENABLE_LTO=" .. (package:config("lto") and "ON" or "OFF"))
         for name, enabled in pairs(package:configs()) do
-            if not package:extraconf("configs", name, "builtin") then
+            if name ~= "shared_init" and not package:extraconf("configs", name, "builtin") then
                 table.insert(configs, "-DENABLE_" .. name:upper() .. "=" .. (enabled and "ON" or "OFF"))
             end
         end

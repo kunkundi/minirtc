@@ -75,6 +75,7 @@ class SrtpEngine {
   };
 
   // Thread-safe global init, also called automatically when creating sessions.
+  // Retains one libsrtp reference for the process lifetime.
   // Throws std::runtime_error on failure; a later call can retry.
   static void GlobalInit();
 

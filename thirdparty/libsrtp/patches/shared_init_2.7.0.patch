@@ -1,0 +1,138 @@
+--- a/srtp/srtp.c
++++ b/srtp/srtp.c
+@@ -67,6 +67,20 @@
+ #include <winsock2.h>
+ #endif
+ 
++/* Serialize shared-library lifetime across independent transport owners. */
++#ifdef _WIN32
++#include <windows.h>
++static SRWLOCK srtp_init_mutex = SRWLOCK_INIT;
++#define SRTP_INIT_LOCK() AcquireSRWLockExclusive(&srtp_init_mutex)
++#define SRTP_INIT_UNLOCK() ReleaseSRWLockExclusive(&srtp_init_mutex)
++#else
++#include <pthread.h>
++static pthread_mutex_t srtp_init_mutex = PTHREAD_MUTEX_INITIALIZER;
++#define SRTP_INIT_LOCK() ((void)pthread_mutex_lock(&srtp_init_mutex))
++#define SRTP_INIT_UNLOCK() ((void)pthread_mutex_unlock(&srtp_init_mutex))
++#endif
++static unsigned int srtp_init_references = 0;
++
+ /* the debug module for srtp */
+ srtp_debug_module_t mod_srtp = {
+     0,     /* debugging is off by default */
+@@ -2876,33 +2890,44 @@
+ 
+ srtp_err_status_t srtp_init(void)
+ {
+-    srtp_err_status_t status;
+-
+-    /* initialize crypto kernel */
+-    status = srtp_crypto_kernel_init();
+-    if (status)
+-        return status;
+-
+-    /* load srtp debug module into the kernel */
+-    status = srtp_crypto_kernel_load_debug_module(&mod_srtp);
+-    if (status)
+-        return status;
+-
+-    return srtp_err_status_ok;
++    srtp_err_status_t status = srtp_err_status_ok;
++
++    SRTP_INIT_LOCK();
++    if (srtp_init_references == UINT_MAX) {
++        status = srtp_err_status_fail;
++    } else if (srtp_init_references != 0) {
++        ++srtp_init_references;
++    } else {
++        status = srtp_crypto_kernel_init();
++        if (status == srtp_err_status_ok) {
++            status = srtp_crypto_kernel_load_debug_module(&mod_srtp);
++        }
++        if (status == srtp_err_status_ok) {
++            srtp_init_references = 1;
++        } else {
++            /* Discard partial registration so a later owner can retry. */
++            srtp_crypto_kernel_shutdown();
++        }
++    }
++    SRTP_INIT_UNLOCK();
++    return status;
+ }
+ 
+ srtp_err_status_t srtp_shutdown(void)
+ {
+-    srtp_err_status_t status;
+-
+-    /* shut down crypto kernel */
+-    status = srtp_crypto_kernel_shutdown();
+-    if (status)
+-        return status;
+-
+-    /* shutting down crypto kernel frees the srtp debug module as well */
+-
+-    return srtp_err_status_ok;
++    srtp_err_status_t status = srtp_err_status_ok;
++
++    SRTP_INIT_LOCK();
++    if (srtp_init_references > 1) {
++        --srtp_init_references;
++    } else if (srtp_init_references == 1) {
++        status = srtp_crypto_kernel_shutdown();
++        if (status == srtp_err_status_ok) {
++            srtp_init_references = 0;
++        }
++    }
++    SRTP_INIT_UNLOCK();
++    return status;
+ }
+ 
+ srtp_stream_ctx_t *srtp_get_stream(srtp_t srtp, uint32_t ssrc)
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -256,6 +256,10 @@
+   ${SOURCES_H}
+ )
+ add_library(libSRTP::srtp2 ALIAS srtp2)
++if(NOT WIN32)
++  find_package(Threads REQUIRED)
++  target_link_libraries(srtp2 PUBLIC Threads::Threads)
++endif()
+ 
+ if (${ENABLE_WARNINGS})
+     target_set_warnings(
+--- a/Config.cmake.in
++++ b/Config.cmake.in
+@@ -1,3 +1,8 @@
+ @PACKAGE_INIT@
+ 
++if(NOT WIN32)
++  include(CMakeFindDependencyMacro)
++  find_dependency(Threads)
++endif()
++
+ include ( "${CMAKE_CURRENT_LIST_DIR}/libSRTPTargets.cmake" )
+--- a/include/srtp.h
++++ b/include/srtp.h
+@@ -370,13 +370,19 @@
+ /**
+  * @brief srtp_init() initializes the srtp library.
+  *
++ * Repeated calls acquire independent references. Initialization and shutdown
++ * are serialized; each successful call should be paired with srtp_shutdown().
++ *
+  * @warning This function @b must be called before any other srtp
+  * functions.
+  */
+ srtp_err_status_t srtp_init(void);
+ 
+ /**
+- * @brief srtp_shutdown() de-initializes the srtp library.
++ * @brief srtp_shutdown() releases one reference to the srtp library.
++ *
++ * Global state is released only after the last owner calls this function.
++ * Each owner must destroy its sessions before releasing its reference.
+  *
+  * @warning No srtp functions may be called after calling this function.
+  */

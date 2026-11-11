@@ -5,6 +5,9 @@
 namespace minirtc {
 
 void SrtpEngine::GlobalInit() {
+  // The libsrtp package serializes and reference-counts global initialization.
+  // Keep one native reference for the process lifetime, independent of Web
+  // connections acquiring and releasing their own reference.
   static const bool initialized = []() {
     const auto status = srtp_init();
     if (status != srtp_err_status_ok) {
