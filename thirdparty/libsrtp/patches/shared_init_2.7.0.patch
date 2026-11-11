@@ -97,7 +97,7 @@
  add_library(libSRTP::srtp2 ALIAS srtp2)
 +if(NOT WIN32)
 +  find_package(Threads REQUIRED)
-+  target_link_libraries(srtp2 PUBLIC Threads::Threads)
++  target_link_libraries(srtp2 Threads::Threads)
 +endif()
  
  if (${ENABLE_WARNINGS})

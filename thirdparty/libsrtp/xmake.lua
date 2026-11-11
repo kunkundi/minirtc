@@ -11,7 +11,7 @@ package("libsrtp")
     add_versions("2.5.0", "8a43ef8e9ae2b665292591af62aa1a4ae41e468b6d98d8258f91478735da4e09")
 
     add_patches("v2.7.0", path.join(os.scriptdir(), "patches", "shared_init_2.7.0.patch"),
-        "99795384ffcd263909884b5229dde513db013123b26929a4b806d2ef9ab65472")
+        "f9834784a8e0664c25040ac2cbec382933fb463db93e718b8ed537b3b80df363")
     -- Give the patched lifetime semantics a distinct package identity so
     -- native and Web transports cannot reuse the old non-idempotent archive.
     add_configs("shared_init", {description = "Serialize and reference-count SRTP initialization", default = true, type = "boolean", readonly = true})
