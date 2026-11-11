@@ -725,11 +725,11 @@ std::shared_ptr<::rtc::DataChannel> DataChannelConnection::AddData(
     auto owner = transport.lock();
     if (!owner || !std::holds_alternative<std::string>(msg)) return;
     const auto& str = std::get<std::string>(msg);
-    if (str.size() > 4096) return;
+    if (str.size() > WebInputRouter::kMaxControlMessageBytes) return;
     auto message = json::parse(str, nullptr, false);
     if (!message.is_object()) return;
     if (message.contains("type") && message["type"] == "web_qos_hello") {
-      if (!message.contains("version") || message["version"] != 1 ||
+      if (str.size() > 4096 || !message.contains("version") || message["version"] != 1 ||
           upgraded->exchange(true))
         return;
       try {

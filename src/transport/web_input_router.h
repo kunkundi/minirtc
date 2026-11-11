@@ -19,19 +19,30 @@ namespace minirtc {
 // its button/key/display action even when the two SCTP streams are reordered.
 class WebInputRouter {
  public:
+  static constexpr size_t kMaxControlMessageBytes = 60000;
+
   explicit WebInputRouter(std::function<void(const std::string&)> deliver)
       : deliver_(std::move(deliver)) {}
 
   void Deliver(const std::string& message, bool motion) {
-    if (message.size() > 4096) return;
+    if (message.size() > kMaxControlMessageBytes) return;
     Deliver(message, motion, nlohmann::json::parse(message, nullptr, false));
   }
 
   // The control channel already parses its handshake; reuse that JSON value.
   void Deliver(const std::string& message, bool motion, nlohmann::json action) {
-    if (!action.is_object()) return;
+    if (!action.is_object() || message.size() > kMaxControlMessageBytes) return;
     std::lock_guard lock(mutex_);
     try {
+      // Directory RPC shares the reliable channel but is not input. It must
+      // remain usable after epoch-based mouse/keyboard delivery is negotiated.
+      // Snapshot pages and preparation batches use the native 60 KB limit.
+      if (action.value("type", nlohmann::json{}) == "file_browser") {
+        if (!motion && action.value("version", nlohmann::json{}) == 1)
+          deliver_(message);
+        return;
+      }
+      if (message.size() > 4096) return;
       if (!action.contains("_input_epoch") || !action.contains("_input_seq")) {
         if (!motion && !upgraded_) deliver_(message);
         return;
