@@ -199,7 +199,8 @@ class IceTransportController
       const webrtc::RtpPacketToSend& packet,
       const PacketFeedbackRegistration& registration);
   void OnSentPacket(const webrtc::RtpPacketToSend& packet,
-                    const PacketFeedbackRegistration& registration);
+                    const PacketFeedbackRegistration& registration,
+                    const webrtc::PacedPacketInfo& pacing_info);
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateVideoBitrateAllocation();
   void UpdateFecProtection();

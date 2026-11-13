@@ -36,7 +36,12 @@ class CongestionControl {
   NetworkControlUpdate OnTransportPacketsFeedback(
       TransportPacketsFeedback report);
 
-  void OnSentPacket(size_t bytes_sent, Timestamp at_time);
+  void OnSentPacket(size_t bytes_sent, Timestamp at_time,
+                    int probe_cluster_id = PacedPacketInfo::kNotAProbe,
+                    bool is_video = false);
+
+  void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
+  void OnVideoSendPaused(bool paused, Timestamp at_time);
 
   void SetRepeatedInitialProbing(bool enable);
 

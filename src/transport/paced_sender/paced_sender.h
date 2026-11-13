@@ -59,6 +59,10 @@ class PacedSender : public webrtc::RtpPacketPacer,
 
   void SetOnRtpPacketDroppedFunc(
       std::function<void(const webrtc::RtpPacketToSend&)> callback);
+  void SetProbeAbortedCallback(
+      std::function<void(int, webrtc::Timestamp, const char*)> callback);
+  void SetVideoSendPausedCallback(
+      std::function<void(bool, webrtc::Timestamp)> callback);
 
   void SetGeneratePaddingFunc(
       std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
@@ -229,6 +233,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void EnqueuePacketOnQueue(
       std::unique_ptr<webrtc::RtpPacketToSend> packet);
   void NotifyRtxDropped(const webrtc::RtpPacketToSend& packet);
+  void NotifyProbeAborted(int id, const char* reason);
   bool RtxExpired(const webrtc::RtpPacketToSend& packet) const;
 
   // Call in response to state updates that could warrant sending out packets.
@@ -291,6 +296,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   int probe_bitrate_limit_bps_ = 0;  // Accessed only on the pacer queue.
   webrtc::Timestamp probe_pause_until_ = webrtc::Timestamp::MinusInfinity();
   bool video_send_paused_ = false;  // Accessed only on the pacer queue.
+  std::function<void(int, webrtc::Timestamp, const char*)> probe_aborted_callback_;
+  std::function<void(bool, webrtc::Timestamp)> video_send_paused_callback_;
   const bool disable_receiver_padding_probing_;
   bool allow_probe_without_media_packet_ = false;  // Pacer queue only.
   // Latch per connection: static content must retain sender ALR probing.

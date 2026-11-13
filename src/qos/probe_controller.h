@@ -146,6 +146,12 @@ class ProbeController {
   // Bind growth to the actual estimate of the outstanding cluster. Ordinary
   // BWE updates or feedback for an older path cannot authorize another step.
   void OnProbeResult(int cluster_id, DataRate bitrate, Timestamp at_time);
+  // Call only after successful transport send (or feedback proving that send).
+  void OnProbeSent(int cluster_id, Timestamp at_time);
+  // Local cancellation is separate from an unsuccessful capacity measurement.
+  void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
+  void OnVideoPacketSent(Timestamp at_time);
+  void OnVideoSendPaused(bool paused, Timestamp at_time);
 
   // Cancel queued/ongoing growth while media or a keyframe is recovering.
   void PauseProbingUntil(Timestamp until);
@@ -178,6 +184,7 @@ class ProbeController {
 
   void UpdateState(State new_state);
   std::vector<ProbeClusterConfig> MaybeContinueProbing(Timestamp at_time);
+  std::vector<ProbeClusterConfig> MaybeProbeOnMediaStart(Timestamp at_time);
   std::vector<ProbeClusterConfig> InitiateExponentialProbing(Timestamp at_time);
   std::vector<ProbeClusterConfig> InitiateProbing(
       Timestamp now, std::vector<DataRate> bitrates_to_probe,
@@ -198,8 +205,20 @@ class ProbeController {
     DataRate target;
     DataRate measured = DataRate::Zero();
     bool probe_further = false;
+    Timestamp created_at = Timestamp::MinusInfinity();
+    Timestamp started_at = Timestamp::MinusInfinity();
+    bool initial = false;
   };
   std::optional<ActiveProbe> active_probe_;
+  struct MediaStartProbe {
+    Timestamp earliest;
+    bool first_video;
+  };
+  std::optional<MediaStartProbe> pending_media_start_probe_;
+  bool has_sent_video_ = false;
+  bool video_sent_since_resume_ = false;
+  bool video_send_paused_ = false;
+  Timestamp video_pause_time_ = Timestamp::MinusInfinity();
   int min_valid_probe_cluster_id_ = 1;
   Timestamp probe_cooldown_until_ = Timestamp::MinusInfinity();
   Timestamp relay_startup_until_ = Timestamp::MinusInfinity();

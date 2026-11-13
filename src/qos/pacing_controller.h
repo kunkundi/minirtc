@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -188,6 +189,7 @@ class PacingController {
   // effect.
   void SetProbingEnabled(bool enabled);
   void AbortProbing(const char* reason);
+  void SetProbeAbortedCallback(std::function<void(int, const char*)> callback);
 
   // Returns the next time we expect ProcessPackets() to be called.
   Timestamp NextSendTime() const;

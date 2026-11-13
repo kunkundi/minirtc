@@ -136,6 +136,27 @@ void PacedSender::NotifyRtxDropped(const webrtc::RtpPacketToSend& packet) {
   if (on_rtp_packet_dropped_func_) on_rtp_packet_dropped_func_(packet);
 }
 
+void PacedSender::SetProbeAbortedCallback(
+    std::function<void(int, webrtc::Timestamp, const char*)> callback) {
+  RunOrPost([this, callback = std::move(callback)]() mutable {
+    probe_aborted_callback_ = std::move(callback);
+    pacing_controller_.SetProbeAbortedCallback(
+        [this](int id, const char* reason) { NotifyProbeAborted(id, reason); });
+  });
+}
+
+void PacedSender::SetVideoSendPausedCallback(
+    std::function<void(bool, webrtc::Timestamp)> callback) {
+  RunOrPost([this, callback = std::move(callback)]() mutable {
+    video_send_paused_callback_ = std::move(callback);
+  });
+}
+
+void PacedSender::NotifyProbeAborted(int id, const char* reason) {
+  if (probe_aborted_callback_)
+    probe_aborted_callback_(id, clock_->CurrentTime(), reason);
+}
+
 bool PacedSender::RtxExpired(const webrtc::RtpPacketToSend& packet) const {
   // Desktop frame recovery finishes well before one second. Do not let
   // repeated NACKs extend an obsolete frame's lifetime indefinitely.
@@ -209,13 +230,20 @@ void PacedSender::CreateProbeClusters(
     std::vector<webrtc::ProbeClusterConfig> probe_cluster_configs) {
   RunOrPost([this, probe_cluster_configs = std::move(probe_cluster_configs)]()
                 mutable {
-    if (video_send_paused_ || clock_->CurrentTime() < probe_pause_until_) return;
+    if (video_send_paused_ || clock_->CurrentTime() < probe_pause_until_) {
+      for (const auto& config : probe_cluster_configs)
+        NotifyProbeAborted(config.id, video_send_paused_ ? "video_paused"
+                                                        : "probe_hold");
+      return;
+    }
     // A controller update queued before recovery must not become a fresh
     // probe if the pacer only processes it after the hold has ended.
     probe_cluster_configs.erase(
         std::remove_if(probe_cluster_configs.begin(), probe_cluster_configs.end(),
                        [this](const auto& config) {
-                         return config.at_time < probe_pause_until_;
+                         if (config.at_time >= probe_pause_until_) return false;
+                         NotifyProbeAborted(config.id, "stale_before_probe_hold");
+                         return true;
                        }),
         probe_cluster_configs.end());
     if (probe_cluster_configs.empty()) return;
@@ -232,6 +260,7 @@ void PacedSender::CreateProbeClusters(
             config.id, config.target_data_rate.bps(),
             (config.target_data_rate * config.target_duration).bytes(),
             config.target_probe_count);
+        NotifyProbeAborted(config.id, "transport_not_ready");
       }
       return;
     }
@@ -266,6 +295,8 @@ void PacedSender::SetVideoSendPaused(bool paused,
   RunOrPost([this, paused, ssrcs, pause_time] {
     if (video_send_paused_ == paused) return;
     video_send_paused_ = paused;
+    if (video_send_paused_callback_)
+      video_send_paused_callback_(paused, pause_time);
     if (paused) {
       // Use the API request time: a busy pacer can process pause/resume after
       // the encoder has already produced the first fresh recovery keyframe.

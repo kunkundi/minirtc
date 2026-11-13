@@ -178,6 +178,25 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           : 2000));
   paced_sender_->SetAllowProbeWithoutMediaPacket(false);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
+  paced_sender_->SetProbeAbortedCallback(
+      [weak_this](int id, webrtc::Timestamp at_time, const char* reason) {
+        if (auto self = weak_this.lock()) {
+          self->task_queue_cc_->PostTask(
+              [weak_this, id, at_time, reason = std::string(reason)] {
+                if (auto owner = weak_this.lock(); owner && owner->controller_)
+                  owner->controller_->OnProbeAborted(id, at_time, reason.c_str());
+              });
+        }
+      });
+  paced_sender_->SetVideoSendPausedCallback(
+      [weak_this](bool paused, webrtc::Timestamp at_time) {
+        if (auto self = weak_this.lock()) {
+          self->task_queue_cc_->PostTask([weak_this, paused, at_time] {
+            if (auto owner = weak_this.lock(); owner && owner->controller_)
+              owner->controller_->OnVideoSendPaused(paused, at_time);
+          });
+        }
+      });
   paced_sender_->SetOnRtpPacketDroppedFunc(
       [weak_this](const webrtc::RtpPacketToSend& packet) {
         if (auto self = weak_this.lock()) {
@@ -272,7 +291,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
             return;
           }
 
-          self->OnSentPacket(*packet, feedback_registration);
+          self->OnSentPacket(*packet, feedback_registration, pacing_info);
 
           if (packet->packet_type().has_value()) {
             switch (packet->packet_type().value()) {
@@ -3373,7 +3392,8 @@ void IceTransportController::RollbackPacketFeedback(
 
 void IceTransportController::OnSentPacket(
     const webrtc::RtpPacketToSend& packet,
-    const PacketFeedbackRegistration& registration) {
+    const PacketFeedbackRegistration& registration,
+    const webrtc::PacedPacketInfo& pacing_info) {
   if (registration.tracked) {
     std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
     transport_feedback_adapter_.CommitFecSend(registration.fec_feedback_id);
@@ -3400,9 +3420,12 @@ void IceTransportController::OnSentPacket(
     const size_t packet_size = registration.send_size;
     const webrtc::Timestamp sent_time =
         webrtc::Timestamp::Millis(registration.send_time_ms);
-    task_queue_cc_->PostTask([this, packet_size, sent_time]() mutable {
+    const int probe_id = pacing_info.probe_cluster_id;
+    const bool is_video =
+        packet.packet_type() == webrtc::RtpPacketMediaType::kVideo;
+    task_queue_cc_->PostTask([this, packet_size, sent_time, probe_id, is_video] {
       if (controller_) {
-        controller_->OnSentPacket(packet_size, sent_time);
+        controller_->OnSentPacket(packet_size, sent_time, probe_id, is_video);
       }
     });
   }

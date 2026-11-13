@@ -328,11 +328,27 @@ NetworkControlUpdate CongestionControl::OnTransportLossReport(
   return NetworkControlUpdate();
 }
 
-void CongestionControl::OnSentPacket(size_t bytes_sent, Timestamp at_time) {
+void CongestionControl::OnSentPacket(size_t bytes_sent, Timestamp at_time,
+                                    int probe_cluster_id, bool is_video) {
+  if (probe_cluster_id != PacedPacketInfo::kNotAProbe)
+    probe_controller_->OnProbeSent(probe_cluster_id, at_time);
+  if (is_video) probe_controller_->OnVideoPacketSent(at_time);
   alr_detector_->OnBytesSent(bytes_sent, at_time.ms());
   std::optional<int64_t> alr_start_time =
       alr_detector_->GetApplicationLimitedRegionStartTime();
   acknowledged_bitrate_estimator_->SetAlr(alr_start_time.has_value());
+}
+
+void CongestionControl::OnProbeAborted(int cluster_id, Timestamp at_time,
+                                     const char* reason) {
+  probe_controller_->OnProbeAborted(cluster_id, at_time, reason);
+  if (pending_probe_ && pending_probe_->id == cluster_id)
+    pending_probe_.reset();
+}
+
+void CongestionControl::OnVideoSendPaused(bool paused, Timestamp at_time) {
+  probe_controller_->OnVideoSendPaused(paused, at_time);
+  if (paused) pending_probe_.reset();
 }
 
 NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
@@ -430,6 +446,11 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   for (const auto& feedback : report.SortedByReceiveTime()) {
     if (feedback.sent_packet.pacing_info.probe_cluster_id !=
         PacedPacketInfo::kNotAProbe) {
+      // Feedback may reach the CC queue before the successful-send task.
+      // It also proves transmission, using the recorded send timestamp.
+      probe_controller_->OnProbeSent(
+          feedback.sent_packet.pacing_info.probe_cluster_id,
+          feedback.sent_packet.send_time);
       auto probe_result =
           probe_bitrate_estimator_->HandleProbeAndEstimateBitrate(feedback);
       if (probe_result) {

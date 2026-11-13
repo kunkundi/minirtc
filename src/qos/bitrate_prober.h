@@ -13,6 +13,7 @@
 
 #include <stddef.h>
 
+#include <functional>
 #include <optional>
 #include <queue>
 
@@ -52,6 +53,7 @@ class BitrateProber {
   void SetEnabled(bool enable);
   void SetAllowProbeWithoutMediaPacket(bool allow);
   void AbortProbing(const char* reason);
+  void SetProbeAbortedCallback(std::function<void(int, const char*)> callback);
 
   // Returns true if the prober is in a probing session, i.e., it currently
   // wants packets to be sent out according to the time returned by
@@ -129,6 +131,7 @@ class BitrateProber {
   Timestamp next_probe_time_;
 
   BitrateProberConfig config_;
+  std::function<void(int, const char*)> probe_aborted_callback_;
 };
 
 }  // namespace webrtc
