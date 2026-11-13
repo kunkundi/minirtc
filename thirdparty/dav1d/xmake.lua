@@ -3,7 +3,11 @@ package("dav1d")
     set_description("dav1d is a new AV1 cross-platform decoder, open-source, and focused on speed, size and correctness.")
     set_license("BSD-2-Clause")
 
-    add_urls("https://code.videolan.org/videolan/dav1d.git")
+    -- Prefer the checksum-verified release archive; keep Git mirrors as
+    -- fallbacks so a VideoLAN GitLab outage does not block clean builds.
+    add_urls("https://downloads.videolan.org/pub/videolan/dav1d/$(version)/dav1d-$(version).tar.xz",
+             "https://github.com/videolan/dav1d.git",
+             "https://code.videolan.org/videolan/dav1d.git")
 
     add_versions("1.4.3", "42fe524bcc82ea3a830057178faace22923a79bad3d819a4962d8cfc54c36f19")
     add_versions("1.1.0", "fb57aae7875f28c30fb3dbae4a3683d27e2f91dde09ce5c60c22cef9bc58dfd1")
