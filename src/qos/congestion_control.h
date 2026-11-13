@@ -8,6 +8,7 @@
 #include "acknowledged_bitrate_estimator.h"
 #include "acknowledged_bitrate_estimator_interface.h"
 #include "alr_detector.h"
+#include "bitrate_limits.h"
 #include "api/network_state_predictor.h"
 #include "api/transport/network_control.h"
 #include "api/transport/network_types.h"
@@ -22,7 +23,7 @@ using namespace webrtc;
 
 class CongestionControl {
  public:
-  CongestionControl();
+  explicit CongestionControl(StartingBitrates starting_bitrates = {});
   ~CongestionControl();
 
  public:
@@ -74,6 +75,7 @@ class CongestionControl {
       acknowledged_bitrate_estimator_;
 
   std::optional<NetworkControllerConfig> initial_config_;
+  StartingBitrates starting_bitrates_;
 
   DataRate min_target_rate_ = DataRate::Zero();
   DataRate min_data_rate_ = DataRate::Zero();

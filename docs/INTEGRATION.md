@@ -117,6 +117,8 @@ MiniRtcParams MakeParams(const char* login_identity,
   params.native_video_output = false;
   params.av1_encoding = false;
   params.turn_mode = MiniRtcTurnAutoUdpTcp;
+  params.direct_start_bitrate_bps = 2500000;
+  params.relay_start_bitrate_bps = 1500000;
   params.enable_srtp = true;
   params.video_content_type = MiniRtcVideoContentType::ScreenContent;
   params.video_quality = MiniRtcVideoQualityHigh;
@@ -133,6 +135,8 @@ MiniRtcParams MakeParams(const char* login_identity,
 ```
 
 `signal_server_ip` 支持主机名、IP、主机与路径，以及 `wss://` / `https://` URL。地址中显式指定的端口优先于 `signal_server_port`。可通过 `MiniRtcParseSignalServerAddress` 校验并拆分地址。示例端口 `9099` 由应用填写。
+
+`direct_start_bitrate_bps` 和 `relay_start_bitrate_bps` 设置本机原生媒体发送端的直连、中继起始带宽估计，单位为 bps，范围为 300000–20000000。字段为零或超出范围时分别使用 2500000 和 1500000；创建后的连接仍根据网络反馈调整带宽。`use_cfg_file=true` 时，`MiniRtcInit` 从 INI 的 `[bandwidth]` 节读取同名键，缺失或非法值使用默认值。扩展后的 `MiniRtcParams` 需要应用与库一起重新编译。
 
 ### 回调与线程
 

@@ -197,8 +197,16 @@ int PeerConnection::Init(PeerConnectionParams params) {
     user_id_ = user_id_with_pwd_;
   }
 
+  StartingBitrates starting_bitrates;
   if (params.use_cfg_file) {
     INIReader reader(params.cfg_path);
+    const StartingBitrates defaults;
+    starting_bitrates.direct_bps = StartingBitrates::Parse(
+        reader.Get("bandwidth", "direct_start_bitrate_bps", ""),
+        defaults.direct_bps);
+    starting_bitrates.relay_bps = StartingBitrates::Parse(
+        reader.Get("bandwidth", "relay_start_bitrate_bps", ""),
+        defaults.relay_bps);
     cfg_signal_server_ip_ = reader.Get("signal server", "ip", "-1");
     cfg_signal_server_port_ = reader.Get("signal server", "port", "-1");
     cfg_hardware_acceleration_ =
@@ -238,6 +246,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
       video_quality_ = MiniRtcVideoQuality::MiniRtcVideoQualityHigh;
     }
   } else {
+    starting_bitrates = StartingBitrates::Normalize(
+        params.direct_start_bitrate_bps, params.relay_start_bitrate_bps);
     cfg_signal_server_ip_ = params.signal_server_ip;
     signal_server_port_ = params.signal_server_port;
     hardware_acceleration_ = params.hardware_acceleration;
@@ -274,6 +284,7 @@ int PeerConnection::Init(PeerConnectionParams params) {
 
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
+  connection_info_.starting_bitrates = starting_bitrates;
   connection_info_.hardware_acceleration = hardware_acceleration_;
   connection_info_.native_video_output = native_video_output_;
   connection_info_.trickle_ice = trickle_ice_;

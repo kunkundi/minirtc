@@ -117,6 +117,8 @@ MiniRtcParams MakeParams(const char* login_identity,
   params.native_video_output = false;
   params.av1_encoding = false;
   params.turn_mode = MiniRtcTurnAutoUdpTcp;
+  params.direct_start_bitrate_bps = 2500000;
+  params.relay_start_bitrate_bps = 1500000;
   params.enable_srtp = true;
   params.video_content_type = MiniRtcVideoContentType::ScreenContent;
   params.video_quality = MiniRtcVideoQualityHigh;
@@ -133,6 +135,8 @@ MiniRtcParams MakeParams(const char* login_identity,
 ```
 
 `signal_server_ip` accepts a hostname, an IP address, a host/path, or a `wss://` / `https://` URL. An explicit port in the address takes precedence over `signal_server_port`. Use `MiniRtcParseSignalServerAddress` to validate and split the address. The example port `9099` is supplied by the application.
+
+`direct_start_bitrate_bps` and `relay_start_bitrate_bps` set the local native media sender's initial bandwidth estimates for direct and relay paths, in bps, within 300000–20000000. Zero or out-of-range values use 2500000 and 1500000 respectively; network feedback continues to adjust bandwidth after connection. With `use_cfg_file=true`, `MiniRtcInit` reads the same keys from the INI's `[bandwidth]` section, using defaults for missing or invalid values. Rebuild the application and library together for the extended `MiniRtcParams` structure.
 
 ### Callbacks and threads
 

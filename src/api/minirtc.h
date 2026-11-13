@@ -551,6 +551,15 @@ typedef struct {
   MiniRtcOnSignalExchange on_signal_exchange;
   /// Optional native H.264 tap.
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video;
+
+  /// Native P2P/direct-IP congestion-control starting estimate in bps.
+  /// Zero or values outside [300000, 20000000] use the default 2500000.
+  /// INI mode reads [bandwidth] direct_start_bitrate_bps instead.
+  int direct_start_bitrate_bps;
+  /// Native TURN congestion-control starting estimate in bps.
+  /// Zero or values outside [300000, 20000000] use the default 1500000.
+  /// INI mode reads [bandwidth] relay_start_bitrate_bps instead.
+  int relay_start_bitrate_bps;
 } MiniRtcParams;
 
 // -----------------------------------------------------------------------------

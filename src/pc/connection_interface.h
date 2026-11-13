@@ -14,6 +14,7 @@
 #include <vector>
 
 #include "direct_ice_policy.h"
+#include "bitrate_limits.h"
 #include "ice_server_config.h"
 #include "minirtc.h"
 
@@ -26,6 +27,7 @@ struct MediaStreamIds {
 };
 
 struct ConnectionInfo {
+  StartingBitrates starting_bitrates;
   DirectIcePolicy direct_policy;
   std::function<void(MiniRtcDirectError)> direct_error;
   std::optional<IceServerConfiguration> ice_config;

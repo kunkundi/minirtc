@@ -64,7 +64,8 @@ class IceTransportController
                          int video_frame_rate,
                          MiniRtcVideoContentType video_content_type,
                          MiniRtcVideoDegradationPreference
-                             video_degradation_preference);
+                             video_degradation_preference,
+                         StartingBitrates starting_bitrates = {});
   ~IceTransportController();
 
  public:
@@ -469,6 +470,7 @@ class IceTransportController
   std::map<uint32_t, std::string> ssrc_to_name_;
 
   MediaCodecConfig media_config_;
+  StartingBitrates starting_bitrates_;
 
   OnReceiveVideo on_receive_video_ = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;

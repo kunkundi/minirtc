@@ -31,7 +31,7 @@ MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params) {
     InitLogger("logs");
   }
 
-  MiniRtcPeerPtr* peer_ptr = new MiniRtcPeerPtr;
+  MiniRtcPeerPtr* peer_ptr = new MiniRtcPeerPtr{};
 #ifdef USE_LIBDATACHANNEL_CONNECTION
   peer_ptr->peer_connection = new DataChannelConnection();
 #else
@@ -53,6 +53,8 @@ MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params) {
     peer_ptr->pc_params.video_frame_rate = params->video_frame_rate;
     peer_ptr->pc_params.video_degradation_preference =
         params->video_degradation_preference;
+    peer_ptr->pc_params.direct_start_bitrate_bps = params->direct_start_bitrate_bps;
+    peer_ptr->pc_params.relay_start_bitrate_bps = params->relay_start_bitrate_bps;
   }
   peer_ptr->pc_params.on_receive_video_buffer = params->on_receive_video_buffer;
   peer_ptr->pc_params.on_receive_audio_buffer = params->on_receive_audio_buffer;

@@ -53,7 +53,8 @@ IceTransportController::IceTransportController(
     std::shared_ptr<IOStatistics> ice_io_statistics, bool enable_srtp,
     MiniRtcVideoQuality video_quality, int video_frame_rate,
     MiniRtcVideoContentType video_content_type,
-    MiniRtcVideoDegradationPreference video_degradation_preference)
+    MiniRtcVideoDegradationPreference video_degradation_preference,
+    StartingBitrates starting_bitrates)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
@@ -69,6 +70,7 @@ IceTransportController::IceTransportController(
       native_video_output_(false),
       is_running_(true),
       congestion_window_size_(DataSize::PlusInfinity()) {
+  starting_bitrates_ = starting_bitrates;
   media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference =
@@ -156,7 +158,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   task_queue_trans_fb_ =
       std::make_shared<TaskQueueLockFree>("transport feedback adapter");
 
-  controller_ = std::make_unique<CongestionControl>();
+  controller_ = std::make_unique<CongestionControl>(starting_bitrates_);
   const int relay_path_state =
       relay_path_state_.load(std::memory_order_acquire);
   if (relay_path_state >= 0) {

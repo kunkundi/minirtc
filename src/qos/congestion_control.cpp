@@ -24,8 +24,6 @@ constexpr float kDefaultPaceMultiplier = 2.5f;
 // below the current throughput estimate to drain the network queues.
 constexpr double kProbeDropThroughputFraction = 0.85;
 
-constexpr DataRate kDirectStartingRate = DataRate::BitsPerSec(2500000);
-constexpr DataRate kRelayStartingRate = DataRate::BitsPerSec(1500000);
 constexpr TimeDelta kProbeEstimateSettleTime = TimeDelta::Millis(100);
 
 }  // namespace
@@ -56,7 +54,7 @@ BandwidthLimitedCause GetBandwidthLimitedCause(LossBasedState loss_based_state,
   }
 }
 
-CongestionControl::CongestionControl()
+CongestionControl::CongestionControl(StartingBitrates starting_bitrates)
     : packet_feedback_only_(true),
       use_min_allocatable_as_lower_bound_(false),
       ignore_probes_lower_than_network_estimate_(false),
@@ -77,13 +75,15 @@ CongestionControl::CongestionControl()
       min_total_allocated_bitrate_(DataRate::Zero()),
       max_padding_rate_(DataRate::Zero()),
       last_loss_based_target_rate_(DataRate::Zero()) {
+  starting_bitrates_ = starting_bitrates;
   NetworkControllerConfig config;
 
   config.constraints.at_time = Timestamp::PlusInfinity();
   config.constraints.min_data_rate = DataRate::BitsPerSec(300000);
   config.constraints.max_data_rate =
       DataRate::BitsPerSec(kDefaultMaxNetworkBitrateBps);
-  config.constraints.starting_rate = kDirectStartingRate;
+  config.constraints.starting_rate =
+      DataRate::BitsPerSec(starting_bitrates_.direct_bps);
 
   config.stream_based_config.at_time = Timestamp::PlusInfinity();
   config.stream_based_config.requests_alr_probing = true;
@@ -117,7 +117,8 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   relay_path_ = relay_path;
   probe_controller_->SetRelayPath(relay_path);
   const DataRate desired_starting_rate =
-      relay_path_ ? kRelayStartingRate : kDirectStartingRate;
+      DataRate::BitsPerSec(relay_path_ ? starting_bitrates_.relay_bps
+                                     : starting_bitrates_.direct_bps);
 
   if (initial_config_) {
     initial_config_->constraints.starting_rate = desired_starting_rate;
@@ -128,7 +129,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
     return update;
   }
 
-  // Lower an established controller immediately when ICE moves onto a relay.
+  // Apply the configured starting estimate when ICE moves onto a relay.
   // On a new direct path, measure the available headroom before raising media.
   if (!relay_path_ && network_available_) {
     update.probe_cluster_configs =

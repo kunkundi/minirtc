@@ -48,6 +48,8 @@ int PeerConnection::InitDirect(PeerConnectionParams params,
   connection_callbacks_.on_net_status_report = params.on_net_status_report;
   connection_callbacks_.user_data = params.user_data;
   connection_info_ = {};
+  connection_info_.starting_bitrates = StartingBitrates::Normalize(
+      params.direct_start_bitrate_bps, params.relay_start_bitrate_bps);
   connection_info_.direct_policy = {IcePolicy::HostOnly, options.local_address,
                                     options.remote_address};
   connection_info_.direct_error = [this](MiniRtcDirectError error) {
