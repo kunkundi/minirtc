@@ -213,11 +213,15 @@ FecProtectionConfig AllocateFecBudget(FecProtectionConfig c, int64_t bps,
 void FecRateBudget::Refill(int64_t now_ms) {
   if (last_ms_ >= 0 && now_ms >= last_ms_ && rate_bps_ > 0)
     credit_ = std::min(
-        4800.0, credit_ + double(std::min<int64_t>(now_ms - last_ms_, 1000)) *
+        max_credit_, credit_ + double(std::min<int64_t>(now_ms - last_ms_, 1000)) *
                               rate_bps_ / 8000);
   if (now_ms < last_ms_)
     credit_ = 0;
   last_ms_ = now_ms;
+}
+void FecRateBudget::SetMaxBurstBytes(size_t bytes) {
+  max_credit_ = static_cast<double>(bytes);
+  credit_ = std::min(credit_, max_credit_);
 }
 void FecRateBudget::SetRate(int64_t bps, int64_t now_ms) {
   Refill(now_ms);

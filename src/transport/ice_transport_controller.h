@@ -492,6 +492,7 @@ class IceTransportController
   std::atomic<FecMode> fec_mode_{FecMode::kAdaptive};
   uint64_t fec_config_version_ = 0;
   bool fec_update_queued_ = false;  // Guarded by stream_senders_mutex_.
+  int64_t rtx_bitrate_limit_bps_ = 0;  // Guarded by stream_senders_mutex_.
   int64_t fec_snapshot_ms_ = -1, fec_log_ms_ = -1;
   std::map<uint32_t, FecFeedbackSnapshot> fec_feedback_snapshots_;
   std::optional<uint8_t> video_abs_send_time_ext_id_;

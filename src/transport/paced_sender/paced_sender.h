@@ -56,6 +56,9 @@ class PacedSender : public webrtc::RtpPacketPacer,
                          const webrtc::PacedPacketInfo&)>
           on_sent_packet_func);
 
+  void SetOnRtpPacketDroppedFunc(
+      std::function<void(const webrtc::RtpPacketToSend&)> callback);
+
   void SetGeneratePaddingFunc(
       std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
           generat_padding_func);
@@ -68,11 +71,22 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void SetFecBudgets(const std::map<uint32_t, int64_t>& rates,
                     int64_t total_bps, uint64_t version);
   uint64_t FecDroppedPackets() const { return fec_dropped_.load(); }
+  // Aggregate RTX allowance across all video streams, in wire bits/s.
+  void SetRtxBudget(int64_t bps, uint64_t version);
+  uint64_t RtxDroppedPackets() const { return rtx_dropped_.load(); }
 
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
                   const webrtc::PacedPacketInfo& cluster_info) override {
     if (is_shutdown_.load() || ShouldDropVideoPacket(*packet)) {
+      NotifyRtxDropped(*packet);
+      return;
+    }
+    if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
+        (rtx_congested_ || RtxExpired(*packet) ||
+         !rtx_send_budget_.Consume(packet->size() + 64,
+                                   clock_->CurrentTime().ms()))) {
+      NotifyRtxDropped(*packet);
       return;
     }
     if (packet->packet_type() == webrtc::RtpPacketMediaType::kForwardErrorCorrection) {
@@ -212,6 +226,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
       std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> packets);
   void EnqueuePacketOnQueue(
       std::unique_ptr<webrtc::RtpPacketToSend> packet);
+  void NotifyRtxDropped(const webrtc::RtpPacketToSend& packet);
+  bool RtxExpired(const webrtc::RtpPacketToSend& packet) const;
 
   // Call in response to state updates that could warrant sending out packets.
   // Protected against re-entry from packet sent receipts.
@@ -232,6 +248,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   std::function<void(std::unique_ptr<webrtc::RtpPacketToSend>,
                      const webrtc::PacedPacketInfo&)>
       on_sent_packet_func_ = nullptr;
+  std::function<void(const webrtc::RtpPacketToSend&)>
+      on_rtp_packet_dropped_func_;
 
   std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
       generat_padding_func_ = nullptr;
@@ -285,6 +303,13 @@ class PacedSender : public webrtc::RtpPacketPacer,
   uint64_t fec_budget_version_ = 0;
   bool fec_budget_managed_ = false;
   std::atomic<uint64_t> fec_dropped_{0};
+  // Bound both queued requests and actual sends: a congested queue or a rate
+  // decrease must not turn an earlier allowance into a recovery burst.
+  FecRateBudget rtx_admission_budget_;
+  FecRateBudget rtx_send_budget_;
+  uint64_t rtx_budget_version_ = 0;
+  bool rtx_congested_ = false;  // Accessed only on the pacer queue.
+  std::atomic<uint64_t> rtx_dropped_{0};
 
   webrtc::Timestamp last_send_time_;
   webrtc::Timestamp last_call_time_;

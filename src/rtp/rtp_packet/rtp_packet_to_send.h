@@ -169,7 +169,7 @@ class RtpPacketToSend : public minirtc::RtpPacket {
   void set_stream_name(const std::string& stream_name) {
     stream_name_ = stream_name;
   }
-  std::string get_stream_name() { return stream_name_; }
+  std::string get_stream_name() const { return stream_name_; }
 
  private:
   webrtc::Timestamp capture_time_ = webrtc::Timestamp::Zero();

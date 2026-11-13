@@ -59,7 +59,6 @@ PacingController::PacingController(Clock* clock, PacketSender* packet_sender,
       send_padding_if_silent_(true),
       pace_audio_(false),
       ignore_transport_overhead_(false),
-      fast_retransmissions_(true),
       keyframe_flushing_(configuration.keyframe_flushing),
       transport_overhead_per_packet_(DataSize::Zero()),
       send_burst_interval_(configuration.send_burst_interval),
@@ -624,6 +623,11 @@ DataSize PacingController::PaddingToAdd(DataSize recommended_probe_size,
 std::unique_ptr<RtpPacketToSend> PacingController::GetPendingPacket(
     const PacedPacketInfo& pacing_info, Timestamp target_send_time,
     Timestamp now) {
+  // Retransmissions retain queue priority, but must respect congestion even
+  // when a bandwidth probe is active. Keepalives are handled separately.
+  if (congested_ && NextUnpacedSendTime().IsInfinite()) {
+    return nullptr;
+  }
   const bool is_probe =
       pacing_info.probe_cluster_id != PacedPacketInfo::kNotAProbe;
   // If first packet in probe, insert a small padding packet so we have a
@@ -731,13 +735,6 @@ Timestamp PacingController::NextUnpacedSendTime() const {
         packet_queue_.LeadingPacketEnqueueTime(RtpPacketMediaType::kAudio);
     if (leading_audio_send_time.IsFinite()) {
       return leading_audio_send_time;
-    }
-  }
-  if (fast_retransmissions_) {
-    Timestamp leading_retransmission_send_time =
-        packet_queue_.LeadingPacketEnqueueTimeForRetransmission();
-    if (leading_retransmission_send_time.IsFinite()) {
-      return leading_retransmission_send_time;
     }
   }
   return Timestamp::MinusInfinity();

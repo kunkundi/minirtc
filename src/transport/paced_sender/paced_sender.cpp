@@ -68,6 +68,22 @@ void PacedSender::SetFecBudgets(const std::map<uint32_t, int64_t>& rates,
   });
 }
 
+void PacedSender::SetRtxBudget(int64_t bps, uint64_t version) {
+  RunOrPost([this, bps, version] {
+    if (version <= rtx_budget_version_) return;
+    rtx_budget_version_ = version;
+    const int64_t now_ms = clock_->CurrentTime().ms();
+    rtx_admission_budget_.SetRate(bps, now_ms);
+    rtx_send_budget_.SetRate(bps, now_ms);
+    // NACKs arrive in batches. Allow 100 ms of repairs (at least one datagram,
+    // at most 32 KiB) while the ordinary pacer still controls each send burst.
+    const size_t burst_bytes =
+        static_cast<size_t>(std::clamp<int64_t>(bps / 80, 1500, 32768));
+    rtx_admission_budget_.SetMaxBurstBytes(burst_bytes);
+    rtx_send_budget_.SetMaxBurstBytes(burst_bytes);
+  });
+}
+
 void PacedSender::RunOrPost(AnyInvocable<void()> task) {
   if (is_shutdown_.load()) {
     return;
@@ -98,6 +114,29 @@ void PacedSender::SetGeneratePaddingFunc(
                 mutable {
     generat_padding_func_ = std::move(generat_padding_func);
   });
+}
+
+void PacedSender::SetOnRtpPacketDroppedFunc(
+    std::function<void(const webrtc::RtpPacketToSend&)> callback) {
+  RunOrPost([this, callback = std::move(callback)]() mutable {
+    on_rtp_packet_dropped_func_ = std::move(callback);
+  });
+}
+
+void PacedSender::NotifyRtxDropped(const webrtc::RtpPacketToSend& packet) {
+  if (packet.packet_type() != webrtc::RtpPacketMediaType::kRetransmission)
+    return;
+  ++rtx_dropped_;
+  // Release the history entry's pending flag so a later NACK can retry.
+  if (on_rtp_packet_dropped_func_) on_rtp_packet_dropped_func_(packet);
+}
+
+bool PacedSender::RtxExpired(const webrtc::RtpPacketToSend& packet) const {
+  // Desktop frame recovery finishes well before one second. Do not let
+  // repeated NACKs extend an obsolete frame's lifetime indefinitely.
+  return packet.capture_time().IsFinite() &&
+         clock_->CurrentTime() - packet.capture_time() >=
+             webrtc::TimeDelta::Seconds(1);
 }
 
 std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
@@ -227,6 +266,7 @@ void PacedSender::Resume() {
 
 void PacedSender::SetCongested(bool congested) {
   RunOrPost([this, congested] {
+    rtx_congested_ = congested;
     pacing_controller_.SetCongested(congested);
     MaybeScheduleProcessPackets();
   });
@@ -267,7 +307,17 @@ void PacedSender::EnqueuePacketOnQueue(
     std::unique_ptr<webrtc::RtpPacketToSend> packet) {
   // Also discard retransmissions posted late by the history queue, including
   // after a quick pause/resume. They still carry the old capture timestamp.
-  if (ShouldDropVideoPacket(*packet)) return;
+  if (ShouldDropVideoPacket(*packet)) {
+    NotifyRtxDropped(*packet);
+    return;
+  }
+  if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
+      (!transport_ready_ || rtx_congested_ || RtxExpired(*packet) ||
+       !rtx_admission_budget_.Consume(packet->size() + 64,
+                                      clock_->CurrentTime().ms()))) {
+    NotifyRtxDropped(*packet);
+    return;
+  }
   packet->set_transport_sequence_number(transport_seq_++);
   size_t packet_size = packet->payload_size() + packet->padding_size();
   if (include_overhead_) {

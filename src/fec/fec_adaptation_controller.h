@@ -111,13 +111,15 @@ FecProtectionConfig AllocateFecBudget(FecProtectionConfig config,
 // for failed/dropped sends: this avoids feedback-driven retransmission bursts.
 class FecRateBudget {
 public:
+  // RTX can allow a short repair burst; FEC retains its 4800-byte default.
+  void SetMaxBurstBytes(size_t bytes);
   void SetRate(int64_t bps, int64_t now_ms);
   bool Consume(size_t bytes, int64_t now_ms);
 
 private:
   void Refill(int64_t now_ms);
   int64_t rate_bps_ = -1, last_ms_ = -1;
-  double credit_ = 0;
+  double credit_ = 0, max_credit_ = 4800;
 };
 } // namespace minirtc
 #endif

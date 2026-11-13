@@ -241,7 +241,6 @@ class PacingController {
   const bool send_padding_if_silent_;
   const bool pace_audio_;
   const bool ignore_transport_overhead_;
-  const bool fast_retransmissions_;
   const bool keyframe_flushing_;
   DataRate max_rate = DataRate::BitsPerSec(100'000'000);
   DataSize transport_overhead_per_packet_;

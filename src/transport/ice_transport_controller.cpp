@@ -175,6 +175,17 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           : 2000));
   paced_sender_->SetAllowProbeWithoutMediaPacket(false);
   std::weak_ptr<IceTransportController> weak_this = shared_from_this();
+  paced_sender_->SetOnRtpPacketDroppedFunc(
+      [weak_this](const webrtc::RtpPacketToSend& packet) {
+        if (auto self = weak_this.lock()) {
+          std::shared_lock lock(self->stream_senders_mutex_);
+          const auto it = self->stream_senders_.find(packet.get_stream_name());
+          if (it != self->stream_senders_.end() && it->second &&
+              it->second->transceiver) {
+            it->second->transceiver->OnRtpPacketSendFailed(packet);
+          }
+        }
+      });
   // The pacer serializes this callback, and Send consumes its buffer before
   // returning, so the callback can retain and reuse its SRTP scratch space.
   paced_sender_->SetOnSentPacketFunc(
@@ -3825,6 +3836,7 @@ void IceTransportController::UpdateFecProtection() {
   const bool log = fec_log_ms_ < 0 || now_ms - fec_log_ms_ >= 5000;
   bool publish = false;
   int64_t media_total = 0, fec_total = 0;
+  int64_t rtx_limit = 0, rtx_reserved = 0;
   {
     std::unique_lock lock(stream_senders_mutex_);
     const uint64_t version = ++fec_config_version_;
@@ -3835,8 +3847,23 @@ void IceTransportController::UpdateFecProtection() {
                now_ms - *c->last_capture_time < 100));
     };
     int videos = 0, audio = 0, data = 0;
+    int64_t rtx_estimate = 0;
     for (const auto &item : stream_senders_) {
       const auto &c = item.second;
+      if (c && c->type == StreamType::kVideo && c->rtx_ssrc) {
+        if (new_snapshot) {
+          const auto auxiliary = fec_feedback_snapshots_.find(*c->rtx_ssrc);
+          const int64_t actual_rtx =
+              auxiliary == fec_feedback_snapshots_.end()
+                  ? 0
+                  : auxiliary->second
+                        .sent_bps[static_cast<size_t>(FecPacketKind::kRtx)];
+          c->rtx_bitrate_ewma =
+              std::max<double>(actual_rtx, c->rtx_bitrate_ewma * 0.8);
+        }
+        // Include repairs of recently idle streams in the shared reservation.
+        rtx_estimate += static_cast<int64_t>(c->rtx_bitrate_ewma);
+      }
       if (!active(c))
         continue;
       if (c->type == StreamType::kVideo && c->codec)
@@ -3853,7 +3880,14 @@ void IceTransportController::UpdateFecProtection() {
     int64_t video_budget = std::max<int64_t>(0, target_bitrate_ - other);
     const int limit = video_bitrate_limit_bps_;
     if (limit > 0) video_budget = std::min<int64_t>(video_budget, limit);
-    const int64_t share = video_budget / std::max(1, videos);
+    // Enforce the same ceiling at RTX admission and send time. At least half
+    // the video transport budget remains available for fresh media and FEC,
+    // even after a retransmission spike or a sudden bandwidth decrease.
+    rtx_limit = video_rtx_enabled_ ? video_budget / 2 : 0;
+    rtx_bitrate_limit_bps_ = rtx_limit;
+    rtx_reserved = std::min(rtx_estimate, rtx_limit);
+    const int64_t share =
+        (video_budget - rtx_reserved) / std::max(1, videos);
     for (const auto &item : stream_senders_) {
       const auto &c = item.second;
       if (!c || c->type != StreamType::kVideo || !c->transceiver)
@@ -3869,24 +3903,12 @@ void IceTransportController::UpdateFecProtection() {
       auto feedback = fec_feedback_snapshots_.find(ssrc);
       if (feedback != fec_feedback_snapshots_.end())
         network.feedback = feedback->second;
-      if (new_snapshot) {
-        auto auxiliary = fec_feedback_snapshots_.find(rtx);
-        const int64_t actual_rtx =
-            auxiliary == fec_feedback_snapshots_.end()
-                ? 0
-                : auxiliary->second
-                      .sent_bps[static_cast<size_t>(FecPacketKind::kRtx)];
-        // Reserve increases immediately and release them slowly.
-        c->rtx_bitrate_ewma =
-            std::max<double>(actual_rtx, c->rtx_bitrate_ewma * 0.8);
-      }
       FecProtectionConfig config;
       if (active(c)) {
         c->fec_last_active_ms = now_ms;
         config = c->fec_controller.Update(mode, network);
-        config = AllocateFecBudget(
-            config, share - static_cast<int64_t>(c->rtx_bitrate_ewma),
-            network.feedback.payload_fraction);
+        config = AllocateFecBudget(config, share,
+                                   network.feedback.payload_fraction);
         media_total += config.media_bitrate_bps;
         fec_total += config.fec_bitrate_bps;
       } else {
@@ -3895,7 +3917,6 @@ void IceTransportController::UpdateFecProtection() {
         if (c->fec_last_active_ms >= 0 &&
             now_ms - c->fec_last_active_ms > 1000) {
           c->fec_controller.Reset();
-          c->rtx_bitrate_ewma = 0;
           c->fec_last_active_ms = -1;
         }
       }
@@ -3932,7 +3953,7 @@ void IceTransportController::UpdateFecProtection() {
       startup.source_ratio = mode == FecMode::kOff     ? 0
                              : mode == FecMode::kFixed ? 0.25
                                                        : 0.10;
-      media_total = AllocateFecBudget(startup, video_budget, 0.94)
+      media_total = AllocateFecBudget(startup, share, 0.94)
                         .media_bitrate_bps;
     }
     video_transport_bitrate_bps_.store(media_total);
@@ -3943,6 +3964,8 @@ void IceTransportController::UpdateFecProtection() {
     fec_log_ms_ = now_ms;
     LOG_DEBUG("FEC pacer: dropped={} media_bps={} fec_bps={}",
              paced_sender_->FecDroppedPackets(), media_total, fec_total);
+    LOG_DEBUG("RTX pacer: dropped={} limit_bps={} reserved_bps={}",
+              paced_sender_->RtxDroppedPackets(), rtx_limit, rtx_reserved);
   }
   if (!publish)
     return;
@@ -3968,6 +3991,8 @@ void IceTransportController::UpdateFecProtection() {
         }
         self->paced_sender_->SetFecBudgets(rates, total,
                                            self->fec_config_version_);
+        self->paced_sender_->SetRtxBudget(self->rtx_bitrate_limit_bps_,
+                                          self->fec_config_version_);
       })) {
     std::unique_lock lock(stream_senders_mutex_);
     fec_update_queued_ = false;
