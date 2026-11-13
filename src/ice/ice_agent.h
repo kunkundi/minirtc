@@ -172,6 +172,9 @@ class IceAgent {
 
  private:
   void DispatchIceCallback(std::function<void()> callback);
+  static void OnIceCheckStatusStatic(NiceAgent*, guint stream_id,
+                                     guint component_id, const gchar* status,
+                                     gpointer data);
   static void OnStunMappingStatic(NiceAgent* agent, NiceCandidate* sample,
                                   const gchar* server_ip, guint server_port,
                                   guint sequence, gpointer data);

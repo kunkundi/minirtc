@@ -373,6 +373,12 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
                      user_ptr_);
     g_signal_connect(agent, "component-state-changed",
                      G_CALLBACK(&IceAgent::OnNiceStateChangedStatic), this);
+    if (g_signal_lookup("ice-check-status", G_OBJECT_TYPE(agent))) {
+      g_signal_connect(agent, "ice-check-status",
+                       G_CALLBACK(OnIceCheckStatusStatic), this);
+    } else {
+      LOG_WARN("libnice lacks ICE readiness diagnostics; rebuild dependencies");
+    }
 
     stream_id_ = nice_agent_add_stream(agent, n_components_);
     if (stream_id_ == 0) {
@@ -1491,6 +1497,20 @@ void IceAgent::DispatchIceCallback(std::function<void()> callback) {
       },
       task,
       [](gpointer data) { delete static_cast<std::function<void()>*>(data); });
+}
+
+void IceAgent::OnIceCheckStatusStatic(NiceAgent*, guint stream_id,
+                                      guint component_id, const gchar* status,
+                                      gpointer data) {
+  auto* self = static_cast<IceAgent*>(data);
+  if (!self || !status) return;
+  // The libnice signal is queued outside its lock. Copy the text before
+  // dispatching because the signal only owns it for the duration of this call.
+  self->DispatchIceCallback(
+      [stream_id, component_id, status = std::string(status)] {
+        LOG_INFO("ICE readiness stream={} component={}: {}", stream_id,
+                 component_id, status);
+      });
 }
 
 void IceAgent::OnNiceStateChangedStatic(NiceAgent* agent, guint stream_id,

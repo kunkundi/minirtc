@@ -1,0 +1,248 @@
+--- a/agent/agent-priv.h
++++ b/agent/agent-priv.h
+@@ -243,6 +243,9 @@
+   guint component_id,
+   NiceComponentState state);
+ 
++void agent_signal_ice_check_status (NiceAgent *agent, guint stream_id,
++    guint component_id, const gchar *status);
++
+ void agent_signal_stun_mapping (NiceAgent *agent, guint stream_id,
+     guint component_id, const NiceAddress *base, const NiceAddress *mapped,
+     const NiceAddress *server, guint sequence);
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -156,6 +156,7 @@
+ 
+   SIGNAL_PUNCH_PACKET,
+   SIGNAL_STUN_MAPPING,
++  SIGNAL_ICE_CHECK_STATUS,
+   N_SIGNALS,
+ };
+ 
+@@ -534,6 +535,12 @@
+       G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST, 0,
+       NULL, NULL, NULL, G_TYPE_NONE, 6, G_TYPE_UINT, G_TYPE_UINT,
+       G_TYPE_UINT64, G_TYPE_UINT64, NICE_TYPE_CANDIDATE, G_TYPE_BYTES);
++  /* MiniRTC diagnostics are queued, like component-state-changed, so an
++   * application logger is never invoked while the agent lock is held. */
++  signals[SIGNAL_ICE_CHECK_STATUS] = g_signal_new ("ice-check-status",
++      G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST, 0,
++      NULL, NULL, NULL, G_TYPE_NONE, 3,
++      G_TYPE_UINT, G_TYPE_UINT, G_TYPE_STRING);
+   signals[SIGNAL_STUN_MAPPING] = g_signal_new ("stun-mapping",
+       G_OBJECT_CLASS_TYPE (gobject_class), G_SIGNAL_RUN_LAST, 0,
+       NULL, NULL, NULL, G_TYPE_NONE, 4,
+@@ -2712,6 +2719,14 @@
+   agent_signal_socket_writable (agent, component);
+ }
+ 
++void agent_signal_ice_check_status (NiceAgent *agent, guint stream_id,
++    guint component_id, const gchar *status)
++{
++  /* agent_queue_signal owns a copy of the string until emission. */
++  agent_queue_signal (agent, signals[SIGNAL_ICE_CHECK_STATUS],
++      stream_id, component_id, status);
++}
++
+ /* Emit every successful Binding sample before candidate deduplication.
+  * Signals are queued so callbacks run outside the agent lock. */
+ void agent_signal_stun_mapping (NiceAgent *agent, guint stream_id,
+--- a/agent/component.h
++++ b/agent/component.h
+@@ -176,6 +176,9 @@
+   GSList *punch_endpoints; /* owned registry, sockets owned by sources */
+   gint64 relay_upgrade_deadline; /* zero until first relay selection */
+   gint64 relay_upgrade_next_retry;
++  gint64 ready_wait_started;
++  gint64 ready_status_last_log;
++  guint ready_status; /* zero until the first readiness evaluation */
+   CandidatePair selected_pair; /* independent from checklists, 
+ 				    see ICE 11.1. "Sending Media" (ID-19) */
+   gboolean fallback_mode;      /* in this case, accepts packets from all, ignore candidate validation */
+--- a/agent/component.c
++++ b/agent/component.c
+@@ -527,6 +527,9 @@
+   cmp->selected_pair.priority = 0;
+   cmp->relay_upgrade_deadline = 0;
+   cmp->relay_upgrade_next_retry = 0;
++  cmp->ready_wait_started = 0;
++  cmp->ready_status_last_log = 0;
++  cmp->ready_status = 0;
+ 
+   cmp->have_local_consent = TRUE;
+ 
+--- a/agent/conncheck.c
++++ b/agent/conncheck.c
+@@ -2244,6 +2244,116 @@
+   }
+ }
+ 
++typedef enum {
++  READY_STATUS_WAIT_NOMINATION = 1,
++  READY_STATUS_WAIT_CHECKS,
++  READY_STATUS_RELAY_BACKGROUND,
++  READY_STATUS_COMPLETE
++} ReadyStatus;
++
++static void
++priv_append_ready_candidate (GString *text, const gchar *label,
++    const NiceCandidate *candidate)
++{
++  gchar address[NICE_ADDRESS_STRING_LEN];
++
++  if (!candidate) {
++    g_string_append_printf (text, " %s=none", label);
++    return;
++  }
++  nice_address_to_string (&candidate->addr, address);
++  g_string_append_printf (text, " %s=%s/%s/[%s]:%u", label,
++      nice_candidate_type_to_string (candidate->type),
++      nice_candidate_transport_to_string (candidate->transport), address,
++      nice_address_get_port (&candidate->addr));
++}
++
++static void
++priv_report_ready_status (NiceAgent *agent, NiceStream *stream,
++    NiceComponent *component, guint valid, guint nominated, guint pending,
++    ReadyStatus status)
++{
++  static const gchar *names[] = { "", "waiting-nomination", "waiting-checks",
++    "relay-background", "ready" };
++  const gboolean ready = status >= READY_STATUS_RELAY_BACKGROUND;
++  const gint64 now = g_get_monotonic_time ();
++  guint candidates = 0, shown = 0, background_direct = 0;
++  GString *text;
++  GSList *i;
++
++  if (!ready && component->ready_wait_started == 0)
++    component->ready_wait_started = now;
++  /* Waiting snapshots are limited to once per second; always report the
++   * transition that explains why the wait ended. Bound candidate detail too. */
++  if (component->ready_status == (guint) status &&
++      (ready || now - component->ready_status_last_log < G_USEC_PER_SEC))
++    return;
++
++  text = g_string_new (NULL);
++  g_string_append_printf (text,
++      "status=%s wait_ms=%" G_GINT64_FORMAT " valid=%u nominated=%u pending=%u"
++      " selected_priority=%" G_GUINT64_FORMAT, names[status],
++      component->ready_wait_started ?
++          (now - component->ready_wait_started) / 1000 : 0,
++      valid, nominated, pending, component->selected_pair.priority);
++  priv_append_ready_candidate (text, "selected_local",
++      (NiceCandidate *) component->selected_pair.local);
++  priv_append_ready_candidate (text, "selected_remote",
++      (NiceCandidate *) component->selected_pair.remote);
++
++  for (i = stream->conncheck_list; i; i = i->next) {
++    CandidateCheckPair *p = i->data;
++    gboolean triggered, blocker, direct_background;
++    const gchar *role;
++
++    if (p->component_id != component->id)
++      continue;
++    triggered = g_slist_find (agent->triggered_check_queue, p) != NULL;
++    direct_background = priv_relay_upgrade_active (agent, component) &&
++        priv_is_direct_upgrade (component, p);
++    if (direct_background &&
++        (p->state == NICE_CHECK_IN_PROGRESS || triggered))
++      background_direct++;
++    /* Mirror the remaining blockers after priv_prune_pending_checks(). */
++    blocker = !direct_background &&
++        p->priority >= component->selected_pair.priority &&
++        (p->state == NICE_CHECK_IN_PROGRESS || triggered);
++    if (nominated == 0) {
++      if (p->state == NICE_CHECK_FAILED)
++        continue;
++      role = "nomination";
++    } else if (blocker) {
++      role = ready ? "background" : "blocker";
++    } else if (pending == 0 && direct_background &&
++        (p->state == NICE_CHECK_IN_PROGRESS || triggered)) {
++      role = "background-direct";
++    } else {
++      continue;
++    }
++    candidates++;
++    if (shown >= 8)
++      continue;
++    shown++;
++    g_string_append_printf (text,
++        "; %s={state=%s priority=%" G_GUINT64_FORMAT
++        " valid=%d nominated=%d triggered=%d retransmit=%d", role,
++        priv_state_to_string (p->state), p->priority, p->valid, p->nominated,
++        triggered, p->retransmit);
++    priv_append_ready_candidate (text, "local", p->local);
++    priv_append_ready_candidate (text, "remote", p->remote);
++    g_string_append_c (text, '}');
++  }
++  g_string_append_printf (text,
++      "; candidates=%u omitted=%u background_direct=%u",
++      candidates, candidates - shown, background_direct);
++  agent_signal_ice_check_status (agent, stream->id, component->id, text->str);
++  g_string_free (text, TRUE);
++  component->ready_status = status;
++  component->ready_status_last_log = now;
++  if (ready)
++    component->ready_wait_started = 0;
++}
++
+ /*
+  * Updates the check list state for a stream component.
+  *
+@@ -2260,6 +2370,7 @@
+ {
+   GSList *i;
+   guint valid = 0, nominated = 0;
++  gboolean selected_nominated = FALSE;
+ 
+   g_assert (component);
+ 
+@@ -2271,16 +2382,31 @@
+ 	++valid;
+ 	if (p->nominated == TRUE) {
+           ++nominated;
++          if (p->local == (NiceCandidate *) component->selected_pair.local &&
++              p->remote == (NiceCandidate *) component->selected_pair.remote &&
++              p->priority == component->selected_pair.priority)
++            selected_nominated = TRUE;
+ 	}
+       }
+     }
+   }
+ 
+   if (nominated > 0) {
+-    /* Only go to READY if no checks are left in progress. If there are
+-     * any that are kept, then this function will be called again when the
+-     * conncheck tick timer finishes them all */
+-    if (priv_prune_pending_checks (agent, stream, component) == 0) {
++    guint pending = priv_prune_pending_checks (agent, stream, component);
++    /* In the negotiated background-upgrade mode, a validated, nominated
++     * relay already provides a usable datagram path. Higher-priority relay
++     * checks must not delay first media either. Keep them running under the
++     * existing pacing/timers, just like the preserved direct checks.
++     * Never bypass nomination, consent, or reliable-transport readiness. */
++    gboolean relay_ready = selected_nominated && !agent->reliable &&
++        component->have_local_consent &&
++        component->selected_pair.remote_consent.have &&
++        priv_relay_upgrade_active (agent, component);
++
++    priv_report_ready_status (agent, stream, component, valid, nominated,
++        pending, pending == 0 ? READY_STATUS_COMPLETE :
++        relay_ready ? READY_STATUS_RELAY_BACKGROUND : READY_STATUS_WAIT_CHECKS);
++    if (pending == 0 || relay_ready) {
+       /* Continue through the states to give client code a nice
+        * logical progression. See http://phabricator.freedesktop.org/D218 for
+        * discussion. */
+@@ -2294,6 +2420,10 @@
+       agent_signal_component_state_change (agent, stream->id,
+           component->id, NICE_COMPONENT_STATE_READY);
+     }
++  }
++  else {
++    priv_report_ready_status (agent, stream, component, valid, nominated, 0,
++        READY_STATUS_WAIT_NOMINATION);
+   }
+   nice_debug ("Agent %p : conn.check list status: %u nominated, %u valid, c-id %u.", agent, nominated, valid, component->id);
+ }
