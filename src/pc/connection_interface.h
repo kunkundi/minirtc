@@ -28,6 +28,7 @@ struct MediaStreamIds {
 
 struct ConnectionInfo {
   StartingBitrates starting_bitrates;
+  bool disable_receiver_padding_probing = false;
   DirectIcePolicy direct_policy;
   std::function<void(MiniRtcDirectError)> direct_error;
   std::optional<IceServerConfiguration> ice_config;

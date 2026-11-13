@@ -250,7 +250,8 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           info_.video_content_type, info_.video_quality,
           info_.video_frame_rate, info_.video_degradation_preference,
           info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-          video_payload_types_, audio_payload_types_, info_.starting_bitrates);
+          video_payload_types_, audio_payload_types_, info_.starting_bitrates,
+          info_.disable_receiver_padding_probing);
 
       ice_transport_->SetOnReceiveFunc(callbacks_.on_receive_video_frame,
                                        callbacks_.on_receive_audio_buffer,
@@ -316,7 +317,8 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           info_.video_content_type, info_.video_quality,
           info_.video_frame_rate, info_.video_degradation_preference,
           info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
-          video_payload_types_, audio_payload_types_, info_.starting_bitrates);
+          video_payload_types_, audio_payload_types_, info_.starting_bitrates,
+          info_.disable_receiver_padding_probing);
 
       ice_transport_->SetOnReceiveFunc(callbacks_.on_receive_video_frame,
                                        callbacks_.on_receive_audio_buffer,

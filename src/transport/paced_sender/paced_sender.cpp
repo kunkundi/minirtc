@@ -30,11 +30,12 @@ const int PacedSender::kNoPacketHoldback = -1;
 PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
                          std::shared_ptr<webrtc::Clock> clock,
                          std::shared_ptr<TaskQueue> task_queue,
-                         bool bounded_video_queue)
+                         bool bounded_video_queue,
+                         bool disable_receiver_padding_probing)
     : ice_agent_(ice_agent),
-      clock_(clock),
       pacing_controller_(clock.get(), this,
                          LowLatencyPacingConfiguration(bounded_video_queue)),
+      clock_(clock),
       max_hold_back_window_(webrtc::TimeDelta::Millis(5)),
       max_hold_back_window_in_packets_(3),
       next_process_time_(webrtc::Timestamp::MinusInfinity()),
@@ -43,9 +44,13 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
       is_shutdown_(false),
       packet_size_(/*alpha=*/0.95),
       include_overhead_(false),
+      disable_receiver_padding_probing_(disable_receiver_padding_probing),
+      task_queue_pacer_(task_queue),
       last_send_time_(webrtc::Timestamp::Millis(0)),
-      last_call_time_(webrtc::Timestamp::Millis(0)),
-      task_queue_pacer_(task_queue) {}
+      last_call_time_(webrtc::Timestamp::Millis(0)) {
+  // Keep pending clusters dormant even if audio/RTX is queued before video.
+  pacing_controller_.SetProbingEnabled(!disable_receiver_padding_probing_);
+}
 
 PacedSender::~PacedSender() { Shutdown(); }
 
@@ -142,7 +147,8 @@ bool PacedSender::RtxExpired(const webrtc::RtpPacketToSend& packet) const {
 std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
 PacedSender::GeneratePadding(webrtc::DataSize size) {
   std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> to_send_rtp_packets;
-  if (is_shutdown_.load() || video_send_paused_) {
+  if (is_shutdown_.load() || video_send_paused_ ||
+      (disable_receiver_padding_probing_ && !has_local_video_)) {
     return to_send_rtp_packets;
   }
   const webrtc::Timestamp padding_time = clock_->CurrentTime();
@@ -170,7 +176,9 @@ void PacedSender::SetSendBurstInterval(webrtc::TimeDelta burst_interval) {
 
 void PacedSender::SetAllowProbeWithoutMediaPacket(bool allow) {
   RunOrPost([this, allow] {
-    pacing_controller_.SetAllowProbeWithoutMediaPacket(allow);
+    allow_probe_without_media_packet_ = allow;
+    pacing_controller_.SetAllowProbeWithoutMediaPacket(
+        allow && (!disable_receiver_padding_probing_ || has_local_video_));
     MaybeScheduleProcessPackets();
   });
 }
@@ -324,6 +332,15 @@ void PacedSender::EnqueuePacketOnQueue(
     packet_size += packet->headers_size();
   }
   packet_size_.Apply(1, packet_size);
+  if (!has_local_video_ &&
+      packet->packet_type() == webrtc::RtpPacketMediaType::kVideo) {
+    has_local_video_ = true;
+    if (disable_receiver_padding_probing_) {
+      pacing_controller_.SetProbingEnabled(true);
+      pacing_controller_.SetAllowProbeWithoutMediaPacket(
+          allow_probe_without_media_packet_);
+    }
+  }
   pacing_controller_.EnqueuePacket(std::move(packet));
 }
 

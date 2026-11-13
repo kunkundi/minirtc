@@ -54,7 +54,7 @@ IceTransportController::IceTransportController(
     MiniRtcVideoQuality video_quality, int video_frame_rate,
     MiniRtcVideoContentType video_content_type,
     MiniRtcVideoDegradationPreference video_degradation_preference,
-    StartingBitrates starting_bitrates)
+    StartingBitrates starting_bitrates, bool disable_receiver_padding_probing)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
@@ -71,6 +71,7 @@ IceTransportController::IceTransportController(
       is_running_(true),
       congestion_window_size_(DataSize::PlusInfinity()) {
   starting_bitrates_ = starting_bitrates;
+  disable_receiver_padding_probing_ = disable_receiver_padding_probing;
   media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference =
@@ -168,7 +169,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   }
   paced_sender_ = std::make_shared<PacedSender>(
       ice_agent_, webrtc_clock_, task_queue_pacer_,
-      UsesBoundedVideoQueue(media_config_));
+      UsesBoundedVideoQueue(media_config_), disable_receiver_padding_probing_);
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(40));
   paced_sender_->SetQueueTimeLimit(TimeDelta::Millis(

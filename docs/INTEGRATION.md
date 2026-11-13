@@ -119,6 +119,7 @@ MiniRtcParams MakeParams(const char* login_identity,
   params.turn_mode = MiniRtcTurnAutoUdpTcp;
   params.direct_start_bitrate_bps = 2500000;
   params.relay_start_bitrate_bps = 1500000;
+  params.disable_receiver_padding_probing = true;
   params.enable_srtp = true;
   params.video_content_type = MiniRtcVideoContentType::ScreenContent;
   params.video_quality = MiniRtcVideoQualityHigh;
@@ -137,6 +138,8 @@ MiniRtcParams MakeParams(const char* login_identity,
 `signal_server_ip` 支持主机名、IP、主机与路径，以及 `wss://` / `https://` URL。地址中显式指定的端口优先于 `signal_server_port`。可通过 `MiniRtcParseSignalServerAddress` 校验并拆分地址。示例端口 `9099` 由应用填写。
 
 `direct_start_bitrate_bps` 和 `relay_start_bitrate_bps` 设置本机原生媒体发送端的直连、中继起始带宽估计，单位为 bps，范围为 300000–20000000。字段为零或超出范围时分别使用 2500000 和 1500000；创建后的连接仍根据网络反馈调整带宽。`use_cfg_file=true` 时，`MiniRtcInit` 从 INI 的 `[bandwidth]` 节读取同名键，缺失或非法值使用默认值。扩展后的 `MiniRtcParams` 需要应用与库一起重新编译。
+
+`disable_receiver_padding_probing` 默认为 `false`，保留接收端填充探测。设为 `true` 时，每条原生连接在首个本地视频 RTP 包进入发送队列前不发送填充探测包；收到远端视频、发送音频或应用数据不会解除限制。本地视频开始发送后保留正常探测及静态画面时的 ALR 带宽恢复，视频暂停仍由暂停接口控制。该选项同时适用于直连和中继，不影响浏览器 WebRTC。INI 模式读取 `[bandwidth]` 下的同名布尔键，缺失或非法值为 `false`；创建连接后修改参数不影响已有连接。
 
 ### 回调与线程
 

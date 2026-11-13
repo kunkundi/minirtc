@@ -560,6 +560,12 @@ typedef struct {
   /// Zero or values outside [300000, 20000000] use the default 1500000.
   /// INI mode reads [bandwidth] relay_start_bitrate_bps instead.
   int relay_start_bitrate_bps;
+  /// Suppress native padding probes until the first local video packet is queued.
+  /// False preserves receiver-side probing. True still permits sender probing,
+  /// including ALR recovery during static video, after local video starts.
+  /// Applies per connection to direct and relay paths; browser WebRTC is separate.
+  /// INI mode reads [bandwidth] disable_receiver_padding_probing (default false).
+  bool disable_receiver_padding_probing;
 } MiniRtcParams;
 
 // -----------------------------------------------------------------------------

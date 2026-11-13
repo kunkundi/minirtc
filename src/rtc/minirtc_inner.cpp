@@ -55,6 +55,8 @@ MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params) {
         params->video_degradation_preference;
     peer_ptr->pc_params.direct_start_bitrate_bps = params->direct_start_bitrate_bps;
     peer_ptr->pc_params.relay_start_bitrate_bps = params->relay_start_bitrate_bps;
+    peer_ptr->pc_params.disable_receiver_padding_probing =
+        params->disable_receiver_padding_probing;
   }
   peer_ptr->pc_params.on_receive_video_buffer = params->on_receive_video_buffer;
   peer_ptr->pc_params.on_receive_audio_buffer = params->on_receive_audio_buffer;

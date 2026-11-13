@@ -82,6 +82,7 @@ typedef struct {
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video;
   int direct_start_bitrate_bps;
   int relay_start_bitrate_bps;
+  bool disable_receiver_padding_probing;
 } PeerConnectionParams;
 
 class PeerConnection {

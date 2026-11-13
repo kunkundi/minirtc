@@ -65,7 +65,8 @@ class IceTransportController
                          MiniRtcVideoContentType video_content_type,
                          MiniRtcVideoDegradationPreference
                              video_degradation_preference,
-                         StartingBitrates starting_bitrates = {});
+                         StartingBitrates starting_bitrates = {},
+                         bool disable_receiver_padding_probing = false);
   ~IceTransportController();
 
  public:
@@ -471,6 +472,7 @@ class IceTransportController
 
   MediaCodecConfig media_config_;
   StartingBitrates starting_bitrates_;
+  bool disable_receiver_padding_probing_ = false;
 
   OnReceiveVideo on_receive_video_ = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;

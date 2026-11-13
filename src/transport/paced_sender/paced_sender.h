@@ -35,7 +35,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   PacedSender(std::shared_ptr<IceAgent> ice_agent,
               std::shared_ptr<webrtc::Clock> clock,
               std::shared_ptr<TaskQueue> task_queue,
-              bool bounded_video_queue = false);
+              bool bounded_video_queue = false,
+              bool disable_receiver_padding_probing = false);
   ~PacedSender();
 
  public:
@@ -288,6 +289,10 @@ class PacedSender : public webrtc::RtpPacketPacer,
   bool processing_packets_ = false;
   int probe_bitrate_limit_bps_ = 0;  // Accessed only on the pacer queue.
   bool video_send_paused_ = false;  // Accessed only on the pacer queue.
+  const bool disable_receiver_padding_probing_;
+  bool allow_probe_without_media_packet_ = false;  // Pacer queue only.
+  // Latch per connection: static content must retain sender ALR probing.
+  bool has_local_video_ = false;  // Pacer queue only.
   webrtc::Timestamp video_pause_time_ = webrtc::Timestamp::MinusInfinity();
   bool ShouldDropVideoPacket(const webrtc::RtpPacketToSend& packet) const {
     return packet.packet_type() != webrtc::RtpPacketMediaType::kAudio &&
