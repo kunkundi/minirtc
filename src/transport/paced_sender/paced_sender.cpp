@@ -148,6 +148,7 @@ std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
 PacedSender::GeneratePadding(webrtc::DataSize size) {
   std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> to_send_rtp_packets;
   if (is_shutdown_.load() || video_send_paused_ ||
+      clock_->CurrentTime() < probe_pause_until_ ||
       (disable_receiver_padding_probing_ && !has_local_video_)) {
     return to_send_rtp_packets;
   }
@@ -208,7 +209,16 @@ void PacedSender::CreateProbeClusters(
     std::vector<webrtc::ProbeClusterConfig> probe_cluster_configs) {
   RunOrPost([this, probe_cluster_configs = std::move(probe_cluster_configs)]()
                 mutable {
-    if (video_send_paused_) return;
+    if (video_send_paused_ || clock_->CurrentTime() < probe_pause_until_) return;
+    // A controller update queued before recovery must not become a fresh
+    // probe if the pacer only processes it after the hold has ended.
+    probe_cluster_configs.erase(
+        std::remove_if(probe_cluster_configs.begin(), probe_cluster_configs.end(),
+                       [this](const auto& config) {
+                         return config.at_time < probe_pause_until_;
+                       }),
+        probe_cluster_configs.end());
+    if (probe_cluster_configs.empty()) return;
     if (probe_bitrate_limit_bps_ > 0) {
       const auto limit = webrtc::DataRate::BitsPerSec(probe_bitrate_limit_bps_);
       for (auto& config : probe_cluster_configs)
@@ -239,6 +249,14 @@ void PacedSender::SetProbeBitrateLimit(int max_bitrate_bps) {
       pacing_controller_.AbortProbing("video_budget_reduced");
     }
     probe_bitrate_limit_bps_ = max_bitrate_bps;
+  });
+}
+
+void PacedSender::PauseProbingUntil(webrtc::Timestamp until) {
+  RunOrPost([this, until] {
+    probe_pause_until_ = std::max(probe_pause_until_, until);
+    pacing_controller_.AbortProbing("probe_hold");
+    MaybeScheduleProcessPackets();
   });
 }
 

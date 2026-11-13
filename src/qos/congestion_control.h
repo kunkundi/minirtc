@@ -42,6 +42,8 @@ class CongestionControl {
 
   NetworkControlUpdate SetRelayPath(bool relay_path, Timestamp at_time);
 
+  void PauseProbingUntil(Timestamp until);
+
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
 

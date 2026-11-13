@@ -115,7 +115,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
 
   pending_probe_.reset();
   relay_path_ = relay_path;
-  probe_controller_->SetRelayPath(relay_path);
+  probe_controller_->SetRelayPath(relay_path, at_time);
   const DataRate desired_starting_rate =
       DataRate::BitsPerSec(relay_path_ ? starting_bitrates_.relay_bps
                                      : starting_bitrates_.direct_bps);
@@ -161,6 +161,11 @@ NetworkControlUpdate CongestionControl::OnNetworkAvailability(
   NetworkControlUpdate update;
   update.probe_cluster_configs = probe_controller_->OnNetworkAvailability(msg);
   return update;
+}
+
+void CongestionControl::PauseProbingUntil(Timestamp until) {
+  pending_probe_.reset();
+  probe_controller_->PauseProbingUntil(until);
 }
 
 NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
@@ -216,6 +221,7 @@ bool CongestionControl::ProbeNetworkHealthy() const {
 
 std::optional<DataRate> CongestionControl::FilterProbeResult(
     DataRate bitrate, int probe_id, Timestamp at_time) {
+  if (!probe_controller_->IsProbeResultValid(probe_id)) return std::nullopt;
   if (pending_probe_ && pending_probe_->id != probe_id) {
     pending_probe_.reset();
   }
@@ -429,7 +435,7 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
       if (probe_result) {
         probe_controller_->OnProbeResult(
             feedback.sent_packet.pacing_info.probe_cluster_id,
-            report.feedback_time);
+            *probe_result, report.feedback_time);
       }
     }
   }

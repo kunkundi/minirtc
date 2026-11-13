@@ -163,6 +163,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // 0 restores unrestricted probing; positive values bound probe rates.
   // Video pause state is independent of this bandwidth budget.
   void SetProbeBitrateLimit(int max_bitrate_bps);
+  void PauseProbingUntil(webrtc::Timestamp until);
   void SetVideoSendPaused(bool paused, const std::vector<uint32_t>& ssrcs,
                           webrtc::Timestamp pause_time);
 
@@ -288,6 +289,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // Protects against ProcessPackets reentry from packet sent receipts.
   bool processing_packets_ = false;
   int probe_bitrate_limit_bps_ = 0;  // Accessed only on the pacer queue.
+  webrtc::Timestamp probe_pause_until_ = webrtc::Timestamp::MinusInfinity();
   bool video_send_paused_ = false;  // Accessed only on the pacer queue.
   const bool disable_receiver_padding_probing_;
   bool allow_probe_without_media_packet_ = false;  // Pacer queue only.

@@ -1944,13 +1944,8 @@ void IceTransportController::FullIntraRequestAllVideoStreams() {
 }
 
 void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
-  if (media_ssrc == 0) {
-    FullIntraRequestAllVideoStreams();
-    return;
-  }
-
   std::string channel_name;
-  {
+  if (media_ssrc != 0) {
     std::shared_lock lock(stream_senders_mutex_);
     for (const auto& [name, context] : stream_senders_) {
       if (context && context->type == StreamType::kVideo &&
@@ -1961,10 +1956,21 @@ void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
     }
   }
 
-  if (channel_name.empty()) {
+  if (media_ssrc != 0 && channel_name.empty()) {
     LOG_WARN("Ignoring FIR for unknown media SSRC {}", media_ssrc);
     return;
   }
+  // Receiver FIR indicates a broken decoding chain. Stop both current and
+  // queued probes while the replacement keyframe and its repairs are sent.
+  // Only remote FIR uses this overload; routine local intra requests do not
+  // repeatedly suppress healthy startup or ALR probes.
+  const auto until = webrtc_clock_->CurrentTime() + TimeDelta::Millis(1500);
+  if (task_queue_cc_ && controller_) {
+    task_queue_cc_->PostTask([this, until] {
+      if (controller_) controller_->PauseProbingUntil(until);
+    });
+  }
+  if (paced_sender_) paced_sender_->PauseProbingUntil(until);
   FullIntraRequest(channel_name);
 }
 
@@ -2266,6 +2272,7 @@ void IceTransportController::SetRelayPath(bool relay_path) {
     if (changed) ResetFecAdaptation();
     const webrtc::Timestamp now = webrtc::Timestamp::Millis(
         webrtc_clock_->TimeInMilliseconds());
+    if (changed && paced_sender_) paced_sender_->PauseProbingUntil(now);
     PostUpdates(controller_->SetRelayPath(relay_path, now));
   });
 }
@@ -3840,6 +3847,8 @@ void IceTransportController::UpdateFecProtection() {
   bool publish = false;
   int64_t media_total = 0, fec_total = 0;
   int64_t rtx_limit = 0, rtx_reserved = 0;
+  bool media_recovery = media_transport_ready_.load() &&
+                        (is_congested_.load() || queue_ms >= 100 || rtt_ms >= 300);
   {
     std::unique_lock lock(stream_senders_mutex_);
     const uint64_t version = ++fec_config_version_;
@@ -3889,6 +3898,7 @@ void IceTransportController::UpdateFecProtection() {
     rtx_limit = video_rtx_enabled_ ? video_budget / 2 : 0;
     rtx_bitrate_limit_bps_ = rtx_limit;
     rtx_reserved = std::min(rtx_estimate, rtx_limit);
+    media_recovery |= video_budget > 0 && rtx_estimate > video_budget / 4;
     const int64_t share =
         (video_budget - rtx_reserved) / std::max(1, videos);
     for (const auto &item : stream_senders_) {
@@ -3906,6 +3916,10 @@ void IceTransportController::UpdateFecProtection() {
       auto feedback = fec_feedback_snapshots_.find(ssrc);
       if (feedback != fec_feedback_snapshots_.end())
         network.feedback = feedback->second;
+      media_recovery |= network.feedback.samples >= 40 &&
+                        network.feedback.last_feedback_ms >= 0 &&
+                        now_ms - network.feedback.last_feedback_ms <= 1500 &&
+                        network.feedback.loss_rate() >= 0.05;
       FecProtectionConfig config;
       if (active(c)) {
         c->fec_last_active_ms = now_ms;
@@ -3962,6 +3976,13 @@ void IceTransportController::UpdateFecProtection() {
     video_transport_bitrate_bps_.store(media_total);
     publish = !fec_update_queued_;
     fec_update_queued_ = true;
+  }
+  if (new_snapshot && media_recovery) {
+    const auto until = webrtc_clock_->CurrentTime() + TimeDelta::Seconds(2);
+    // UpdateFecProtection runs on the congestion-control queue. The pacer
+    // cancels existing clusters and rejects new clusters during this hold.
+    if (controller_) controller_->PauseProbingUntil(until);
+    paced_sender_->PauseProbingUntil(until);
   }
   if (log) {
     fec_log_ms_ = now_ms;
