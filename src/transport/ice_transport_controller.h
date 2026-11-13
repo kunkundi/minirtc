@@ -499,6 +499,8 @@ class IceTransportController
   bool fec_update_queued_ = false;  // Guarded by stream_senders_mutex_.
   int64_t rtx_bitrate_limit_bps_ = 0;  // Guarded by stream_senders_mutex_.
   int64_t fec_snapshot_ms_ = -1, fec_log_ms_ = -1;
+  uint32_t probe_hold_reasons_ = 0;
+  int64_t probe_hold_log_ms_ = -1;
   std::map<uint32_t, FecFeedbackSnapshot> fec_feedback_snapshots_;
   std::optional<uint8_t> video_abs_send_time_ext_id_;
   std::optional<uint8_t> video_abs_recv_time_ext_id_;

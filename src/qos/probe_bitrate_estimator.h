@@ -35,6 +35,8 @@ class ProbeBitrateEstimator {
 
   std::optional<DataRate> FetchAndResetLastEstimatedBitrate(
       int* cluster_id = nullptr);
+  // Reason for the latest rejected revision, or nullptr for a valid sample.
+  const char* LastRejectionReason(int cluster_id) const;
 
   // Removes incomplete probe feedback even if no further feedback arrives.
   void RemoveExpiredClusters(Timestamp timestamp);

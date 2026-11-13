@@ -163,15 +163,19 @@ NetworkControlUpdate CongestionControl::OnNetworkAvailability(
   return update;
 }
 
-void CongestionControl::PauseProbingUntil(Timestamp until) {
+void CongestionControl::PauseProbingUntil(Timestamp until, const char* reason) {
   pending_probe_.reset();
-  probe_controller_->PauseProbingUntil(until);
+  probe_controller_->PauseProbingUntil(until, reason);
 }
 
 NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
   NetworkControlUpdate update;
   probe_bitrate_estimator_->RemoveExpiredClusters(msg.at_time);
   if (initial_config_) {
+    // Configuration has no clock until the first process tick. Using its
+    // placeholder infinity would bypass startup limits and queue expiry if
+    // the network became available before this tick.
+    initial_config_->constraints.at_time = msg.at_time;
     update.probe_cluster_configs =
         ResetConstraints(initial_config_->constraints);
     update.pacer_config = GetPacingRates(msg.at_time);
@@ -201,12 +205,13 @@ NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
       alr_detector_->GetApplicationLimitedRegionStartTime();
   probe_controller_->SetAlrStartTimeMs(start_time_ms);
 
+  // Refresh health and delay state before evaluating a recovery timer.
+  MaybeTriggerOnNetworkChanged(&update, msg.at_time);
   auto probes = probe_controller_->Process(msg.at_time);
   update.probe_cluster_configs.insert(update.probe_cluster_configs.end(),
                                       probes.begin(), probes.end());
   update.congestion_window = current_data_window_;
 
-  MaybeTriggerOnNetworkChanged(&update, msg.at_time);
   MaybeApplyPendingProbe(&update, msg.at_time);
   return update;
 }
@@ -457,6 +462,13 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
         probe_controller_->OnProbeResult(
             feedback.sent_packet.pacing_info.probe_cluster_id,
             *probe_result, report.feedback_time);
+      } else if (const char* reason =
+                     probe_bitrate_estimator_->LastRejectionReason(
+                         feedback.sent_packet.pacing_info.probe_cluster_id)) {
+        const int id = feedback.sent_packet.pacing_info.probe_cluster_id;
+        probe_controller_->OnProbeFeedbackRejected(id, reason,
+                                                   report.feedback_time);
+        if (pending_probe_ && pending_probe_->id == id) pending_probe_.reset();
       }
     }
   }
@@ -560,8 +572,13 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
 
   const bool in_alr =
       alr_detector_->GetApplicationLimitedRegionStartTime().has_value();
+  const auto limited_cause = GetBandwidthLimitedCause(
+      loss_based_state, bandwidth_estimation_->IsRttAboveLimit(),
+      delay_based_bwe_->last_state());
+  const bool cause_changed = last_probe_limited_cause_ != limited_cause;
 
   if ((loss_based_target_rate != last_loss_based_target_rate_) ||
+      cause_changed ||
       in_alr != last_reported_in_alr_ ||
       (loss_based_state != last_loss_base_state_) ||
       (fraction_loss != last_estimated_fraction_loss_) ||
@@ -598,14 +615,25 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
 
     update->target_rate = target_rate_msg;
 
+    const bool probe_healthy =
+        fraction_loss / 255.0 < 0.05 && round_trip_time.IsFinite() &&
+        round_trip_time < TimeDelta::Millis(300);
+    if (cause_changed || probe_health_blocked_ != !probe_healthy ||
+        (!probe_healthy &&
+         at_time - last_probe_health_log_ >= TimeDelta::Seconds(2))) {
+      LOG_DEBUG("Probe BWE health: loss_rtt_healthy={} loss={} rtt_ms={} "
+                "limited_cause={} estimate_bps={} in_alr={}",
+                probe_healthy, fraction_loss / 255.0,
+                round_trip_time.IsFinite() ? round_trip_time.ms() : -1,
+                static_cast<int>(limited_cause), loss_based_target_rate.bps(),
+                in_alr);
+      last_probe_health_log_ = at_time;
+    }
+    probe_health_blocked_ = !probe_healthy;
+    last_probe_limited_cause_ = limited_cause;
     auto probes = probe_controller_->SetEstimatedBitrate(
         loss_based_target_rate,
-        GetBandwidthLimitedCause(bandwidth_estimation_->loss_based_state(),
-                                 bandwidth_estimation_->IsRttAboveLimit(),
-                                 delay_based_bwe_->last_state()),
-        at_time,
-        fraction_loss / 255.0 < 0.05 && round_trip_time.IsFinite() &&
-            round_trip_time < TimeDelta::Millis(300));
+        limited_cause, at_time, probe_healthy);
     update->probe_cluster_configs.insert(update->probe_cluster_configs.end(),
                                          probes.begin(), probes.end());
     update->pacer_config = GetPacingRates(at_time);

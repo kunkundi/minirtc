@@ -105,8 +105,10 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
       DataSize::Bytes(
           packet_feedback.sent_packet.pacing_info.probe_cluster_min_bytes) *
       kMinReceivedBytesRatio;
-  if (cluster->num_probes < min_probes || cluster->size_total < min_size)
+  if (cluster->num_probes < min_probes || cluster->size_total < min_size) {
+    cluster->rejection_reason = "insufficient_feedback";
     return std::nullopt;
+  }
 
   TimeDelta send_interval = cluster->last_send - cluster->first_send;
   TimeDelta receive_interval = cluster->last_receive - cluster->first_receive;
@@ -115,6 +117,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
       receive_interval <= TimeDelta::Zero() ||
       receive_interval > kMaxProbeInterval) {
     cluster->rejection_reason = "invalid_interval";
+    if (estimated_cluster_id_ == cluster_id) estimated_data_rate_.reset();
     LOG_DEBUG(
         "Probe feedback rejected: id={} reason=invalid_interval "
         "actual_packets={} target_packets={} actual_bytes={} "
@@ -140,6 +143,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   double ratio = receive_rate / send_rate;
   if (ratio > kMaxValidRatio) {
     cluster->rejection_reason = "receive_send_ratio";
+    if (estimated_cluster_id_ == cluster_id) estimated_data_rate_.reset();
     LOG_DEBUG(
         "Probe feedback rejected: id={} reason=receive_send_ratio "
         "actual_packets={} target_packets={} actual_bytes={} "
@@ -151,15 +155,16 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   }
   if (!cluster->result_reported) {
     LOG_DEBUG(
-        "Probe feedback accepted: id={} actual_packets={} target_packets={} "
+        "Probe feedback accepted: id={} stage=first_valid actual_packets={} "
+        "target_packets={} "
         "actual_bytes={} target_bytes={} send_bitrate_bps={} "
         "receive_bitrate_bps={}",
         cluster_id, cluster->num_probes, cluster->target_probes,
         cluster->size_total.bytes(), cluster->target_size.bytes(),
         send_rate.bps(), receive_rate.bps());
     cluster->result_reported = true;
-    cluster->rejection_reason = nullptr;
   }
+  cluster->rejection_reason = nullptr;
 
   DataRate res = std::min(send_rate, receive_rate);
   // If we're receiving at significantly lower bitrate than we were sending at,
@@ -177,6 +182,11 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     estimated_cluster_id_ = cluster_id;
   }
   return res;
+}
+
+const char* ProbeBitrateEstimator::LastRejectionReason(int cluster_id) const {
+  const auto it = clusters_.find(cluster_id);
+  return it == clusters_.end() ? nullptr : it->second.rejection_reason;
 }
 
 std::optional<DataRate>

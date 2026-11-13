@@ -47,7 +47,7 @@ class CongestionControl {
 
   NetworkControlUpdate SetRelayPath(bool relay_path, Timestamp at_time);
 
-  void PauseProbingUntil(Timestamp until);
+  void PauseProbingUntil(Timestamp until, const char* reason = "external_hold");
 
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
@@ -115,6 +115,9 @@ class CongestionControl {
   bool last_reported_in_alr_ = false;
   bool network_available_ = false;
   bool relay_path_ = false;
+  bool probe_health_blocked_ = false;
+  Timestamp last_probe_health_log_ = Timestamp::MinusInfinity();
+  std::optional<BandwidthLimitedCause> last_probe_limited_cause_;
 
   struct PendingProbe {
     int id;

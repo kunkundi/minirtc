@@ -1986,10 +1986,11 @@ void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
   const auto until = webrtc_clock_->CurrentTime() + TimeDelta::Millis(1500);
   if (task_queue_cc_ && controller_) {
     task_queue_cc_->PostTask([this, until] {
-      if (controller_) controller_->PauseProbingUntil(until);
+      if (controller_) controller_->PauseProbingUntil(until, "keyframe_recovery");
     });
   }
   if (paced_sender_) paced_sender_->PauseProbingUntil(until);
+  LOG_DEBUG("Probe protection hold: reason=remote_fir hold_ms=1500");
   FullIntraRequest(channel_name);
 }
 
@@ -3836,6 +3837,8 @@ void IceTransportController::ResetFecAdaptation() {
   }
   fec_feedback_snapshots_.clear();
   fec_snapshot_ms_ = -1;
+  probe_hold_reasons_ = 0;
+  probe_hold_log_ms_ = -1;
   std::unique_lock lock(stream_senders_mutex_);
   for (const auto &item : stream_senders_) {
     if (!item.second)
@@ -3870,8 +3873,15 @@ void IceTransportController::UpdateFecProtection() {
   bool publish = false;
   int64_t media_total = 0, fec_total = 0;
   int64_t rtx_limit = 0, rtx_reserved = 0;
-  bool media_recovery = media_transport_ready_.load() &&
-                        (is_congested_.load() || queue_ms >= 100 || rtt_ms >= 300);
+  uint32_t hold_reasons = 0;
+  if (media_transport_ready_.load()) {
+    if (is_congested_.load()) hold_reasons |= 1;
+    if (queue_ms >= 100) hold_reasons |= 2;
+    if (rtt_ms >= 300) hold_reasons |= 4;
+  }
+  int64_t logged_video_budget = 0, logged_rtx_estimate = 0;
+  double highest_loss = 0;
+  int loss_samples = 0;
   {
     std::unique_lock lock(stream_senders_mutex_);
     const uint64_t version = ++fec_config_version_;
@@ -3921,7 +3931,9 @@ void IceTransportController::UpdateFecProtection() {
     rtx_limit = video_rtx_enabled_ ? video_budget / 2 : 0;
     rtx_bitrate_limit_bps_ = rtx_limit;
     rtx_reserved = std::min(rtx_estimate, rtx_limit);
-    media_recovery |= video_budget > 0 && rtx_estimate > video_budget / 4;
+    if (video_budget > 0 && rtx_estimate > video_budget / 4) hold_reasons |= 8;
+    logged_video_budget = video_budget;
+    logged_rtx_estimate = rtx_estimate;
     const int64_t share =
         (video_budget - rtx_reserved) / std::max(1, videos);
     for (const auto &item : stream_senders_) {
@@ -3939,10 +3951,17 @@ void IceTransportController::UpdateFecProtection() {
       auto feedback = fec_feedback_snapshots_.find(ssrc);
       if (feedback != fec_feedback_snapshots_.end())
         network.feedback = feedback->second;
-      media_recovery |= network.feedback.samples >= 40 &&
+      const bool loss_recovery = network.feedback.samples >= 40 &&
                         network.feedback.last_feedback_ms >= 0 &&
                         now_ms - network.feedback.last_feedback_ms <= 1500 &&
                         network.feedback.loss_rate() >= 0.05;
+      if (loss_recovery) {
+        hold_reasons |= 16;
+        if (network.feedback.loss_rate() > highest_loss) {
+          highest_loss = network.feedback.loss_rate();
+          loss_samples = network.feedback.samples;
+        }
+      }
       FecProtectionConfig config;
       if (active(c)) {
         c->fec_last_active_ms = now_ms;
@@ -4000,12 +4019,31 @@ void IceTransportController::UpdateFecProtection() {
     publish = !fec_update_queued_;
     fec_update_queued_ = true;
   }
-  if (new_snapshot && media_recovery) {
+  if (new_snapshot && hold_reasons) {
+    if (hold_reasons != probe_hold_reasons_ || probe_hold_log_ms_ < 0 ||
+        now_ms - probe_hold_log_ms_ >= 2000) {
+      LOG_DEBUG("Probe protection hold: reason=media_recovery congested={} "
+                "queue_blocked={} rtt_blocked={} rtx_blocked={} loss_blocked={} "
+                "queue_ms={} rtt_ms={} trigger_loss={} trigger_loss_samples={} "
+                "rtx_bps={} "
+                "video_budget_bps={} hold_ms=2000",
+                bool(hold_reasons & 1), bool(hold_reasons & 2),
+                bool(hold_reasons & 4), bool(hold_reasons & 8),
+                bool(hold_reasons & 16), queue_ms, rtt_ms, highest_loss,
+                loss_samples, logged_rtx_estimate, logged_video_budget);
+      probe_hold_log_ms_ = now_ms;
+    }
     const auto until = webrtc_clock_->CurrentTime() + TimeDelta::Seconds(2);
     // UpdateFecProtection runs on the congestion-control queue. The pacer
     // cancels existing clusters and rejects new clusters during this hold.
-    if (controller_) controller_->PauseProbingUntil(until);
+    if (controller_) controller_->PauseProbingUntil(until, "media_recovery");
     paced_sender_->PauseProbingUntil(until);
+  }
+  if (new_snapshot) {
+    if (!hold_reasons && probe_hold_reasons_)
+      LOG_DEBUG("Probe protection conditions cleared: queue_ms={} rtt_ms={} "
+                "existing_cooldown_retained=true", queue_ms, rtt_ms);
+    probe_hold_reasons_ = hold_reasons;
   }
   if (log) {
     fec_log_ms_ = now_ms;
