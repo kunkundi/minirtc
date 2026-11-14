@@ -143,7 +143,14 @@ FecAdaptationController::Update(FecMode mode, const FecNetworkSnapshot &n) {
     desired = 0;
     reason = FecDecision::kOff;
   } else if (urgent || n.now_ms < congestion_until_ms_) {
-    desired = urgent ? 0 : std::min(ratio_, 0.05);
+    const bool repair_needed =
+        fresh && f.samples >= 40 && f.loss_rate() >= 0.02;
+    const bool blocked =
+        n.congested || n.queue_ms >= 250 || n.transport_bps <= 0;
+    // Keep a small repair share inside the existing transport budget. A
+    // transient local queue or bitrate decrease must not latch FEC at zero
+    // throughout a keyframe recovery episode with actual packet loss.
+    desired = blocked ? 0 : repair_needed ? 0.10 : std::min(ratio_, 0.05);
     reason = FecDecision::kCongested;
   } else if (mode == FecMode::kFixed) {
     desired = 0.25;

@@ -35,8 +35,6 @@ void BandwidthRampController::ResetWindow(Timestamp now) {
 
 void BandwidthRampController::OnFeedback(
     const TransportPacketsFeedback& report) {
-  if (!report.packet_feedbacks.empty())
-    network_feedback_at_ = report.feedback_time;
   loss_tracker_.OnFeedback(report, false);
   for (const auto& packet : report.packet_feedbacks) {
     const auto& sent = packet.sent_packet;
@@ -106,49 +104,6 @@ void BandwidthRampController::OnVideoSendPaused(bool paused, Timestamp now) {
   Pause(now, now);
 }
 
-void BandwidthRampController::Hold(Timestamp now, Timestamp until,
-                                   const char* reason, TimeDelta rtt) {
-  if (until > now && target_ > minimum_ &&
-      now - last_backoff_ >= TimeDelta::Seconds(1)) {
-    const DataRate previous = target_;
-    failed_rate_ = now - failed_at_ < TimeDelta::Seconds(30)
-                       ? std::min(failed_rate_, target_)
-                       : target_;
-    failed_at_ = now;
-    // Raw BWE may still contain an optimistic probe result. Back off the
-    // published budget before that estimate catches up. Continued congestion
-    // may back off again once a second, never once per feedback callback.
-    DataRate backed_off = target_ * 0.85;
-    if (!confirmed_rate_.IsZero())
-      backed_off = std::min(backed_off, confirmed_rate_ * 0.95);
-    target_ = std::max(minimum_, backed_off);
-    caution_rate_ = target_;
-    confirmed_rate_ = std::min(confirmed_rate_, target_);
-    changed_at_ = now;
-    last_backoff_ = now;
-    const auto loss = loss_tracker_.recent();
-    LOG_DEBUG(
-        "Bandwidth ramp hold: reason={} previous_bps={} target_bps={} "
-        "failed_bps={} "
-        "confirmed_bps={} settled_lost={} settled_packets={} "
-        "loss_grace_ms={} rtt_ms={} hold_ms={}",
-        reason, previous.bps(), target_.bps(), failed_rate_.bps(),
-        confirmed_rate_.bps(), loss.lost, loss.packets,
-        PacketLossTracker::GracePeriod(rtt).ms(),
-        rtt.IsFinite() ? rtt.ms() : -1, (until - now).ms());
-    // Judge the lower budget using packets sent after this backoff. Delayed
-    // reports from the previous rate must not cause another cut; local pauses
-    // deliberately keep the tracker so pending corrections can still arrive.
-    loss_tracker_.Reset(now);
-    unhealthy_since_ = now;
-  }
-  hold_until_ = std::max(hold_until_, until);
-  recovery_until_ = std::max(recovery_until_, until + TimeDelta::Seconds(10));
-  candidate_ = DataRate::Zero();
-  confirmed_at_ = Timestamp::MinusInfinity();
-  ResetWindow(now);
-}
-
 TimeDelta BandwidthRampController::ConfirmationDuration(TimeDelta rtt,
                                                         Timestamp now) const {
   if (!rtt.IsFinite()) rtt = TimeDelta::Millis(100);
@@ -194,8 +149,8 @@ void BandwidthRampController::LogWaiting(const char* reason, DataRate estimate,
 }
 
 DataRate BandwidthRampController::Update(DataRate estimate, bool healthy,
-                                         TimeDelta rtt, Timestamp now,
-                                         const char* unhealthy_reason) {
+                                         TimeDelta rtt, Timestamp now) {
+  estimate = std::max(estimate, minimum_);
   if (target_.IsZero()) {
     target_ = estimate;
     changed_at_ = now;
@@ -206,22 +161,9 @@ DataRate BandwidthRampController::Update(DataRate estimate, bool healthy,
   const auto loss = loss_tracker_.recent();
   const bool settled_loss =
       loss.packets >= 40 && loss.lost >= loss.packets * 0.03;
-  if (healthy) {
-    unhealthy_since_ = Timestamp::MinusInfinity();
-  } else if (!unhealthy_since_.IsFinite()) {
-    unhealthy_since_ = now;
-  }
-  // A transient delay/RTT alarm freezes growth. The underlying delay BWE can
-  // still lower its estimate immediately; an additional ramp backoff needs
-  // a sustained alarm or loss that has survived the correction interval.
-  if (settled_loss ||
-      (!healthy && network_feedback_at_.IsFinite() &&
-       network_feedback_at_ - unhealthy_since_ >= TimeDelta::Millis(200))) {
-    Hold(now, now + TimeDelta::Seconds(2),
-         settled_loss ? "settled_packet_loss" : unhealthy_reason, rtt);
-  } else if (!healthy) {
-    Pause(now, now + TimeDelta::Millis(200));
-  }
+  // BWE owns all capacity decreases. Mild loss or a transient delay alarm
+  // can stop growth, but must not apply a second penalty to the encoder.
+  if (settled_loss || !healthy) Pause(now, now + TimeDelta::Millis(300));
   if (estimate < target_) {
     if (estimate < target_ * 0.95) {
       LOG_DEBUG(
@@ -231,8 +173,20 @@ DataRate BandwidthRampController::Update(DataRate estimate, bool healthy,
           target_.bps(), estimate.bps(), loss.lost, loss.packets,
           rtt.IsFinite() ? rtt.ms() : -1);
     }
-    if (estimate < target_ * 0.85)
-      recovery_until_ = std::max(recovery_until_, now + TimeDelta::Seconds(10));
+    if (estimate < target_ * 0.85 && (!healthy || settled_loss)) {
+      failed_rate_ = now - failed_at_ < TimeDelta::Seconds(30)
+                         ? std::min(failed_rate_, target_)
+                         : target_;
+      failed_at_ = now;
+      caution_rate_ = estimate;
+      recovery_until_ = std::max(recovery_until_, now + TimeDelta::Seconds(5));
+      Pause(now, now + TimeDelta::Seconds(1));
+    } else if (estimate < target_ * 0.85) {
+      // A bounded probe revision without congestion is not a failed load.
+      recovery_until_ = std::max(recovery_until_, now + TimeDelta::Seconds(1));
+    }
+    // Do not judge a new, lower budget using loss from the previous rate.
+    loss_tracker_.Reset(now);
     // Congestion reductions always pass through immediately.
     target_ = estimate;
     confirmed_rate_ = std::min(confirmed_rate_, target_);

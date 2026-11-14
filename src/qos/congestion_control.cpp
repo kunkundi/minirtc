@@ -365,6 +365,8 @@ void CongestionControl::OnSentPacket(size_t bytes_sent, Timestamp at_time,
   if (probe_cluster_id != PacedPacketInfo::kNotAProbe) {
     bandwidth_ramp_.OnProbeSent(probe_cluster_id, at_time);
     probe_controller_->OnProbeSent(probe_cluster_id, at_time);
+  } else {
+    delay_based_bwe_->OnNormalPacketSent(DataSize::Bytes(bytes_sent), at_time);
   }
   if (is_video) probe_controller_->OnVideoPacketSent(at_time);
   alr_detector_->OnBytesSent(bytes_sent, at_time.ms());
@@ -404,6 +406,16 @@ void CongestionControl::UpdatePacketLoss(Timestamp at_time) {
                 expected_packets_since_last_loss_update_,
                 PacketLossTracker::GracePeriod(
                     bandwidth_estimation_->round_trip_time()).ms());
+    }
+    // Loss backoff must act on the budget actually sent, not an optimistic
+    // probe candidate that may be several times higher than that budget.
+    if (expected_packets_since_last_loss_update_ >= 20 &&
+        lost_packets_since_last_loss_update_ >
+            expected_packets_since_last_loss_update_ * 0.10 &&
+        last_pushback_target_rate_ > DataRate::Zero() &&
+        bandwidth_estimation_->target_rate() > last_pushback_target_rate_) {
+      bandwidth_estimation_->SetSendBitrate(last_pushback_target_rate_,
+                                            at_time);
     }
     bandwidth_estimation_->UpdatePacketsLost(
         lost_packets_since_last_loss_update_,
@@ -486,8 +498,16 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   }
   previously_in_alr_ = alr_start_time.has_value();
 
+  auto normal_feedback = report.SortedByReceiveTime();
+  normal_feedback.erase(
+      std::remove_if(normal_feedback.begin(), normal_feedback.end(),
+                     [](const PacketResult& packet) {
+                       return packet.sent_packet.pacing_info.probe_cluster_id !=
+                              PacedPacketInfo::kNotAProbe;
+                     }),
+      normal_feedback.end());
   acknowledged_bitrate_estimator_->IncomingPacketFeedbackVector(
-      report.SortedByReceiveTime());
+      normal_feedback);
   auto acknowledged_bitrate = acknowledged_bitrate_estimator_->bitrate();
   bandwidth_estimation_->SetAcknowledgedRate(acknowledged_bitrate,
                                              report.feedback_time);
@@ -554,6 +574,10 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   bool recovered_from_overuse = false;
 
   DelayBasedBwe::Result result;
+  UpdatePacketLoss(report.feedback_time);
+  delay_based_bwe_->SetTransportState(
+      last_pushback_target_rate_, bandwidth_estimation_->round_trip_time(),
+      bandwidth_estimation_->fraction_loss() / 255.0);
   result = delay_based_bwe_->IncomingPacketFeedbackVector(
       report, acknowledged_bitrate, probe_bitrate, alr_start_time.has_value());
 
@@ -615,14 +639,14 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
       round_trip_time.IsFinite() && round_trip_time >= TimeDelta::Millis(300);
   const bool delay_overuse =
       delay_based_bwe_->last_state() == BandwidthUsage::kBwOverusing;
-  // Ramp loss decisions use its settled normal-packet window. Reusing the
-  // periodic BWE loss percentage here would penalize the same old loss again.
+  // The ramp can pause growth on fresh delay/loss evidence, but BWE alone
+  // owns decreases. Its settled loss window also expires independently.
   const bool ramp_healthy = !fresh_feedback || (!high_rtt && !delay_overuse);
-  DataRate pushback_target_rate = network_available_
-      ? bandwidth_ramp_.Update(loss_based_target_rate,
-                               ramp_healthy, round_trip_time, at_time,
-                               high_rtt ? "sustained_rtt" : "sustained_delay")
-      : std::min(loss_based_target_rate, last_pushback_target_rate_);
+  DataRate pushback_target_rate =
+      network_available_
+          ? bandwidth_ramp_.Update(loss_based_target_rate, ramp_healthy,
+                                   round_trip_time, at_time)
+          : std::min(loss_based_target_rate, last_pushback_target_rate_);
   pushback_target_rate = std::clamp(pushback_target_rate, min_data_rate_,
                                    max_data_rate_);
   if (at_time < bandwidth_ramp_.hold_until()) {

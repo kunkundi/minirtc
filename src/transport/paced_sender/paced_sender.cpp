@@ -77,6 +77,7 @@ void PacedSender::SetRtxBudget(int64_t bps, uint64_t version) {
   RunOrPost([this, bps, version] {
     if (version <= rtx_budget_version_) return;
     rtx_budget_version_ = version;
+    rtx_budget_bps_ = bps;
     const int64_t now_ms = clock_->CurrentTime().ms();
     rtx_admission_budget_.SetRate(bps, now_ms);
     rtx_send_budget_.SetRate(bps, now_ms);
@@ -86,6 +87,8 @@ void PacedSender::SetRtxBudget(int64_t bps, uint64_t version) {
         static_cast<size_t>(std::clamp<int64_t>(bps / 80, 1500, 32768));
     rtx_admission_budget_.SetMaxBurstBytes(burst_bytes);
     rtx_send_budget_.SetMaxBurstBytes(burst_bytes);
+    FlushDeferredRtx();
+    MaybeScheduleProcessPackets();
   });
 }
 
@@ -165,6 +168,50 @@ bool PacedSender::RtxExpired(const webrtc::RtpPacketToSend& packet) const {
              webrtc::TimeDelta::Seconds(1);
 }
 
+void PacedSender::DeferRtx(std::unique_ptr<webrtc::RtpPacketToSend> packet) {
+  const size_t bytes = packet->size() + 64;
+  const size_t limit = static_cast<size_t>(
+      std::clamp<int64_t>(rtx_budget_bps_ / 40, 2400, 32768));
+  if (deferred_rtx_bytes_ + bytes > limit) {
+    NotifyRtxDropped(*packet);
+    return;
+  }
+  // Keep history pending while credit refills, so repeated NACKs cannot
+  // recreate and immediately discard the same packet on every feedback.
+  deferred_rtx_bytes_ += bytes;
+  ++rtx_deferred_;
+  auto position = deferred_rtx_.end();
+  if (packet->is_key_frame())
+    position = std::find_if(
+        deferred_rtx_.begin(), deferred_rtx_.end(),
+        [](const DeferredRtx& item) { return !item.packet->is_key_frame(); });
+  deferred_rtx_.insert(
+      position, {std::move(packet),
+                 clock_->CurrentTime() + webrtc::TimeDelta::Millis(200)});
+}
+
+void PacedSender::FlushDeferredRtx() {
+  const auto now = clock_->CurrentTime();
+  for (auto it = deferred_rtx_.begin(); it != deferred_rtx_.end();) {
+    const auto& packet = *it->packet;
+    const size_t bytes = packet.size() + 64;
+    const bool drop = !transport_ready_ || rtx_congested_ ||
+                      rtx_budget_bps_ == 0 || ShouldDropVideoPacket(packet) ||
+                      RtxExpired(packet) || now >= it->deadline;
+    if (!drop && !rtx_admission_budget_.Consume(bytes, now.ms())) {
+      ++it;
+      continue;
+    }
+    auto ready = std::move(it->packet);
+    deferred_rtx_bytes_ -= bytes;
+    it = deferred_rtx_.erase(it);
+    if (drop)
+      NotifyRtxDropped(*ready);
+    else
+      EnqueueReadyPacket(std::move(ready));
+  }
+}
+
 std::vector<std::unique_ptr<webrtc::RtpPacketToSend>>
 PacedSender::GeneratePadding(webrtc::DataSize size) {
   std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> to_send_rtp_packets;
@@ -215,6 +262,7 @@ void PacedSender::SetTransportReady(bool ready) {
 
     pacing_controller_.AbortProbing("transport_not_ready");
     pacing_controller_.Pause();
+    FlushDeferredRtx();
     next_process_time_ = webrtc::Timestamp::MinusInfinity();
   });
 }
@@ -304,6 +352,7 @@ void PacedSender::SetVideoSendPaused(bool paused,
       pacing_controller_.AbortProbing("video_paused");
       for (uint32_t ssrc : ssrcs)
         pacing_controller_.RemovePacketsForSsrc(ssrc);
+      FlushDeferredRtx();
       UpdateStats();
     }
     MaybeScheduleProcessPackets();
@@ -325,6 +374,7 @@ void PacedSender::SetCongested(bool congested) {
   RunOrPost([this, congested] {
     rtx_congested_ = congested;
     pacing_controller_.SetCongested(congested);
+    FlushDeferredRtx();
     MaybeScheduleProcessPackets();
   });
 }
@@ -370,11 +420,21 @@ void PacedSender::EnqueuePacketOnQueue(
   }
   if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
       (!transport_ready_ || rtx_congested_ || RtxExpired(*packet) ||
-       !rtx_admission_budget_.Consume(packet->size() + 64,
-                                      clock_->CurrentTime().ms()))) {
+       rtx_budget_bps_ == 0)) {
     NotifyRtxDropped(*packet);
     return;
   }
+  if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
+      !rtx_admission_budget_.Consume(packet->size() + 64,
+                                     clock_->CurrentTime().ms())) {
+    DeferRtx(std::move(packet));
+    return;
+  }
+  EnqueueReadyPacket(std::move(packet));
+}
+
+void PacedSender::EnqueueReadyPacket(
+    std::unique_ptr<webrtc::RtpPacketToSend> packet) {
   packet->set_transport_sequence_number(transport_seq_++);
   size_t packet_size = packet->payload_size() + packet->padding_size();
   if (include_overhead_) {
@@ -395,6 +455,15 @@ void PacedSender::EnqueuePacketOnQueue(
 
 void PacedSender::RemovePacketsForSsrc(uint32_t ssrc) {
   RunOrPost([this, ssrc] {
+    for (auto it = deferred_rtx_.begin(); it != deferred_rtx_.end();) {
+      if (it->packet->Ssrc() != ssrc) {
+        ++it;
+        continue;
+      }
+      deferred_rtx_bytes_ -= it->packet->size() + 64;
+      NotifyRtxDropped(*it->packet);
+      it = deferred_rtx_.erase(it);
+    }
     pacing_controller_.RemovePacketsForSsrc(ssrc);
     MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
   });
@@ -492,6 +561,7 @@ void PacedSender::MaybeProcessPackets(
                                  std::function<void(PacedSender*)>>(
       this, [](PacedSender* sender) { sender->processing_packets_ = false; });
 
+  FlushDeferredRtx();
   webrtc::Timestamp next_send_time = pacing_controller_.NextSendTime();
   const webrtc::Timestamp now = clock_->CurrentTime();
   webrtc::TimeDelta early_execute_margin =
@@ -517,6 +587,10 @@ void PacedSender::MaybeProcessPackets(
   }
 
   UpdateStats();
+
+  if (!deferred_rtx_.empty())
+    next_send_time =
+        std::min(next_send_time, now + webrtc::TimeDelta::Millis(10));
 
   // Do not hold back in probing.
   webrtc::TimeDelta hold_back_window = webrtc::TimeDelta::Zero();

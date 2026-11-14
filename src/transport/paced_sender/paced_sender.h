@@ -8,6 +8,7 @@
 #define _PACED_SENDER_H_
 
 #include <atomic>
+#include <deque>
 #include <memory>
 #include <mutex>
 
@@ -17,6 +18,7 @@
 #include "api/units/data_size.h"
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
+#include "fec_adaptation_controller.h"
 #include "ice_agent.h"
 #include "log.h"
 #include "pacing_controller.h"
@@ -24,7 +26,6 @@
 #include "rtp_packet_pacer.h"
 #include "rtp_packet_to_send.h"
 #include "task_queue.h"
-#include "fec_adaptation_controller.h"
 
 namespace minirtc {
 class PacedSender : public webrtc::RtpPacketPacer,
@@ -79,6 +80,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // Aggregate RTX allowance across all video streams, in wire bits/s.
   void SetRtxBudget(int64_t bps, uint64_t version);
   uint64_t RtxDroppedPackets() const { return rtx_dropped_.load(); }
+  // Cumulative admissions deferred while waiting for RTX credit.
+  uint64_t RtxDeferredPackets() const { return rtx_deferred_.load(); }
 
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
@@ -88,7 +91,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
       return;
     }
     if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
-        (rtx_congested_ || RtxExpired(*packet) ||
+        (rtx_congested_ || RtxExpired(*packet) || rtx_budget_bps_ == 0 ||
          !rtx_send_budget_.Consume(packet->size() + 64,
                                    clock_->CurrentTime().ms()))) {
       NotifyRtxDropped(*packet);
@@ -232,6 +235,9 @@ class PacedSender : public webrtc::RtpPacketPacer,
       std::vector<std::unique_ptr<webrtc::RtpPacketToSend>> packets);
   void EnqueuePacketOnQueue(
       std::unique_ptr<webrtc::RtpPacketToSend> packet);
+  void EnqueueReadyPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet);
+  void DeferRtx(std::unique_ptr<webrtc::RtpPacketToSend> packet);
+  void FlushDeferredRtx();
   void NotifyRtxDropped(const webrtc::RtpPacketToSend& packet);
   void NotifyProbeAborted(int id, const char* reason);
   bool RtxExpired(const webrtc::RtpPacketToSend& packet) const;
@@ -321,9 +327,17 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // decrease must not turn an earlier allowance into a recovery burst.
   FecRateBudget rtx_admission_budget_;
   FecRateBudget rtx_send_budget_;
+  struct DeferredRtx {
+    std::unique_ptr<webrtc::RtpPacketToSend> packet;
+    webrtc::Timestamp deadline;
+  };
+  std::deque<DeferredRtx> deferred_rtx_;
+  size_t deferred_rtx_bytes_ = 0;
+  int64_t rtx_budget_bps_ = -1;
   uint64_t rtx_budget_version_ = 0;
   bool rtx_congested_ = false;  // Accessed only on the pacer queue.
   std::atomic<uint64_t> rtx_dropped_{0};
+  std::atomic<uint64_t> rtx_deferred_{0};
 
   webrtc::Timestamp last_send_time_;
   webrtc::Timestamp last_call_time_;

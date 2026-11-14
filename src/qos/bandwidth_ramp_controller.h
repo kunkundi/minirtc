@@ -27,10 +27,8 @@ class BandwidthRampController {
   void InvalidateProbe(int id);
   void Pause(Timestamp now, Timestamp until);
   void OnVideoSendPaused(bool paused, Timestamp now);
-  void Hold(Timestamp now, Timestamp until, const char* reason = "congestion",
-            TimeDelta rtt = TimeDelta::PlusInfinity());
-  DataRate Update(DataRate estimate, bool healthy, TimeDelta rtt, Timestamp now,
-                  const char* unhealthy_reason = "network");
+  DataRate Update(DataRate estimate, bool healthy, TimeDelta rtt,
+                  Timestamp now);
 
   DataRate target() const { return target_; }
   DataRate confirmed_rate() const { return confirmed_rate_; }
@@ -47,8 +45,6 @@ class BandwidthRampController {
 
   bool relay_ = false;
   bool video_paused_ = false;
-  Timestamp unhealthy_since_ = Timestamp::MinusInfinity();
-  Timestamp network_feedback_at_ = Timestamp::MinusInfinity();
   PacketLossTracker loss_tracker_;
   DataRate target_ = DataRate::Zero();
   DataRate minimum_ = DataRate::Zero();
@@ -59,7 +55,6 @@ class BandwidthRampController {
   Timestamp confirmed_at_ = Timestamp::MinusInfinity();
   Timestamp changed_at_ = Timestamp::MinusInfinity();
   Timestamp hold_until_ = Timestamp::MinusInfinity();
-  Timestamp last_backoff_ = Timestamp::MinusInfinity();
   Timestamp recovery_until_ = Timestamp::MinusInfinity();
   Timestamp epoch_ = Timestamp::MinusInfinity();
   Timestamp first_send_ = Timestamp::PlusInfinity();

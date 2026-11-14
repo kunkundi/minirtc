@@ -4061,8 +4061,9 @@ void IceTransportController::UpdateFecProtection() {
     fec_log_ms_ = now_ms;
     LOG_DEBUG("FEC pacer: dropped={} media_bps={} fec_bps={}",
              paced_sender_->FecDroppedPackets(), media_total, fec_total);
-    LOG_DEBUG("RTX pacer: dropped={} limit_bps={} reserved_bps={}",
-              paced_sender_->RtxDroppedPackets(), rtx_limit, rtx_reserved);
+    LOG_DEBUG("RTX pacer: dropped={} limit_bps={} reserved_bps={} deferred={}",
+              paced_sender_->RtxDroppedPackets(), rtx_limit, rtx_reserved,
+              paced_sender_->RtxDeferredPackets());
   }
   if (!publish)
     return;
