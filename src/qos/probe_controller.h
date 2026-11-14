@@ -77,6 +77,7 @@ class ProbeController {
   void OnVideoPacketSent();
   void OnVideoSendPaused(bool paused);
   void OnProbeSent(int id, Timestamp at_time);
+  void OnProbeResult(int id);
   void OnProbeAborted(int id);
   bool IsProbeResultValid(int id) const;
 
@@ -135,6 +136,8 @@ class ProbeController {
   bool video_paused_ = false;
   int min_valid_probe_id_ = 1;
   int current_probe_start_id_ = 1;
+  int last_probe_result_id_ = -1;
+  Timestamp initial_probe_until_ = Timestamp::MinusInfinity();
 
   int32_t next_probe_cluster_id_ = 1;
 

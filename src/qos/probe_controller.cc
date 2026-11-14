@@ -118,6 +118,10 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateExponentialProbing(
   assert(state_ == State::kInit);
   assert(start_bitrate_ > DataRate::Zero());
 
+  // Use WebRTC's longer initial-probe timing on TURN. Short bursts can fit
+  // into relay buffers without demonstrating sustainable path capacity.
+  initial_probe_until_ = at_time + TimeDelta::Seconds(5);
+
   // When probing at 1.8 Mbps ( 6x 300), this represents a threshold of
   // 1.2 Mbps to continue probing.
   std::vector<DataRate> probes = {config_.first_exponential_probe_scale *
@@ -145,7 +149,8 @@ std::vector<ProbeClusterConfig> ProbeController::SetEstimatedBitrate(
   if (state_ == State::kWaitingForProbingResult) {
     // Continue probing if probing results indicate channel has greater
     // capacity unless we already reached the needed bitrate.
-    if (bitrate > min_bitrate_to_probe_further_) {
+    if (last_probe_result_id_ == next_probe_cluster_id_ - 1 &&
+        bitrate > min_bitrate_to_probe_further_) {
       return InitiateProbing(
           at_time,
           std::vector<DataRate>{config_.further_exponential_probe_scale *
@@ -212,6 +217,8 @@ std::vector<ProbeClusterConfig> ProbeController::RequestProbe(
 void ProbeController::Reset(Timestamp at_time) {
   min_valid_probe_id_ = next_probe_cluster_id_;
   current_probe_start_id_ = next_probe_cluster_id_;
+  last_probe_result_id_ = -1;
+  initial_probe_until_ = Timestamp::MinusInfinity();
   video_started_ = false;
   alr_start_time_.reset();
   bandwidth_limited_cause_ = BandwidthLimitedCause::kDelayBasedLimited;
@@ -274,6 +281,10 @@ ProbeClusterConfig ProbeController::CreateProbeClusterConfig(Timestamp at_time,
   config.target_data_rate = bitrate;
   config.target_duration = config_.min_probe_duration;
   config.min_probe_delta = config_.min_probe_delta;
+  if (relay_path_ && at_time < initial_probe_until_) {
+    config.target_duration = TimeDelta::Millis(100);
+    config.min_probe_delta = TimeDelta::Millis(20);
+  }
   config.target_probe_count = config_.min_probe_packets_sent;
   config.id = next_probe_cluster_id_;
   next_probe_cluster_id_++;
@@ -337,7 +348,8 @@ void ProbeController::SetRelayPath(bool relay_path) {
     // Keep TURN's single startup cluster; subsequent growth uses GCC feedback.
     config_.first_exponential_probe_scale = 2.0;
     config_.second_exponential_probe_scale = 0;
-    config_.further_exponential_probe_scale = 1.5;
+    // Keep the upstream 2x / 0.7 continuation pair. Using 1.5x with 0.7
+    // allows only a 5% estimate revision to schedule another cluster.
     config_.alr_probe_scale = 1.5;
   }
 }
@@ -351,6 +363,11 @@ void ProbeController::OnVideoSendPaused(bool paused) {
   min_valid_probe_id_ = next_probe_cluster_id_;
   start_bitrate_ = estimated_bitrate_;
   UpdateState(State::kInit);
+}
+
+void ProbeController::OnProbeResult(int id) {
+  if (IsProbeResultValid(id))
+    last_probe_result_id_ = std::max(last_probe_result_id_, id);
 }
 
 void ProbeController::OnProbeSent(int id, Timestamp at_time) {

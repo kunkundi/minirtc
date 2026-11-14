@@ -79,6 +79,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   const DataRate start =
       DataRate::BitsPerSec(relay_path ? starting_bitrates_.relay_bps
                                       : starting_bitrates_.direct_bps);
+  bandwidth_estimation_->OnRouteChange(relay_path);
   if (initial_constraints_) {
     initial_constraints_->starting_rate = start;
     return update;
@@ -86,7 +87,6 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
 
   // A new ICE path has its own capacity and timing. Never carry a relay's
   // loss/delay history or probe results onto a direct path (or vice versa).
-  bandwidth_estimation_->OnRouteChange();
   acknowledged_bitrate_estimator_ =
       AcknowledgedBitrateEstimatorInterface::Create();
   delay_based_bwe_ = std::make_unique<DelayBasedBwe>();
@@ -308,6 +308,7 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
       probe_bitrate_estimator_->FetchAndResetLastEstimatedBitrate(&probe_id);
   if (probe_bitrate && !probe_controller_->IsProbeResultValid(probe_id))
     probe_bitrate.reset();
+  if (probe_bitrate) probe_controller_->OnProbeResult(probe_id);
   // Upstream's lower bound protects against an incomplete low probe without
   // deferring valid estimates or requiring normal media to fill the link.
   if (probe_bitrate && acknowledged_bitrate) {

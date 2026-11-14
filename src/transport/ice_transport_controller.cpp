@@ -168,9 +168,10 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   }
   paced_sender_ = std::make_shared<PacedSender>(
       ice_agent_, webrtc_clock_, task_queue_pacer_,
-      // Encoder overshoot is controlled before encoding. Allow the pacer to
-      // drain a large keyframe within the queue deadline, as in WebRTC.
-      false, disable_receiver_padding_probing_);
+      // Desktop admission bounds queue growth. Do not accelerate large frames
+      // to meet the 100 ms admission limit at the expense of path capacity.
+      media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent,
+      disable_receiver_padding_probing_);
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(
       relay_path_state == 1 ? kRelayPacerBurstIntervalMs : 40));
@@ -788,32 +789,18 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     context->capture_input_frame_total.fetch_add(1,
                                                  std::memory_order_relaxed);
     {
-      const int64_t now_us = clock_->CurrentTimeUs();
-      const int64_t elapsed = now_us - context->frame_dropper_last_input_us;
-      if (context->frame_dropper_last_input_us == 0 || elapsed > 1000000)
-        context->frame_dropper.Reset();
-      context->frame_dropper_last_input_us = now_us;
-      // Leak against the actual capture cadence, including quiet desktops.
-      const int input_fps = elapsed > 0 && elapsed <= 1000000
-                                ? std::clamp<int>(1000000 / elapsed, 1,
-                                                  media_config_.max_frame_rate)
-                                : media_config_.max_frame_rate;
-      const int bitrate =
-          context->desired_target_bitrate.value_or(media_config_.init_bitrate);
-      context->frame_dropper.SetRates(
-          std::max(1.0, bitrate * (1.0 - cwnd_reduce_ratio_)) / 1000.0,
-          input_fps);
-      context->frame_dropper.Leak(input_fps);
-      // Do not consume a pending FIR when admission skips a frame. The next
-      // admitted frame will carry it; keyframe recovery can also bypass drops.
-      const bool drop = context->frame_dropper.DropFrame();
       bool keyframe_pending = b_force_i_frame_.load();
-      if (drop && !keyframe_pending) {
+      if (!keyframe_pending) {
         std::lock_guard<std::mutex> keyframe_lock(force_i_frame_streams_mutex_);
         keyframe_pending = force_i_frame_streams_.count(channel_name) != 0;
       }
-      if (drop && !keyframe_pending) {
-        ++context->rate_dropped_frames;
+      if (!context->desired_target_bitrate) {
+        context->video_rate_control.SetRates(media_config_.init_bitrate,
+                                            media_config_.min_bitrate, 0);
+      }
+      if (context->video_rate_control.DropFrame(
+              clock_->CurrentTimeUs(), media_config_.max_frame_rate,
+              keyframe_pending)) {
         return 0;
       }
     }
@@ -1478,7 +1465,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "Video frame health: channel={} encoded_fps={} low_windows={}/{} "
         "capture_fps={} pacer_reject_percent={} "
         "encode_queue_drop_percent={} delay_avg_ms={} delay_p95_ms={} "
-        "resolution={}x{} rate_dropped_total={}",
+        "resolution={}x{} rate_dropped_total={} cwnd_dropped_total={} "
+        "encoder_target_bps={} cwnd_drop_interval={}",
         channel_name, context->measured_encoded_frame_rate,
         low_frame_rate_window_count,
         context->encoded_frame_rate_valid_window_count,
@@ -1487,7 +1475,11 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->measured_encode_queue_drop_percent,
         context->average_encode_queue_delay_ms,
         context->p95_encode_queue_delay_ms, encoded_frame.EncodedWidth(),
-        encoded_frame.EncodedHeight(), context->rate_dropped_frames);
+        encoded_frame.EncodedHeight(),
+        context->video_rate_control.rate_dropped_frames(),
+        context->video_rate_control.cwnd_dropped_frames(),
+        context->video_rate_control.target_bitrate_bps(),
+        context->video_rate_control.cwnd_drop_interval());
   }
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==
@@ -2176,7 +2168,7 @@ int IceTransportController::OnVideoEncoded(
       context->keyframe_same_resolution_retry = false;
       context->keyframe_budget_retry_count = 0;
     }
-    context->frame_dropper.Fill(encoded_frame.Size(), !keyframe);
+    context->video_rate_control.Fill(encoded_frame.Size(), keyframe);
   }
 
   if (measure_encode_delay) {
@@ -2819,8 +2811,7 @@ int IceTransportController::SetVideoSendPaused(bool paused) {
     // Invalidate queued raw frames and late asynchronous encoder callbacks,
     // even if they finish after a quick pause/resume cycle.
     ++context->video_settings_generation;
-    context->frame_dropper.Reset();
-    context->frame_dropper_last_input_us = 0;
+    context->video_rate_control.Reset();
     if (!paused) {
       context->ResetEncodedFrameRateTracking();
       context->ResetEncoderQualityTracking();
@@ -2858,8 +2849,7 @@ int IceTransportController::UpdateVideoResolution(int width, int height) {
     // resets adaptation with the new bound and produces a fresh keyframe.
     if (changed) {
       ++context->video_settings_generation;
-      context->frame_dropper.Reset();
-      context->frame_dropper_last_input_us = 0;
+      context->video_rate_control.Reset();
       context->source_width = context->source_height = 0;
       context->target_width.reset();
       context->target_height.reset();
@@ -2977,8 +2967,7 @@ int IceTransportController::UpdateVideoSettings(
       retired_encoders.push_back(std::move(context->codec));
       context->codec = std::move(prepared.codec);
       ++context->video_settings_generation;
-      context->frame_dropper.Reset();
-      context->frame_dropper_last_input_us = 0;
+      context->video_rate_control.Reset();
       context->encoding_speed_priority_enabled =
           prepared.speed_priority;
       context->encoding_speed_priority_update_generation.reset();
@@ -4070,7 +4059,9 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
         continue;
       }
 
-      const int per_video_bitrate = static_cast<int>(context->fec_protection.media_bitrate_bps);
+      const int per_video_bitrate = context->video_rate_control.SetRates(
+          static_cast<int>(context->fec_protection.media_bitrate_bps),
+          media_config_.min_bitrate, cwnd_reduce_ratio_);
       context->desired_target_bitrate = per_video_bitrate;
       // Admission pauses at zero; avoid passing unsupported zero to codecs.
       if (per_video_bitrate <= 0) continue;

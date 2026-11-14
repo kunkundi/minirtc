@@ -78,7 +78,7 @@ class SendSideBandwidthEstimation {
   SendSideBandwidthEstimation();
   ~SendSideBandwidthEstimation();
 
-  void OnRouteChange();
+  void OnRouteChange(bool relay_path = false);
 
   DataRate target_rate() const;
   LossBasedState loss_based_state() const;

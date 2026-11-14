@@ -150,8 +150,8 @@ SendSideBandwidthEstimation::SendSideBandwidthEstimation()
 
 SendSideBandwidthEstimation::~SendSideBandwidthEstimation() {}
 
-void SendSideBandwidthEstimation::OnRouteChange() {
-  loss_based_bwe_ = std::make_unique<LossBasedBweV2>();
+void SendSideBandwidthEstimation::OnRouteChange(bool relay_path) {
+  loss_based_bwe_ = std::make_unique<LossBasedBweV2>(relay_path);
   loss_based_state_ = LossBasedState::kDelayBasedEstimate;
   acknowledged_rate_.reset();
   min_bitrate_history_.clear();

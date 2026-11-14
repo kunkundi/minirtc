@@ -35,7 +35,7 @@ uint16_t SequenceNumberAt(uint16_t start_sequence_number, uint32_t offset) {
   return static_cast<uint16_t>(start_sequence_number + offset);
 }
 
-constexpr int64_t kMaxKeyframeAssemblyMs = 1500;
+constexpr int64_t kMaxFrameAssemblyMs = 1500;
 
 bool IsH264KeyFrame(const uint8_t* data, size_t size) {
   if (!data) {
@@ -932,7 +932,7 @@ void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
       for (const auto& [_, pending_frame] : pending_frames_) {
         if (pending_frame.is_keyframe &&
             (pending_frame.is_complete ||
-             (now_ms - pending_frame.arrival_time <= kMaxKeyframeAssemblyMs &&
+             (now_ms - pending_frame.arrival_time <= kMaxFrameAssemblyMs &&
               now_ms - pending_frame.last_progress_time <=
                   timing.soft_deadline_ms))) {
           return;
@@ -1051,19 +1051,27 @@ bool RtpVideoReceiver::Process() {
 
       auto it = pending_frames_.begin();
       const int64_t frame_age_ms = now_ms - it->second.arrival_time;
-      // A paced keyframe can take longer than an RTT-based repair deadline.
-      // Allow forward progress, but bound the entire assembly to 1.5 seconds.
-      // Ordinary frames and stalled keyframes keep the existing deadlines.
-      const int64_t recovery_age_ms =
-          it->second.is_keyframe && !it->second.is_complete
-              ? now_ms - it->second.last_progress_time
-              : frame_age_ms;
       const bool has_blocking_nacks =
           nack_ &&
           (it->second.last_sequence_number.has_value()
                ? nack_->HasPendingNacksUpTo(
                      *it->second.last_sequence_number)
                : nack_->HasPendingNacks());
+      if (has_blocking_nacks) {
+        if (!it->second.missing_since_ms)
+          it->second.missing_since_ms = now_ms;
+      } else {
+        it->second.missing_since_ms.reset();
+      }
+      // Separate packet serialization from loss repair. A gap discovered late
+      // in a large frame still gets an RTT-based repair window. Forward
+      // progress never extends that window while packets remain missing.
+      const int64_t recovery_age_ms =
+          it->second.missing_since_ms
+              ? now_ms - *it->second.missing_since_ms
+              : (!it->second.is_complete
+                     ? now_ms - it->second.last_progress_time
+                     : frame_age_ms);
       const bool is_older_than_decoded_frame =
           last_complete_frame_ts_.has_value() &&
           !webrtc::AheadOf(it->first, *last_complete_frame_ts_);
@@ -1115,10 +1123,14 @@ bool RtpVideoReceiver::Process() {
         completed_frame = std::move(it->second.frame);
         pending_frames_.erase(it);
       } else if (recovery_age_ms > recovery_timing.hard_deadline_ms ||
-                 frame_age_ms > kMaxKeyframeAssemblyMs) {
+                 frame_age_ms > kMaxFrameAssemblyMs) {
         dropped_timestamp = it->first;
         dropped_frame = true;
         recovery_timed_out = true;
+        LOG_DEBUG("Video frame recovery timeout: channel={} timestamp={} "
+                  "keyframe={} frame_age_ms={} recovery_age_ms={} missing={}",
+                  log_context_, it->first, it->second.is_keyframe, frame_age_ms,
+                  recovery_age_ms, has_blocking_nacks);
         awaiting_keyframe_ = true;
         if (nack_ && it->second.last_sequence_number.has_value()) {
           // Only abandon losses that can affect this frame. Newer frames,
@@ -1141,6 +1153,10 @@ bool RtpVideoReceiver::Process() {
                          recovery_timing.soft_fir_confirmation_delay_ms) {
         it->second.soft_fir_requested = true;
         request_soft_fir = true;
+        LOG_DEBUG("Video frame recovery FIR: channel={} timestamp={} "
+                  "keyframe={} frame_age_ms={} recovery_age_ms={} missing={}",
+                  log_context_, it->first, it->second.is_keyframe, frame_age_ms,
+                  recovery_age_ms, has_blocking_nacks);
       } else {
         break;
       }

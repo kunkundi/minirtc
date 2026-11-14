@@ -29,7 +29,6 @@
 #include "congestion_control_feedback.h"
 #include "data_channel_receive.h"
 #include "data_channel_send.h"
-#include "frame_dropper.h"
 #include "ice_agent.h"
 #include "media_channel.h"
 #include "media_codec.h"
@@ -42,6 +41,7 @@
 #include "video_channel_send.h"
 #include "video_decoder_factory.h"
 #include "video_encoder_factory.h"
+#include "video_encoder_rate_control.h"
 #include "video_frame_cadence.h"
 
 typedef void (*OnReceiveVideo)(const MiniRtcVideoFrame*, const char*, const size_t,
@@ -243,9 +243,7 @@ class IceTransportController
     std::optional<int> desired_target_bitrate;
     std::optional<int> applied_target_bitrate;
     bool bitrate_update_queued = false;
-    webrtc::FrameDropper frame_dropper;
-    int64_t frame_dropper_last_input_us = 0;
-    uint64_t rate_dropped_frames = 0;
+    VideoEncoderRateControl video_rate_control;
     FecAdaptationController fec_controller;
     FecProtectionConfig fec_protection;
     int64_t fec_last_active_ms = -1;

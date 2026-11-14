@@ -17,8 +17,8 @@ webrtc::PacingController::Configuration LowLatencyPacingConfiguration(
   // packets prevents a recovery frame from sitting behind content that can no
   // longer be decoded usefully.
   configuration.keyframe_flushing = true;
-  // Callers with strict frame-size budgets can bound the pacing rate. The
-  // native sender uses frame admission and keeps WebRTC queue draining enabled.
+  // Desktop senders pause frame admission while the queue drains at the GCC
+  // pacing rate. The short admission deadline must not accelerate large frames.
   configuration.drain_large_queues = !bounded_video_queue;
   return configuration;
 }

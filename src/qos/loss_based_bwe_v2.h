@@ -53,7 +53,7 @@ class LossBasedBweV2 {
     LossBasedState state = LossBasedState::kDelayBasedEstimate;
   };
   // Default algorithm/configuration from WebRTC 2e61fea6e375 (2026-11-14).
-  LossBasedBweV2();
+  explicit LossBasedBweV2(bool relay_path = false);
 
   LossBasedBweV2(const LossBasedBweV2&) = delete;
   LossBasedBweV2& operator=(const LossBasedBweV2&) = delete;
@@ -112,6 +112,7 @@ class LossBasedBweV2 {
     double temporal_weight_factor = 0.9;
     double bandwidth_backoff_lower_bound_factor = 1.0;
     double max_increase_factor = 1.3;
+    double max_increase_factor_after_congestion = 1.3;
     TimeDelta delayed_increase_window = TimeDelta::Millis(300);
     bool not_increase_if_inherent_loss_less_than_average_loss = true;
     bool not_use_acked_rate_in_alr = true;
@@ -213,6 +214,7 @@ class LossBasedBweV2 {
   HoldInfo last_hold_info_ = HoldInfo();
   PaddingInfo last_padding_info_ = PaddingInfo();
   double average_reported_loss_ratio_ = 0.0;
+  bool congestion_loss_observed_ = false;
 };
 
 }  // namespace webrtc
