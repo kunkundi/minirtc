@@ -14,6 +14,7 @@
 #include <stdint.h>
 
 #include <optional>
+#include <string>
 #include <vector>
 
 #include "api/transport/network_types.h"
@@ -130,25 +131,39 @@ class ProbeController {
 
   void EnablePeriodicAlrProbing(bool enable);
 
-  // Probes are sent periodically every 1s during the first 5s after the network
-  // becomes available or until OnMaxTotalAllocatedBitrate is invoked with a
-  // none zero max_total_allocated_bitrate (there are active streams being
-  // sent.) Probe rate is up to max configured bitrate configured via
-  // SetBitrates.
+  // Repeat bootstrap probes while healthy, within the path's startup window.
+  // Failed probes or a nonzero max allocation end the repeated-probe window.
   void EnableRepeatedInitialProbing(bool enable);
 
   // TURN relays are more sensitive to bursty padding and large probe jumps.
   // Keep the default WebRTC profile for direct paths and select a gentler
   // profile only after ICE confirms that the active pair is relayed.
-  void SetRelayPath(bool relay_path);
+  void SetRelayPath(bool relay_path, Timestamp at_time);
 
   // Probe a newly selected direct path without changing the media target.
   // Retry briefly if probing is blocked or a probe produces no valid feedback.
   std::vector<ProbeClusterConfig> RequestProbeOnPathChange(Timestamp at_time);
 
-  // Only an actual, valid estimate for the outstanding cluster completes the
-  // path probe. Ordinary BWE updates or feedback for an older path do not.
-  void OnProbeResult(int cluster_id, Timestamp at_time);
+  // Bind growth to the actual estimate of the outstanding cluster. Ordinary
+  // BWE updates or feedback for an older path cannot authorize another step.
+  void OnProbeResult(int cluster_id, DataRate bitrate, Timestamp at_time);
+  void OnProbeFeedbackRejected(int cluster_id, const char* reason,
+                               Timestamp at_time);
+  // Call only after successful transport send (or feedback proving that send).
+  void OnProbeSent(int cluster_id, Timestamp at_time);
+  // Local cancellation is separate from an unsuccessful capacity measurement.
+  void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
+  void OnVideoPacketSent(Timestamp at_time);
+  void OnVideoSendPaused(bool paused, Timestamp at_time);
+
+  // Cancel queued/ongoing growth while media or a keyframe is recovering.
+  void PauseProbingUntil(Timestamp until, const char* reason = "external_hold");
+  bool IsProbeResultValid(int cluster_id) const;
+
+  // The sender publishes a bounded transport budget separately from raw BWE.
+  // Each continuation needs a new sustained-traffic confirmation.
+  void SetGrowthLimit(DataRate probe_limit, DataRate confirmed_rate,
+                      Timestamp confirmed_at);
 
   void SetAlrStartTimeMs(std::optional<int64_t> alr_start_time);
   void SetAlrEndedTimeMs(int64_t alr_end_time);
@@ -176,6 +191,13 @@ class ProbeController {
   };
 
   void UpdateState(State new_state);
+  std::vector<ProbeClusterConfig> MaybeContinueProbing(Timestamp at_time);
+  std::vector<ProbeClusterConfig> MaybeProbeFurther(Timestamp at_time);
+  std::vector<ProbeClusterConfig> MaybeProbeOnMediaStart(Timestamp at_time);
+  void ScheduleProbeRetry(Timestamp earliest, DataRate max_rate,
+                          const char* reason);
+  std::vector<ProbeClusterConfig> MaybeRetryProbe(Timestamp at_time);
+  void LogRetryBlocked(Timestamp at_time, const char* reason);
   std::vector<ProbeClusterConfig> InitiateExponentialProbing(Timestamp at_time);
   std::vector<ProbeClusterConfig> InitiateProbing(
       Timestamp now, std::vector<DataRate> bitrates_to_probe,
@@ -191,6 +213,46 @@ class ProbeController {
   bool network_available_;
   bool repeated_initial_probing_enabled_ = false;
   bool relay_path_ = false;
+  DataRate growth_probe_limit_ = DataRate::PlusInfinity();
+  Timestamp media_confirmed_at_ = Timestamp::MinusInfinity();
+  bool pending_further_probe_ = false;
+  struct ActiveProbe {
+    int id;
+    DataRate target;
+    DataRate measured = DataRate::Zero();
+    bool probe_further = false;
+    Timestamp created_at = Timestamp::MinusInfinity();
+    Timestamp started_at = Timestamp::MinusInfinity();
+    bool initial = false;
+    bool recovery = false;
+    std::string rejection_reason;
+  };
+  std::optional<ActiveProbe> active_probe_;
+  struct MediaStartProbe {
+    Timestamp earliest;
+    bool first_video;
+  };
+  std::optional<MediaStartProbe> pending_media_start_probe_;
+  struct ProbeRetry {
+    Timestamp deadline;
+    Timestamp next_attempt;
+    DataRate max_rate;
+    DataRate confirmation_rate;
+    Timestamp healthy_since = Timestamp::MinusInfinity();
+    Timestamp last_log = Timestamp::MinusInfinity();
+    std::string blocked_reason;
+    int attempts = 0;
+    bool finished = false;
+  };
+  std::optional<ProbeRetry> pending_probe_retry_;
+  bool has_sent_video_ = false;
+  bool video_sent_since_resume_ = false;
+  bool video_send_paused_ = false;
+  Timestamp video_pause_time_ = Timestamp::MinusInfinity();
+  int min_valid_probe_cluster_id_ = 1;
+  Timestamp probe_cooldown_until_ = Timestamp::MinusInfinity();
+  Timestamp relay_startup_until_ = Timestamp::MinusInfinity();
+  DataRate retry_bitrate_limit_ = DataRate::PlusInfinity();
   struct PathProbe {
     Timestamp deadline;
     Timestamp last_probe_time = Timestamp::MinusInfinity();

@@ -65,8 +65,10 @@ AcknowledgedBitrateEstimatorInterface::
 
 std::unique_ptr<AcknowledgedBitrateEstimatorInterface>
 AcknowledgedBitrateEstimatorInterface::Create() {
-  // return std::make_unique<AcknowledgedBitrateEstimator>();
   RobustThroughputEstimatorSettings settings;
+  // Keep the packet-count and send/receive-span safeguards, but retire the
+  // pre-congestion rate sooner when desktop link capacity changes abruptly.
+  settings.min_window_duration = TimeDelta::Millis(500);
   return std::make_unique<RobustThroughputEstimator>(settings);
 }
 

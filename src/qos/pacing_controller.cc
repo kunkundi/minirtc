@@ -166,6 +166,11 @@ void PacingController::AbortProbing(const char* reason) {
   probing_send_failure_ = false;
 }
 
+void PacingController::SetProbeAbortedCallback(
+    std::function<void(int, const char*)> callback) {
+  prober_.SetProbeAbortedCallback(std::move(callback));
+}
+
 void PacingController::SetPacingRates(DataRate pacing_rate,
                                       DataRate padding_rate) {
   if (padding_rate > pacing_rate) {

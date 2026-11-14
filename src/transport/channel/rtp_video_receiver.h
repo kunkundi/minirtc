@@ -104,7 +104,8 @@ class RtpVideoReceiver : public ThreadBase {
                         uint32_t packet_count, uint32_t timestamp);
   bool RestoreMediaPacketFromRtx(RtpPacket& rtx_packet,
                                  RtpPacket* media_packet);
-  void TrackPendingFramePacket(uint32_t timestamp, uint16_t sequence_number);
+  void TrackPendingFramePacket(uint32_t timestamp, uint16_t sequence_number,
+                               bool is_keyframe);
   bool GetFrameSequenceRange(uint32_t timestamp, const char* codec_name,
                              uint16_t* start_sequence_number,
                              uint16_t* end_sequence_number,
@@ -175,6 +176,7 @@ class RtpVideoReceiver : public ThreadBase {
     std::optional<uint16_t> last_sequence_number;
     bool recovery_escalated = false;
     bool soft_fir_requested = false;
+    int64_t last_progress_time = 0;
   };
   struct RtpTimestampLess {
     bool operator()(uint32_t lhs, uint32_t rhs) const {

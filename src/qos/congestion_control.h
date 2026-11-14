@@ -5,14 +5,14 @@
 #include <deque>
 #include <memory>
 
-#include "acknowledged_bitrate_estimator.h"
 #include "acknowledged_bitrate_estimator_interface.h"
 #include "alr_detector.h"
-#include "api/network_state_predictor.h"
+#include "bandwidth_ramp_controller.h"
+#include "bitrate_limits.h"
 #include "api/transport/network_control.h"
 #include "api/transport/network_types.h"
-#include "congestion_window_pushback_controller.h"
 #include "delay_based_bwe.h"
+#include "probe_bitrate_estimator.h"
 #include "probe_controller.h"
 #include "send_side_bandwidth_estimation.h"
 
@@ -22,7 +22,7 @@ using namespace webrtc;
 
 class CongestionControl {
  public:
-  CongestionControl();
+  explicit CongestionControl(StartingBitrates starting_bitrates = {});
   ~CongestionControl();
 
  public:
@@ -30,16 +30,22 @@ class CongestionControl {
 
   NetworkControlUpdate OnProcessInterval(ProcessInterval msg);
 
-  NetworkControlUpdate OnTransportLossReport(TransportLossReport msg);
-
   NetworkControlUpdate OnTransportPacketsFeedback(
       TransportPacketsFeedback report);
 
-  void OnSentPacket(size_t bytes_sent, Timestamp at_time);
+  void OnSentPacket(size_t bytes_sent, Timestamp at_time,
+                    int probe_cluster_id = PacedPacketInfo::kNotAProbe,
+                    bool is_video = false);
+
+  void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
+  void OnVideoSendPaused(bool paused, Timestamp at_time);
 
   void SetRepeatedInitialProbing(bool enable);
 
   NetworkControlUpdate SetRelayPath(bool relay_path, Timestamp at_time);
+
+  void PauseProbingUntil(Timestamp until, const char* reason = "external_hold",
+                        Timestamp at_time = Timestamp::MinusInfinity());
 
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
@@ -53,18 +59,10 @@ class CongestionControl {
   std::optional<DataRate> FilterProbeResult(DataRate bitrate, int probe_id,
                                             Timestamp at_time);
   void MaybeApplyPendingProbe(NetworkControlUpdate* update, Timestamp at_time);
+  void UpdatePacketLoss(Timestamp at_time);
 
  private:
-  const bool packet_feedback_only_;
-  const bool use_min_allocatable_as_lower_bound_;
-  const bool ignore_probes_lower_than_network_estimate_;
-  const bool limit_probes_lower_than_throughput_estimate_;
-  const bool pace_at_max_of_bwe_and_lower_link_capacity_;
-  const bool limit_pacingfactor_by_upper_link_capacity_estimate_;
-
   const std::unique_ptr<ProbeController> probe_controller_;
-  const std::unique_ptr<CongestionWindowPushbackController>
-      congestion_window_pushback_controller_;
 
   std::unique_ptr<SendSideBandwidthEstimation> bandwidth_estimation_;
   std::unique_ptr<AlrDetector> alr_detector_;
@@ -73,39 +71,37 @@ class CongestionControl {
   std::unique_ptr<AcknowledgedBitrateEstimatorInterface>
       acknowledged_bitrate_estimator_;
 
-  std::optional<NetworkControllerConfig> initial_config_;
+  std::optional<TargetRateConstraints> initial_constraints_;
+  StartingBitrates starting_bitrates_;
 
   DataRate min_target_rate_ = DataRate::Zero();
   DataRate min_data_rate_ = DataRate::Zero();
   DataRate max_data_rate_ = DataRate::PlusInfinity();
   std::optional<DataRate> starting_rate_;
 
-  bool first_packet_sent_ = false;
-
-  std::optional<NetworkStateEstimate> estimate_;
-
   Timestamp next_loss_update_ = Timestamp::MinusInfinity();
   int lost_packets_since_last_loss_update_ = 0;
   int expected_packets_since_last_loss_update_ = 0;
+  PacketLossTracker loss_tracker_;
+  Timestamp last_packet_feedback_ = Timestamp::MinusInfinity();
 
   std::deque<int64_t> feedback_max_rtts_;
 
   DataRate last_loss_based_target_rate_;
   DataRate last_pushback_target_rate_ = DataRate::Zero();
-  DataRate last_stable_target_rate_;
-  LossBasedState last_loss_base_state_;
+  DataRate last_stable_target_rate_ = DataRate::Zero();
+  LossBasedState last_loss_base_state_ = LossBasedState::kDelayBasedEstimate;
 
-  std::optional<uint8_t> last_estimated_fraction_loss_ = 0;
+  uint8_t last_estimated_fraction_loss_ = 0;
   TimeDelta last_estimated_round_trip_time_ = TimeDelta::PlusInfinity();
-
-  double pacing_factor_;
-  DataRate min_total_allocated_bitrate_;
-  DataRate max_padding_rate_;
 
   bool previously_in_alr_ = false;
   bool last_reported_in_alr_ = false;
   bool network_available_ = false;
   bool relay_path_ = false;
+  bool probe_health_blocked_ = false;
+  Timestamp last_probe_health_log_ = Timestamp::MinusInfinity();
+  std::optional<BandwidthLimitedCause> last_probe_limited_cause_;
 
   struct PendingProbe {
     int id;
@@ -115,8 +111,9 @@ class CongestionControl {
   };
   std::optional<PendingProbe> pending_probe_;
   int last_settled_probe_id_ = -1;
+  BandwidthRampController bandwidth_ramp_;
+  Timestamp last_update_time_ = Timestamp::MinusInfinity();
 
-  std::optional<DataSize> current_data_window_;
 };
 }  // namespace minirtc
 

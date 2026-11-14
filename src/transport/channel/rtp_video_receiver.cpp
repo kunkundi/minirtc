@@ -35,6 +35,8 @@ uint16_t SequenceNumberAt(uint16_t start_sequence_number, uint32_t offset) {
   return static_cast<uint16_t>(start_sequence_number + offset);
 }
 
+constexpr int64_t kMaxKeyframeAssemblyMs = 1500;
+
 bool IsH264KeyFrame(const uint8_t* data, size_t size) {
   if (!data) {
     return false;
@@ -168,16 +170,20 @@ bool RtpVideoReceiver::RestoreMediaPacketFromRtx(RtpPacket& rtx_packet,
 }
 
 void RtpVideoReceiver::TrackPendingFramePacket(uint32_t timestamp,
-                                               uint16_t sequence_number) {
+                                               uint16_t sequence_number,
+                                               bool is_keyframe) {
   std::lock_guard<std::mutex> lock(pending_frames_mtx_);
   PendingFrame& pending_frame = pending_frames_[timestamp];
-  if (pending_frame.arrival_time == 0) {
+  if (!pending_frame.last_sequence_number) {
     pending_frame.arrival_time = clock_->CurrentTime().ms();
   }
+  pending_frame.is_keyframe |= is_keyframe;
   if (!pending_frame.last_sequence_number.has_value() ||
       webrtc::AheadOf(sequence_number,
                       *pending_frame.last_sequence_number)) {
     pending_frame.last_sequence_number = sequence_number;
+    // Duplicates and late repairs do not extend the receive deadline.
+    pending_frame.last_progress_time = clock_->CurrentTime().ms();
   }
 }
 
@@ -555,7 +561,10 @@ bool RtpVideoReceiver::CheckIsH264FrameCompleted(RtpPacketH264& rtp_packet_h264,
   uint16_t start_seq, end_seq;
   uint32_t packet_count;
 
-  TrackPendingFramePacket(timestamp, seq);
+  TrackPendingFramePacket(
+      timestamp, seq,
+      is_start && IsH264KeyFrame(rtp_packet_h264.Payload(),
+                                 rtp_packet_h264.PayloadSize()));
 
   if (is_start) {
     fua_start_sequence_numbers_[timestamp] = seq;
@@ -635,7 +644,7 @@ bool RtpVideoReceiver::CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1) {
   uint16_t start_seq, end_seq;
   uint32_t packet_count;
 
-  TrackPendingFramePacket(timestamp, seq);
+  TrackPendingFramePacket(timestamp, seq, rtp_packet_av1.IsKeyFrame());
 
   if (rtp_packet_av1.Av1FrameStart()) {
     fua_start_sequence_numbers_[timestamp] = seq;
@@ -911,16 +920,21 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
 }
 
 void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
+  const int64_t now_ms = clock_->CurrentTime().ms();
+  const auto timing = GetFrameRecoveryTiming();
   bool awaiting_keyframe = false;
   {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     awaiting_keyframe = awaiting_keyframe_;
     if (awaiting_keyframe) {
-      // Packet ingestion can complete the requested key frame between worker
-      // ticks. Let Process() consume it instead of sending a duplicate FIR at
-      // the retry boundary.
+      // Let a completed or steadily arriving keyframe finish at the retry
+      // boundary instead of replacing it with another large frame.
       for (const auto& [_, pending_frame] : pending_frames_) {
-        if (pending_frame.is_complete && pending_frame.is_keyframe) {
+        if (pending_frame.is_keyframe &&
+            (pending_frame.is_complete ||
+             (now_ms - pending_frame.arrival_time <= kMaxKeyframeAssemblyMs &&
+              now_ms - pending_frame.last_progress_time <=
+                  timing.soft_deadline_ms))) {
           return;
         }
       }
@@ -930,7 +944,6 @@ void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
     return;
   }
 
-  const int64_t now_ms = clock_->CurrentTime().ms();
   if (now_ms >=
       next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
     SendKeyFrameRequest(false);
@@ -1038,6 +1051,13 @@ bool RtpVideoReceiver::Process() {
 
       auto it = pending_frames_.begin();
       const int64_t frame_age_ms = now_ms - it->second.arrival_time;
+      // A paced keyframe can take longer than an RTT-based repair deadline.
+      // Allow forward progress, but bound the entire assembly to 1.5 seconds.
+      // Ordinary frames and stalled keyframes keep the existing deadlines.
+      const int64_t recovery_age_ms =
+          it->second.is_keyframe && !it->second.is_complete
+              ? now_ms - it->second.last_progress_time
+              : frame_age_ms;
       const bool has_blocking_nacks =
           nack_ &&
           (it->second.last_sequence_number.has_value()
@@ -1094,7 +1114,8 @@ bool RtpVideoReceiver::Process() {
         completed_keyframe = it->second.is_keyframe;
         completed_frame = std::move(it->second.frame);
         pending_frames_.erase(it);
-      } else if (frame_age_ms > recovery_timing.hard_deadline_ms) {
+      } else if (recovery_age_ms > recovery_timing.hard_deadline_ms ||
+                 frame_age_ms > kMaxKeyframeAssemblyMs) {
         dropped_timestamp = it->first;
         dropped_frame = true;
         recovery_timed_out = true;
@@ -1107,7 +1128,7 @@ bool RtpVideoReceiver::Process() {
         }
         pending_frames_.erase(it);
       } else if (!it->second.recovery_escalated &&
-                 frame_age_ms > recovery_timing.soft_deadline_ms) {
+                 recovery_age_ms > recovery_timing.soft_deadline_ms) {
         // Treat the soft deadline as a warning first. A short confirmation
         // window gives the aggressive NACK schedule one more chance to finish
         // without paying for an unnecessary full key frame.
@@ -1115,7 +1136,7 @@ bool RtpVideoReceiver::Process() {
         soft_stall_started = true;
       } else if (it->second.recovery_escalated &&
                  !it->second.soft_fir_requested &&
-                 frame_age_ms >
+                 recovery_age_ms >
                      recovery_timing.soft_deadline_ms +
                          recovery_timing.soft_fir_confirmation_delay_ms) {
         it->second.soft_fir_requested = true;

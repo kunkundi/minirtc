@@ -81,6 +81,11 @@ DelayBasedBwe::Result DelayBasedBwe::IncomingPacketFeedbackVector(
   bool recovered_from_overuse = false;
   BandwidthUsage prev_detector_state = active_delay_detector_->State();
   for (const auto& packet_feedback : packet_feedback_vector) {
+    // Probe bursts measure capacity separately. Mixing their spacing with
+    // sparse desktop frames can turn the end of a burst into a delay trend.
+    if (packet_feedback.sent_packet.pacing_info.probe_cluster_id !=
+        PacedPacketInfo::kNotAProbe)
+      continue;
     delayed_feedback = false;
     IncomingPacketFeedback(packet_feedback, msg.feedback_time);
     if (prev_detector_state == BandwidthUsage::kBwUnderusing &&
@@ -91,9 +96,9 @@ DelayBasedBwe::Result DelayBasedBwe::IncomingPacketFeedbackVector(
   }
 
   if (delayed_feedback) {
-    // TODO(bugs.webrtc.org/10125): Design a better mechanism to safe-guard
-    // against building very large network queues.
-    return Result();
+    return probe_bitrate ? ApplyProbeResult(*probe_bitrate, msg.feedback_time,
+                                            acked_bitrate, in_alr)
+                         : Result();
   }
   rate_control_.SetInApplicationLimitedRegion(in_alr);
   return MaybeUpdateEstimate(acked_bitrate, probe_bitrate,
@@ -123,6 +128,7 @@ void DelayBasedBwe::IncomingPacketFeedback(const PacketResult& packet_feedback,
     video_delay_detector_.reset(new TrendlineEstimator());
     audio_delay_detector_.reset(new TrendlineEstimator());
     active_delay_detector_ = video_delay_detector_.get();
+    overuse_since_ = Timestamp::MinusInfinity();
   }
   last_seen_packet_ = at_time;
 
@@ -176,13 +182,48 @@ DataRate DelayBasedBwe::TriggerOveruse(Timestamp at_time,
 DelayBasedBwe::Result DelayBasedBwe::MaybeUpdateEstimate(
     std::optional<DataRate> acked_bitrate,
     std::optional<DataRate> probe_bitrate, bool recovered_from_overuse,
-    bool /* in_alr */, Timestamp at_time) {
+    bool in_alr, Timestamp at_time) {
   Result result;
 
   // Currently overusing the bandwidth.
   if (active_delay_detector_->State() == BandwidthUsage::kBwOverusing) {
-    if (acked_bitrate &&
-        rate_control_.TimeToReduceFurther(at_time, *acked_bitrate)) {
+    if (!overuse_since_.IsFinite()) overuse_since_ = at_time;
+    const DataRate reference =
+        published_rate_.IsZero()
+            ? rate_control_.LatestEstimate()
+            : std::min(published_rate_, rate_control_.LatestEstimate());
+    while (!normal_sends_.empty() &&
+           at_time - normal_sends_.front().first >= TimeDelta::Seconds(1)) {
+      normal_sent_bytes_ -= normal_sends_.front().second;
+      normal_sends_.pop_front();
+    }
+    const auto send_window =
+        std::min(TimeDelta::Seconds(1), at_time - first_normal_send_);
+    const DataRate sent_rate = send_window > TimeDelta::Zero()
+                                   ? normal_sent_bytes_ / send_window
+                                   : DataRate::Zero();
+    // A congested link also has a low ACK rate. Use offered media load, not
+    // delivered throughput, to distinguish that case from a quiet desktop.
+    const bool low_load = in_alr || (first_normal_send_.IsFinite() &&
+                                     send_window >= TimeDelta::Millis(500) &&
+                                     sent_rate < reference * 0.65);
+    const bool strong_congestion =
+        network_loss_ >= 0.10 ||
+        (network_rtt_.IsFinite() && network_rtt_ >= TimeDelta::Millis(300));
+    const bool guarded = low_load && !strong_congestion;
+    if (guarded) {
+      // A quiet desktop's ACK rate measures demand, not available capacity.
+      // Require fresh, sustained overuse, then reduce the published budget
+      // gradually. Large RTT/loss and a loaded stream retain fast backoff.
+      if (at_time - overuse_since_ >= TimeDelta::Millis(200) &&
+          at_time - last_low_load_backoff_ >= TimeDelta::Millis(500)) {
+        rate_control_.SetEstimate(reference * 0.90, at_time);
+        result.updated = true;
+        result.target_bitrate = rate_control_.LatestEstimate();
+        last_low_load_backoff_ = at_time;
+      }
+    } else if (acked_bitrate &&
+               rate_control_.TimeToReduceFurther(at_time, *acked_bitrate)) {
       result.updated =
           UpdateEstimate(at_time, acked_bitrate, &result.target_bitrate);
     } else if (!acked_bitrate && rate_control_.ValidEstimate() &&
@@ -196,7 +237,24 @@ DelayBasedBwe::Result DelayBasedBwe::MaybeUpdateEstimate(
       result.probe = false;
       result.target_bitrate = rate_control_.LatestEstimate();
     }
+    if (result.updated ||
+        at_time - last_decision_log_ >= TimeDelta::Seconds(1)) {
+      LOG_DEBUG(
+          "Delay BWE decision: action={} low_load={} in_alr={} "
+          "published_bps={} reference_bps={} sent_bps={} acked_bps={} "
+          "target_bps={} rtt_ms={} "
+          "loss={} overuse_ms={}",
+          result.updated ? (guarded ? "bounded_backoff" : "backoff")
+                         : "confirm_overuse",
+          low_load, in_alr, published_rate_.bps(), reference.bps(),
+          sent_rate.bps(), acked_bitrate ? acked_bitrate->bps() : 0,
+          result.updated ? result.target_bitrate.bps() : reference.bps(),
+          network_rtt_.IsFinite() ? network_rtt_.ms() : -1, network_loss_,
+          (at_time - overuse_since_).ms());
+      last_decision_log_ = at_time;
+    }
   } else {
+    overuse_since_ = Timestamp::MinusInfinity();
     if (probe_bitrate) {
       result.probe = true;
       result.updated = true;
@@ -232,6 +290,24 @@ bool DelayBasedBwe::UpdateEstimate(Timestamp at_time,
 
 void DelayBasedBwe::OnRttUpdate(TimeDelta avg_rtt) {
   rate_control_.SetRtt(avg_rtt);
+}
+
+void DelayBasedBwe::SetTransportState(DataRate published_rate, TimeDelta rtt,
+                                      double loss_ratio) {
+  published_rate_ = published_rate;
+  network_rtt_ = rtt;
+  network_loss_ = loss_ratio;
+}
+
+void DelayBasedBwe::OnNormalPacketSent(DataSize size, Timestamp at_time) {
+  if (!first_normal_send_.IsFinite()) first_normal_send_ = at_time;
+  normal_sends_.emplace_back(at_time, size);
+  normal_sent_bytes_ += size;
+  while (!normal_sends_.empty() &&
+         at_time - normal_sends_.front().first >= TimeDelta::Seconds(1)) {
+    normal_sent_bytes_ -= normal_sends_.front().second;
+    normal_sends_.pop_front();
+  }
 }
 
 bool DelayBasedBwe::LatestEstimate(std::vector<uint32_t>* ssrcs,

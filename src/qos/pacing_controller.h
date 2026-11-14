@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include <array>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <vector>
@@ -181,13 +182,13 @@ class PacingController {
   TimeDelta ExpectedQueueTime() const;
 
   void SetQueueTimeLimit(TimeDelta limit);
-  void SetDrainLargeQueues(bool drain) { drain_large_queues_ = drain; }
 
   // Enable bitrate probing. Enabled by default, mostly here to simplify
   // testing. Must be called before any packets are being sent to have an
   // effect.
   void SetProbingEnabled(bool enabled);
   void AbortProbing(const char* reason);
+  void SetProbeAbortedCallback(std::function<void(int, const char*)> callback);
 
   // Returns the next time we expect ProcessPackets() to be called.
   Timestamp NextSendTime() const;

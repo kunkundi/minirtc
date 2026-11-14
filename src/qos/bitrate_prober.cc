@@ -68,12 +68,19 @@ void BitrateProber::AbortProbing(const char* reason) {
         cluster.sent_packets, cluster.sent_probes,
         cluster.pace_info.probe_cluster_min_bytes,
         cluster.pace_info.probe_cluster_min_probes);
+    if (probe_aborted_callback_)
+      probe_aborted_callback_(cluster.pace_info.probe_cluster_id, reason);
     clusters_.pop();
   }
   next_probe_time_ = Timestamp::PlusInfinity();
   if (probing_state_ != ProbingState::kDisabled) {
     probing_state_ = ProbingState::kInactive;
   }
+}
+
+void BitrateProber::SetProbeAbortedCallback(
+    std::function<void(int, const char*)> callback) {
+  probe_aborted_callback_ = std::move(callback);
 }
 
 void BitrateProber::MaybeSetActiveState(DataSize packet_size) {
@@ -123,6 +130,9 @@ void BitrateProber::CreateProbeCluster(
         cluster.pace_info.probe_cluster_id, cluster.sent_bytes,
         cluster.sent_packets, cluster.pace_info.probe_cluster_min_bytes,
         cluster.pace_info.probe_cluster_min_probes);
+    if (probe_aborted_callback_)
+      probe_aborted_callback_(cluster.pace_info.probe_cluster_id,
+                              "pending_queue_limit");
     clusters_.pop();
   }
 
@@ -168,6 +178,8 @@ bool BitrateProber::RemoveExpiredClusters(Timestamp now) {
         cluster.pace_info.probe_cluster_min_bytes,
         cluster.pace_info.probe_cluster_min_probes,
         (now - cluster.requested_at).ms());
+    if (probe_aborted_callback_)
+      probe_aborted_callback_(cluster.pace_info.probe_cluster_id, reason);
     clusters_.pop();
     removed_cluster = true;
   }
@@ -223,6 +235,8 @@ std::optional<PacedPacketInfo> BitrateProber::CurrentCluster(Timestamp now) {
         cluster.sent_packets, cluster.sent_probes,
         cluster.pace_info.probe_cluster_min_bytes,
         cluster.pace_info.probe_cluster_min_probes);
+    if (probe_aborted_callback_)
+      probe_aborted_callback_(cluster.pace_info.probe_cluster_id, "schedule_delay");
     clusters_.pop();
     if (clusters_.empty()) {
       probing_state_ = ProbingState::kInactive;

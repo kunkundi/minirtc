@@ -64,7 +64,9 @@ class IceTransportController
                          int video_frame_rate,
                          MiniRtcVideoContentType video_content_type,
                          MiniRtcVideoDegradationPreference
-                             video_degradation_preference);
+                             video_degradation_preference,
+                         StartingBitrates starting_bitrates = {},
+                         bool disable_receiver_padding_probing = false);
   ~IceTransportController();
 
  public:
@@ -197,7 +199,8 @@ class IceTransportController
       const webrtc::RtpPacketToSend& packet,
       const PacketFeedbackRegistration& registration);
   void OnSentPacket(const webrtc::RtpPacketToSend& packet,
-                    const PacketFeedbackRegistration& registration);
+                    const PacketFeedbackRegistration& registration,
+                    const webrtc::PacedPacketInfo& pacing_info);
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateVideoBitrateAllocation();
   void UpdateFecProtection();
@@ -469,6 +472,8 @@ class IceTransportController
   std::map<uint32_t, std::string> ssrc_to_name_;
 
   MediaCodecConfig media_config_;
+  StartingBitrates starting_bitrates_;
+  bool disable_receiver_padding_probing_ = false;
 
   OnReceiveVideo on_receive_video_ = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
@@ -494,6 +499,8 @@ class IceTransportController
   bool fec_update_queued_ = false;  // Guarded by stream_senders_mutex_.
   int64_t rtx_bitrate_limit_bps_ = 0;  // Guarded by stream_senders_mutex_.
   int64_t fec_snapshot_ms_ = -1, fec_log_ms_ = -1;
+  uint32_t probe_hold_reasons_ = 0;
+  int64_t probe_hold_log_ms_ = -1;
   std::map<uint32_t, FecFeedbackSnapshot> fec_feedback_snapshots_;
   std::optional<uint8_t> video_abs_send_time_ext_id_;
   std::optional<uint8_t> video_abs_recv_time_ext_id_;
@@ -561,12 +568,6 @@ class IceTransportController
   int64_t target_bitrate_ = 0;
   int64_t available_transport_bitrate_ = 0;
 
-  struct LossReport {
-    uint32_t extended_highest_sequence_number = 0;
-    int cumulative_lost = 0;
-  };
-  std::map<uint32_t, LossReport> last_report_blocks_;
-  webrtc::Timestamp last_report_block_time_;
 };
 }  // namespace minirtc
 
