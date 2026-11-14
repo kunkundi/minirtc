@@ -20,6 +20,7 @@
 #include "api/units/data_rate.h"
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
+#include "relay_qos_config.h"
 
 namespace minirtc {
 namespace webrtc {
@@ -55,7 +56,8 @@ enum class BandwidthLimitedCause : int {
 // bitrate is adjusted by an application.
 class ProbeController {
  public:
-  explicit ProbeController(bool require_video = true);
+  explicit ProbeController(bool require_video = true,
+                           RelayQosConfig relay_config = {});
   ~ProbeController();
 
   ProbeController(const ProbeController&) = delete;
@@ -130,14 +132,13 @@ class ProbeController {
   DataRate bitrate_before_last_large_drop_ = DataRate::Zero();
   bool last_drop_in_alr_ = false;
 
-  bool relay_path_ = false;
   const bool require_video_;
+  const RelayQosConfig relay_config_;
   bool video_started_ = false;
   bool video_paused_ = false;
   int min_valid_probe_id_ = 1;
   int current_probe_start_id_ = 1;
   int last_probe_result_id_ = -1;
-  Timestamp initial_probe_until_ = Timestamp::MinusInfinity();
 
   int32_t next_probe_cluster_id_ = 1;
 

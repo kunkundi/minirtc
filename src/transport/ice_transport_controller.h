@@ -247,7 +247,6 @@ class IceTransportController
     FecAdaptationController fec_controller;
     FecProtectionConfig fec_protection;
     int64_t fec_last_active_ms = -1;
-    double rtx_bitrate_ewma = 0;
     bool startup_resolution_attempted = false;
     bool startup_keyframe_pending = false;
     int startup_keyframe_retry_count = 0;

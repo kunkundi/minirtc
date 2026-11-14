@@ -47,8 +47,11 @@ BandwidthLimitedCause GetBandwidthLimitedCause(LossBasedState loss_based_state,
 }
 
 CongestionControl::CongestionControl(StartingBitrates starting_bitrates,
-                                     bool disable_receiver_padding_probing)
-    : probe_controller_(new ProbeController(disable_receiver_padding_probing)),
+                                     bool disable_receiver_padding_probing,
+                                     RelayQosConfig relay_config)
+    : relay_config_(relay_config),
+      probe_controller_(new ProbeController(disable_receiver_padding_probing,
+                                            relay_config)),
       bandwidth_estimation_(new SendSideBandwidthEstimation()),
       alr_detector_(new AlrDetector()),
       probe_bitrate_estimator_(new ProbeBitrateEstimator()),
@@ -79,7 +82,14 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   const DataRate start =
       DataRate::BitsPerSec(relay_path ? starting_bitrates_.relay_bps
                                       : starting_bitrates_.direct_bps);
-  bandwidth_estimation_->OnRouteChange(relay_path);
+  bandwidth_estimation_->OnRouteChange(
+      relay_path ? relay_config_.loss_recovery_max_increase : 1.3);
+  if (relay_path) {
+    LOG_INFO("Relay QoS: probe_duration_ms={} probe_delta_ms={} "
+             "loss_recovery_max_increase={}", relay_config_.probe_duration_ms,
+             relay_config_.probe_delta_ms,
+             relay_config_.loss_recovery_max_increase);
+  }
   if (initial_constraints_) {
     initial_constraints_->starting_rate = start;
     return update;

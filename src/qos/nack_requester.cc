@@ -142,8 +142,16 @@ void NackRequester::ClearUpTo(uint16_t seq_num) {
                         recovered_list_.upper_bound(seq_num));
 }
 
-bool NackRequester::HasPendingNacksUpTo(uint16_t seq_num) const {
-  return nack_list_.begin() != nack_list_.upper_bound(seq_num);
+std::optional<Timestamp> NackRequester::FirstMissingTime(
+    std::optional<uint16_t> through_sequence) const {
+  const auto end = through_sequence ? nack_list_.upper_bound(*through_sequence)
+                                    : nack_list_.end();
+  std::optional<Timestamp> first;
+  for (auto it = nack_list_.begin(); it != end; ++it) {
+    if (!first || it->second.created_at_time < *first)
+      first = it->second.created_at_time;
+  }
+  return first;
 }
 
 void NackRequester::UpdateRtt(int64_t rtt_ms) {

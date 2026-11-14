@@ -121,6 +121,10 @@ void VideoChannelSend::Initialize(rtp::PAYLOAD_TYPE payload_type,
   fec_state_->clock = clock_;
   fec_state_->channel = channel_name_;
   fec_state_->rtx_ssrc = rtx_ssrc_;
+  paced_sender_->RegisterVideoSsrc(
+      ssrc_, rtx_enabled_ ? rtx_ssrc_ : ssrc_, [state = fec_state_] {
+        if (state->active.load()) state->sender.Reset();
+      });
   rtp_packetizer_ = RtpPacketizer::Create(payload_type, ssrc_);
   if (fec_enabled_ && rtx_enabled_) rtp_packetizer_->SetMaxPayloadSize(1100);
   padding_packetizer_ = RtpPacketizer::Create(
@@ -370,6 +374,7 @@ std::vector<std::unique_ptr<RtpPacket>> VideoChannelSend::GeneratePadding(
 
 void VideoChannelSend::Destroy() {
   if (fec_state_) fec_state_->active.store(false);
+  if (paced_sender_) paced_sender_->UnregisterVideoSsrc(ssrc_);
   if (task_queue_history_) {
     history_shutdown_.store(true);
     {

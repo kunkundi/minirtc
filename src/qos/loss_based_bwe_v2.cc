@@ -69,14 +69,11 @@ double GetLossProbability(double inherent_loss, DataRate loss_limited_bandwidth,
 
 }  // namespace
 
-LossBasedBweV2::LossBasedBweV2(bool relay_path)
-    : config_([relay_path] {
+LossBasedBweV2::LossBasedBweV2(double max_increase_factor)
+    : config_([max_increase_factor] {
         Config config;
-        // TURN policing may drop excess traffic without a delay signal. Keep
-        // padding recovery below the upstream 30%/300ms growth ceiling so loss
-        // feedback can arrive before another large increase. Initial probing
-        // and the delay-based estimator retain their normal recovery speed.
-        if (relay_path) config.max_increase_factor_after_congestion = 1.05;
+        config.max_increase_factor = std::isfinite(max_increase_factor)
+            ? std::max(1.0, max_increase_factor) : 1.3;
         return config;
       }()) {
   current_best_estimate_.inherent_loss = config_.initial_inherent_loss_estimate;
@@ -144,10 +141,6 @@ void LossBasedBweV2::UpdateBandwidthEstimate(
   if (!PushBackObservation(packet_results)) {
     return;
   }
-
-  // Preserve normal ramp-up on mildly lossy paths. After substantial loss,
-  // use the route's conservative recovery ceiling until the route is reset.
-  congestion_loss_observed_ |= average_reported_loss_ratio_ > 0.10;
 
   if (!IsValid(current_best_estimate_.loss_limited_bandwidth)) {
     if (!IsValid(delay_based_estimate)) {
@@ -321,13 +314,10 @@ void LossBasedBweV2::UpdateBandwidthEstimate(
       (recovering_after_loss_timestamp_.IsInfinite() ||
        recovering_after_loss_timestamp_ + config_.delayed_increase_window <
            last_send_time_most_recent_observation_)) {
-    const double max_increase_factor =
-        congestion_loss_observed_ ? config_.max_increase_factor_after_congestion
-                                  : config_.max_increase_factor;
     bandwidth_limit_in_current_window_ =
         std::max(kCongestionControllerMinBitrate,
                  current_best_estimate_.loss_limited_bandwidth *
-                     max_increase_factor);
+                     config_.max_increase_factor);
     recovering_after_loss_timestamp_ = last_send_time_most_recent_observation_;
   }
 }

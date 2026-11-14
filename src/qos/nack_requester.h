@@ -10,6 +10,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <map>
+#include <optional>
 #include <set>
 #include <vector>
 
@@ -53,7 +54,8 @@ class NackRequester {
                        bool send_successful);
   bool ConsumeKeyFrameRequest();
   bool HasPendingNacks() const { return !nack_list_.empty(); }
-  bool HasPendingNacksUpTo(uint16_t seq_num) const;
+  std::optional<Timestamp> FirstMissingTime(
+      std::optional<uint16_t> through_sequence = std::nullopt) const;
   int64_t RttMs() const { return rtt_.ms(); }
   bool HasRttSample() const { return has_rtt_sample_; }
   void UpdateRtt(int64_t rtt_ms);

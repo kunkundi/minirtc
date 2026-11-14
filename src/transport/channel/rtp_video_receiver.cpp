@@ -919,26 +919,26 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
   }
 }
 
-void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
+bool RtpVideoReceiver::IsReceivingKeyFrame() {
   const int64_t now_ms = clock_->CurrentTime().ms();
   const auto timing = GetFrameRecoveryTiming();
+  std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+  for (const auto& [_, frame] : pending_frames_) {
+    if (frame.is_keyframe &&
+        (frame.is_complete ||
+         (now_ms - frame.arrival_time <= kMaxFrameAssemblyMs &&
+          now_ms - frame.last_progress_time <= timing.soft_deadline_ms)))
+      return true;
+  }
+  return false;
+}
+
+void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
+  const int64_t now_ms = clock_->CurrentTime().ms();
   bool awaiting_keyframe = false;
   {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     awaiting_keyframe = awaiting_keyframe_;
-    if (awaiting_keyframe) {
-      // Let a completed or steadily arriving keyframe finish at the retry
-      // boundary instead of replacing it with another large frame.
-      for (const auto& [_, pending_frame] : pending_frames_) {
-        if (pending_frame.is_keyframe &&
-            (pending_frame.is_complete ||
-             (now_ms - pending_frame.arrival_time <= kMaxFrameAssemblyMs &&
-              now_ms - pending_frame.last_progress_time <=
-                  timing.soft_deadline_ms))) {
-          return;
-        }
-      }
-    }
   }
   if (!awaiting_keyframe) {
     return;
@@ -1051,24 +1051,16 @@ bool RtpVideoReceiver::Process() {
 
       auto it = pending_frames_.begin();
       const int64_t frame_age_ms = now_ms - it->second.arrival_time;
-      const bool has_blocking_nacks =
-          nack_ &&
-          (it->second.last_sequence_number.has_value()
-               ? nack_->HasPendingNacksUpTo(
-                     *it->second.last_sequence_number)
-               : nack_->HasPendingNacks());
-      if (has_blocking_nacks) {
-        if (!it->second.missing_since_ms)
-          it->second.missing_since_ms = now_ms;
-      } else {
-        it->second.missing_since_ms.reset();
-      }
+      const auto missing_since =
+          nack_ ? nack_->FirstMissingTime(it->second.last_sequence_number)
+                : std::nullopt;
+      const bool has_blocking_nacks = missing_since.has_value();
       // Separate packet serialization from loss repair. A gap discovered late
       // in a large frame still gets an RTT-based repair window. Forward
-      // progress never extends that window while packets remain missing.
+      // progress and promotion to the head of the queue never restart it.
       const int64_t recovery_age_ms =
-          it->second.missing_since_ms
-              ? now_ms - *it->second.missing_since_ms
+          missing_since
+              ? now_ms - missing_since->ms()
               : (!it->second.is_complete
                      ? now_ms - it->second.last_progress_time
                      : frame_age_ms);
@@ -1112,8 +1104,13 @@ bool RtpVideoReceiver::Process() {
         completed_frame = std::move(it->second.frame);
         pending_frames_.erase(it);
       } else if (it->second.is_complete && awaiting_keyframe_) {
+        // An incomplete frame may still be missing its IDR header. Preserve
+        // that repair opportunity; only discard known complete deltas here.
         dropped_timestamp = it->first;
         dropped_frame = true;
+        if (nack_ && it->second.last_sequence_number)
+          nack_->ClearUpTo(*it->second.last_sequence_number);
+        MarkFrameDiscardedLocked(dropped_timestamp);
         pending_frames_.erase(it);
       } else if (it->second.is_complete && !has_blocking_nacks) {
         soft_fir_avoided = it->second.recovery_escalated &&
@@ -1399,6 +1396,13 @@ bool RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
   if (enter_awaiting_state) {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     awaiting_keyframe_ = true;
+  }
+
+  // Apply the same guard to soft/hard timeouts and periodic retries. A
+  // superseded partial delta must not replace a keyframe still arriving.
+  if (IsReceivingKeyFrame()) {
+    recovery_fir_suppressed_.fetch_add(1, std::memory_order_relaxed);
+    return false;
   }
 
   std::lock_guard<std::mutex> lock(rtcp_sender_mtx_);

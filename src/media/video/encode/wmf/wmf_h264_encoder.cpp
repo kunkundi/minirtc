@@ -3,6 +3,7 @@
 #include <codecapi.h>
 #include <strmif.h>
 
+#include <algorithm>
 #include <chrono>
 #include <limits>
 
@@ -60,7 +61,26 @@ class WmfH264Encoder::Impl {
     pps_.clear();
     parser_.Reset();
     sequence_ = 0;
+    buffer_size_bytes_ = 0;
     force_idr_ = true;
+  }
+
+  void UpdateBufferSize(int bitrate) {
+    if (config_.video_content_type != MiniRtcVideoContentType::ScreenContent ||
+        !api_ || api_->IsSupported(&CODECAPI_AVEncCommonBufferSize) != S_OK)
+      return;
+    // H.264 expresses HRD size in bytes. Bound CBR bursts at the encoder,
+    // including maintain-resolution mode, without resetting the MFT. This
+    // is an optional driver capability, not a guaranteed per-frame limit.
+    const uint32_t bytes = static_cast<uint32_t>(std::clamp<int64_t>(
+        int64_t(bitrate) * 600 / 8000, 4096, 128 * 1024));
+    if (bytes == buffer_size_bytes_) return;
+    const HRESULT hr = SetUint(api_.Get(), CODECAPI_AVEncCommonBufferSize, bytes);
+    if (buffer_size_bytes_ == 0 || FAILED(hr))
+      LOG_DEBUG("WMF encoder buffer: bytes={} accepted={}", bytes, SUCCEEDED(hr));
+    // Cache attempted values too: optional driver rejection must not trigger
+    // a reconfiguration or a retry on every unchanged bitrate update.
+    buffer_size_bytes_ = bytes;
   }
 
   HRESULT Configure(IMFActivate* activation) {
@@ -129,6 +149,7 @@ class WmfH264Encoder::Impl {
     hr = SetUint(api_.Get(), CODECAPI_AVEncCommonMeanBitRate,
                  config_.init_bitrate);
     if (FAILED(hr)) return hr;
+    UpdateBufferSize(config_.init_bitrate);
     hr = encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     if (FAILED(hr)) return hr;
     return encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
@@ -323,6 +344,7 @@ class WmfH264Encoder::Impl {
   ComPtr<ICodecAPI> api_;
   DWORD input_id_ = 0, output_id_ = 0;
   unsigned input_credit_ = 0;
+  uint32_t buffer_size_bytes_ = 0;
   bool async_ = false, force_idr_ = true, reconfigure_ = false;
   bool initialized_ = false;
   uint64_t sequence_ = 0;
@@ -415,6 +437,7 @@ int WmfH264Encoder::SetTargetBitrate(int bitrate) {
                        bitrate)))
       impl_->reconfigure_ = true;
     impl_->config_.init_bitrate = bitrate;
+    impl_->UpdateBufferSize(bitrate);
     return 0;
   });
 }

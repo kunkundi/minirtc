@@ -130,6 +130,7 @@ class RtpVideoReceiver : public ThreadBase {
   FrameRecoveryTiming GetFrameRecoveryTiming();
   void MaybeLogRecoveryStats(bool force = false);
   void MaybeRetryKeyFrameRequest();
+  bool IsReceivingKeyFrame();
   void OnCompleteKeyFrame(int64_t now_ms);
   bool SendKeyFrameRequest(bool enter_awaiting_state);
   bool RtxEnabled() const { return rtx_ssrc_.load() != 0; }
@@ -177,7 +178,6 @@ class RtpVideoReceiver : public ThreadBase {
     bool recovery_escalated = false;
     bool soft_fir_requested = false;
     int64_t last_progress_time = 0;
-    std::optional<int64_t> missing_since_ms;
   };
   struct RtpTimestampLess {
     bool operator()(uint32_t lhs, uint32_t rhs) const {

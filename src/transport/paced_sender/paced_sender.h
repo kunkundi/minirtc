@@ -64,6 +64,9 @@ class PacedSender : public webrtc::RtpPacketPacer,
       std::function<void(int, webrtc::Timestamp, const char*)> callback);
   void SetVideoSendPausedCallback(
       std::function<void(bool, webrtc::Timestamp)> callback);
+  void RegisterVideoSsrc(uint32_t media_ssrc, uint32_t rtx_ssrc,
+                         std::function<void()> on_keyframe);
+  void UnregisterVideoSsrc(uint32_t media_ssrc);
 
   void SetGeneratePaddingFunc(
       std::function<std::vector<std::unique_ptr<RtpPacket>>(uint32_t, int64_t)>
@@ -136,10 +139,10 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void OnAbortedRetransmissions(
       uint32_t /* ssrc */,
       rtc::ArrayView<const uint16_t> /* sequence_numbers */) override {}
-  std::optional<uint32_t> GetRtxSsrcForMedia(
-      uint32_t /* ssrc */) const override {
-    return std::nullopt;
-  }
+  std::optional<uint32_t> GetRtxSsrcForMedia(uint32_t ssrc) const override;
+  void OnPacketDiscarded(const webrtc::RtpPacketToSend& packet) override;
+  void OnKeyframeEnqueued(uint32_t ssrc,
+                          webrtc::Timestamp capture_time) override;
 
  public:
   void SetSendBurstInterval(webrtc::TimeDelta burst_interval);
@@ -235,6 +238,7 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void EnqueuePacketOnQueue(
       std::unique_ptr<webrtc::RtpPacketToSend> packet);
   void EnqueueReadyPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet);
+  void RemovePacketsForSsrcOnQueue(uint32_t ssrc);
   void DeferRtx(std::unique_ptr<webrtc::RtpPacketToSend> packet);
   void FlushDeferredRtx();
   void NotifyRtxDropped(const webrtc::RtpPacketToSend& packet);
@@ -309,10 +313,24 @@ class PacedSender : public webrtc::RtpPacketPacer,
   bool has_local_video_ = false;  // Pacer queue only.
   webrtc::Timestamp video_pause_time_ = webrtc::Timestamp::MinusInfinity();
   bool ShouldDropVideoPacket(const webrtc::RtpPacketToSend& packet) const {
-    return packet.packet_type() != webrtc::RtpPacketMediaType::kAudio &&
-           (video_send_paused_ || (video_pause_time_.IsFinite() &&
-                                  packet.capture_time() <= video_pause_time_));
+    if (packet.packet_type() == webrtc::RtpPacketMediaType::kAudio) return false;
+    if (video_send_paused_ || (video_pause_time_.IsFinite() &&
+                              packet.capture_time() <= video_pause_time_))
+      return true;
+    // History tasks can post old RTX after its replacement keyframe was
+    // queued. Keep a per-media watermark, independent of sequence wrapping.
+    const auto stream = video_streams_.find(
+        packet.original_ssrc().value_or(packet.Ssrc()));
+    return stream != video_streams_.end() && packet.capture_time().IsFinite() &&
+           packet.capture_time() < stream->second.keyframe_capture_time;
   }
+
+  struct VideoStream {
+    uint32_t rtx_ssrc;
+    webrtc::Timestamp keyframe_capture_time = webrtc::Timestamp::MinusInfinity();
+    std::function<void()> on_keyframe;
+  };
+  std::map<uint32_t, VideoStream> video_streams_;  // Pacer queue only.
 
   std::shared_ptr<TaskQueue> task_queue_pacer_;
   int64_t transport_seq_ = 0;

@@ -63,6 +63,9 @@ class PacingController {
         uint32_t /* ssrc */) const {
       return std::nullopt;
     }
+    virtual void OnPacketDiscarded(const RtpPacketToSend& /* packet */) {}
+    virtual void OnKeyframeEnqueued(uint32_t /* ssrc */,
+                                   Timestamp /* capture_time */) {}
   };
 
   // If no media or paused, wake up at least every `kPausedProcessIntervalMs` in

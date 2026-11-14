@@ -23,7 +23,9 @@ using namespace webrtc;
 class CongestionControl {
  public:
   explicit CongestionControl(StartingBitrates starting_bitrates = {},
-                             bool disable_receiver_padding_probing = true);
+                             bool disable_receiver_padding_probing = true,
+                             RelayQosConfig relay_config =
+                                 RelayQosConfig::FromEnvironment());
   ~CongestionControl();
 
  public:
@@ -56,6 +58,7 @@ class CongestionControl {
   void UpdatePacketLoss(Timestamp at_time);
 
  private:
+  const RelayQosConfig relay_config_;
   const std::unique_ptr<ProbeController> probe_controller_;
 
   std::unique_ptr<SendSideBandwidthEstimation> bandwidth_estimation_;

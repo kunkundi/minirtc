@@ -79,6 +79,7 @@ struct FecProtectionConfig {
   // -1 is the legacy standalone sender (ratio budget only); 0 disables sends.
   int64_t fec_bitrate_bps = -1;
   int64_t media_bitrate_bps = 0;
+  int64_t rtx_bitrate_bps = 0;
   int64_t recovery_window_ms = 150;
   bool keyframe_priority = false;
   FecDecision reason = FecDecision::kFixed;
@@ -100,12 +101,12 @@ private:
   FecProtectionConfig current_;
 };
 
-// Caller subtracts other traffic and RTX first. No encoder minimum can expand
-// this allocation. Ratio counts RTP source bytes; using wire bytes here is a
-// conservative reservation, corrected by the actual sender's byte budget.
+// Caller subtracts other traffic first. RTX and FEC share one protection
+// allocation capped at half of the wire budget. Padding is not protection.
 FecProtectionConfig AllocateFecBudget(FecProtectionConfig config,
                                       int64_t available_bps,
-                                      double payload_fraction);
+                                      double payload_fraction,
+                                      double measured_protection_fraction = 0);
 
 // A bounded time budget shared by all repair streams in one pacer. No refund
 // for failed/dropped sends: this avoids feedback-driven retransmission bursts.

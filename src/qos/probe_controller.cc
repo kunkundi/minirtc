@@ -38,10 +38,11 @@ constexpr TimeDelta kMinTimeBetweenAlrProbes = TimeDelta::Seconds(5);
 constexpr double kProbeUncertainty = 0.05;
 }  // namespace
 
-ProbeController::ProbeController(bool require_video)
+ProbeController::ProbeController(bool require_video, RelayQosConfig relay_config)
     : network_available_(false),
       enable_periodic_alr_probing_(false),
-      require_video_(require_video) {
+      require_video_(require_video),
+      relay_config_(relay_config) {
   Reset(Timestamp::Zero());
 }
 ProbeController::~ProbeController() = default;
@@ -117,10 +118,6 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateExponentialProbing(
   assert(network_available_);
   assert(state_ == State::kInit);
   assert(start_bitrate_ > DataRate::Zero());
-
-  // Use WebRTC's longer initial-probe timing on TURN. Short bursts can fit
-  // into relay buffers without demonstrating sustainable path capacity.
-  initial_probe_until_ = at_time + TimeDelta::Seconds(5);
 
   // When probing at 1.8 Mbps ( 6x 300), this represents a threshold of
   // 1.2 Mbps to continue probing.
@@ -218,7 +215,6 @@ void ProbeController::Reset(Timestamp at_time) {
   min_valid_probe_id_ = next_probe_cluster_id_;
   current_probe_start_id_ = next_probe_cluster_id_;
   last_probe_result_id_ = -1;
-  initial_probe_until_ = Timestamp::MinusInfinity();
   video_started_ = false;
   alr_start_time_.reset();
   bandwidth_limited_cause_ = BandwidthLimitedCause::kDelayBasedLimited;
@@ -281,10 +277,6 @@ ProbeClusterConfig ProbeController::CreateProbeClusterConfig(Timestamp at_time,
   config.target_data_rate = bitrate;
   config.target_duration = config_.min_probe_duration;
   config.min_probe_delta = config_.min_probe_delta;
-  if (relay_path_ && at_time < initial_probe_until_) {
-    config.target_duration = TimeDelta::Millis(100);
-    config.min_probe_delta = TimeDelta::Millis(20);
-  }
   config.target_probe_count = config_.min_probe_packets_sent;
   config.id = next_probe_cluster_id_;
   next_probe_cluster_id_++;
@@ -342,15 +334,15 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
 }
 
 void ProbeController::SetRelayPath(bool relay_path) {
-  relay_path_ = relay_path;
   config_ = ProbeControllerConfig();
-  if (relay_path_) {
-    // Keep TURN's single startup cluster; subsequent growth uses GCC feedback.
-    config_.first_exponential_probe_scale = 2.0;
-    config_.second_exponential_probe_scale = 0;
-    // Keep the upstream 2x / 0.7 continuation pair. Using 1.5x with 0.7
-    // allows only a 5% estimate revision to schedule another cluster.
-    config_.alr_probe_scale = 1.5;
+  if (relay_path) {
+    config_.first_exponential_probe_scale = relay_config_.first_probe_scale;
+    config_.second_exponential_probe_scale = relay_config_.second_probe_scale;
+    config_.alr_probe_scale = relay_config_.alr_probe_scale;
+    // Use the same policy for startup, ALR and recovery. A late recovery
+    // probe must not silently revert to short, burst-sensitive sampling.
+    config_.min_probe_duration = TimeDelta::Millis(relay_config_.probe_duration_ms);
+    config_.min_probe_delta = TimeDelta::Millis(relay_config_.probe_delta_ms);
   }
 }
 

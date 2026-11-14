@@ -139,7 +139,8 @@ void PacingController::SetCircuitBreakerThreshold(int num_iterations) {
 }
 
 void PacingController::RemovePacketsForSsrc(uint32_t ssrc) {
-  packet_queue_.RemovePacketsForSsrc(ssrc);
+  for (const auto& packet : packet_queue_.RemovePacketsForSsrc(ssrc))
+    packet_sender_->OnPacketDiscarded(*packet);
 }
 
 bool PacingController::IsProbing() const { return prober_.is_probing(); }
@@ -203,7 +204,10 @@ void PacingController::EnqueuePacket(std::unique_ptr<RtpPacketToSend> packet) {
     // First packet of a keyframe (and no keyframe packets currently in the
     // queue). Flush any pending packets currently in the queue for that stream
     // in order to get the new keyframe out as quickly as possible.
-    packet_queue_.RemovePacketsForSsrc(packet->Ssrc());
+    RemovePacketsForSsrc(packet->Ssrc());
+    if (auto rtx_ssrc = packet_sender_->GetRtxSsrcForMedia(packet->Ssrc()))
+      RemovePacketsForSsrc(*rtx_ssrc);
+    packet_sender_->OnKeyframeEnqueued(packet->Ssrc(), packet->capture_time());
   }
 
   prober_.OnIncomingPacket(DataSize::Bytes(packet->payload_size()));

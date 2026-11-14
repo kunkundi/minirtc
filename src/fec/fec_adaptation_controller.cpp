@@ -207,13 +207,23 @@ FecAdaptationController::Update(FecMode mode, const FecNetworkSnapshot &n) {
 }
 
 FecProtectionConfig AllocateFecBudget(FecProtectionConfig c, int64_t bps,
-                                      double fraction) {
+                                      double fraction,
+                                      double measured_protection_fraction) {
   bps = std::clamp<int64_t>(bps, 0, 1000000000);
   c.source_ratio =
       std::isfinite(c.source_ratio) ? std::clamp(c.source_ratio, 0.0, 0.25) : 0;
   fraction = std::isfinite(fraction) ? std::clamp(fraction, 0.05, 1.0) : 0.94;
-  const auto media = static_cast<int64_t>(bps / (1 + c.source_ratio));
-  c.fec_bitrate_bps = bps - media;
+  const double protection = std::clamp(
+      std::max(std::isfinite(measured_protection_fraction)
+                   ? measured_protection_fraction : 0.0,
+               c.source_ratio / (1 + c.source_ratio)), 0.0, 0.5);
+  const int64_t media = std::max(bps - bps / 2,
+                               static_cast<int64_t>(bps * (1 - protection)));
+  // Keep the requested FEC/source ratio inside the combined allowance. The
+  // remaining measured protection cost is reserved for retransmissions.
+  c.fec_bitrate_bps = std::min<int64_t>(bps - media,
+                                      media * c.source_ratio);
+  c.rtx_bitrate_bps = bps - media - c.fec_bitrate_bps;
   c.media_bitrate_bps = static_cast<int64_t>(media * fraction);
   return c;
 }

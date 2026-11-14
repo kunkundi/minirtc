@@ -1466,7 +1466,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "capture_fps={} pacer_reject_percent={} "
         "encode_queue_drop_percent={} delay_avg_ms={} delay_p95_ms={} "
         "resolution={}x{} rate_dropped_total={} cwnd_dropped_total={} "
-        "encoder_target_bps={} cwnd_drop_interval={}",
+        "encoder_target_bps={} cwnd_drop_interval={} media_budget_bps={} "
+        "encoded_bps={} encoder_utilization={} keyframe_bytes={} pacer_queue_ms={}",
         channel_name, context->measured_encoded_frame_rate,
         low_frame_rate_window_count,
         context->encoded_frame_rate_valid_window_count,
@@ -1478,8 +1479,13 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         encoded_frame.EncodedHeight(),
         context->video_rate_control.rate_dropped_frames(),
         context->video_rate_control.cwnd_dropped_frames(),
+        context->video_rate_control.encoder_target_bps(),
+        context->video_rate_control.cwnd_drop_interval(),
         context->video_rate_control.target_bitrate_bps(),
-        context->video_rate_control.cwnd_drop_interval());
+        context->video_rate_control.encoded_bitrate_bps(now_ms),
+        context->video_rate_control.encoder_utilization(),
+        context->video_rate_control.last_keyframe_bytes(),
+        paced_sender_ ? paced_sender_->ExpectedQueueTime().ms() : 0);
   }
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==
@@ -2168,7 +2174,8 @@ int IceTransportController::OnVideoEncoded(
       context->keyframe_same_resolution_retry = false;
       context->keyframe_budget_retry_count = 0;
     }
-    context->video_rate_control.Fill(encoded_frame.Size(), keyframe);
+    context->video_rate_control.Fill(encoded_frame.Size(), keyframe,
+                                     clock_->CurrentTimeMs());
   }
 
   if (measure_encode_delay) {
@@ -3819,7 +3826,6 @@ void IceTransportController::ResetFecAdaptation(bool reset_feedback) {
     if (!item.second)
       continue;
     item.second->fec_controller.Reset();
-    item.second->rtx_bitrate_ewma = 0;
   }
 }
 
@@ -3858,23 +3864,19 @@ void IceTransportController::UpdateFecProtection() {
                now_ms - *c->last_capture_time < 100));
     };
     int videos = 0, audio = 0, data = 0;
-    int64_t rtx_estimate = 0;
+    int64_t sent_media = 0, sent_protection = 0;
+    // A common one-second measurement window tracks proportions, not stale
+    // absolute peaks. A target decrease immediately scales all allocations.
+    for (const auto& [_, snapshot] : fec_feedback_snapshots_) {
+      sent_media += snapshot.sent_bps[static_cast<size_t>(FecPacketKind::kMedia)];
+      sent_protection +=
+          snapshot.sent_bps[static_cast<size_t>(FecPacketKind::kRepair)] +
+          snapshot.sent_bps[static_cast<size_t>(FecPacketKind::kRtx)];
+    }
+    const double protection_fraction = sent_media + sent_protection > 0
+        ? double(sent_protection) / (sent_media + sent_protection) : 0;
     for (const auto &item : stream_senders_) {
       const auto &c = item.second;
-      if (c && c->type == StreamType::kVideo && c->rtx_ssrc) {
-        if (new_snapshot) {
-          const auto auxiliary = fec_feedback_snapshots_.find(*c->rtx_ssrc);
-          const int64_t actual_rtx =
-              auxiliary == fec_feedback_snapshots_.end()
-                  ? 0
-                  : auxiliary->second
-                        .sent_bps[static_cast<size_t>(FecPacketKind::kRtx)];
-          c->rtx_bitrate_ewma =
-              std::max<double>(actual_rtx, c->rtx_bitrate_ewma * 0.8);
-        }
-        // Include repairs of recently idle streams in the shared reservation.
-        rtx_estimate += static_cast<int64_t>(c->rtx_bitrate_ewma);
-      }
       if (!active(c))
         continue;
       if (c->type == StreamType::kVideo && c->codec)
@@ -3891,14 +3893,7 @@ void IceTransportController::UpdateFecProtection() {
     int64_t video_budget = std::max<int64_t>(0, target_bitrate_ - other);
     const int limit = video_bitrate_limit_bps_;
     if (limit > 0) video_budget = std::min<int64_t>(video_budget, limit);
-    // Enforce the same ceiling at RTX admission and send time. At least half
-    // the video transport budget remains available for fresh media and FEC,
-    // even after a retransmission spike or a sudden bandwidth decrease.
-    rtx_limit = video_rtx_enabled_ ? video_budget / 2 : 0;
-    rtx_bitrate_limit_bps_ = rtx_limit;
-    rtx_reserved = std::min(rtx_estimate, rtx_limit);
-    const int64_t share =
-        (video_budget - rtx_reserved) / std::max(1, videos);
+    const int64_t share = video_budget / std::max(1, videos);
     for (const auto &item : stream_senders_) {
       const auto &c = item.second;
       if (!c || c->type != StreamType::kVideo || !c->transceiver)
@@ -3919,9 +3914,11 @@ void IceTransportController::UpdateFecProtection() {
         c->fec_last_active_ms = now_ms;
         config = c->fec_controller.Update(mode, network);
         config = AllocateFecBudget(config, share,
-                                   network.feedback.payload_fraction);
+                                   network.feedback.payload_fraction,
+                                   protection_fraction);
         media_total += config.media_bitrate_bps;
         fec_total += config.fec_bitrate_bps;
+        rtx_reserved += config.rtx_bitrate_bps;
       } else {
         config.source_ratio = 0;
         config.fec_bitrate_bps = 0;
@@ -3940,9 +3937,15 @@ void IceTransportController::UpdateFecProtection() {
                 ? 0
                 : auxiliary->second
                       .sent_bps[static_cast<size_t>(FecPacketKind::kRepair)];
+        const int64_t sent_rtx =
+            auxiliary == fec_feedback_snapshots_.end()
+                ? 0
+                : auxiliary->second
+                      .sent_bps[static_cast<size_t>(FecPacketKind::kRtx)];
         LOG_DEBUG("FEC control: stream={} mode={} reason={} samples={} loss={} "
                  "rtt={} queue={} feedback_age={} ratio={} media_bps={} "
-                 "fec_bps={} rtx_bps={} sent_media_bps={} sent_fec_bps={}",
+                 "fec_bps={} rtx_bps={} sent_media_bps={} sent_fec_bps={} "
+                 "sent_rtx_bps={} protection_fraction={}",
                  item.first, int(mode), FecDecisionName(config.reason),
                  network.feedback.samples, network.feedback.loss_rate(), rtt_ms,
                  queue_ms,
@@ -3951,12 +3954,17 @@ void IceTransportController::UpdateFecProtection() {
                      : now_ms - network.feedback.last_feedback_ms,
                  config.source_ratio, config.media_bitrate_bps,
                  config.fec_bitrate_bps,
-                 static_cast<int64_t>(c->rtx_bitrate_ewma),
+                 config.rtx_bitrate_bps,
                  network.feedback
                      .sent_bps[static_cast<size_t>(FecPacketKind::kMedia)],
-                 sent_repairs);
+                 sent_repairs, sent_rtx, protection_fraction);
       }
     }
+    // FEC and RTX cannot each consume an independent protection ceiling.
+    // Apply the shared ceiling at both RTX admission and actual send time.
+    rtx_limit = video_rtx_enabled_
+        ? std::max<int64_t>(0, video_budget / 2 - fec_total) : 0;
+    rtx_bitrate_limit_bps_ = rtx_limit;
     // Keep a startup admission budget for the first captured frame of a new
     // stream. Idle streams still receive zero FEC allowance.
     if (!videos) {
@@ -4061,7 +4069,7 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
 
       const int per_video_bitrate = context->video_rate_control.SetRates(
           static_cast<int>(context->fec_protection.media_bitrate_bps),
-          media_config_.min_bitrate, cwnd_reduce_ratio_);
+          media_config_.min_bitrate, cwnd_reduce_ratio_, now_ms);
       context->desired_target_bitrate = per_video_bitrate;
       // Admission pauses at zero; avoid passing unsupported zero to codecs.
       if (per_video_bitrate <= 0) continue;
@@ -4150,6 +4158,8 @@ void IceTransportController::ApplyVideoBitrateUpdateOnEncodeQueue(
 
     if (result == 0) {
       context->applied_target_bitrate = target_bitrate;
+      context->video_rate_control.OnEncoderRateApplied(
+          target_bitrate, media_config_.max_frame_rate, clock_->CurrentTimeMs());
     }
 
     if (context->desired_target_bitrate.has_value() &&

@@ -139,6 +139,60 @@ void PacedSender::NotifyRtxDropped(const webrtc::RtpPacketToSend& packet) {
   if (on_rtp_packet_dropped_func_) on_rtp_packet_dropped_func_(packet);
 }
 
+void PacedSender::OnPacketDiscarded(const webrtc::RtpPacketToSend& packet) {
+  NotifyRtxDropped(packet);
+  if (packet.packet_type() == webrtc::RtpPacketMediaType::kForwardErrorCorrection)
+    ++fec_dropped_;
+}
+
+void PacedSender::RegisterVideoSsrc(uint32_t media_ssrc, uint32_t rtx_ssrc,
+                                   std::function<void()> on_keyframe) {
+  RunOrPost([this, media_ssrc, rtx_ssrc, on_keyframe = std::move(on_keyframe)] {
+    video_streams_.insert_or_assign(
+        media_ssrc, VideoStream{rtx_ssrc, webrtc::Timestamp::MinusInfinity(),
+                               on_keyframe});
+  });
+}
+
+void PacedSender::UnregisterVideoSsrc(uint32_t media_ssrc) {
+  RunOrPost([this, media_ssrc] {
+    auto it = video_streams_.find(media_ssrc);
+    if (it == video_streams_.end()) return;
+    RemovePacketsForSsrcOnQueue(media_ssrc);
+    if (it->second.rtx_ssrc != media_ssrc)
+      RemovePacketsForSsrcOnQueue(it->second.rtx_ssrc);
+    video_streams_.erase(it);
+    MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
+  });
+}
+
+std::optional<uint32_t> PacedSender::GetRtxSsrcForMedia(uint32_t ssrc) const {
+  const auto it = video_streams_.find(ssrc);
+  if (it == video_streams_.end() || !it->second.rtx_ssrc ||
+      it->second.rtx_ssrc == ssrc)
+    return std::nullopt;
+  return it->second.rtx_ssrc;
+}
+
+void PacedSender::OnKeyframeEnqueued(uint32_t ssrc,
+                                    webrtc::Timestamp capture_time) {
+  auto stream = video_streams_.find(ssrc);
+  if (stream == video_streams_.end()) return;
+  stream->second.keyframe_capture_time = capture_time;
+  for (auto it = deferred_rtx_.begin(); it != deferred_rtx_.end();) {
+    if (it->packet->original_ssrc().value_or(it->packet->Ssrc()) != ssrc) {
+      ++it;
+      continue;
+    }
+    deferred_rtx_bytes_ -= it->packet->size() + 64;
+    NotifyRtxDropped(*it->packet);
+    it = deferred_rtx_.erase(it);
+  }
+  // FEC shares the RTX SSRC. Forget the old partial block so a delayed flush
+  // cannot recreate repairs for media superseded by this keyframe.
+  if (stream->second.on_keyframe) stream->second.on_keyframe();
+}
+
 void PacedSender::SetProbeAbortedCallback(
     std::function<void(int, webrtc::Timestamp, const char*)> callback) {
   RunOrPost([this, callback = std::move(callback)]() mutable {
@@ -455,18 +509,22 @@ void PacedSender::EnqueueReadyPacket(
 
 void PacedSender::RemovePacketsForSsrc(uint32_t ssrc) {
   RunOrPost([this, ssrc] {
-    for (auto it = deferred_rtx_.begin(); it != deferred_rtx_.end();) {
-      if (it->packet->Ssrc() != ssrc) {
-        ++it;
-        continue;
-      }
-      deferred_rtx_bytes_ -= it->packet->size() + 64;
-      NotifyRtxDropped(*it->packet);
-      it = deferred_rtx_.erase(it);
-    }
-    pacing_controller_.RemovePacketsForSsrc(ssrc);
+    RemovePacketsForSsrcOnQueue(ssrc);
     MaybeProcessPackets(webrtc::Timestamp::MinusInfinity());
   });
+}
+
+void PacedSender::RemovePacketsForSsrcOnQueue(uint32_t ssrc) {
+  for (auto it = deferred_rtx_.begin(); it != deferred_rtx_.end();) {
+    if (it->packet->Ssrc() != ssrc) {
+      ++it;
+      continue;
+    }
+    deferred_rtx_bytes_ -= it->packet->size() + 64;
+    NotifyRtxDropped(*it->packet);
+    it = deferred_rtx_.erase(it);
+  }
+  pacing_controller_.RemovePacketsForSsrc(ssrc);
 }
 
 void PacedSender::SetAccountForAudioPackets(bool account_for_audio) {
