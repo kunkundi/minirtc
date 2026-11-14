@@ -115,6 +115,11 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
 
   pending_probe_.reset();
   relay_path_ = relay_path;
+  loss_tracker_.Reset(at_time);
+  last_packet_feedback_ = Timestamp::MinusInfinity();
+  next_loss_update_ = Timestamp::MinusInfinity();
+  lost_packets_since_last_loss_update_ = 0;
+  expected_packets_since_last_loss_update_ = 0;
   probe_controller_->SetRelayPath(relay_path, at_time);
   bandwidth_ramp_.Reset(last_pushback_target_rate_, relay_path_, at_time,
                          min_data_rate_);
@@ -163,6 +168,11 @@ NetworkControlUpdate CongestionControl::OnNetworkAvailability(
   network_available_ = msg.network_available;
   if (!network_available_) {
     pending_probe_.reset();
+    loss_tracker_.Reset(msg.at_time);
+    last_packet_feedback_ = Timestamp::MinusInfinity();
+    next_loss_update_ = Timestamp::MinusInfinity();
+    lost_packets_since_last_loss_update_ = 0;
+    expected_packets_since_last_loss_update_ = 0;
     bandwidth_ramp_.Reset(last_pushback_target_rate_, relay_path_, msg.at_time,
                            min_data_rate_);
   }
@@ -175,7 +185,7 @@ void CongestionControl::PauseProbingUntil(Timestamp until, const char* reason,
                                          Timestamp at_time) {
   pending_probe_.reset();
   if (!at_time.IsFinite()) at_time = last_update_time_;
-  if (at_time.IsFinite()) bandwidth_ramp_.Hold(at_time, until);
+  if (at_time.IsFinite()) bandwidth_ramp_.Pause(at_time, until);
   probe_controller_->PauseProbingUntil(until, reason);
 }
 
@@ -373,9 +383,33 @@ void CongestionControl::OnProbeAborted(int cluster_id, Timestamp at_time,
 
 void CongestionControl::OnVideoSendPaused(bool paused, Timestamp at_time) {
   probe_controller_->OnVideoSendPaused(paused, at_time);
+  bandwidth_ramp_.OnVideoSendPaused(paused, at_time);
   if (paused) {
     pending_probe_.reset();
-    bandwidth_ramp_.Hold(at_time, at_time);
+  }
+}
+
+void CongestionControl::UpdatePacketLoss(Timestamp at_time) {
+  if (!packet_feedback_only_) return;
+  const auto sample =
+      loss_tracker_.Advance(at_time, bandwidth_estimation_->round_trip_time());
+  expected_packets_since_last_loss_update_ += sample.packets;
+  lost_packets_since_last_loss_update_ += sample.lost;
+  if (at_time >= next_loss_update_ &&
+      expected_packets_since_last_loss_update_ > 0) {
+    next_loss_update_ = at_time + TimeDelta::Millis(kLossUpdateInterval);
+    if (lost_packets_since_last_loss_update_ > 0) {
+      LOG_DEBUG("BWE settled loss: lost={} packets={} loss_grace_ms={}",
+                lost_packets_since_last_loss_update_,
+                expected_packets_since_last_loss_update_,
+                PacketLossTracker::GracePeriod(
+                    bandwidth_estimation_->round_trip_time()).ms());
+    }
+    bandwidth_estimation_->UpdatePacketsLost(
+        lost_packets_since_last_loss_update_,
+        expected_packets_since_last_loss_update_, at_time);
+    expected_packets_since_last_loss_update_ = 0;
+    lost_packets_since_last_loss_update_ = 0;
   }
 }
 
@@ -386,6 +420,8 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
     // against building very large network queues.
     return NetworkControlUpdate();
   }
+  last_packet_feedback_ = report.feedback_time;
+  loss_tracker_.OnFeedback(report);
 
   // if (congestion_window_pushback_controller_) {
   //   congestion_window_pushback_controller_->UpdateOutstandingData(
@@ -438,22 +474,6 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
     }
     if (feedback_min_rtt.IsFinite()) {
       bandwidth_estimation_->UpdateRtt(feedback_min_rtt, report.feedback_time);
-    }
-
-    expected_packets_since_last_loss_update_ +=
-        report.PacketsWithFeedback().size();
-    for (const auto& packet_feedback : report.PacketsWithFeedback()) {
-      if (!packet_feedback.IsReceived())
-        lost_packets_since_last_loss_update_ += 1;
-    }
-    if (report.feedback_time > next_loss_update_) {
-      next_loss_update_ =
-          report.feedback_time + TimeDelta::Millis(kLossUpdateInterval);
-      bandwidth_estimation_->UpdatePacketsLost(
-          lost_packets_since_last_loss_update_,
-          expected_packets_since_last_loss_update_, report.feedback_time);
-      expected_packets_since_last_loss_update_ = 0;
-      lost_packets_since_last_loss_update_ = 0;
     }
   }
   std::optional<int64_t> alr_start_time =
@@ -581,16 +601,27 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
 void CongestionControl::MaybeTriggerOnNetworkChanged(
     NetworkControlUpdate* update, Timestamp at_time) {
   last_update_time_ = at_time;
+  UpdatePacketLoss(at_time);
   uint8_t fraction_loss = bandwidth_estimation_->fraction_loss();
   TimeDelta round_trip_time = bandwidth_estimation_->round_trip_time();
   DataRate loss_based_target_rate = bandwidth_estimation_->target_rate();
   LossBasedState loss_based_state = bandwidth_estimation_->loss_based_state();
   // Probe estimates remain candidates inside BWE. Publish a separately
   // confirmed budget to the encoder, pacer, ALR detector and probe limiter.
+  const bool fresh_feedback =
+      last_packet_feedback_.IsFinite() &&
+      at_time - last_packet_feedback_ <= TimeDelta::Seconds(1);
+  const bool high_rtt =
+      round_trip_time.IsFinite() && round_trip_time >= TimeDelta::Millis(300);
+  const bool delay_overuse =
+      delay_based_bwe_->last_state() == BandwidthUsage::kBwOverusing;
+  // Ramp loss decisions use its settled normal-packet window. Reusing the
+  // periodic BWE loss percentage here would penalize the same old loss again.
+  const bool ramp_healthy = !fresh_feedback || (!high_rtt && !delay_overuse);
   DataRate pushback_target_rate = network_available_
       ? bandwidth_ramp_.Update(loss_based_target_rate,
-                               round_trip_time.IsInfinite() || ProbeNetworkHealthy(),
-                               round_trip_time, at_time)
+                               ramp_healthy, round_trip_time, at_time,
+                               high_rtt ? "sustained_rtt" : "sustained_delay")
       : std::min(loss_based_target_rate, last_pushback_target_rate_);
   pushback_target_rate = std::clamp(pushback_target_rate, min_data_rate_,
                                    max_data_rate_);

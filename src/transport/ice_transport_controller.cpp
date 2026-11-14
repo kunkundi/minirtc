@@ -4022,25 +4022,33 @@ void IceTransportController::UpdateFecProtection() {
     fec_update_queued_ = true;
   }
   if (new_snapshot && hold_reasons) {
+    const bool queue_only = hold_reasons == 2;
+    const auto hold = TimeDelta::Millis(queue_only ? 300 : 2000);
+    const char* reason = queue_only ? "local_queue" : "media_recovery";
     if (hold_reasons != probe_hold_reasons_ || probe_hold_log_ms_ < 0 ||
         now_ms - probe_hold_log_ms_ >= 2000) {
-      LOG_DEBUG("Probe protection hold: reason=media_recovery congested={} "
+      LOG_DEBUG("Probe protection hold: reason={} congested={} "
                 "queue_blocked={} rtt_blocked={} rtx_blocked={} loss_blocked={} "
                 "queue_ms={} rtt_ms={} trigger_loss={} trigger_loss_samples={} "
                 "rtx_bps={} "
-                "video_budget_bps={} hold_ms=2000",
-                bool(hold_reasons & 1), bool(hold_reasons & 2),
+                "video_budget_bps={} hold_ms={} action=pause_growth",
+                reason, bool(hold_reasons & 1), bool(hold_reasons & 2),
                 bool(hold_reasons & 4), bool(hold_reasons & 8),
                 bool(hold_reasons & 16), queue_ms, rtt_ms, highest_loss,
-                loss_samples, logged_rtx_estimate, logged_video_budget);
+                loss_samples, logged_rtx_estimate, logged_video_budget,
+                hold.ms());
       probe_hold_log_ms_ = now_ms;
     }
     const auto now = webrtc_clock_->CurrentTime();
-    const auto until = now + TimeDelta::Seconds(2);
+    const auto until = now + hold;
     // UpdateFecProtection runs on the congestion-control queue. The pacer
     // cancels existing clusters and rejects new clusters during this hold.
+    // These local protection signals suspend probing/growth, preserving the
+    // media pacing budget. Delay BWE and settled packet loss decide backoff.
+    // A queue-only burst gets a short hold, refreshed while it persists, so
+    // periodic frame bursts do not keep restarting a two-second cooldown.
     if (controller_)
-      controller_->PauseProbingUntil(until, "media_recovery", now);
+      controller_->PauseProbingUntil(until, reason, now);
     paced_sender_->PauseProbingUntil(until);
   }
   if (new_snapshot) {

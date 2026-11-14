@@ -10,6 +10,7 @@
 #include <unordered_map>
 
 #include "api/transport/network_types.h"
+#include "packet_loss_tracker.h"
 
 namespace minirtc {
 namespace webrtc {
@@ -24,9 +25,12 @@ class BandwidthRampController {
   void OnProbeSent(int id, Timestamp now);
   void OnProbeResult(int id, DataRate rate, Timestamp now);
   void InvalidateProbe(int id);
-  void Hold(Timestamp now, Timestamp until);
-  DataRate Update(DataRate estimate, bool healthy, TimeDelta rtt,
-                  Timestamp now);
+  void Pause(Timestamp now, Timestamp until);
+  void OnVideoSendPaused(bool paused, Timestamp now);
+  void Hold(Timestamp now, Timestamp until, const char* reason = "congestion",
+            TimeDelta rtt = TimeDelta::PlusInfinity());
+  DataRate Update(DataRate estimate, bool healthy, TimeDelta rtt, Timestamp now,
+                  const char* unhealthy_reason = "network");
 
   DataRate target() const { return target_; }
   DataRate confirmed_rate() const { return confirmed_rate_; }
@@ -42,6 +46,10 @@ class BandwidthRampController {
                   Timestamp now);
 
   bool relay_ = false;
+  bool video_paused_ = false;
+  Timestamp unhealthy_since_ = Timestamp::MinusInfinity();
+  Timestamp network_feedback_at_ = Timestamp::MinusInfinity();
+  PacketLossTracker loss_tracker_;
   DataRate target_ = DataRate::Zero();
   DataRate minimum_ = DataRate::Zero();
   DataRate failed_rate_ = DataRate::PlusInfinity();

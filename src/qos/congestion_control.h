@@ -63,6 +63,7 @@ class CongestionControl {
   std::optional<DataRate> FilterProbeResult(DataRate bitrate, int probe_id,
                                             Timestamp at_time);
   void MaybeApplyPendingProbe(NetworkControlUpdate* update, Timestamp at_time);
+  void UpdatePacketLoss(Timestamp at_time);
 
  private:
   const bool packet_feedback_only_;
@@ -98,6 +99,8 @@ class CongestionControl {
   Timestamp next_loss_update_ = Timestamp::MinusInfinity();
   int lost_packets_since_last_loss_update_ = 0;
   int expected_packets_since_last_loss_update_ = 0;
+  PacketLossTracker loss_tracker_;
+  Timestamp last_packet_feedback_ = Timestamp::MinusInfinity();
 
   std::deque<int64_t> feedback_max_rtts_;
 
