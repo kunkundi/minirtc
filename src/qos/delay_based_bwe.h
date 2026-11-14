@@ -13,10 +13,8 @@
 
 #include <stdint.h>
 
-#include <deque>
 #include <memory>
 #include <optional>
-#include <utility>
 #include <vector>
 
 #include "aimd_rate_control.h"
@@ -68,12 +66,6 @@ class DelayBasedBwe {
                                       std::optional<DataRate> probe_bitrate,
                                       bool in_alr);
   void OnRttUpdate(TimeDelta avg_rtt);
-  void SetTransportState(DataRate published_rate, TimeDelta rtt,
-                         double loss_ratio);
-  void OnNormalPacketSent(DataSize size, Timestamp at_time);
-  // Apply a settled probe without replaying packet feedback into the detector.
-  Result ApplyProbeResult(DataRate bitrate, Timestamp at_time,
-                          std::optional<DataRate> acked_bitrate, bool in_alr);
   bool LatestEstimate(std::vector<uint32_t>* ssrcs, DataRate* bitrate) const;
   void SetStartBitrate(DataRate start_bitrate);
   void SetMinBitrate(DataRate min_bitrate);
@@ -116,15 +108,6 @@ class DelayBasedBwe {
   AimdRateControl rate_control_;
   DataRate prev_bitrate_;
   BandwidthUsage prev_state_;
-  DataRate published_rate_ = DataRate::Zero();
-  TimeDelta network_rtt_ = TimeDelta::PlusInfinity();
-  double network_loss_ = 0;
-  Timestamp overuse_since_ = Timestamp::MinusInfinity();
-  Timestamp last_low_load_backoff_ = Timestamp::MinusInfinity();
-  Timestamp last_decision_log_ = Timestamp::MinusInfinity();
-  std::deque<std::pair<Timestamp, DataSize>> normal_sends_;
-  DataSize normal_sent_bytes_ = DataSize::Zero();
-  Timestamp first_normal_send_ = Timestamp::MinusInfinity();
 };
 
 }  // namespace webrtc

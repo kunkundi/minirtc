@@ -29,6 +29,7 @@
 #include "congestion_control_feedback.h"
 #include "data_channel_receive.h"
 #include "data_channel_send.h"
+#include "frame_dropper.h"
 #include "ice_agent.h"
 #include "media_channel.h"
 #include "media_codec.h"
@@ -190,6 +191,7 @@ class IceTransportController
     size_t send_size = 0;  // Includes SRTP overhead when the packet is protected.
     bool tracked = false;
     int64_t fec_feedback_id = -1;
+    std::optional<webrtc::SentPacket> sent_packet;
   };
 
   PacketFeedbackRegistration RegisterPacketForFeedback(
@@ -204,7 +206,7 @@ class IceTransportController
   void PostUpdates(webrtc::NetworkControlUpdate update);
   void UpdateVideoBitrateAllocation();
   void UpdateFecProtection();
-  void ResetFecAdaptation();
+  void ResetFecAdaptation(bool reset_feedback = true);
   void UpdateControlState();
   void UpdateCongestedState();
   bool CanProbeWithoutMedia();
@@ -241,6 +243,9 @@ class IceTransportController
     std::optional<int> desired_target_bitrate;
     std::optional<int> applied_target_bitrate;
     bool bitrate_update_queued = false;
+    webrtc::FrameDropper frame_dropper;
+    int64_t frame_dropper_last_input_us = 0;
+    uint64_t rate_dropped_frames = 0;
     FecAdaptationController fec_controller;
     FecProtectionConfig fec_protection;
     int64_t fec_last_active_ms = -1;
@@ -499,8 +504,6 @@ class IceTransportController
   bool fec_update_queued_ = false;  // Guarded by stream_senders_mutex_.
   int64_t rtx_bitrate_limit_bps_ = 0;  // Guarded by stream_senders_mutex_.
   int64_t fec_snapshot_ms_ = -1, fec_log_ms_ = -1;
-  uint32_t probe_hold_reasons_ = 0;
-  int64_t probe_hold_log_ms_ = -1;
   std::map<uint32_t, FecFeedbackSnapshot> fec_feedback_snapshots_;
   std::optional<uint8_t> video_abs_send_time_ext_id_;
   std::optional<uint8_t> video_abs_recv_time_ext_id_;
@@ -511,6 +514,8 @@ class IceTransportController
   std::atomic<bool> media_transport_ready_{false};
   // -1 means ICE has not selected a pair yet, 0 direct, 1 relay.
   std::atomic<int> relay_path_state_{-1};
+  uint64_t cc_route_id_ = 0;      // Accessed only on task_queue_cc_.
+  double cwnd_reduce_ratio_ = 0;  // Protected by stream_senders_mutex_.
   std::atomic<int64_t> video_transport_bitrate_bps_{MINIRTC_INIT_BITRATE};
   std::optional<webrtc::NetworkEstimate> video_network_estimate_;
   // Physical viewport bound for this peer; guarded by stream_senders_mutex_.

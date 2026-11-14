@@ -104,6 +104,7 @@ int64_t TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_sen
   PacketFeedback feedback;
 
   feedback.creation_time = creation_time;
+  feedback.sent.route_id = route_id_;
   // Note, if transport sequence number header extension is used, transport
   // sequence numbers are wrapped to 16 bit. See
   // RtpSenderEgress::CompleteSendPacket.
@@ -121,7 +122,8 @@ int64_t TransportFeedbackAdapter::AddPacket(const RtpPacketToSend& packet_to_sen
          creation_time - history_.begin()->second.creation_time >
              kSendTimeHistoryWindow) {
     // TODO(sprang): Warn if erasing (too many) old items?
-    if (history_.begin()->second.sent.sequence_number > last_ack_seq_num_)
+    if (history_.begin()->second.sent.sequence_number > last_ack_seq_num_ &&
+        history_.begin()->second.sent.route_id == route_id_)
       in_flight_.RemoveInFlightPacketBytes(history_.begin()->second);
 
     const PacketFeedback& packet = history_.begin()->second;
@@ -163,7 +165,9 @@ bool TransportFeedbackAdapter::RemovePacket(
 
   auto history_it = history_.find(mapping_it->second);
   if (history_it != history_.end()) {
-    if (history_it->second.sent.send_time.IsFinite()) {
+    if (history_it->second.sent.send_time.IsFinite() &&
+        history_it->second.sent.sequence_number > last_ack_seq_num_ &&
+        history_it->second.sent.route_id == route_id_) {
       in_flight_.RemoveInFlightPacketBytes(history_it->second);
     }
     history_.erase(history_it);
@@ -229,12 +233,12 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
                                        feedback.report_timestamp_compact_ntp() -
                                        *last_feedback_compact_ntp_time_)
                                  : TimeDelta::Zero();
-  last_feedback_compact_ntp_time_ = feedback.report_timestamp_compact_ntp();
-  if (feedback_delta < TimeDelta::Zero()) {
-    LOG_WARN("Unexpected feedback ntp time delta {}", ToString(feedback_delta));
-    current_offset_ = feedback_receive_time;
-  } else {
-    current_offset_ += feedback_delta;
+  // Map this report using its own sender timestamp. A reordered RTCP report
+  // must not move the shared clock anchor backwards or reset it to local now.
+  const Timestamp report_offset = current_offset_ + feedback_delta;
+  if (feedback_delta >= TimeDelta::Zero()) {
+    current_offset_ = report_offset;
+    last_feedback_compact_ntp_time_ = feedback.report_timestamp_compact_ntp();
   }
 
   int ignored_packets = 0;
@@ -260,16 +264,18 @@ TransportFeedbackAdapter::ProcessCongestionControlFeedback(
     if (received) {
       RememberAcknowledgedPacket(key, feedback_receive_time);
     }
-    if (packet_feedback->network_route != network_route_) {
+    if (packet_feedback->sent.route_id != route_id_) {
       ++ignored_packets;
       continue;
     }
+    if (!received && packet_feedback->reported_lost) continue;
     fec_feedback_.Feedback(packet_feedback->sent.sequence_number, received,
                             feedback_receive_time.ms());
     PacketResult result;
     result.sent_packet = packet_feedback->sent;
+    result.previously_reported_lost = packet_feedback->reported_lost;
     if (packet_info.arrival_time_offset.IsFinite()) {
-      result.receive_time = current_offset_ - packet_info.arrival_time_offset;
+      result.receive_time = report_offset - packet_info.arrival_time_offset;
       supports_ecn &= packet_info.ecn != EcnMarking::kNotEct;
     }
     result.ecn = packet_info.ecn;
@@ -306,6 +312,7 @@ TransportFeedbackAdapter::ToTransportFeedback(
     std::vector<PacketResult> packet_results, Timestamp feedback_receive_time,
     bool supports_ecn) {
   TransportPacketsFeedback msg;
+  msg.route_id = route_id_;
   msg.feedback_time = feedback_receive_time;
   if (packet_results.empty()) {
     return std::nullopt;
@@ -317,10 +324,14 @@ TransportFeedbackAdapter::ToTransportFeedback(
   return msg;
 }
 
-void TransportFeedbackAdapter::SetNetworkRoute(
+uint64_t TransportFeedbackAdapter::SetNetworkRoute(
     const rtc::NetworkRoute& network_route) {
-  if (network_route_ != network_route) fec_feedback_.Reset();
   network_route_ = network_route;
+  ++route_id_;
+  fec_feedback_.Reset();
+  in_flight_ = InFlightBytesTracker();
+  pending_untracked_size_ = DataSize::Zero();
+  return route_id_;
 }
 
 DataSize TransportFeedbackAdapter::GetOutstandingData() const {
@@ -374,7 +385,8 @@ std::optional<PacketFeedback> TransportFeedbackAdapter::RetrievePacketFeedback(
     // valid sequence number is >= 0.
     for (auto it = history_.upper_bound(last_ack_seq_num_);
          it != history_.upper_bound(transport_seq_num); ++it) {
-      in_flight_.RemoveInFlightPacketBytes(it->second);
+      if (it->second.sent.route_id == route_id_)
+        in_flight_.RemoveInFlightPacketBytes(it->second);
     }
     last_ack_seq_num_ = transport_seq_num;
   }
@@ -397,6 +409,7 @@ std::optional<PacketFeedback> TransportFeedbackAdapter::RetrievePacketFeedback(
   }
 
   PacketFeedback packet_feedback = it->second;
+  if (!received) it->second.reported_lost = true;
   if (received) {
     // Note: Lost packets are not removed from history because they might
     // be reported as received by a later feedback.

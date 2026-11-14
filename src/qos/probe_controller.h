@@ -14,7 +14,6 @@
 #include <stdint.h>
 
 #include <optional>
-#include <string>
 #include <vector>
 
 #include "api/transport/network_types.h"
@@ -25,69 +24,19 @@
 namespace minirtc {
 namespace webrtc {
 
+// Fixed GCC defaults from WebRTC 2e61fea6e37524aca68adb43ca304c41f65d4add.
+// MiniRTC has no allocation/network-state estimator or field-trial interface.
 struct ProbeControllerConfig {
-  ProbeControllerConfig();
-  ProbeControllerConfig(const ProbeControllerConfig&);
-  ProbeControllerConfig& operator=(const ProbeControllerConfig&) = default;
-  ~ProbeControllerConfig();
-
-  // These parameters configure the initial probes. First we send one or two
-  // probes of sizes p1 * start_bitrate_ and p2 * start_bitrate_.
-  // Then whenever we get a bitrate estimate of at least further_probe_threshold
-  // times the size of the last sent probe we'll send another one of size
-  // step_size times the new estimate.
-  double first_exponential_probe_scale;
-  double second_exponential_probe_scale;
-  double further_exponential_probe_scale;
-  double further_probe_threshold;
-  bool abort_further_probe_if_max_lower_than_current;
-  // Duration of time from the first initial probe where repeated initial probes
-  // are sent if repeated initial probing is enabled.
-  TimeDelta repeated_initial_probing_time_period;
-  // The minimum probing duration of an individual probe during
-  // the repeated_initial_probing_time_period.
-  TimeDelta initial_probe_duration;
-  // Delta time between sent bursts of packets in a probe during
-  // the repeated_initial_probing_time_period.
-  TimeDelta initial_min_probe_delta;
-  // Configures how often we send ALR probes and how big they are.
-  TimeDelta alr_probing_interval;
-  double alr_probe_scale;
-  // Configures how often we send probes if NetworkStateEstimate is available.
-  TimeDelta network_state_estimate_probing_interval;
-  // Periodically probe as long as the ratio between current estimate and
-  // NetworkStateEstimate is lower then this.
-  double probe_if_estimate_lower_than_network_state_estimate_ratio;
-  TimeDelta estimate_lower_than_network_state_estimate_probing_interval;
-  double network_state_probe_scale;
-  // Overrides min_probe_duration if network_state_estimate_probing_interval
-  // is set and a network state estimate is known and equal or higher than the
-  // probe target.
-  TimeDelta network_state_probe_duration;
-  // Overrides min_probe_delta if network_state_estimate_probing_interval
-  // is set and a network state estimate is known and equal or higher than the
-  // probe target.
-  TimeDelta network_state_min_probe_delta;
-
-  // Configures the probes emitted by changed to the allocated bitrate.
-  bool probe_on_max_allocated_bitrate_change;
-  double first_allocation_probe_scale;
-  double second_allocation_probe_scale;
-  double allocation_probe_limit_by_current_scale;
-
-  // The minimum number probing packets used.
-  int min_probe_packets_sent;
-  // The minimum probing duration.
-  TimeDelta min_probe_duration;
-  // Delta time between sent bursts of packets in a probe.
-  TimeDelta min_probe_delta;
-  double loss_limited_probe_scale;
-  // Don't send a probe if min(estimate, network state estimate) is larger than
-  // this fraction of the set max or max allocated bitrate.
-  double skip_if_estimate_larger_than_fraction_of_max;
-  // Scale factor of the max allocated bitrate. Used when deciding if a probe
-  // can be skiped due to that the estimate is already high enough.
-  double skip_probe_max_allocated_scale;
+  double first_exponential_probe_scale = 3.0;
+  double second_exponential_probe_scale = 6.0;
+  double further_exponential_probe_scale = 2.0;
+  double further_probe_threshold = 0.7;
+  TimeDelta alr_probing_interval = TimeDelta::Seconds(5);
+  double alr_probe_scale = 2.0;
+  int min_probe_packets_sent = 5;
+  TimeDelta min_probe_duration = TimeDelta::Millis(15);
+  TimeDelta min_probe_delta = TimeDelta::Millis(2);
+  double loss_limited_probe_scale = 1.5;
 };
 
 // Reason that bandwidth estimate is limited. Bandwidth estimate can be limited
@@ -106,79 +55,42 @@ enum class BandwidthLimitedCause : int {
 // bitrate is adjusted by an application.
 class ProbeController {
  public:
-  ProbeController();
+  explicit ProbeController(bool require_video = true);
   ~ProbeController();
 
   ProbeController(const ProbeController&) = delete;
   ProbeController& operator=(const ProbeController&) = delete;
 
-  std::vector<ProbeClusterConfig> SetBitrates(DataRate min_bitrate,
-                                              DataRate start_bitrate,
-                                              DataRate max_bitrate,
-                                              Timestamp at_time);
+  [[nodiscard]] std::vector<ProbeClusterConfig> SetBitrates(
+      DataRate min_bitrate, DataRate start_bitrate, DataRate max_bitrate,
+      Timestamp at_time);
 
-  // The total bitrate, as opposed to the max bitrate, is the sum of the
-  // configured bitrates for all active streams.
-  std::vector<ProbeClusterConfig> OnMaxTotalAllocatedBitrate(
-      DataRate max_total_allocated_bitrate, Timestamp at_time);
-
-  std::vector<ProbeClusterConfig> OnNetworkAvailability(
+  [[nodiscard]] std::vector<ProbeClusterConfig> OnNetworkAvailability(
       NetworkAvailability msg);
 
-  std::vector<ProbeClusterConfig> SetEstimatedBitrate(
+  [[nodiscard]] std::vector<ProbeClusterConfig> SetEstimatedBitrate(
       DataRate bitrate, BandwidthLimitedCause bandwidth_limited_cause,
-      Timestamp at_time, bool recovery_network_healthy = true);
+      Timestamp at_time);
 
   void EnablePeriodicAlrProbing(bool enable);
+  void SetRelayPath(bool relay_path);
+  void OnVideoPacketSent();
+  void OnVideoSendPaused(bool paused);
+  void OnProbeSent(int id, Timestamp at_time);
+  void OnProbeAborted(int id);
+  bool IsProbeResultValid(int id) const;
 
-  // Repeat bootstrap probes while healthy, within the path's startup window.
-  // Failed probes or a nonzero max allocation end the repeated-probe window.
-  void EnableRepeatedInitialProbing(bool enable);
+  void SetAlrStartTime(std::optional<Timestamp> alr_start_time);
+  void SetAlrEndedTime(Timestamp alr_end_time);
 
-  // TURN relays are more sensitive to bursty padding and large probe jumps.
-  // Keep the default WebRTC profile for direct paths and select a gentler
-  // profile only after ICE confirms that the active pair is relayed.
-  void SetRelayPath(bool relay_path, Timestamp at_time);
-
-  // Probe a newly selected direct path without changing the media target.
-  // Retry briefly if probing is blocked or a probe produces no valid feedback.
-  std::vector<ProbeClusterConfig> RequestProbeOnPathChange(Timestamp at_time);
-
-  // Bind growth to the actual estimate of the outstanding cluster. Ordinary
-  // BWE updates or feedback for an older path cannot authorize another step.
-  void OnProbeResult(int cluster_id, DataRate bitrate, Timestamp at_time);
-  void OnProbeFeedbackRejected(int cluster_id, const char* reason,
-                               Timestamp at_time);
-  // Call only after successful transport send (or feedback proving that send).
-  void OnProbeSent(int cluster_id, Timestamp at_time);
-  // Local cancellation is separate from an unsuccessful capacity measurement.
-  void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
-  void OnVideoPacketSent(Timestamp at_time);
-  void OnVideoSendPaused(bool paused, Timestamp at_time);
-
-  // Cancel queued/ongoing growth while media or a keyframe is recovering.
-  void PauseProbingUntil(Timestamp until, const char* reason = "external_hold");
-  bool IsProbeResultValid(int cluster_id) const;
-
-  // The sender publishes a bounded transport budget separately from raw BWE.
-  // Each continuation needs a new sustained-traffic confirmation.
-  void SetGrowthLimit(DataRate probe_limit, DataRate confirmed_rate,
-                      Timestamp confirmed_at);
-
-  void SetAlrStartTimeMs(std::optional<int64_t> alr_start_time);
-  void SetAlrEndedTimeMs(int64_t alr_end_time);
-
-  std::vector<ProbeClusterConfig> RequestProbe(Timestamp at_time);
-
-  void SetNetworkStateEstimate(webrtc::NetworkStateEstimate estimate);
+  [[nodiscard]] std::vector<ProbeClusterConfig> RequestProbe(Timestamp at_time);
 
   // Resets the ProbeController to a state equivalent to as if it was just
   // created EXCEPT for configuration settings like
-  // `enable_periodic_alr_probing_` `network_available_` and
-  // `max_total_allocated_bitrate_`.
+  // `enable_periodic_alr_probing_`, `network_available_` and the path profile.
   void Reset(Timestamp at_time);
 
-  std::vector<ProbeClusterConfig> Process(Timestamp at_time);
+  [[nodiscard]] std::vector<ProbeClusterConfig> Process(Timestamp at_time);
 
  private:
   enum class State {
@@ -191,99 +103,38 @@ class ProbeController {
   };
 
   void UpdateState(State new_state);
-  std::vector<ProbeClusterConfig> MaybeContinueProbing(Timestamp at_time);
-  std::vector<ProbeClusterConfig> MaybeProbeFurther(Timestamp at_time);
-  std::vector<ProbeClusterConfig> MaybeProbeOnMediaStart(Timestamp at_time);
-  void ScheduleProbeRetry(Timestamp earliest, DataRate max_rate,
-                          const char* reason);
-  std::vector<ProbeClusterConfig> MaybeRetryProbe(Timestamp at_time);
-  void LogRetryBlocked(Timestamp at_time, const char* reason);
-  std::vector<ProbeClusterConfig> InitiateExponentialProbing(Timestamp at_time);
-  std::vector<ProbeClusterConfig> InitiateProbing(
-      Timestamp now, std::vector<DataRate> bitrates_to_probe,
+  [[nodiscard]] std::vector<ProbeClusterConfig> InitiateExponentialProbing(
+      Timestamp at_time);
+  [[nodiscard]] std::vector<ProbeClusterConfig> InitiateProbing(
+      Timestamp now, const std::vector<DataRate>& bitrates_to_probe,
       bool probe_further);
   bool TimeForAlrProbe(Timestamp at_time) const;
-  bool TimeForNetworkStateProbe(Timestamp at_time) const;
-  bool TimeForNextRepeatedInitialProbe(Timestamp at_time) const;
-  std::vector<ProbeClusterConfig> MaybeProbeNewPath(Timestamp at_time);
-  std::vector<ProbeClusterConfig> MaybeProbeAfterDrop(Timestamp at_time);
   ProbeClusterConfig CreateProbeClusterConfig(Timestamp at_time,
                                               DataRate bitrate);
 
   bool network_available_;
-  bool repeated_initial_probing_enabled_ = false;
-  bool relay_path_ = false;
-  DataRate growth_probe_limit_ = DataRate::PlusInfinity();
-  Timestamp media_confirmed_at_ = Timestamp::MinusInfinity();
-  bool pending_further_probe_ = false;
-  struct ActiveProbe {
-    int id;
-    DataRate target;
-    DataRate measured = DataRate::Zero();
-    bool probe_further = false;
-    Timestamp created_at = Timestamp::MinusInfinity();
-    Timestamp started_at = Timestamp::MinusInfinity();
-    bool initial = false;
-    bool recovery = false;
-    std::string rejection_reason;
-  };
-  std::optional<ActiveProbe> active_probe_;
-  struct MediaStartProbe {
-    Timestamp earliest;
-    bool first_video;
-  };
-  std::optional<MediaStartProbe> pending_media_start_probe_;
-  struct ProbeRetry {
-    Timestamp deadline;
-    Timestamp next_attempt;
-    DataRate max_rate;
-    DataRate confirmation_rate;
-    Timestamp healthy_since = Timestamp::MinusInfinity();
-    Timestamp last_log = Timestamp::MinusInfinity();
-    std::string blocked_reason;
-    int attempts = 0;
-    bool finished = false;
-  };
-  std::optional<ProbeRetry> pending_probe_retry_;
-  bool has_sent_video_ = false;
-  bool video_sent_since_resume_ = false;
-  bool video_send_paused_ = false;
-  Timestamp video_pause_time_ = Timestamp::MinusInfinity();
-  int min_valid_probe_cluster_id_ = 1;
-  Timestamp probe_cooldown_until_ = Timestamp::MinusInfinity();
-  Timestamp relay_startup_until_ = Timestamp::MinusInfinity();
-  DataRate retry_bitrate_limit_ = DataRate::PlusInfinity();
-  struct PathProbe {
-    Timestamp deadline;
-    Timestamp last_probe_time = Timestamp::MinusInfinity();
-    std::optional<int> cluster_id;
-    int attempts = 0;
-  };
-  std::optional<PathProbe> pending_path_probe_;
-  struct DropRecovery {
-    DataRate reference_rate;
-    Timestamp deadline;
-    Timestamp next_attempt;
-    Timestamp recovered_since = Timestamp::PlusInfinity();
-    int attempts = 0;
-  };
-  std::optional<DropRecovery> pending_drop_recovery_;
-  Timestamp drop_recovery_cooldown_ = Timestamp::MinusInfinity();
-  bool recovery_network_healthy_ = true;
-  Timestamp last_allowed_repeated_initial_probe_ = Timestamp::MinusInfinity();
   BandwidthLimitedCause bandwidth_limited_cause_ =
       BandwidthLimitedCause::kDelayBasedLimited;
   State state_;
   DataRate min_bitrate_to_probe_further_ = DataRate::PlusInfinity();
   Timestamp time_last_probing_initiated_ = Timestamp::MinusInfinity();
   DataRate estimated_bitrate_ = DataRate::Zero();
-  std::optional<webrtc::NetworkStateEstimate> network_estimate_;
   DataRate start_bitrate_ = DataRate::Zero();
   DataRate max_bitrate_ = DataRate::PlusInfinity();
+  Timestamp last_bwe_drop_probing_time_ = Timestamp::Zero();
   std::optional<Timestamp> alr_start_time_;
   std::optional<Timestamp> alr_end_time_;
   bool enable_periodic_alr_probing_;
-  DataRate max_total_allocated_bitrate_ = DataRate::Zero();
+  Timestamp time_of_last_large_drop_ = Timestamp::MinusInfinity();
+  DataRate bitrate_before_last_large_drop_ = DataRate::Zero();
+  bool last_drop_in_alr_ = false;
+
+  bool relay_path_ = false;
+  const bool require_video_;
+  bool video_started_ = false;
+  bool video_paused_ = false;
+  int min_valid_probe_id_ = 1;
+  int current_probe_start_id_ = 1;
 
   int32_t next_probe_cluster_id_ = 1;
 

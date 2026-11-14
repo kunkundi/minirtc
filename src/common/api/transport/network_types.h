@@ -107,6 +107,8 @@ struct PacedPacketInfo {
 };
 
 struct SentPacket {
+  // ICE selected-pair generation; feedback must stay on its original route.
+  uint64_t route_id = 0;
   Timestamp send_time = Timestamp::PlusInfinity();
   // Size of packet with overhead up to IP layer.
   DataSize size = DataSize::Zero();
@@ -168,6 +170,7 @@ struct PacketResult {
 
   SentPacket sent_packet;
   Timestamp receive_time = Timestamp::PlusInfinity();
+  bool previously_reported_lost = false;
   EcnMarking ecn = EcnMarking::kNotEct;
 };
 
@@ -176,6 +179,7 @@ struct TransportPacketsFeedback {
   TransportPacketsFeedback(const TransportPacketsFeedback& other);
   ~TransportPacketsFeedback();
 
+  uint64_t route_id = 0;
   Timestamp feedback_time = Timestamp::PlusInfinity();
   DataSize data_in_flight = DataSize::Zero();
   bool transport_supports_ecn = false;

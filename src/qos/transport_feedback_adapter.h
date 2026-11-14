@@ -45,6 +45,7 @@ struct PacketFeedback {
   // The network route that this packet is associated with.
   rtc::NetworkRoute network_route;
 
+  bool reported_lost = false;
   uint32_t ssrc = 0;
   uint16_t rtp_sequence_number = 0;
 };
@@ -87,7 +88,8 @@ class TransportFeedbackAdapter {
       const rtcp::CongestionControlFeedback& feedback,
       Timestamp feedback_receive_time);
 
-  void SetNetworkRoute(const rtc::NetworkRoute& network_route);
+  // Each call denotes a newly selected ICE pair, including direct -> direct.
+  uint64_t SetNetworkRoute(const rtc::NetworkRoute& network_route);
 
   DataSize GetOutstandingData() const;
 
@@ -138,6 +140,7 @@ class TransportFeedbackAdapter {
   int64_t last_ack_seq_num_ = -1;
   InFlightBytesTracker in_flight_;
   rtc::NetworkRoute network_route_;
+  uint64_t route_id_ = 0;
 
   Timestamp current_offset_ = Timestamp::MinusInfinity();
 

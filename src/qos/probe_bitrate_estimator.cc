@@ -13,7 +13,6 @@
 #include <algorithm>
 #include <memory>
 #include <optional>
-#include <string_view>
 
 #include "api/transport/network_types.h"
 #include "api/units/data_rate.h"
@@ -35,9 +34,6 @@ constexpr double kMinReceivedBytesRatio = .80;
 
 // The maximum |receive rate| / |send rate| ratio for a valid estimate.
 constexpr float kMaxValidRatio = 2.0f;
-
-// A locally delayed burst measures the sender's scheduling, not link capacity.
-constexpr double kMinProbeSendRateRatio = 0.8;
 
 // The minimum |receive rate| / |send rate| ratio assuming that the link is
 // not saturated, i.e. we assume that we will receive at least
@@ -138,20 +134,6 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   DataSize send_size = cluster->size_total - cluster->size_last_send;
   DataRate send_rate = send_size / send_interval;
 
-  const DataRate target_rate = packet_feedback.sent_packet.pacing_info.send_bitrate;
-  if (target_rate > DataRate::Zero() &&
-      send_rate < target_rate * kMinProbeSendRateRatio) {
-    if (!cluster->rejection_reason ||
-        std::string_view(cluster->rejection_reason) != "send_rate_too_low") {
-      LOG_DEBUG("Probe feedback rejected: id={} reason=send_rate_too_low "
-                "send_bitrate_bps={} target_bitrate_bps={}",
-                cluster_id, send_rate.bps(), target_rate.bps());
-    }
-    cluster->rejection_reason = "send_rate_too_low";
-    if (estimated_cluster_id_ == cluster_id) estimated_data_rate_.reset();
-    return std::nullopt;
-  }
-
   // Since the `receive_interval` does not include the time it takes to
   // actually receive the first packet the size of the first received packet
   // should not be included when calculating the receive bitrate.
@@ -200,11 +182,6 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     estimated_cluster_id_ = cluster_id;
   }
   return res;
-}
-
-const char* ProbeBitrateEstimator::LastRejectionReason(int cluster_id) const {
-  const auto it = clusters_.find(cluster_id);
-  return it == clusters_.end() ? nullptr : it->second.rejection_reason;
 }
 
 std::optional<DataRate>

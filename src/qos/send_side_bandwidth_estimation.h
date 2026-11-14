@@ -26,19 +26,10 @@
 #include "api/units/data_rate.h"
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
+#include "loss_based_bwe_v2.h"
 
 namespace minirtc {
 namespace webrtc {
-
-enum class LossBasedState {
-  kIncreasing = 0,
-  // TODO(bugs.webrtc.org/12707): Remove one of the increasing states once we
-  // have decided if padding is usefull for ramping up when BWE is loss
-  // limited.
-  kIncreaseUsingPadding = 1,
-  kDecreasing = 2,
-  kDelayBasedEstimate = 3
-};
 
 class LinkCapacityTracker {
  public:
@@ -127,16 +118,11 @@ class SendSideBandwidthEstimation {
                                 BandwidthUsage delay_detector_state,
                                 std::optional<DataRate> probe_bitrate,
                                 bool in_alr);
-  bool PaceAtLossBasedEstimate() const;
 
  private:
   friend class GoogCcStatePrinter;
 
-  enum UmaState { kNoUpdate, kFirstDone, kDone };
-
   bool IsInStartPhase(Timestamp at_time) const;
-
-  void UpdateUmaStatsPacketsLost(Timestamp at_time, int packets_lost);
 
   // Updates history of min bitrates.
   // After this method returns min_bitrate_history_.front().second contains the
@@ -158,6 +144,8 @@ class SendSideBandwidthEstimation {
   // should be cleaned up.
   void ApplyTargetLimits(Timestamp at_time);
 
+  std::unique_ptr<LossBasedBweV2> loss_based_bwe_ =
+      std::make_unique<LossBasedBweV2>();
   RttBasedBackoff rtt_backoff_;
   LinkCapacityTracker link_capacity_;
 
@@ -188,11 +176,6 @@ class SendSideBandwidthEstimation {
   DataRate delay_based_limit_;
   Timestamp time_last_decrease_;
   Timestamp first_report_time_;
-  int initially_lost_packets_;
-  DataRate bitrate_at_2_seconds_;
-  UmaState uma_update_state_;
-  UmaState uma_rtt_state_;
-  std::vector<bool> rampup_uma_stats_updated_;
   float low_loss_threshold_;
   float high_loss_threshold_;
   DataRate bitrate_threshold_;

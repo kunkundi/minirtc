@@ -32,11 +32,10 @@ namespace {
 constexpr int64_t kDesktopPacerQueueLimitMs = 100;
 constexpr int64_t kDesktopFrameAdmissionQueueMs = 80;
 constexpr int64_t kRelayPacerBurstIntervalMs = 5;
-// At the normal 2.5x pacing rate this occupies at most 72 ms of the queue,
-// leaving room for RTP overhead and recovery within the 350 ms deadline.
+// Limit regular keyframe bytes independently of the pacer's queue draining.
 constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
-// Only the initial keyframe may borrow extra queue time (at most 240 ms at
-// normal 2.5x pacing). Admission still pauses following frames as it drains.
+// Only the initial keyframe may borrow extra queue time. Admission pauses
+// following frames while the pacer drains it.
 constexpr int64_t kStartupKeyFrameBudgetMs = 600;
 constexpr size_t kStartupKeyFrameMaxBytes = 128 * 1024;
 constexpr int64_t kStartupKeyFrameTimeoutMs = 1500;
@@ -158,7 +157,8 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   task_queue_trans_fb_ =
       std::make_shared<TaskQueueLockFree>("transport feedback adapter");
 
-  controller_ = std::make_unique<CongestionControl>(starting_bitrates_);
+  controller_ = std::make_unique<CongestionControl>(
+      starting_bitrates_, disable_receiver_padding_probing_);
   const int relay_path_state =
       relay_path_state_.load(std::memory_order_acquire);
   if (relay_path_state >= 0) {
@@ -168,8 +168,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   }
   paced_sender_ = std::make_shared<PacedSender>(
       ice_agent_, webrtc_clock_, task_queue_pacer_,
-      media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent,
-      disable_receiver_padding_probing_);
+      // Encoder overshoot is controlled before encoding. Allow the pacer to
+      // drain a large keyframe within the queue deadline, as in WebRTC.
+      false, disable_receiver_padding_probing_);
   paced_sender_->SetPacingRates(DataRate::BitsPerSec(300000), DataRate::Zero());
   paced_sender_->SetSendBurstInterval(TimeDelta::Millis(
       relay_path_state == 1 ? kRelayPacerBurstIntervalMs : 40));
@@ -786,6 +787,36 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       return 0;
     context->capture_input_frame_total.fetch_add(1,
                                                  std::memory_order_relaxed);
+    {
+      const int64_t now_us = clock_->CurrentTimeUs();
+      const int64_t elapsed = now_us - context->frame_dropper_last_input_us;
+      if (context->frame_dropper_last_input_us == 0 || elapsed > 1000000)
+        context->frame_dropper.Reset();
+      context->frame_dropper_last_input_us = now_us;
+      // Leak against the actual capture cadence, including quiet desktops.
+      const int input_fps = elapsed > 0 && elapsed <= 1000000
+                                ? std::clamp<int>(1000000 / elapsed, 1,
+                                                  media_config_.max_frame_rate)
+                                : media_config_.max_frame_rate;
+      const int bitrate =
+          context->desired_target_bitrate.value_or(media_config_.init_bitrate);
+      context->frame_dropper.SetRates(
+          std::max(1.0, bitrate * (1.0 - cwnd_reduce_ratio_)) / 1000.0,
+          input_fps);
+      context->frame_dropper.Leak(input_fps);
+      // Do not consume a pending FIR when admission skips a frame. The next
+      // admitted frame will carry it; keyframe recovery can also bypass drops.
+      const bool drop = context->frame_dropper.DropFrame();
+      bool keyframe_pending = b_force_i_frame_.load();
+      if (drop && !keyframe_pending) {
+        std::lock_guard<std::mutex> keyframe_lock(force_i_frame_streams_mutex_);
+        keyframe_pending = force_i_frame_streams_.count(channel_name) != 0;
+      }
+      if (drop && !keyframe_pending) {
+        ++context->rate_dropped_frames;
+        return 0;
+      }
+    }
     if (media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
         paced_sender_ &&
         (paced_sender_->ExpectedQueueTime() >=
@@ -1447,7 +1478,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "Video frame health: channel={} encoded_fps={} low_windows={}/{} "
         "capture_fps={} pacer_reject_percent={} "
         "encode_queue_drop_percent={} delay_avg_ms={} delay_p95_ms={} "
-        "resolution={}x{}",
+        "resolution={}x{} rate_dropped_total={}",
         channel_name, context->measured_encoded_frame_rate,
         low_frame_rate_window_count,
         context->encoded_frame_rate_valid_window_count,
@@ -1456,7 +1487,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->measured_encode_queue_drop_percent,
         context->average_encode_queue_delay_ms,
         context->p95_encode_queue_delay_ms, encoded_frame.EncodedWidth(),
-        encoded_frame.EncodedHeight());
+        encoded_frame.EncodedHeight(), context->rate_dropped_frames);
   }
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==
@@ -1473,9 +1504,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     }
   }
 
-  // Resolution-priority mode intentionally accepts a lower temporal rate.
-  // The bounded encode queue already coalesces excess input frames, so do not
-  // undo that choice by reducing spatial detail here.
+  // Resolution priority adapts temporal load through the frame dropper before
+  // encoding. Keep its spatial detail while the network budget recovers.
   if (maintain_resolution) {
     return;
   }
@@ -1979,20 +2009,6 @@ void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
     LOG_WARN("Ignoring FIR for unknown media SSRC {}", media_ssrc);
     return;
   }
-  // Receiver FIR indicates a broken decoding chain. Stop both current and
-  // queued probes while the replacement keyframe and its repairs are sent.
-  // Only remote FIR uses this overload; routine local intra requests do not
-  // repeatedly suppress healthy startup or ALR probes.
-  const auto now = webrtc_clock_->CurrentTime();
-  const auto until = now + TimeDelta::Millis(1500);
-  if (task_queue_cc_ && controller_) {
-    task_queue_cc_->PostTask([this, now, until] {
-      if (controller_)
-        controller_->PauseProbingUntil(until, "keyframe_recovery", now);
-    });
-  }
-  if (paced_sender_) paced_sender_->PauseProbingUntil(until);
-  LOG_DEBUG("Probe protection hold: reason=remote_fir hold_ms=1500");
   FullIntraRequest(channel_name);
 }
 
@@ -2160,6 +2176,7 @@ int IceTransportController::OnVideoEncoded(
       context->keyframe_same_resolution_retry = false;
       context->keyframe_budget_retry_count = 0;
     }
+    context->frame_dropper.Fill(encoded_frame.Size(), !keyframe);
   }
 
   if (measure_encode_delay) {
@@ -2282,24 +2299,27 @@ void IceTransportController::UpdateNetworkAvaliablity(bool network_available) {
 }
 
 void IceTransportController::SetRelayPath(bool relay_path) {
-  const bool changed = relay_path_state_.exchange(relay_path ? 1 : 0) != (relay_path ? 1 : 0);
-  if (!task_queue_cc_ || !controller_) {
-    return;
-  }
+  relay_path_state_.store(relay_path ? 1 : 0);
+  if (!task_queue_cc_ || !controller_) return;
 
-  task_queue_cc_->PostTask([this, relay_path, changed]() mutable {
-    if (!controller_) {
-      return;
-    }
-    if (changed) ResetFecAdaptation();
-    const webrtc::Timestamp now = webrtc::Timestamp::Millis(
-        webrtc_clock_->TimeInMilliseconds());
-    if (changed && paced_sender_) {
+  // Queue the reset while holding the adapter lock, before any packet on the
+  // new route can enqueue its sent/feedback notification to congestion control.
+  std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
+  rtc::NetworkRoute route;
+  route.connected = true;
+  route.local = route.local.CreateWithTurn(relay_path);
+  const uint64_t route_id = transport_feedback_adapter_.SetNetworkRoute(route);
+  task_queue_cc_->PostTask([this, relay_path, route_id] {
+    if (!controller_) return;
+    cc_route_id_ = route_id;
+    ResetFecAdaptation(false);
+    const auto now = webrtc_clock_->CurrentTime();
+    if (paced_sender_) {
       paced_sender_->PauseProbingUntil(now);
       paced_sender_->SetSendBurstInterval(TimeDelta::Millis(
           relay_path ? kRelayPacerBurstIntervalMs : 40));
     }
-    PostUpdates(controller_->SetRelayPath(relay_path, now));
+    PostUpdates(controller_->SetRelayPath(relay_path, now, true));
   });
 }
 
@@ -2343,12 +2363,10 @@ void IceTransportController::UpdateMediaTransportState() {
 
   if (task_queue_cc_ && controller_) {
     task_queue_cc_->PostTask(
-        [this, allow_probe_without_media, transport_ready,
-         was_transport_ready]() mutable {
+        [this, transport_ready, was_transport_ready]() mutable {
           if (!controller_) {
             return;
           }
-          controller_->SetRepeatedInitialProbing(allow_probe_without_media);
           if (transport_ready != was_transport_ready) {
             ResetFecAdaptation();
             webrtc::NetworkAvailability msg;
@@ -2801,6 +2819,8 @@ int IceTransportController::SetVideoSendPaused(bool paused) {
     // Invalidate queued raw frames and late asynchronous encoder callbacks,
     // even if they finish after a quick pause/resume cycle.
     ++context->video_settings_generation;
+    context->frame_dropper.Reset();
+    context->frame_dropper_last_input_us = 0;
     if (!paused) {
       context->ResetEncodedFrameRateTracking();
       context->ResetEncoderQualityTracking();
@@ -2838,6 +2858,8 @@ int IceTransportController::UpdateVideoResolution(int width, int height) {
     // resets adaptation with the new bound and produces a fresh keyframe.
     if (changed) {
       ++context->video_settings_generation;
+      context->frame_dropper.Reset();
+      context->frame_dropper_last_input_us = 0;
       context->source_width = context->source_height = 0;
       context->target_width.reset();
       context->target_height.reset();
@@ -2955,6 +2977,8 @@ int IceTransportController::UpdateVideoSettings(
       retired_encoders.push_back(std::move(context->codec));
       context->codec = std::move(prepared.codec);
       ++context->video_settings_generation;
+      context->frame_dropper.Reset();
+      context->frame_dropper_last_input_us = 0;
       context->encoding_speed_priority_enabled =
           prepared.speed_priority;
       context->encoding_speed_priority_update_generation.reset();
@@ -3279,7 +3303,7 @@ void IceTransportController::OnCongestionControlFeedback(
     }
     if (feedback_msg.has_value() && task_queue_cc_) {
       task_queue_cc_->PostTask([this, feedback_msg]() mutable {
-        if (controller_) {
+        if (controller_ && feedback_msg->route_id == cc_route_id_) {
           PostUpdates(
               controller_->OnTransportPacketsFeedback(feedback_msg.value()));
           UpdateCongestedState();
@@ -3331,7 +3355,8 @@ IceTransportController::RegisterPacketForFeedback(
     registration.fec_feedback_id = transport_feedback_adapter_.AddPacket(
         packet, pacing_info, send_size - packet.size(),
         webrtc::Timestamp::Millis(registration.send_time_ms));
-    transport_feedback_adapter_.ProcessSentPacket(sent_packet);
+    registration.sent_packet =
+        transport_feedback_adapter_.ProcessSentPacket(sent_packet);
   }
   return registration;
 }
@@ -3380,9 +3405,12 @@ void IceTransportController::OnSentPacket(
     const int probe_id = pacing_info.probe_cluster_id;
     const bool is_video =
         packet.packet_type() == webrtc::RtpPacketMediaType::kVideo;
-    task_queue_cc_->PostTask([this, packet_size, sent_time, probe_id, is_video] {
-      if (controller_) {
-        controller_->OnSentPacket(packet_size, sent_time, probe_id, is_video);
+    const auto sent_packet = registration.sent_packet;
+    task_queue_cc_->PostTask([this, packet_size, sent_time, probe_id, is_video,
+                              sent_packet] {
+      if (controller_ && sent_packet && sent_packet->route_id == cc_route_id_) {
+        controller_->OnSentPacket(packet_size, sent_time, probe_id, is_video,
+                                  sent_packet->data_in_flight);
       }
     });
   }
@@ -3412,6 +3440,10 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   }
 
   if (update.target_rate) {
+    {
+      std::unique_lock lock(stream_senders_mutex_);
+      cwnd_reduce_ratio_ = update.target_rate->cwnd_reduce_ratio;
+    }
     available_transport_bitrate_ = std::max<int64_t>(0, update.target_rate->target_rate.bps());
     target_bitrate_ = available_transport_bitrate_;
     video_network_estimate_ = update.target_rate->network_estimate;
@@ -3786,15 +3818,13 @@ void IceTransportController::PostUpdates(webrtc::NetworkControlUpdate update) {
   UpdateVideoBitrateAllocation();
 }
 
-void IceTransportController::ResetFecAdaptation() {
-  {
+void IceTransportController::ResetFecAdaptation(bool reset_feedback) {
+  if (reset_feedback) {
     std::lock_guard<std::mutex> lock(transport_feedback_adapter_mutex_);
     transport_feedback_adapter_.ResetFecFeedback();
   }
   fec_feedback_snapshots_.clear();
   fec_snapshot_ms_ = -1;
-  probe_hold_reasons_ = 0;
-  probe_hold_log_ms_ = -1;
   std::unique_lock lock(stream_senders_mutex_);
   for (const auto &item : stream_senders_) {
     if (!item.second)
@@ -3829,15 +3859,6 @@ void IceTransportController::UpdateFecProtection() {
   bool publish = false;
   int64_t media_total = 0, fec_total = 0;
   int64_t rtx_limit = 0, rtx_reserved = 0;
-  uint32_t hold_reasons = 0;
-  if (media_transport_ready_.load()) {
-    if (is_congested_.load()) hold_reasons |= 1;
-    if (queue_ms >= 100) hold_reasons |= 2;
-    if (rtt_ms >= 300) hold_reasons |= 4;
-  }
-  int64_t logged_video_budget = 0, logged_rtx_estimate = 0;
-  double highest_loss = 0;
-  int loss_samples = 0;
   {
     std::unique_lock lock(stream_senders_mutex_);
     const uint64_t version = ++fec_config_version_;
@@ -3887,9 +3908,6 @@ void IceTransportController::UpdateFecProtection() {
     rtx_limit = video_rtx_enabled_ ? video_budget / 2 : 0;
     rtx_bitrate_limit_bps_ = rtx_limit;
     rtx_reserved = std::min(rtx_estimate, rtx_limit);
-    if (video_budget > 0 && rtx_estimate > video_budget / 4) hold_reasons |= 8;
-    logged_video_budget = video_budget;
-    logged_rtx_estimate = rtx_estimate;
     const int64_t share =
         (video_budget - rtx_reserved) / std::max(1, videos);
     for (const auto &item : stream_senders_) {
@@ -3907,17 +3925,6 @@ void IceTransportController::UpdateFecProtection() {
       auto feedback = fec_feedback_snapshots_.find(ssrc);
       if (feedback != fec_feedback_snapshots_.end())
         network.feedback = feedback->second;
-      const bool loss_recovery = network.feedback.samples >= 40 &&
-                        network.feedback.last_feedback_ms >= 0 &&
-                        now_ms - network.feedback.last_feedback_ms <= 1500 &&
-                        network.feedback.loss_rate() >= 0.05;
-      if (loss_recovery) {
-        hold_reasons |= 16;
-        if (network.feedback.loss_rate() > highest_loss) {
-          highest_loss = network.feedback.loss_rate();
-          loss_samples = network.feedback.samples;
-        }
-      }
       FecProtectionConfig config;
       if (active(c)) {
         c->fec_last_active_ms = now_ms;
@@ -3974,42 +3981,6 @@ void IceTransportController::UpdateFecProtection() {
     video_transport_bitrate_bps_.store(media_total);
     publish = !fec_update_queued_;
     fec_update_queued_ = true;
-  }
-  if (new_snapshot && hold_reasons) {
-    const bool queue_only = hold_reasons == 2;
-    const auto hold = TimeDelta::Millis(queue_only ? 300 : 2000);
-    const char* reason = queue_only ? "local_queue" : "media_recovery";
-    if (hold_reasons != probe_hold_reasons_ || probe_hold_log_ms_ < 0 ||
-        now_ms - probe_hold_log_ms_ >= 2000) {
-      LOG_DEBUG("Probe protection hold: reason={} congested={} "
-                "queue_blocked={} rtt_blocked={} rtx_blocked={} loss_blocked={} "
-                "queue_ms={} rtt_ms={} trigger_loss={} trigger_loss_samples={} "
-                "rtx_bps={} "
-                "video_budget_bps={} hold_ms={} action=pause_growth",
-                reason, bool(hold_reasons & 1), bool(hold_reasons & 2),
-                bool(hold_reasons & 4), bool(hold_reasons & 8),
-                bool(hold_reasons & 16), queue_ms, rtt_ms, highest_loss,
-                loss_samples, logged_rtx_estimate, logged_video_budget,
-                hold.ms());
-      probe_hold_log_ms_ = now_ms;
-    }
-    const auto now = webrtc_clock_->CurrentTime();
-    const auto until = now + hold;
-    // UpdateFecProtection runs on the congestion-control queue. The pacer
-    // cancels existing clusters and rejects new clusters during this hold.
-    // These local protection signals suspend probing/growth, preserving the
-    // media pacing budget. Delay BWE and settled packet loss decide backoff.
-    // A queue-only burst gets a short hold, refreshed while it persists, so
-    // periodic frame bursts do not keep restarting a two-second cooldown.
-    if (controller_)
-      controller_->PauseProbingUntil(until, reason, now);
-    paced_sender_->PauseProbingUntil(until);
-  }
-  if (new_snapshot) {
-    if (!hold_reasons && probe_hold_reasons_)
-      LOG_DEBUG("Probe protection conditions cleared: queue_ms={} rtt_ms={} "
-                "existing_cooldown_retained=true", queue_ms, rtt_ms);
-    probe_hold_reasons_ = hold_reasons;
   }
   if (log) {
     fec_log_ms_ = now_ms;
