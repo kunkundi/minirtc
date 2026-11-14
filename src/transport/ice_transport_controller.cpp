@@ -4087,10 +4087,14 @@ void IceTransportController::UpdateFecProtection() {
           total += std::max<int64_t>(0, c->fec_protection.fec_bitrate_bps);
           c->transceiver->SetFecProtection(c->fec_protection);
         }
-        self->paced_sender_->SetFecBudgets(rates, total,
-                                           self->fec_config_version_);
-        self->paced_sender_->SetRtxBudget(self->rtx_bitrate_limit_bps_,
-                                          self->fec_config_version_);
+        const uint64_t version = self->fec_config_version_;
+        const int64_t rtx_limit = self->rtx_bitrate_limit_bps_;
+        // Already on the pacer queue: budget updates can synchronously send
+        // queued packets or drop deferred RTX. Both callbacks acquire this
+        // mutex, so publish the captured allocation after releasing it.
+        lock.unlock();
+        self->paced_sender_->SetFecBudgets(rates, total, version);
+        self->paced_sender_->SetRtxBudget(rtx_limit, version);
       })) {
     std::unique_lock lock(stream_senders_mutex_);
     fec_update_queued_ = false;
