@@ -8,6 +8,7 @@
 #include "acknowledged_bitrate_estimator.h"
 #include "acknowledged_bitrate_estimator_interface.h"
 #include "alr_detector.h"
+#include "bandwidth_ramp_controller.h"
 #include "bitrate_limits.h"
 #include "api/network_state_predictor.h"
 #include "api/transport/network_control.h"
@@ -47,7 +48,8 @@ class CongestionControl {
 
   NetworkControlUpdate SetRelayPath(bool relay_path, Timestamp at_time);
 
-  void PauseProbingUntil(Timestamp until, const char* reason = "external_hold");
+  void PauseProbingUntil(Timestamp until, const char* reason = "external_hold",
+                        Timestamp at_time = Timestamp::MinusInfinity());
 
   void MaybeTriggerOnNetworkChanged(NetworkControlUpdate* update,
                                     Timestamp at_time);
@@ -127,6 +129,8 @@ class CongestionControl {
   };
   std::optional<PendingProbe> pending_probe_;
   int last_settled_probe_id_ = -1;
+  BandwidthRampController bandwidth_ramp_;
+  Timestamp last_update_time_ = Timestamp::MinusInfinity();
 
   std::optional<DataSize> current_data_window_;
 };

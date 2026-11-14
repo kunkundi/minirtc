@@ -197,6 +197,7 @@ std::vector<ProbeClusterConfig> ProbeController::OnNetworkAvailability(
   network_available_ = msg.network_available;
 
   if (!network_available_) {
+    pending_further_probe_ = false;
     pending_probe_retry_.reset();
     pending_media_start_probe_.reset();
     video_sent_since_resume_ = false;
@@ -328,28 +329,63 @@ std::vector<ProbeClusterConfig> ProbeController::MaybeContinueProbing(
           active_probe_->measured.bps(), estimated_bitrate_.bps(),
           min_bitrate_to_probe_further_.bps(),
           network_state_estimate_probe_further_limit.bps());
-      // A confirmed recovery probe can release the failed-probe ceiling.
-      // Every subsequent step still goes through the normal rate limits.
       const bool probe_further =
           active_probe_->probe_further ||
           (active_probe_->recovery && active_probe_->target < max_bitrate_ &&
            (max_total_allocated_bitrate_.IsZero() ||
             active_probe_->target < max_total_allocated_bitrate_ * 2));
-      // A smaller successful retry may lead back to the same failed target.
-      // Keep its episode budget until that target is actually confirmed, so
-      // alternating low/high results cannot replenish retries indefinitely.
-      if (pending_probe_retry_ &&
-          bitrate >= pending_probe_retry_->confirmation_rate)
-        pending_probe_retry_.reset();
-      retry_bitrate_limit_ = DataRate::PlusInfinity();
+      // A burst result cannot clear congestion history or authorize a chain.
+      // Standalone callers without a growth controller retain legacy behavior.
+      if (growth_probe_limit_.IsInfinite()) {
+        if (pending_probe_retry_ &&
+            bitrate >= pending_probe_retry_->confirmation_rate)
+          pending_probe_retry_.reset();
+        retry_bitrate_limit_ = DataRate::PlusInfinity();
+      }
       active_probe_.reset();
       UpdateState(State::kProbingComplete);
-      if (!probe_further) return {};
-      return InitiateProbing(
-          at_time, {config_.further_exponential_probe_scale * bitrate}, true);
+      pending_further_probe_ = probe_further;
+      return MaybeProbeFurther(at_time);
     }
   }
   return {};
+}
+
+void ProbeController::SetGrowthLimit(DataRate probe_limit,
+                                     DataRate confirmed_rate,
+                                     Timestamp confirmed_at) {
+  growth_probe_limit_ = probe_limit;
+  media_confirmed_at_ = confirmed_at;
+  if (confirmed_at.IsFinite() && confirmed_at > probe_cooldown_until_) {
+    if (pending_probe_retry_ &&
+        confirmed_rate >= pending_probe_retry_->confirmation_rate)
+      pending_probe_retry_.reset();
+    if (retry_bitrate_limit_.IsFinite() &&
+        confirmed_rate >= retry_bitrate_limit_ * config_.further_probe_threshold)
+      retry_bitrate_limit_ = DataRate::PlusInfinity();
+  }
+}
+
+std::vector<ProbeClusterConfig> ProbeController::MaybeProbeFurther(
+    Timestamp at_time) {
+  // Once a bounded retry episode is exhausted, sustained media can justify
+  // occasional new exploration even outside ALR. Missing feedback or a quiet
+  // desktop cannot continuously replenish that retry budget.
+  const bool steady_probe = growth_probe_limit_.IsFinite() &&
+      video_sent_since_resume_ && !video_send_paused_ &&
+      (!pending_probe_retry_ || pending_probe_retry_->finished) &&
+      at_time - time_last_probing_initiated_ >= TimeDelta::Seconds(5);
+  if ((!pending_further_probe_ && !steady_probe) || active_probe_ ||
+      (growth_probe_limit_.IsFinite() &&
+       media_confirmed_at_ <= time_last_probing_initiated_)) return {};
+  // Confirmed traffic permits the full bounded step (faster on an uncongested
+  // path, much smaller near a recently failed rate), independent of raw BWE.
+  const DataRate target = growth_probe_limit_.IsFinite()
+      ? growth_probe_limit_
+      : config_.further_exponential_probe_scale * estimated_bitrate_;
+  auto probes = InitiateProbing(at_time, {target}, true);
+  if (!probes.empty()) pending_further_probe_ = false;
+  return probes;
 }
 
 void ProbeController::EnablePeriodicAlrProbing(bool enable) {
@@ -369,6 +405,8 @@ void ProbeController::SetRelayPath(bool relay_path, Timestamp at_time) {
   }
 
   relay_path_ = relay_path;
+  pending_further_probe_ = false;
+  media_confirmed_at_ = Timestamp::MinusInfinity();
   pending_probe_retry_.reset();
   active_probe_.reset();
   min_valid_probe_cluster_id_ = next_probe_cluster_id_;
@@ -480,6 +518,7 @@ void ProbeController::OnProbeSent(int cluster_id, Timestamp at_time) {
 void ProbeController::OnProbeAborted(int cluster_id, Timestamp at_time,
                                    const char* reason) {
   if (!active_probe_ || active_probe_->id != cluster_id) return;
+  pending_further_probe_ = false;
   LOG_DEBUG("Probe cancelled: id={} reason={} sent={} age_ms={}", cluster_id,
             reason, active_probe_->started_at.IsFinite(),
             (at_time - active_probe_->created_at).ms());
@@ -497,6 +536,8 @@ void ProbeController::OnProbeAborted(int cluster_id, Timestamp at_time,
 void ProbeController::OnVideoSendPaused(bool paused, Timestamp at_time) {
   video_send_paused_ = paused;
   if (!paused) return;
+  pending_further_probe_ = false;
+  media_confirmed_at_ = Timestamp::MinusInfinity();
   video_pause_time_ = std::max(video_pause_time_, at_time);
   pending_probe_retry_.reset();
   video_sent_since_resume_ = false;
@@ -543,7 +584,8 @@ bool ProbeController::IsProbeResultValid(int cluster_id) const {
 
 void ProbeController::ScheduleProbeRetry(Timestamp earliest, DataRate max_rate,
                                        const char* reason) {
-  if (!relay_path_ || !network_available_ || video_send_paused_ ||
+  if ((!relay_path_ && growth_probe_limit_.IsInfinite()) ||
+      !network_available_ || video_send_paused_ ||
       !video_sent_since_resume_ || max_rate.IsZero()) return;
   if (pending_media_start_probe_ &&
       (!active_probe_ || active_probe_->started_at.IsInfinite())) return;
@@ -637,6 +679,7 @@ std::vector<ProbeClusterConfig> ProbeController::MaybeRetryProbe(
 }
 
 void ProbeController::PauseProbingUntil(Timestamp until, const char* reason) {
+  pending_further_probe_ = false;
   probe_cooldown_until_ = std::max(probe_cooldown_until_, until);
   DataRate max_retry_rate = estimated_bitrate_ * 1.25;
   if (active_probe_) max_retry_rate = active_probe_->target;
@@ -753,6 +796,8 @@ void ProbeController::SetNetworkStateEstimate(
 }
 
 void ProbeController::Reset(Timestamp at_time) {
+  pending_further_probe_ = false;
+  media_confirmed_at_ = Timestamp::MinusInfinity();
   pending_probe_retry_.reset();
   pending_media_start_probe_.reset();
   has_sent_video_ = false;
@@ -823,6 +868,8 @@ bool ProbeController::TimeForNetworkStateProbe(Timestamp at_time) const {
 }
 
 bool ProbeController::TimeForNextRepeatedInitialProbe(Timestamp at_time) const {
+  if (growth_probe_limit_.IsFinite() &&
+      media_confirmed_at_ <= time_last_probing_initiated_) return false;
   if (repeated_initial_probing_enabled_ &&
       state_ != State::kWaitingForProbingResult &&
       last_allowed_repeated_initial_probe_ > at_time) {
@@ -842,6 +889,8 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
     return InitiateExponentialProbing(at_time);
   }
   auto further_probes = MaybeContinueProbing(at_time);
+  if (!further_probes.empty()) return further_probes;
+  further_probes = MaybeProbeFurther(at_time);
   if (!further_probes.empty()) return further_probes;
   if (active_probe_) {
     if (active_probe_->started_at.IsInfinite() &&
@@ -956,9 +1005,6 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
   }
 
   DataRate max_probe_bitrate = std::min(max_bitrate_, retry_bitrate_limit_);
-  if (relay_path_ && now < relay_startup_until_) {
-    max_probe_bitrate = std::min(max_probe_bitrate, kRelayStartupProbeLimit);
-  }
   if (max_total_allocated_bitrate_ > DataRate::Zero()) {
     // If a max allocated bitrate has been configured, allow probing up to 2x
     // that rate. This allows some overhead to account for bursty streams,
@@ -999,12 +1045,24 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
                                           config_.network_state_probe_scale)});
   }
 
+  const DataRate hard_limit = max_probe_bitrate;
+  if (relay_path_ && now < relay_startup_until_) {
+    max_probe_bitrate = std::min(max_probe_bitrate, kRelayStartupProbeLimit);
+  }
+  max_probe_bitrate = std::min(max_probe_bitrate, growth_probe_limit_);
   std::vector<ProbeClusterConfig> pending_probes;
   for (DataRate bitrate : bitrates_to_probe) {
     if (bitrate >= max_probe_bitrate) {
       bitrate = max_probe_bitrate;
-      probe_further = false;
+      // A temporary media growth limit defers the next step. Configured and
+      // failed-probe ceilings still terminate the chain as before.
+      if (bitrate >= hard_limit ||
+          (growth_probe_limit_.IsInfinite() && relay_path_ &&
+           now < relay_startup_until_)) probe_further = false;
     }
+    if (bitrate.IsZero()) continue;
+    if (!pending_probes.empty() &&
+        pending_probes.back().target_data_rate == bitrate) continue;
     pending_probes.push_back(CreateProbeClusterConfig(now, bitrate));
   }
   time_last_probing_initiated_ = now;

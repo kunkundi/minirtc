@@ -1983,10 +1983,12 @@ void IceTransportController::FullIntraRequest(uint32_t media_ssrc) {
   // queued probes while the replacement keyframe and its repairs are sent.
   // Only remote FIR uses this overload; routine local intra requests do not
   // repeatedly suppress healthy startup or ALR probes.
-  const auto until = webrtc_clock_->CurrentTime() + TimeDelta::Millis(1500);
+  const auto now = webrtc_clock_->CurrentTime();
+  const auto until = now + TimeDelta::Millis(1500);
   if (task_queue_cc_ && controller_) {
-    task_queue_cc_->PostTask([this, until] {
-      if (controller_) controller_->PauseProbingUntil(until, "keyframe_recovery");
+    task_queue_cc_->PostTask([this, now, until] {
+      if (controller_)
+        controller_->PauseProbingUntil(until, "keyframe_recovery", now);
     });
   }
   if (paced_sender_) paced_sender_->PauseProbingUntil(until);
@@ -4033,10 +4035,12 @@ void IceTransportController::UpdateFecProtection() {
                 loss_samples, logged_rtx_estimate, logged_video_budget);
       probe_hold_log_ms_ = now_ms;
     }
-    const auto until = webrtc_clock_->CurrentTime() + TimeDelta::Seconds(2);
+    const auto now = webrtc_clock_->CurrentTime();
+    const auto until = now + TimeDelta::Seconds(2);
     // UpdateFecProtection runs on the congestion-control queue. The pacer
     // cancels existing clusters and rejects new clusters during this hold.
-    if (controller_) controller_->PauseProbingUntil(until, "media_recovery");
+    if (controller_)
+      controller_->PauseProbingUntil(until, "media_recovery", now);
     paced_sender_->PauseProbingUntil(until);
   }
   if (new_snapshot) {

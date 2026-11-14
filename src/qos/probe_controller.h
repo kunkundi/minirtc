@@ -160,6 +160,11 @@ class ProbeController {
   void PauseProbingUntil(Timestamp until, const char* reason = "external_hold");
   bool IsProbeResultValid(int cluster_id) const;
 
+  // The sender publishes a bounded transport budget separately from raw BWE.
+  // Each continuation needs a new sustained-traffic confirmation.
+  void SetGrowthLimit(DataRate probe_limit, DataRate confirmed_rate,
+                      Timestamp confirmed_at);
+
   void SetAlrStartTimeMs(std::optional<int64_t> alr_start_time);
   void SetAlrEndedTimeMs(int64_t alr_end_time);
 
@@ -187,6 +192,7 @@ class ProbeController {
 
   void UpdateState(State new_state);
   std::vector<ProbeClusterConfig> MaybeContinueProbing(Timestamp at_time);
+  std::vector<ProbeClusterConfig> MaybeProbeFurther(Timestamp at_time);
   std::vector<ProbeClusterConfig> MaybeProbeOnMediaStart(Timestamp at_time);
   void ScheduleProbeRetry(Timestamp earliest, DataRate max_rate,
                           const char* reason);
@@ -207,6 +213,9 @@ class ProbeController {
   bool network_available_;
   bool repeated_initial_probing_enabled_ = false;
   bool relay_path_ = false;
+  DataRate growth_probe_limit_ = DataRate::PlusInfinity();
+  Timestamp media_confirmed_at_ = Timestamp::MinusInfinity();
+  bool pending_further_probe_ = false;
   struct ActiveProbe {
     int id;
     DataRate target;
