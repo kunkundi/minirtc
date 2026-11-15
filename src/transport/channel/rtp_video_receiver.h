@@ -132,10 +132,15 @@ class RtpVideoReceiver : public ThreadBase {
   void MaybeRetryKeyFrameRequest();
   bool IsReceivingKeyFrame();
   void OnCompleteRecoveryFrame(uint32_t timestamp, bool is_keyframe,
-                               int64_t now_ms);
+                               int64_t now_ms, uint64_t request_generation);
+  struct FailedKeyFrame {
+    int64_t arrival_ms;
+    uint64_t request_generation;
+    uint32_t timestamp;
+  };
   bool SendKeyFrameRequest(
       bool enter_awaiting_state,
-      std::optional<int64_t> failed_keyframe_arrival_ms = std::nullopt,
+      std::optional<FailedKeyFrame> failed_keyframe = std::nullopt,
       std::optional<uint32_t> soft_frame_timestamp = std::nullopt);
   bool RtxEnabled() const { return rtx_ssrc_.load() != 0; }
 
@@ -182,6 +187,7 @@ class RtpVideoReceiver : public ThreadBase {
     bool recovery_escalated = false;
     bool soft_fir_requested = false;
     int64_t last_progress_time = 0;
+    uint64_t request_generation = 0;
   };
   struct RtpTimestampLess {
     bool operator()(uint32_t lhs, uint32_t rhs) const {
@@ -221,6 +227,15 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<bool> keyframe_request_pending_{false};
   std::atomic<int64_t> keyframe_request_started_ms_{0};
   std::atomic<int64_t> next_keyframe_request_ms_{0};
+  // A repaired delta ends its recovery event, but the FIR it already caused
+  // can still produce a keyframe. Track that attempt independently. Publish
+  // generations under pending_frames_mtx_ before sending, including failures,
+  // so frames first observed in the same millisecond cannot match an old FIR.
+  std::atomic<uint64_t> keyframe_request_generation_{0};
+  std::atomic<bool> keyframe_request_in_flight_{false};
+  // Protected by rtcp_sender_mtx_. This is a local receive-order association,
+  // not a sender acknowledgement of an FIR sequence number.
+  std::optional<uint32_t> keyframe_request_timestamp_floor_;
   // Protected by rtcp_sender_mtx_. A failure must belong to the latest FIR
   // before it can shorten that request's retry interval.
   int64_t last_keyframe_request_ms_ = 0;
