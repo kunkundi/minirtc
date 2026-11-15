@@ -18,6 +18,7 @@
 
 #include "api/transport/network_types.h"
 #include "api/units/data_rate.h"
+#include "api/units/data_size.h"
 #include "api/units/time_delta.h"
 #include "api/units/timestamp.h"
 #include "relay_qos_config.h"
@@ -85,7 +86,14 @@ class ProbeController {
   void OnProbeSent(int id, Timestamp at_time);
   void OnProbeResult(int id, double received_fraction = 1.0);
   // A relay candidate ends startup retries only after bandwidth adoption.
-  void OnProbeResultAdopted(int id, Timestamp at_time);
+  void OnProbeResultAdopted(int id, Timestamp at_time,
+                            DataRate bitrate = DataRate::Zero());
+  // Called once per real transport report, after delay/loss BWE updates.
+  // Timers and low application throughput alone cannot prove path health.
+  Timestamp ProbeObservationStartTime() const;
+  void OnProbeHealthFeedback(Timestamp at_time, Timestamp latest_send_time,
+                             DataRate bitrate, bool delay_overuse, bool in_alr,
+                             DataSize non_probe_received);
   void OnProbeResultRejected(int id);
   void OnProbeAborted(int id);
   bool IsProbeResultValid(int id) const;
@@ -133,6 +141,9 @@ class ProbeController {
   TimeDelta ProbeResultWaitTime() const;
   TimeDelta ContinuationObservationTime() const;
   void RememberCongestedProbe(Timestamp at_time);
+  void RecordProbeFailure(Timestamp at_time, const char* reason);
+  bool HasProbeRiskPolicy() const;
+  std::vector<ProbeClusterConfig> RecoverProbing(Timestamp at_time);
   ProbeClusterConfig CreateProbeClusterConfig(Timestamp at_time,
                                               DataRate bitrate);
 
@@ -176,6 +187,24 @@ class ProbeController {
   int last_timed_out_probe_id_ = -1;
   DataRate failed_probe_ceiling_ = DataRate::PlusInfinity();
   Timestamp failed_probe_ceiling_expires_ = Timestamp::MinusInfinity();
+
+  // One exponential chain is one experiment. Its adopted peak remains
+  // observable after estimate acceptance or the result deadline expires.
+  struct ProbeEpisode {
+    int first_id = -1;
+    int last_id = -1;
+    DataRate highest_target = DataRate::Zero();
+    DataRate adopted_rate = DataRate::Zero();
+    Timestamp adopted_at = Timestamp::MinusInfinity();
+    Timestamp last_feedback = Timestamp::MinusInfinity();
+    Timestamp overuse_since = Timestamp::MinusInfinity();
+    DataSize non_probe_received = DataSize::Zero();
+    bool failed = false;
+  };
+  std::optional<ProbeEpisode> probe_episode_;
+  int probe_failure_count_ = 0;
+  Timestamp next_recovery_probe_time_ = Timestamp::MinusInfinity();
+  bool recovery_release_pending_ = false;
 
   int32_t next_probe_cluster_id_ = 1;
 

@@ -36,13 +36,22 @@ struct RelayQosConfig {
   double further_probe_scale = 1.5;
 
   // A short probe receipt is not evidence of sustained capacity. Observe
-  // ordinary traffic before another increase, and remember a congested probe
-  // briefly without imposing its ceiling on the media bandwidth estimator.
+  // ordinary traffic before another increase. Remember congested probes while
+  // retaining bounded recovery, without capping the media bandwidth estimator.
   int continuation_observation_ms = 500;
   int failed_probe_backoff_ms = 15000;
+  // Probe receipts can precede the congestion caused by a short burst. Keep
+  // that evidence separate from the one-second estimate acceptance deadline.
+  int post_probe_observation_ms = 2000;
+  int post_probe_overuse_ms = 200;
+  double post_probe_drop_ratio = 0.75;
+  int failed_probe_max_backoff_ms = 60000;
+  double recovery_probe_scale = 1.2;
+  int recovery_probe_interval_ms = 5000;
 
   static RelayQosConfig Upstream() {
-    return {15, 2, 3, 6, 2, 1.3, 0, 0, 0, 2, 0, 0};
+    return {15, 2, 3, 6, 2, 1.3, 0, 0, 0, 2, 0, 0,
+            0, 0, 0.75, 0, 1.2, 0};
   }
   static RelayQosConfig FromEnvironment() {
     const char* profile = std::getenv("MINIRTC_RELAY_QOS");

@@ -422,7 +422,7 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
     if (result.probe) {
       if (adopted_relay_probe_id >= 0) {
         probe_controller_->OnProbeResultAdopted(
-            adopted_relay_probe_id, report.feedback_time);
+            adopted_relay_probe_id, report.feedback_time, result.target_bitrate);
         LOG_DEBUG("Relay probe adopted: id={} bitrate_bps={}",
                   adopted_relay_probe_id, result.target_bitrate.bps());
         pending_relay_probe_.reset();
@@ -438,6 +438,20 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   bandwidth_estimation_->UpdateLossBasedEstimator(
       report, result.delay_detector_state, probe_bitrate,
       alr_start_time.has_value());
+  Timestamp latest_send_time = Timestamp::MinusInfinity();
+  DataSize non_probe_received = DataSize::Zero();
+  const auto observation_start = probe_controller_->ProbeObservationStartTime();
+  for (const auto& feedback : feedbacks) {
+    latest_send_time = std::max(latest_send_time, feedback.sent_packet.send_time);
+    if (feedback.sent_packet.send_time > observation_start &&
+        feedback.sent_packet.pacing_info.probe_cluster_id ==
+            PacedPacketInfo::kNotAProbe)
+      non_probe_received += feedback.sent_packet.size;
+  }
+  probe_controller_->OnProbeHealthFeedback(
+      report.feedback_time, latest_send_time, bandwidth_estimation_->target_rate(),
+      result.delay_detector_state == BandwidthUsage::kBwOverusing,
+      alr_start_time.has_value(), non_probe_received);
   if (!feedback_max_rtts_.empty()) {
     const auto window =
         TimeDelta::Millis(*std::min_element(feedback_max_rtts_.begin(),
