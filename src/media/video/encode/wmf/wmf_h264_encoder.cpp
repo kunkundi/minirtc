@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstring>
 #include <limits>
 
 #include "encoder_input_timing.h"
@@ -66,22 +67,34 @@ class WmfH264Encoder::Impl {
     burst_control_.Reset(buffer_duration_ms_, false, std::nullopt);
     last_buffer_log_ms_ = -1;
     last_buffer_log_duration_ms_ = 0;
+    buffer_initialization_write_attempted_ = false;
     force_idr_ = true;
     sample_clock_.Reset();
   }
 
-  void ConfigureBufferControl() {
+  void ConfigureBufferControl(const char* phase, bool verify_current) {
+    // Capability and writability are configuration-dependent. An optional
+    // property rejected before media types are negotiated must not poison the
+    // live encoder. These three initialization phases are the only retries;
+    // frame processing retains the bounded dynamic failure cache.
     const bool requested =
         config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
         buffer_duration_ms_ > 0;
-    const bool supported = requested && api_ &&
-        api_->IsSupported(&CODECAPI_AVEncCommonBufferSize) == S_OK;
+    const HRESULT support_hr = requested && api_
+        ? api_->IsSupported(&CODECAPI_AVEncCommonBufferSize) : E_NOTIMPL;
+    const bool supported = support_hr == S_OK;
+    HRESULT range_hr = E_NOTIMPL;
+    VARTYPE minimum_type = VT_EMPTY, maximum_type = VT_EMPTY,
+            step_type = VT_EMPTY;
     std::optional<WmfEncoderBurstControl::Range> range;
     if (supported) {
       VARIANT minimum{}, maximum{}, step{};
-      const HRESULT hr = api_->GetParameterRange(
+      range_hr = api_->GetParameterRange(
           &CODECAPI_AVEncCommonBufferSize, &minimum, &maximum, &step);
-      if (hr == S_OK && minimum.vt == VT_UI4 && maximum.vt == VT_UI4 &&
+      minimum_type = minimum.vt;
+      maximum_type = maximum.vt;
+      step_type = step.vt;
+      if (range_hr == S_OK && minimum.vt == VT_UI4 && maximum.vt == VT_UI4 &&
           (step.vt == VT_UI4 || step.vt == VT_EMPTY) &&
           minimum.ulVal <= maximum.ulVal &&
           maximum.ulVal > 0)
@@ -93,18 +106,48 @@ class WmfH264Encoder::Impl {
       VariantClear(&step);
     }
     burst_control_.Reset(buffer_duration_ms_, supported, range);
-    LOG_DEBUG("WMF encoder burst control: buffer_ms={} recovery_buffer_ms={} "
-              "requested={} supported={} range_known={} range_min={} "
-              "range_max={} range_step={}",
-              buffer_duration_ms_,
+    LOG_DEBUG("WMF encoder burst control: phase={} buffer_ms={} "
+              "recovery_buffer_ms={} requested={} supported={} "
+              "support_status=0x{:08x} range_known={} range_min={} "
+              "range_max={} range_step={} range_status=0x{:08x} "
+              "range_types={}/{}/{}",
+              phase, buffer_duration_ms_,
               std::max(buffer_duration_ms_,
                        WmfEncoderBurstControl::kRecoveryBufferMs),
-              requested, supported, range.has_value(),
-              range ? range->minimum : 0, range ? range->maximum : 0,
-              range ? range->step : 0);
+              requested, supported, static_cast<uint32_t>(support_hr),
+              range.has_value(), range ? range->minimum : 0,
+              range ? range->maximum : 0, range ? range->step : 0,
+              static_cast<uint32_t>(range_hr), minimum_type, maximum_type,
+              step_type);
+    const auto request = burst_control_.Next(config_.init_bitrate, true);
+    if (!request) return;
+    if (verify_current) {
+      VARIANT readback{};
+      const HRESULT read_hr =
+          api_->GetValue(&CODECAPI_AVEncCommonBufferSize, &readback);
+      const auto actual = read_hr == S_OK && readback.vt == VT_UI4
+          ? std::optional<uint32_t>(readback.ulVal) : std::nullopt;
+      const VARTYPE read_type = readback.vt;
+      VariantClear(&readback);
+      const bool confirmed = actual &&
+          WmfEncoderBurstControl::ReadbackSatisfies(*request, *actual);
+      LOG_DEBUG("WMF encoder buffer verification: phase={} requested_bytes={} "
+                "readback_bytes={} readback_known={} confirmed={} "
+                "readback_status=0x{:08x} readback_type={}",
+                phase, request->bytes, actual.value_or(0), actual.has_value(),
+                confirmed, static_cast<uint32_t>(read_hr), read_type);
+      if (confirmed) {
+        // Preserve a valid early setting even when a static MFT stops allowing
+        // writes after type negotiation; do not overwrite it just to verify it.
+        burst_control_.Complete(*request, true, actual);
+        return;
+      }
+    }
+    UpdateBufferSize(config_.init_bitrate, true, phase);
   }
 
-  void UpdateBufferSize(int bitrate, bool keyframe) {
+  void UpdateBufferSize(int bitrate, bool keyframe,
+                        const char* phase = "dynamic") {
     if (!api_) return;
     // At most one tighter attempt and one legacy fallback. Driver capability
     // and failures are cached for this MFT; optional writes never reconfigure
@@ -114,6 +157,9 @@ class WmfH264Encoder::Impl {
       if (!request) return;
       const HRESULT writable =
           api_->IsModifiable(&CODECAPI_AVEncCommonBufferSize);
+      const bool initializing = std::strcmp(phase, "dynamic") != 0;
+      if (initializing && writable != S_FALSE)
+        buffer_initialization_write_attempted_ = true;
       const HRESULT hr = writable == S_FALSE
           ? E_ACCESSDENIED
           : SetUint(api_.Get(), CODECAPI_AVEncCommonBufferSize, request->bytes);
@@ -122,6 +168,7 @@ class WmfH264Encoder::Impl {
           api_->GetValue(&CODECAPI_AVEncCommonBufferSize, &readback);
       const auto actual = read_hr == S_OK && readback.vt == VT_UI4
           ? std::optional<uint32_t>(readback.ulVal) : std::nullopt;
+      const VARTYPE read_type = readback.vt;
       VariantClear(&readback);
       // ICodecAPI::SetValue can return S_FALSE for a read-only property;
       // that is not an accepted write even though SUCCEEDED(S_FALSE) is true.
@@ -129,18 +176,22 @@ class WmfH264Encoder::Impl {
       const bool readback_mismatch = actual &&
           !WmfEncoderBurstControl::ReadbackSatisfies(*request, *actual);
       const int64_t now_ms = clock_->CurrentTimeMs();
-      if (last_buffer_log_ms_ < 0 || hr != S_OK || retry || readback_mismatch ||
+      if (initializing || last_buffer_log_ms_ < 0 ||
+          hr != S_OK || retry || readback_mismatch ||
           now_ms - last_buffer_log_ms_ >= 5000 ||
           last_buffer_log_duration_ms_ != request->duration_ms) {
-        LOG_DEBUG("WMF encoder buffer: requested_bytes={} readback_bytes={} "
+        LOG_DEBUG("WMF encoder buffer: phase={} requested_bytes={} "
+                  "readback_bytes={} "
                   "readback_known={} readback_mismatch={} buffer_ms={} "
                   "keyframe={} write_accepted={} "
-                  "status=0x{:08x} readback_status=0x{:08x} "
+                  "status=0x{:08x} modifiable_status=0x{:08x} "
+                  "readback_status=0x{:08x} readback_type={} "
                   "legacy_fallback={} control_enabled={}",
-                  request->bytes, actual.value_or(0), actual.has_value(),
+                  phase, request->bytes, actual.value_or(0), actual.has_value(),
                   readback_mismatch,
                   request->duration_ms, keyframe, hr == S_OK,
-                  static_cast<uint32_t>(hr), static_cast<uint32_t>(read_hr),
+                  static_cast<uint32_t>(hr), static_cast<uint32_t>(writable),
+                  static_cast<uint32_t>(read_hr), read_type,
                   burst_control_.tighter_failed(), burst_control_.enabled());
         last_buffer_log_ms_ = now_ms;
         last_buffer_log_duration_ms_ = request->duration_ms;
@@ -149,7 +200,7 @@ class WmfH264Encoder::Impl {
     }
   }
 
-  HRESULT Configure(IMFActivate* activation) {
+  HRESULT Configure(IMFActivate* activation, bool configure_buffer = true) {
     HRESULT hr = activation->ActivateObject(IID_PPV_ARGS(&encoder_));
     if (FAILED(hr)) return hr;
     ComPtr<IMFAttributes> attributes;
@@ -186,6 +237,12 @@ class WmfH264Encoder::Impl {
                 ? 0
                 : 50);
 
+    // Offer the optional HRD setting before media-type negotiation, when an
+    // MFT can still accept static options. Recheck after stream start rather
+    // than assuming
+    // SetValue(S_OK) or an early readback proves the live HRD configuration.
+    if (configure_buffer) ConfigureBufferControl("before_types", false);
+
     ComPtr<IMFMediaType> output, input;
     hr = MFCreateMediaType(&output);
     if (FAILED(hr)) return hr;
@@ -215,11 +272,13 @@ class WmfH264Encoder::Impl {
     hr = SetUint(api_.Get(), CODECAPI_AVEncCommonMeanBitRate,
                  config_.init_bitrate);
     if (FAILED(hr)) return hr;
-    ConfigureBufferControl();
-    UpdateBufferSize(config_.init_bitrate, true);
+    if (configure_buffer) ConfigureBufferControl("types_ready", true);
     hr = encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     if (FAILED(hr)) return hr;
-    return encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+    hr = encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
+    if (FAILED(hr)) return hr;
+    if (configure_buffer) ConfigureBufferControl("streaming", true);
+    return S_OK;
   }
 
   HRESULT Initialize() {
@@ -233,6 +292,19 @@ class WmfH264Encoder::Impl {
     for (UINT32 i = 0; i < count; ++i) {
       if (!encoder_) {
         hr = Configure(activations[i]);
+        if (FAILED(hr) && buffer_initialization_write_attempted_) {
+          // Even an accepted optional property can make subsequent media-type
+          // negotiation or stream start fail. Reactivate this same MFT once
+          // with no HRD writes before falling back to another encoder. This
+          // path runs only during initialization, never for dynamic updates.
+          LOG_DEBUG("WMF encoder retry without optional buffer control: "
+                    "initialization_status=0x{:08x}",
+                    static_cast<uint32_t>(hr));
+          Reset();
+          const HRESULT shutdown_hr = activations[i]->ShutdownObject();
+          hr = FAILED(shutdown_hr) ? shutdown_hr
+                                   : Configure(activations[i], false);
+        }
         if (FAILED(hr)) {
           LOG_DEBUG("Hardware H.264 MFT initialization failed: 0x{:08x}",
                     static_cast<uint32_t>(hr));
@@ -414,6 +486,7 @@ class WmfH264Encoder::Impl {
   unsigned input_credit_ = 0;
   const int buffer_duration_ms_ = WmfEncoderBurstControl::BufferMsFromEnvironment();
   WmfEncoderBurstControl burst_control_;
+  bool buffer_initialization_write_attempted_ = false;
   int64_t last_buffer_log_ms_ = -1;
   int last_buffer_log_duration_ms_ = 0;
   bool async_ = false, force_idr_ = true, reconfigure_ = false;
