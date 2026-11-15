@@ -34,8 +34,8 @@ class ProbeBitrateEstimator {
       const PacketResult& packet_feedback);
 
   std::optional<DataRate> FetchAndResetLastEstimatedBitrate(
-      int* cluster_id = nullptr);
-  // Reason for the latest rejected revision, or nullptr for a valid sample.
+      int* cluster_id = nullptr, double* received_fraction = nullptr,
+      int* rejected_cluster_id = nullptr);
 
   // Removes incomplete probe feedback even if no further feedback arrives.
   void RemoveExpiredClusters(Timestamp timestamp);
@@ -63,6 +63,7 @@ class ProbeBitrateEstimator {
   std::optional<int> max_expired_cluster_id_;
   std::optional<DataRate> estimated_data_rate_;
   int estimated_cluster_id_ = -1;
+  int rejected_cluster_id_ = -1;
 };
 
 }  // namespace webrtc

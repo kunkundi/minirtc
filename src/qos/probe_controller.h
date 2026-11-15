@@ -79,9 +79,13 @@ class ProbeController {
   void OnVideoPacketSent();
   void OnVideoSendPaused(bool paused);
   void OnProbeSent(int id, Timestamp at_time);
-  void OnProbeResult(int id);
+  void OnProbeResult(int id, double received_fraction = 1.0);
+  void OnProbeResultRejected(int id);
   void OnProbeAborted(int id);
   bool IsProbeResultValid(int id) const;
+  void OnTransportFeedback(Timestamp at_time, TimeDelta rtt);
+  void SetTransportLossSample(int settled_packets, int settled_lost);
+  void LogState(Timestamp at_time) const;
 
   void SetAlrStartTime(std::optional<Timestamp> alr_start_time);
   void SetAlrEndedTime(Timestamp alr_end_time);
@@ -112,6 +116,10 @@ class ProbeController {
       Timestamp now, const std::vector<DataRate>& bitrates_to_probe,
       bool probe_further);
   bool TimeForAlrProbe(Timestamp at_time) const;
+  std::vector<ProbeClusterConfig> ContinueProbing(Timestamp at_time);
+  const char* ContinuationBlockReason(Timestamp at_time) const;
+  bool HasSignificantSettledLoss(Timestamp at_time) const;
+  TimeDelta ProbeResultWaitTime() const;
   ProbeClusterConfig CreateProbeClusterConfig(Timestamp at_time,
                                               DataRate bitrate);
 
@@ -139,6 +147,15 @@ class ProbeController {
   int min_valid_probe_id_ = 1;
   int current_probe_start_id_ = 1;
   int last_probe_result_id_ = -1;
+  double last_probe_received_fraction_ = 0;
+  bool relay_path_ = false;
+  Timestamp initial_retry_deadline_ = Timestamp::MinusInfinity();
+  DataRate initial_probe_rate_ = DataRate::Zero();
+  int initial_retry_count_ = 0;
+  Timestamp last_feedback_time_ = Timestamp::MinusInfinity();
+  TimeDelta feedback_rtt_ = TimeDelta::Millis(100);
+  int settled_packets_ = 0;
+  int settled_lost_ = 0;
 
   int32_t next_probe_cluster_id_ = 1;
 

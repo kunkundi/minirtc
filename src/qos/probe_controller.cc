@@ -23,6 +23,7 @@
 #include "api/units/timestamp.h"
 #include "bitrate_limits.h"
 #include "log.h"
+#include "packet_loss_tracker.h"
 
 namespace minirtc {
 namespace webrtc {
@@ -87,6 +88,7 @@ std::vector<ProbeClusterConfig> ProbeController::SetBitrates(
 std::vector<ProbeClusterConfig> ProbeController::OnNetworkAvailability(
     NetworkAvailability msg) {
   network_available_ = msg.network_available;
+  if (!network_available_) initial_retry_deadline_ = Timestamp::MinusInfinity();
 
   if (!network_available_ && state_ == State::kWaitingForProbingResult) {
     state_ = State::kProbingComplete;
@@ -127,7 +129,14 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateExponentialProbing(
       config_.second_exponential_probe_scale > 0) {
     probes.push_back(config_.second_exponential_probe_scale * start_bitrate_);
   }
-  return InitiateProbing(at_time, probes, true);
+  auto result = InitiateProbing(at_time, probes, true);
+  if (!result.empty() && relay_path_ && relay_config_.initial_retry_limit > 0) {
+    initial_retry_deadline_ =
+        at_time + TimeDelta::Millis(relay_config_.initial_retry_window_ms);
+    initial_probe_rate_ = result.back().target_data_rate;
+    initial_retry_count_ = 0;
+  }
+  return result;
 }
 
 std::vector<ProbeClusterConfig> ProbeController::SetEstimatedBitrate(
@@ -143,19 +152,63 @@ std::vector<ProbeClusterConfig> ProbeController::SetEstimatedBitrate(
   }
   estimated_bitrate_ = bitrate;
 
-  if (state_ == State::kWaitingForProbingResult) {
-    // Continue probing if probing results indicate channel has greater
-    // capacity unless we already reached the needed bitrate.
-    if (last_probe_result_id_ == next_probe_cluster_id_ - 1 &&
-        bitrate > min_bitrate_to_probe_further_) {
-      return InitiateProbing(
-          at_time,
-          std::vector<DataRate>{config_.further_exponential_probe_scale *
-                                bitrate},
-          true);
-    }
+  return ContinueProbing(at_time);
+}
+
+bool ProbeController::HasSignificantSettledLoss(Timestamp at_time) const {
+  return relay_path_ && relay_config_.probe_settle_ms > 0 &&
+         at_time - last_feedback_time_ <= TimeDelta::Seconds(1) &&
+         settled_packets_ >= 20 && settled_lost_ * 10 >= settled_packets_;
+}
+
+TimeDelta ProbeController::ProbeResultWaitTime() const {
+  if (!relay_path_ || relay_config_.probe_settle_ms <= 0)
+    return kMaxWaitingTimeForProbingResult;
+  // Keep the native one-second deadline unless the bounded RTT/grace window
+  // itself needs longer. Allow one feedback interval after settling, never an
+  // unbounded continuation from an old probe result.
+  const auto settle = std::max(TimeDelta::Millis(relay_config_.probe_settle_ms),
+                              feedback_rtt_ +
+                                  PacketLossTracker::GracePeriod(feedback_rtt_));
+  return std::max(kMaxWaitingTimeForProbingResult,
+                  settle + TimeDelta::Millis(100));
+}
+
+const char* ProbeController::ContinuationBlockReason(Timestamp at_time) const {
+  if (at_time - time_last_probing_initiated_ > ProbeResultWaitTime())
+    return "result_expired";
+  if (last_probe_result_id_ != next_probe_cluster_id_ - 1)
+    return "waiting_valid_probe";
+  if (estimated_bitrate_ <= min_bitrate_to_probe_further_)
+    return "below_further_threshold";
+  if (relay_path_ && relay_config_.probe_settle_ms > 0) {
+    // The upstream 80% threshold may publish an early useful estimate. It
+    // must not immediately authorize another relay rate doubling while the
+    // tail of this cluster and the associated loss feedback are outstanding.
+    if (last_probe_received_fraction_ < 0.95) return "incomplete_feedback";
+    const auto grace = PacketLossTracker::GracePeriod(feedback_rtt_);
+    const auto settle = std::max(TimeDelta::Millis(relay_config_.probe_settle_ms),
+                                feedback_rtt_ + grace);
+    if (at_time < time_last_probing_initiated_ + settle) return "settling";
+    if (last_feedback_time_ < time_last_probing_initiated_ + grace ||
+        at_time - last_feedback_time_ > TimeDelta::Seconds(1))
+      return "fresh_feedback_needed";
+    if (HasSignificantSettledLoss(at_time)) return "settled_loss";
   }
-  return {};
+  return nullptr;
+}
+
+std::vector<ProbeClusterConfig> ProbeController::ContinueProbing(
+    Timestamp at_time) {
+  if (state_ != State::kWaitingForProbingResult ||
+      ContinuationBlockReason(at_time))
+    return {};
+  // Re-evaluate using the current estimate after settling, never the peak
+  // reported by an earlier partial cluster. This is a bounded relay policy,
+  // not a substitute for WebRTC's optional network-state capacity estimator.
+  return InitiateProbing(
+      at_time, {config_.further_exponential_probe_scale * estimated_bitrate_},
+      true);
 }
 
 void ProbeController::EnablePeriodicAlrProbing(bool enable) {
@@ -215,6 +268,13 @@ void ProbeController::Reset(Timestamp at_time) {
   min_valid_probe_id_ = next_probe_cluster_id_;
   current_probe_start_id_ = next_probe_cluster_id_;
   last_probe_result_id_ = -1;
+  last_probe_received_fraction_ = 0;
+  initial_retry_deadline_ = Timestamp::MinusInfinity();
+  initial_probe_rate_ = DataRate::Zero();
+  initial_retry_count_ = 0;
+  last_feedback_time_ = Timestamp::MinusInfinity();
+  feedback_rtt_ = TimeDelta::Millis(100);
+  settled_packets_ = settled_lost_ = 0;
   video_started_ = false;
   alr_start_time_.reset();
   bandwidth_limited_cause_ = BandwidthLimitedCause::kDelayBasedLimited;
@@ -248,8 +308,9 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
     return {};
   if (state_ == State::kInit && !start_bitrate_.IsZero())
     return InitiateExponentialProbing(at_time);
-  if (at_time - time_last_probing_initiated_ >
-      kMaxWaitingTimeForProbingResult) {
+  auto continuation = ContinueProbing(at_time);
+  if (!continuation.empty()) return continuation;
+  if (at_time - time_last_probing_initiated_ > ProbeResultWaitTime()) {
     if (state_ == State::kWaitingForProbingResult) {
       LOG_DEBUG("kWaitingForProbingResult: timeout");
       UpdateState(State::kProbingComplete);
@@ -257,6 +318,26 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
   }
   if (estimated_bitrate_.IsZero() || state_ != State::kProbingComplete) {
     return {};
+  }
+  if (at_time < initial_retry_deadline_ &&
+      initial_retry_count_ < relay_config_.initial_retry_limit &&
+      at_time - time_last_probing_initiated_ >=
+          ProbeResultWaitTime() &&
+      at_time - last_feedback_time_ <= TimeDelta::Seconds(1)) {
+    // Unlike unrestricted repeated initial probing, retry only while no
+    // startup cluster has yielded a valid result, at no higher than the first
+    // attempted rate. ALR is not required for this finite recovery window.
+    auto retry = InitiateProbing(
+        at_time,
+        {std::min(initial_probe_rate_,
+                  estimated_bitrate_ * config_.first_exponential_probe_scale)},
+        true);
+    if (!retry.empty()) {
+      ++initial_retry_count_;
+      LOG_DEBUG("Retry invalid startup probe: attempt={} target_bitrate_bps={}",
+                initial_retry_count_, retry.back().target_data_rate.bps());
+      return retry;
+    }
   }
   if (TimeForAlrProbe(at_time)) {
     return InitiateProbing(
@@ -291,6 +372,7 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
   if (!network_available_ || (require_video_ && !video_started_) ||
       video_paused_)
     return {};
+  if (HasSignificantSettledLoss(now)) return {};
   DataRate max_probe_bitrate = max_bitrate_;
   switch (bandwidth_limited_cause_) {
     case BandwidthLimitedCause::kRttBasedBackOffHighRtt:
@@ -311,6 +393,7 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
   }
 
   current_probe_start_id_ = next_probe_cluster_id_;
+  last_probe_received_fraction_ = 0;
   std::vector<ProbeClusterConfig> pending_probes;
   for (DataRate bitrate : bitrates_to_probe) {
     assert(!bitrate.IsZero());
@@ -334,6 +417,7 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
 }
 
 void ProbeController::SetRelayPath(bool relay_path) {
+  relay_path_ = relay_path;
   config_ = ProbeControllerConfig();
   if (relay_path) {
     config_.first_exponential_probe_scale = relay_config_.first_probe_scale;
@@ -353,28 +437,70 @@ void ProbeController::OnVideoSendPaused(bool paused) {
   video_paused_ = paused;
   video_started_ = false;
   min_valid_probe_id_ = next_probe_cluster_id_;
+  initial_retry_deadline_ = Timestamp::MinusInfinity();
   start_bitrate_ = estimated_bitrate_;
   UpdateState(State::kInit);
 }
 
-void ProbeController::OnProbeResult(int id) {
-  if (IsProbeResultValid(id))
-    last_probe_result_id_ = std::max(last_probe_result_id_, id);
+void ProbeController::OnProbeResult(int id, double received_fraction) {
+  if (!IsProbeResultValid(id) || id < current_probe_start_id_ ||
+      id < last_probe_result_id_)
+    return;
+  if (id > last_probe_result_id_) last_probe_received_fraction_ = 0;
+  last_probe_result_id_ = id;
+  last_probe_received_fraction_ =
+      std::max(last_probe_received_fraction_, received_fraction);
+  initial_retry_deadline_ = Timestamp::MinusInfinity();
 }
 
 void ProbeController::OnProbeSent(int id, Timestamp at_time) {
   if (IsProbeResultValid(id) && id >= current_probe_start_id_)
-    time_last_probing_initiated_ = at_time;
+    time_last_probing_initiated_ =
+        std::max(time_last_probing_initiated_, at_time);
+}
+
+void ProbeController::OnProbeResultRejected(int id) {
+  // A later revision can invalidate an earlier partial estimate while the
+  // relay controller is waiting for its loss/feedback window to settle.
+  if (id == last_probe_result_id_ && id == next_probe_cluster_id_ - 1) {
+    last_probe_result_id_ = -1;
+    last_probe_received_fraction_ = 0;
+  }
 }
 
 void ProbeController::OnProbeAborted(int id) {
   if (!IsProbeResultValid(id) || id < current_probe_start_id_) return;
   min_valid_probe_id_ = id + 1;
+  initial_retry_deadline_ = Timestamp::MinusInfinity();
   if (id == next_probe_cluster_id_ - 1) UpdateState(State::kProbingComplete);
 }
 
 bool ProbeController::IsProbeResultValid(int id) const {
   return id >= min_valid_probe_id_ && id < next_probe_cluster_id_;
+}
+
+void ProbeController::OnTransportFeedback(Timestamp at_time, TimeDelta rtt) {
+  last_feedback_time_ = at_time;
+  if (rtt.IsFinite() && rtt > TimeDelta::Zero())
+    feedback_rtt_ = std::min(rtt, TimeDelta::Seconds(1));
+}
+
+void ProbeController::SetTransportLossSample(int settled_packets,
+                                             int settled_lost) {
+  settled_packets_ = settled_packets;
+  settled_lost_ = settled_lost;
+}
+
+void ProbeController::LogState(Timestamp at_time) const {
+  const char* reason = ContinuationBlockReason(at_time);
+  LOG_DEBUG("Probe state: state={} latest_id={} result_id={} received_fraction={} "
+            "continuation={} startup_retries={} startup_window_ms={}",
+            static_cast<int>(state_), next_probe_cluster_id_ - 1,
+            last_probe_result_id_, last_probe_received_fraction_,
+            reason ? reason : "ready", initial_retry_count_,
+            initial_retry_deadline_.IsFinite()
+                ? std::max<int64_t>(0, (initial_retry_deadline_ - at_time).ms())
+                : 0);
 }
 
 }  // namespace webrtc

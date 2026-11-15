@@ -117,6 +117,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
       receive_interval <= TimeDelta::Zero() ||
       receive_interval > kMaxProbeInterval) {
     cluster->rejection_reason = "invalid_interval";
+    rejected_cluster_id_ = std::max(rejected_cluster_id_, cluster_id);
     if (estimated_cluster_id_ == cluster_id) estimated_data_rate_.reset();
     LOG_DEBUG(
         "Probe feedback rejected: id={} reason=invalid_interval "
@@ -143,6 +144,7 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
   double ratio = receive_rate / send_rate;
   if (ratio > kMaxValidRatio) {
     cluster->rejection_reason = "receive_send_ratio";
+    rejected_cluster_id_ = std::max(rejected_cluster_id_, cluster_id);
     if (estimated_cluster_id_ == cluster_id) estimated_data_rate_.reset();
     LOG_DEBUG(
         "Probe feedback rejected: id={} reason=receive_send_ratio "
@@ -181,14 +183,26 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     estimated_data_rate_ = res;
     estimated_cluster_id_ = cluster_id;
   }
+  if (cluster_id >= rejected_cluster_id_) rejected_cluster_id_ = -1;
   return res;
 }
 
 std::optional<DataRate>
-ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate(int* cluster_id) {
+ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate(
+    int* cluster_id, double* received_fraction, int* rejected_cluster_id) {
   if (cluster_id)
     *cluster_id = estimated_data_rate_ ? estimated_cluster_id_ : -1;
+  if (received_fraction) {
+    const auto cluster = clusters_.find(estimated_cluster_id_);
+    *received_fraction = estimated_data_rate_ && cluster != clusters_.end() &&
+                                 cluster->second.target_size > DataSize::Zero()
+                             ? cluster->second.size_total.bytes<double>() /
+                                   cluster->second.target_size.bytes<double>()
+                             : 0;
+  }
   std::optional<DataRate> estimated_data_rate = estimated_data_rate_;
+  if (rejected_cluster_id) *rejected_cluster_id = rejected_cluster_id_;
+  rejected_cluster_id_ = -1;
   estimated_data_rate_.reset();
   return estimated_data_rate;
 }

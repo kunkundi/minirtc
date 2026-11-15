@@ -1007,6 +1007,12 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
             LOG_DEBUG("Force I frame for stream [{}]", channel_name);
           }
         }
+        {
+          std::unique_lock lock(self->stream_senders_mutex_);
+          if (self->video_send_paused_ ||
+              context->video_settings_generation != settings_generation) return;
+          context->video_rate_control.OnEncoderInput(self->clock_->CurrentTimeMs());
+        }
         context->codec->Encode(
             std::move(frame),
             [weak_self, weak_context, channel_name, queue_delay_ms,
@@ -1467,7 +1473,9 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "encode_queue_drop_percent={} delay_avg_ms={} delay_p95_ms={} "
         "resolution={}x{} rate_dropped_total={} cwnd_dropped_total={} "
         "encoder_target_bps={} cwnd_drop_interval={} media_budget_bps={} "
-        "encoded_bps={} encoder_utilization={} keyframe_bytes={} pacer_queue_ms={}",
+        "encoded_bps={} encoder_utilization={} keyframe_bytes={} pacer_queue_ms={} "
+        "applied_target_bps={} encoder_input_fps={} encoder_network_utilization={} "
+        "max_frame_bytes={} pacer_oldest_ms={}",
         channel_name, context->measured_encoded_frame_rate,
         low_frame_rate_window_count,
         context->encoded_frame_rate_valid_window_count,
@@ -1485,7 +1493,12 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->video_rate_control.encoded_bitrate_bps(now_ms),
         context->video_rate_control.encoder_utilization(),
         context->video_rate_control.last_keyframe_bytes(),
-        paced_sender_ ? paced_sender_->ExpectedQueueTime().ms() : 0);
+        paced_sender_ ? paced_sender_->ExpectedQueueTime().ms() : 0,
+        context->applied_target_bitrate.value_or(0),
+        context->video_rate_control.encoder_input_fps(now_ms),
+        context->video_rate_control.encoder_network_utilization(now_ms),
+        context->video_rate_control.max_frame_bytes(now_ms),
+        paced_sender_ ? paced_sender_->OldestPacketWaitTime().ms() : 0);
   }
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==

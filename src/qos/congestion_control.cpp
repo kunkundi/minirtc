@@ -86,9 +86,10 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
       relay_path ? relay_config_.loss_recovery_max_increase : 1.3);
   if (relay_path) {
     LOG_INFO("Relay QoS: probe_duration_ms={} probe_delta_ms={} "
-             "loss_recovery_max_increase={}", relay_config_.probe_duration_ms,
+             "loss_recovery_max_increase={} probe_settle_ms={} startup_retries={}", relay_config_.probe_duration_ms,
              relay_config_.probe_delta_ms,
-             relay_config_.loss_recovery_max_increase);
+             relay_config_.loss_recovery_max_increase,
+             relay_config_.probe_settle_ms, relay_config_.initial_retry_limit);
   }
   if (initial_constraints_) {
     initial_constraints_->starting_rate = start;
@@ -110,6 +111,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   expected_packets_since_last_loss_update_ = 0;
   previously_in_alr_ = false;
   first_feedback_received_ = false;
+  last_diagnostic_time_ = Timestamp::MinusInfinity();
   outstanding_data_ = DataSize::Zero();
   current_data_window_.reset();
   encoding_rate_ratio_ = 1.0;
@@ -159,6 +161,21 @@ NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
   auto probes = probe_controller_->Process(msg.at_time);
   update.probe_cluster_configs.insert(update.probe_cluster_configs.end(),
                                       probes.begin(), probes.end());
+
+  if (msg.at_time - last_diagnostic_time_ >= TimeDelta::Seconds(1)) {
+    last_diagnostic_time_ = msg.at_time;
+    const auto ack = acknowledged_bitrate_estimator_->bitrate();
+    const auto loss = loss_tracker_.recent();
+    const auto pacing = GetPacingRates(msg.at_time);
+    LOG_DEBUG("BWE state: target_bps={} ack_bps={} in_alr={} limited_cause={} "
+              "settled_lost={} settled_packets={} pacing_bps={} padding_bps={}",
+              last_loss_based_target_rate_.bps(), ack ? ack->bps() : 0,
+              start_time_ms.has_value(),
+              last_probe_limited_cause_ ? static_cast<int>(*last_probe_limited_cause_) : -1,
+              loss.lost, loss.packets, pacing.data_rate().bps(),
+              pacing.pad_rate().bps());
+    probe_controller_->LogState(msg.at_time);
+  }
 
   return update;
 }
@@ -222,6 +239,8 @@ void CongestionControl::UpdatePacketLoss(Timestamp at_time) {
       loss_tracker_.Advance(at_time, bandwidth_estimation_->round_trip_time());
   expected_packets_since_last_loss_update_ += sample.packets;
   lost_packets_since_last_loss_update_ += sample.lost;
+  const auto recent = loss_tracker_.recent();
+  probe_controller_->SetTransportLossSample(recent.packets, recent.lost);
   if (at_time >= next_loss_update_ &&
       expected_packets_since_last_loss_update_ > 0) {
     next_loss_update_ = at_time + TimeDelta::Millis(kLossUpdateInterval);
@@ -287,6 +306,10 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   if (min_propagation_rtt.IsFinite()) {
     bandwidth_estimation_->UpdateRtt(min_propagation_rtt, report.feedback_time);
   }
+  // Process ticks may settle pending losses, but only an actual transport
+  // report refreshes the evidence required for relay probe continuation.
+  probe_controller_->OnTransportFeedback(
+      report.feedback_time, bandwidth_estimation_->round_trip_time());
   std::optional<int64_t> alr_start_time =
       alr_detector_->GetApplicationLimitedRegionStartTime();
 
@@ -314,11 +337,17 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   }
 
   int probe_id = -1;
+  int rejected_probe_id = -1;
+  double received_fraction = 0;
   auto probe_bitrate =
-      probe_bitrate_estimator_->FetchAndResetLastEstimatedBitrate(&probe_id);
+      probe_bitrate_estimator_->FetchAndResetLastEstimatedBitrate(
+          &probe_id, &received_fraction, &rejected_probe_id);
+  if (rejected_probe_id >= 0)
+    probe_controller_->OnProbeResultRejected(rejected_probe_id);
   if (probe_bitrate && !probe_controller_->IsProbeResultValid(probe_id))
     probe_bitrate.reset();
-  if (probe_bitrate) probe_controller_->OnProbeResult(probe_id);
+  if (probe_bitrate)
+    probe_controller_->OnProbeResult(probe_id, received_fraction);
   // Upstream's lower bound protects against an incomplete low probe without
   // deferring valid estimates or requiring normal media to fill the link.
   if (probe_bitrate && acknowledged_bitrate) {

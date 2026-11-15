@@ -96,6 +96,7 @@ class CongestionControl {
   bool relay_path_ = false;
   std::optional<BandwidthLimitedCause> last_probe_limited_cause_;
   bool first_feedback_received_ = false;
+  Timestamp last_diagnostic_time_ = Timestamp::MinusInfinity();
   DataSize outstanding_data_ = DataSize::Zero();
   std::optional<DataSize> current_data_window_;
   double encoding_rate_ratio_ = 1.0;

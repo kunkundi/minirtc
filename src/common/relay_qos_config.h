@@ -22,8 +22,14 @@ struct RelayQosConfig {
   double second_probe_scale = 0;
   double alr_probe_scale = 1.5;
   double loss_recovery_max_increase = 1.05;
+  // WebRTC supports repeated initial probes in a finite startup window.
+  // MiniRTC restricts repeats to failed startup measurements, and additionally
+  // lets relay feedback/loss settle before continuing an exponential chain.
+  int initial_retry_window_ms = 5000;
+  int initial_retry_limit = 2;
+  int probe_settle_ms = 150;
 
-  static RelayQosConfig Upstream() { return {15, 2, 3, 6, 2, 1.3}; }
+  static RelayQosConfig Upstream() { return {15, 2, 3, 6, 2, 1.3, 0, 0, 0}; }
   static RelayQosConfig FromEnvironment() {
     const char* profile = std::getenv("MINIRTC_RELAY_QOS");
     return profile && std::strcmp(profile, "upstream") == 0 ? Upstream()
