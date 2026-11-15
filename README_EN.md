@@ -39,6 +39,21 @@ Hardware paths require `hardware_acceleration=true`, a matching build, and devic
 
 Native output varies by backend: CPU NV12, CUDA NV12, Apple `CVPixelBuffer`, or Android MediaCodec buffers. It does not imply zero-copy support on every path. See the [encoder](src/media/video/encode/video_encoder_factory.cpp), [decoder](src/media/video/decode/video_decoder_factory.cpp), and [frame ownership guide](docs/INTEGRATION_EN.md#frames).
 
+### Windows Media Foundation encoder buffering
+
+The optional ScreenContent `CODECAPI_AVEncCommonBufferSize` policy is independent of average bitrate, real PTS, no-B-frame encoding and packet admission. Set these variables before starting the process:
+
+| Variable | Behavior |
+| --- | --- |
+| `MINIRTC_WMF_BUFFER_MS` | Defaults to 300ms for ordinary frames; IDR/recovery requests use at least 600ms. 0 leaves the property untouched, without disabling the driver's internal buffering. Accepts 100–2000ms. |
+| `MINIRTC_WMF_INITIAL_BUFFER_MS` | Optional initialization experiment, 100–2000ms, including the first IDR. Missing, zero or invalid values use `max(ordinary duration, 600)`. Does not override disabled buffer control. |
+
+The ordinary 300/600 options use the same initial recovery allowance by default. Durations are converted to bytes at the negotiated bitrate, clamped to 4096–131072, then adjusted to a known driver range. Use the second variable with fresh processes/MFTs to compare initial 300ms and 600ms, checking first frames, periodic IDRs, FIR recovery and quality.
+
+Successful initialization readback does not establish runtime support. Dynamic writes require known, satisfactory readback; `S_OK`, `IsSupported` and unknown readback alone prove nothing. A failed tighter request gets at most one recovery attempt. Failure stops optional writes for that instance without rebuilding or losing a pending IDR. Recovery that only retains the old value also stops probing. Normal resolution rebuilds negotiate capability again.
+
+`WMF encoder buffer state` logs separate initialization confirmation, `dynamic_capability`, the last request and current readback. `fixed_readback` retains the observed bytes; its `readback_equivalent_ms` changes with bitrate and must not continually be described as 600ms. Read-only monitoring continues periodically and after IDRs when writes stop. `readback_verified` confirms property changes only, not bitstream HRD compliance or a hard per-frame cap. Initialization broken by an optional write retains one clean MFT retry without that property.
+
 <a id="build"></a>
 
 ## Build quickly

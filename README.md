@@ -39,6 +39,21 @@
 
 原生输出随后端使用 CPU NV12、CUDA NV12、Apple `CVPixelBuffer` 或 Android MediaCodec 缓冲区，不代表每条路径都零拷贝。详见 [编码工厂](src/media/video/encode/video_encoder_factory.cpp)、[解码工厂](src/media/video/decode/video_decoder_factory.cpp) 和 [帧生命周期](docs/INTEGRATION.md#frames)。
 
+### Windows Media Foundation 编码缓冲
+
+ScreenContent 的可选 `CODECAPI_AVEncCommonBufferSize` 配置与平均码率、真实 PTS、无 B 帧和发送准入相互独立。以下环境变量须在启动进程前设置：
+
+| 变量 | 行为 |
+| --- | --- |
+| `MINIRTC_WMF_BUFFER_MS` | 默认 300；普通帧请求该时长，IDR/恢复至少 600ms。0 禁止本程序配置该属性，并不关闭驱动内部缓冲。允许 100–2000ms。 |
+| `MINIRTC_WMF_INITIAL_BUFFER_MS` | 可选初始化实验，允许 100–2000ms，包含首个 IDR。未设置、0 或无效值使用 `max(普通帧时长, 600)`；不覆盖上一变量的禁用状态。 |
+
+300/600 两个普通帧选项默认采用相同的初始化恢复预算。预算按协商码率换算为 bytes，限制到 4096–131072，再适配已知驱动范围。实验性初始化 300ms 与默认初始化 600ms 应使用第二个变量在全新进程/MFT 中对照，不能忽略首帧、周期 IDR、FIR 恢复和画质。
+
+初始化读回成功不代表支持运行时修改。动态请求必须读回已知且满足要求的值；`S_OK`、`IsSupported` 或未知读回均不能证明生效。紧预算失败后最多请求一次恢复预算，失败即停止该实例的可选写入，不重建、不丢弃待处理 IDR；若恢复仅保留旧值，也停止动态探测。正常分辨率重建后重新查询能力。
+
+`WMF encoder buffer state` 日志分别记录初始化确认、`dynamic_capability`、最近请求和当前读回值。`fixed_readback` 表示保留当前观察到的固定 bytes；随码率变化，`readback_equivalent_ms` 也会改变，不能持续称为 600ms。停止写入后仍周期性及在 IDR 后只读观察。`readback_verified` 仅验证属性变化，不能证明码流 HRD 合规或单帧硬上限。可选设置破坏初始化时保留一次不写该属性的全新 MFT 重试。
+
 <a id="build"></a>
 
 ## 快速构建

@@ -64,10 +64,13 @@ class WmfH264Encoder::Impl {
     pps_.clear();
     parser_.Reset();
     sequence_ = 0;
-    burst_control_.Reset(buffer_duration_ms_, false, std::nullopt);
+    burst_control_.Reset(buffer_duration_ms_);
     last_buffer_log_ms_ = -1;
-    last_buffer_log_duration_ms_ = 0;
+    last_buffer_observation_bitrate_ = 0;
+    last_buffer_request_bitrate_ = 0;
+    buffer_initial_bitrate_ = config_.init_bitrate;
     buffer_initialization_write_attempted_ = false;
+    buffer_control_requested_ = false;
     force_idr_ = true;
     sample_clock_.Reset();
   }
@@ -105,21 +108,24 @@ class WmfH264Encoder::Impl {
       VariantClear(&maximum);
       VariantClear(&step);
     }
-    burst_control_.Reset(buffer_duration_ms_, supported, range);
+    burst_control_.Configure(supported, range);
     LOG_DEBUG("WMF encoder burst control: phase={} buffer_ms={} "
-              "recovery_buffer_ms={} requested={} supported={} "
+              "initial_buffer_ms={} recovery_buffer_ms={} "
+              "target_bps={} requested={} supported={} "
               "support_status=0x{:08x} range_known={} range_min={} "
               "range_max={} range_step={} range_status=0x{:08x} "
               "range_types={}/{}/{}",
-              phase, buffer_duration_ms_,
+              phase, buffer_duration_ms_, initial_buffer_duration_ms_,
               std::max(buffer_duration_ms_,
                        WmfEncoderBurstControl::kRecoveryBufferMs),
-              requested, supported, static_cast<uint32_t>(support_hr),
+              config_.init_bitrate, requested, supported,
+              static_cast<uint32_t>(support_hr),
               range.has_value(), range ? range->minimum : 0,
               range ? range->maximum : 0, range ? range->step : 0,
               static_cast<uint32_t>(range_hr), minimum_type, maximum_type,
               step_type);
-    const auto request = burst_control_.Next(config_.init_bitrate, true);
+    const auto request = burst_control_.InitialRequest(
+        config_.init_bitrate, initial_buffer_duration_ms_);
     if (!request) return;
     if (verify_current) {
       VARIANT readback{};
@@ -129,8 +135,8 @@ class WmfH264Encoder::Impl {
           ? std::optional<uint32_t>(readback.ulVal) : std::nullopt;
       const VARTYPE read_type = readback.vt;
       VariantClear(&readback);
-      const bool confirmed = actual &&
-          WmfEncoderBurstControl::ReadbackSatisfies(*request, *actual);
+      const bool confirmed =
+          burst_control_.VerifyInitialization(*request, actual);
       LOG_DEBUG("WMF encoder buffer verification: phase={} requested_bytes={} "
                 "readback_bytes={} readback_known={} confirmed={} "
                 "readback_status=0x{:08x} readback_type={}",
@@ -139,25 +145,82 @@ class WmfH264Encoder::Impl {
       if (confirmed) {
         // Preserve a valid early setting even when a static MFT stops allowing
         // writes after type negotiation; do not overwrite it just to verify it.
-        burst_control_.Complete(*request, true, actual);
+        LogBufferState(phase, config_.init_bitrate);
         return;
       }
     }
     UpdateBufferSize(config_.init_bitrate, true, phase);
   }
 
+  void LogBufferState(const char* phase, int bitrate) {
+    const auto actual = burst_control_.observed_bytes();
+    // This is a property observation, not proof of bitstream HRD compliance or
+    // a per-frame cap. Fixed bytes have a different duration after BWE changes.
+    LOG_INFO("WMF encoder buffer state: encoder={} phase={} policy={} "
+              "dynamic_capability={} writes_enabled={} "
+              "initial_confirmed={} initial_bytes={} initial_bps={} "
+              "last_requested_bytes={} last_request_bps={} "
+              "readback_known={} readback_bytes={} target_bps={} "
+              "readback_equivalent_ms={:.3f} recovery_only={} "
+              "verification_scope=property",
+              static_cast<void*>(encoder_.Get()), phase,
+              burst_control_.policy_name(), burst_control_.dynamic_state_name(),
+              burst_control_.writes_enabled(), burst_control_.initial_confirmed(),
+              burst_control_.initial_bytes().value_or(0), buffer_initial_bitrate_,
+              burst_control_.requested_bytes().value_or(0),
+              last_buffer_request_bitrate_, actual.has_value(),
+              actual.value_or(0), bitrate,
+              actual && bitrate > 0 ? double(*actual) * 8000 / bitrate : 0.0,
+              burst_control_.tighter_failed());
+    last_buffer_log_ms_ = clock_->CurrentTimeMs();
+    last_buffer_observation_bitrate_ = bitrate;
+  }
+
+  void ObserveBufferSize(int bitrate, bool keyframe) {
+    const int64_t now_ms = clock_->CurrentTimeMs();
+    // BWE can update many times per second. Bound read-only property queries
+    // and state logs even when bitrate changes; encoded IDRs are still checked.
+    const int interval_ms = bitrate == last_buffer_observation_bitrate_
+                                ? 5000 : 1000;
+    if (!keyframe && last_buffer_log_ms_ >= 0 &&
+        now_ms - last_buffer_log_ms_ < interval_ms)
+      return;
+    // Read-only monitoring continues after writes stop, including after an
+    // encoded IDR. It detects late/unknown readback without retrying SetValue.
+    VARIANT readback{};
+    const HRESULT hr = api_->GetValue(&CODECAPI_AVEncCommonBufferSize, &readback);
+    burst_control_.ObserveRuntime(hr == S_OK && readback.vt == VT_UI4
+        ? std::optional<uint32_t>(readback.ulVal) : std::nullopt);
+    LOG_DEBUG("WMF encoder buffer observation: status=0x{:08x} type={}",
+              static_cast<uint32_t>(hr), readback.vt);
+    VariantClear(&readback);
+    LogBufferState("runtime_observation", bitrate);
+  }
+
   void UpdateBufferSize(int bitrate, bool keyframe,
                         const char* phase = "dynamic") {
-    if (!api_) return;
+    if (!api_ || !buffer_control_requested_) return;
+    const bool initializing = std::strcmp(phase, "dynamic") != 0;
+    if (initializing && !burst_control_.writes_enabled()) return;
+    if (!initializing && sequence_ == 0) {
+      // The negotiated initial allowance includes the first IDR, including an
+      // explicit initialization experiment. Probe runtime changes after output.
+      ObserveBufferSize(bitrate, false);
+      return;
+    }
     // At most one tighter attempt and one legacy fallback. Driver capability
     // and failures are cached for this MFT; optional writes never reconfigure
     // it or prevent a pending keyframe from being encoded.
-    for (int attempt = 0; attempt < 2; ++attempt) {
-      const auto request = burst_control_.Next(bitrate, keyframe);
-      if (!request) return;
+    for (int attempt = 0; attempt < (initializing ? 1 : 2); ++attempt) {
+      const auto request = initializing
+          ? burst_control_.InitialRequest(bitrate, initial_buffer_duration_ms_)
+          : burst_control_.Next(bitrate, keyframe);
+      if (!request) {
+        if (!initializing) ObserveBufferSize(bitrate, false);
+        return;
+      }
       const HRESULT writable =
           api_->IsModifiable(&CODECAPI_AVEncCommonBufferSize);
-      const bool initializing = std::strcmp(phase, "dynamic") != 0;
       if (initializing && writable != S_FALSE)
         buffer_initialization_write_attempted_ = true;
       const HRESULT hr = writable == S_FALSE
@@ -172,35 +235,40 @@ class WmfH264Encoder::Impl {
       VariantClear(&readback);
       // ICodecAPI::SetValue can return S_FALSE for a read-only property;
       // that is not an accepted write even though SUCCEEDED(S_FALSE) is true.
-      const bool retry = burst_control_.Complete(*request, hr == S_OK, actual);
+      bool retry = false;
+      if (initializing)
+        burst_control_.CompleteInitialization(*request, hr == S_OK, actual);
+      else
+        retry = burst_control_.Complete(*request, hr == S_OK, actual);
+      last_buffer_request_bitrate_ = bitrate;
       const bool readback_mismatch = actual &&
           !WmfEncoderBurstControl::ReadbackSatisfies(*request, *actual);
-      const int64_t now_ms = clock_->CurrentTimeMs();
-      if (initializing || last_buffer_log_ms_ < 0 ||
-          hr != S_OK || retry || readback_mismatch ||
-          now_ms - last_buffer_log_ms_ >= 5000 ||
-          last_buffer_log_duration_ms_ != request->duration_ms) {
-        LOG_DEBUG("WMF encoder buffer: phase={} requested_bytes={} "
+      // Log each bounded write, including successful bitrate-driven changes.
+      // Read-only steady-state observations remain rate limited.
+      LOG_DEBUG("WMF encoder buffer: phase={} target_bps={} requested_bytes={} "
                   "readback_bytes={} "
                   "readback_known={} readback_mismatch={} buffer_ms={} "
                   "keyframe={} write_accepted={} "
                   "status=0x{:08x} modifiable_status=0x{:08x} "
                   "readback_status=0x{:08x} readback_type={} "
-                  "legacy_fallback={} control_enabled={}",
-                  phase, request->bytes, actual.value_or(0), actual.has_value(),
+                  "legacy_fallback={} request_confirmed={}",
+                  phase, bitrate, request->bytes, actual.value_or(0),
+                  actual.has_value(),
                   readback_mismatch,
                   request->duration_ms, keyframe, hr == S_OK,
                   static_cast<uint32_t>(hr), static_cast<uint32_t>(writable),
                   static_cast<uint32_t>(read_hr), read_type,
-                  burst_control_.tighter_failed(), burst_control_.enabled());
-        last_buffer_log_ms_ = now_ms;
-        last_buffer_log_duration_ms_ = request->duration_ms;
-      }
+                  burst_control_.tighter_failed(),
+                  hr == S_OK && actual && !readback_mismatch);
+      LogBufferState(phase, bitrate);
       if (!retry) return;
     }
   }
 
   HRESULT Configure(IMFActivate* activation, bool configure_buffer = true) {
+    buffer_control_requested_ = configure_buffer && buffer_duration_ms_ > 0 &&
+        config_.video_content_type == MiniRtcVideoContentType::ScreenContent;
+    if (!buffer_control_requested_) burst_control_.Reset(0);
     HRESULT hr = activation->ActivateObject(IID_PPV_ARGS(&encoder_));
     if (FAILED(hr)) return hr;
     ComPtr<IMFAttributes> attributes;
@@ -278,6 +346,8 @@ class WmfH264Encoder::Impl {
     hr = encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     if (FAILED(hr)) return hr;
     if (configure_buffer) ConfigureBufferControl("streaming", true);
+    if (!buffer_control_requested_)
+      LogBufferState("without_optional_buffer", config_.init_bitrate);
     return S_OK;
   }
 
@@ -382,6 +452,8 @@ class WmfH264Encoder::Impl {
     if (const auto qp = parser_.GetLastSliceQp())
       frame.SetQp(*qp, 0, 51, false);
     frames.push_back(std::move(frame));
+    if (buffer_control_requested_)
+      ObserveBufferSize(config_.init_bitrate, key);
     force_idr_ = false;
     return S_OK;
   }
@@ -485,10 +557,15 @@ class WmfH264Encoder::Impl {
   DWORD input_id_ = 0, output_id_ = 0;
   unsigned input_credit_ = 0;
   const int buffer_duration_ms_ = WmfEncoderBurstControl::BufferMsFromEnvironment();
+  const int initial_buffer_duration_ms_ =
+      WmfEncoderBurstControl::InitialBufferMsFromEnvironment(buffer_duration_ms_);
   WmfEncoderBurstControl burst_control_;
   bool buffer_initialization_write_attempted_ = false;
+  bool buffer_control_requested_ = false;
   int64_t last_buffer_log_ms_ = -1;
-  int last_buffer_log_duration_ms_ = 0;
+  int last_buffer_observation_bitrate_ = 0;
+  int last_buffer_request_bitrate_ = 0;
+  int buffer_initial_bitrate_ = 0;
   bool async_ = false, force_idr_ = true, reconfigure_ = false;
   bool initialized_ = false;
   uint64_t sequence_ = 0;
