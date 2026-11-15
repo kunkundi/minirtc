@@ -44,6 +44,7 @@
 #include "video_encoder_factory.h"
 #include "video_encoder_rate_control.h"
 #include "video_frame_cadence.h"
+#include "video_send_diagnostics.h"
 
 typedef void (*OnReceiveVideo)(const MiniRtcVideoFrame*, const char*, const size_t,
                                const char*, const size_t, void*);
@@ -245,6 +246,7 @@ class IceTransportController
     std::optional<int> applied_target_bitrate;
     bool bitrate_update_queued = false;
     VideoEncoderRateControl video_rate_control;
+    VideoSendDiagnostics video_send_diagnostics;
     EncoderInputCadence encoder_input_cadence;
     int applied_input_frame_rate = 0;
     FecAdaptationController fec_controller;

@@ -116,6 +116,12 @@ class VideoEncoderRateControl {
   size_t max_frame_bytes(int64_t now_ms) const {
     return bitrate_adjuster_.MaxFrameBytes(now_ms);
   }
+  size_t max_delta_frame_bytes(int64_t now_ms) const {
+    return bitrate_adjuster_.MaxFrameBytes(now_ms, false);
+  }
+  size_t max_keyframe_bytes(int64_t now_ms) const {
+    return bitrate_adjuster_.MaxFrameBytes(now_ms, true);
+  }
   int encoded_bitrate_bps(int64_t now_ms) const {
     return bitrate_adjuster_.OutputBitrate(now_ms);
   }

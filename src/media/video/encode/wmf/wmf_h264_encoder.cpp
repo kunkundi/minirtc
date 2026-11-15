@@ -10,6 +10,7 @@
 #include "encoder_input_timing.h"
 #include "h264_bitstream_parser.h"
 #include "openh264/openh264_encoder.h"
+#include "wmf_encoder_burst_control.h"
 #include "wmf/wmf_utils.h"
 
 namespace minirtc {
@@ -62,27 +63,90 @@ class WmfH264Encoder::Impl {
     pps_.clear();
     parser_.Reset();
     sequence_ = 0;
-    buffer_size_bytes_ = 0;
+    burst_control_.Reset(buffer_duration_ms_, false, std::nullopt);
+    last_buffer_log_ms_ = -1;
+    last_buffer_log_duration_ms_ = 0;
     force_idr_ = true;
     sample_clock_.Reset();
   }
 
-  void UpdateBufferSize(int bitrate) {
-    if (config_.video_content_type != MiniRtcVideoContentType::ScreenContent ||
-        !api_ || api_->IsSupported(&CODECAPI_AVEncCommonBufferSize) != S_OK)
-      return;
-    // H.264 expresses HRD size in bytes. Bound CBR bursts at the encoder,
-    // including maintain-resolution mode, without resetting the MFT. This
-    // is an optional driver capability, not a guaranteed per-frame limit.
-    const uint32_t bytes = static_cast<uint32_t>(std::clamp<int64_t>(
-        int64_t(bitrate) * 600 / 8000, 4096, 128 * 1024));
-    if (bytes == buffer_size_bytes_) return;
-    const HRESULT hr = SetUint(api_.Get(), CODECAPI_AVEncCommonBufferSize, bytes);
-    if (buffer_size_bytes_ == 0 || FAILED(hr))
-      LOG_DEBUG("WMF encoder buffer: bytes={} accepted={}", bytes, SUCCEEDED(hr));
-    // Cache attempted values too: optional driver rejection must not trigger
-    // a reconfiguration or a retry on every unchanged bitrate update.
-    buffer_size_bytes_ = bytes;
+  void ConfigureBufferControl() {
+    const bool requested =
+        config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
+        buffer_duration_ms_ > 0;
+    const bool supported = requested && api_ &&
+        api_->IsSupported(&CODECAPI_AVEncCommonBufferSize) == S_OK;
+    std::optional<WmfEncoderBurstControl::Range> range;
+    if (supported) {
+      VARIANT minimum{}, maximum{}, step{};
+      const HRESULT hr = api_->GetParameterRange(
+          &CODECAPI_AVEncCommonBufferSize, &minimum, &maximum, &step);
+      if (hr == S_OK && minimum.vt == VT_UI4 && maximum.vt == VT_UI4 &&
+          (step.vt == VT_UI4 || step.vt == VT_EMPTY) &&
+          minimum.ulVal <= maximum.ulVal &&
+          maximum.ulVal > 0)
+        range = WmfEncoderBurstControl::Range{
+            minimum.ulVal, maximum.ulVal,
+            step.vt == VT_EMPTY ? 1u : step.ulVal};
+      VariantClear(&minimum);
+      VariantClear(&maximum);
+      VariantClear(&step);
+    }
+    burst_control_.Reset(buffer_duration_ms_, supported, range);
+    LOG_DEBUG("WMF encoder burst control: buffer_ms={} recovery_buffer_ms={} "
+              "requested={} supported={} range_known={} range_min={} "
+              "range_max={} range_step={}",
+              buffer_duration_ms_,
+              std::max(buffer_duration_ms_,
+                       WmfEncoderBurstControl::kRecoveryBufferMs),
+              requested, supported, range.has_value(),
+              range ? range->minimum : 0, range ? range->maximum : 0,
+              range ? range->step : 0);
+  }
+
+  void UpdateBufferSize(int bitrate, bool keyframe) {
+    if (!api_) return;
+    // At most one tighter attempt and one legacy fallback. Driver capability
+    // and failures are cached for this MFT; optional writes never reconfigure
+    // it or prevent a pending keyframe from being encoded.
+    for (int attempt = 0; attempt < 2; ++attempt) {
+      const auto request = burst_control_.Next(bitrate, keyframe);
+      if (!request) return;
+      const HRESULT writable =
+          api_->IsModifiable(&CODECAPI_AVEncCommonBufferSize);
+      const HRESULT hr = writable == S_FALSE
+          ? E_ACCESSDENIED
+          : SetUint(api_.Get(), CODECAPI_AVEncCommonBufferSize, request->bytes);
+      VARIANT readback{};
+      const HRESULT read_hr =
+          api_->GetValue(&CODECAPI_AVEncCommonBufferSize, &readback);
+      const auto actual = read_hr == S_OK && readback.vt == VT_UI4
+          ? std::optional<uint32_t>(readback.ulVal) : std::nullopt;
+      VariantClear(&readback);
+      // ICodecAPI::SetValue can return S_FALSE for a read-only property;
+      // that is not an accepted write even though SUCCEEDED(S_FALSE) is true.
+      const bool retry = burst_control_.Complete(*request, hr == S_OK, actual);
+      const bool readback_mismatch = actual &&
+          !WmfEncoderBurstControl::ReadbackSatisfies(*request, *actual);
+      const int64_t now_ms = clock_->CurrentTimeMs();
+      if (last_buffer_log_ms_ < 0 || hr != S_OK || retry || readback_mismatch ||
+          now_ms - last_buffer_log_ms_ >= 5000 ||
+          last_buffer_log_duration_ms_ != request->duration_ms) {
+        LOG_DEBUG("WMF encoder buffer: requested_bytes={} readback_bytes={} "
+                  "readback_known={} readback_mismatch={} buffer_ms={} "
+                  "keyframe={} write_accepted={} "
+                  "status=0x{:08x} readback_status=0x{:08x} "
+                  "legacy_fallback={} control_enabled={}",
+                  request->bytes, actual.value_or(0), actual.has_value(),
+                  readback_mismatch,
+                  request->duration_ms, keyframe, hr == S_OK,
+                  static_cast<uint32_t>(hr), static_cast<uint32_t>(read_hr),
+                  burst_control_.tighter_failed(), burst_control_.enabled());
+        last_buffer_log_ms_ = now_ms;
+        last_buffer_log_duration_ms_ = request->duration_ms;
+      }
+      if (!retry) return;
+    }
   }
 
   HRESULT Configure(IMFActivate* activation) {
@@ -151,7 +215,8 @@ class WmfH264Encoder::Impl {
     hr = SetUint(api_.Get(), CODECAPI_AVEncCommonMeanBitRate,
                  config_.init_bitrate);
     if (FAILED(hr)) return hr;
-    UpdateBufferSize(config_.init_bitrate);
+    ConfigureBufferControl();
+    UpdateBufferSize(config_.init_bitrate, true);
     hr = encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_BEGIN_STREAMING, 0);
     if (FAILED(hr)) return hr;
     return encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
@@ -261,6 +326,7 @@ class WmfH264Encoder::Impl {
     }
     if (!encoder_) return MF_E_NOT_INITIALIZED;
     if (sequence_ % config_.key_frame_interval == 0) force_idr_ = true;
+    UpdateBufferSize(config_.init_bitrate, force_idr_);
     if (force_idr_) {
       HRESULT hr = SetUint(api_.Get(), CODECAPI_AVEncVideoForceKeyFrame, 1);
       if (FAILED(hr)) return hr;
@@ -346,7 +412,10 @@ class WmfH264Encoder::Impl {
   ComPtr<ICodecAPI> api_;
   DWORD input_id_ = 0, output_id_ = 0;
   unsigned input_credit_ = 0;
-  uint32_t buffer_size_bytes_ = 0;
+  const int buffer_duration_ms_ = WmfEncoderBurstControl::BufferMsFromEnvironment();
+  WmfEncoderBurstControl burst_control_;
+  int64_t last_buffer_log_ms_ = -1;
+  int last_buffer_log_duration_ms_ = 0;
   bool async_ = false, force_idr_ = true, reconfigure_ = false;
   bool initialized_ = false;
   uint64_t sequence_ = 0;
@@ -442,7 +511,7 @@ int WmfH264Encoder::SetTargetBitrate(int bitrate) {
                        bitrate)))
       impl_->reconfigure_ = true;
     impl_->config_.init_bitrate = bitrate;
-    impl_->UpdateBufferSize(bitrate);
+    impl_->UpdateBufferSize(bitrate, impl_->force_idr_);
     return 0;
   });
 }

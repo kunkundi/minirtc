@@ -220,6 +220,11 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
           const auto it = self->stream_senders_.find(packet.get_stream_name());
           if (it != self->stream_senders_.end() && it->second &&
               it->second->transceiver) {
+            if (packet.packet_type() == webrtc::RtpPacketMediaType::kVideo &&
+                packet.capture_time().IsFinite()) {
+              it->second->video_send_diagnostics.OnPacketDiscarded(
+                  packet.capture_time().us());
+            }
             it->second->transceiver->OnRtpPacketSendFailed(packet);
           }
         }
@@ -243,6 +248,11 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                 self->stream_senders_.find(packet->get_stream_name());
             if (sender_it != self->stream_senders_.end() &&
                 sender_it->second && sender_it->second->transceiver) {
+              if (packet->packet_type() == webrtc::RtpPacketMediaType::kVideo &&
+                  packet->capture_time().IsFinite()) {
+                sender_it->second->video_send_diagnostics.OnPacketDiscarded(
+                    packet->capture_time().us());
+              }
               sender_it->second->transceiver->OnRtpPacketSendFailed(*packet);
             }
           };
@@ -319,6 +329,14 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                     self->stream_senders_.find(self->last_active_stream_);
                 if (sender_it != self->stream_senders_.end() &&
                     sender_it->second && sender_it->second->transceiver) {
+                  if (packet->packet_type() ==
+                          webrtc::RtpPacketMediaType::kVideo &&
+                      packet->capture_time().IsFinite()) {
+                    // Successful local socket submission, not remote receipt.
+                    sender_it->second->video_send_diagnostics.OnPacketSent(
+                        packet->capture_time().us(), self->clock_->CurrentTimeMs(),
+                        packet->is_first_packet_of_frame(), packet->Marker());
+                  }
                   sender_it->second->transceiver->OnSentRtpPacket(
                       std::move(packet));
                 }
@@ -792,6 +810,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
   // copy, encode or queue video while the pacer is unable to send it. Keep
   // pending key-frame requests intact for the first frame after readiness.
   if (!media_transport_ready_.load()) {
+    context->video_send_diagnostics.EndAdmissionRun();
     return 0;
   }
 
@@ -819,12 +838,15 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     }
     if (media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
         paced_sender_) {
+      const auto expected_queue = paced_sender_->ExpectedQueueTime();
+      const auto oldest_wait = paced_sender_->OldestPacketWaitTime();
       const bool expected_queue_full =
-          paced_sender_->ExpectedQueueTime() >=
-          TimeDelta::Millis(kDesktopFrameAdmissionQueueMs);
+          expected_queue >= TimeDelta::Millis(kDesktopFrameAdmissionQueueMs);
       const bool oldest_packet_expired =
-          paced_sender_->OldestPacketWaitTime() >=
-          TimeDelta::Millis(kDesktopPacerQueueLimitMs);
+          oldest_wait >= TimeDelta::Millis(kDesktopPacerQueueLimitMs);
+      context->video_send_diagnostics.OnAdmission(
+          clock_->CurrentTimeMs(), expected_queue_full || oldest_packet_expired,
+          expected_queue.ms(), oldest_wait.ms());
       if (expected_queue_full || oldest_packet_expired) {
         // Remote desktop frames expire quickly. Stop admitting new frames
         // while the packet queue drains, and retain both sampled causes when
@@ -1504,7 +1526,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "encoder_target_bps={} cwnd_drop_interval={} media_budget_bps={} "
         "encoded_bps={} encoder_utilization={} keyframe_bytes={} pacer_queue_ms={} "
         "applied_target_bps={} encoder_input_fps={} encoder_network_utilization={} "
-        "max_frame_bytes={} pacer_oldest_ms={} qp={} normalized_qp_ewma={} "
+        "max_frame_bytes={} max_delta_frame_bytes={} max_keyframe_bytes={} "
+        "pacer_oldest_ms={} qp={} normalized_qp_ewma={} "
         "applied_input_fps={} pacer_rejected_total={} "
         "pacer_rejected_expected_queue_only_total={} "
         "pacer_rejected_oldest_wait_only_total={} pacer_rejected_both_total={}",
@@ -1530,6 +1553,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->video_rate_control.encoder_input_fps(now_ms),
         context->video_rate_control.encoder_network_utilization(now_ms),
         context->video_rate_control.max_frame_bytes(now_ms),
+        context->video_rate_control.max_delta_frame_bytes(now_ms),
+        context->video_rate_control.max_keyframe_bytes(now_ms),
         paced_sender_ ? paced_sender_->OldestPacketWaitTime().ms() : 0,
         context->last_encoder_quality_stats.qp, context->normalized_qp_ewma,
         context->applied_input_frame_rate,
@@ -2248,7 +2273,18 @@ int IceTransportController::OnVideoEncoded(
     return -1;
   }
 
-  return context->transceiver->SendVideo(encoded_frame);
+  const int64_t now_ms = clock_->CurrentTimeMs();
+  const int64_t encoded_ms = encoded_frame.EncodedTimestamp() / 1000;
+  context->video_send_diagnostics.OnEncoded(
+      encoded_frame.CapturedTimestamp(),
+      encoded_ms > 0 && encoded_ms <= now_ms ? encoded_ms : now_ms,
+      encoded_frame.FrameType() == VideoFrameType::kVideoFrameKey);
+  const int result = context->transceiver->SendVideo(encoded_frame);
+  if (result < 0) {
+    context->video_send_diagnostics.OnPacketDiscarded(
+        encoded_frame.CapturedTimestamp());
+  }
+  return result;
 }
 
 int IceTransportController::SendAudio(const MiniRtcAudioFrame* audio_frame,
@@ -2874,6 +2910,7 @@ int IceTransportController::SetVideoSendPaused(bool paused) {
     // even if they finish after a quick pause/resume cycle.
     ++context->video_settings_generation;
     context->video_rate_control.Reset();
+    context->video_send_diagnostics.EndAdmissionRun();
     if (!paused) {
       context->ResetEncodedFrameRateTracking();
       context->ResetEncoderQualityTracking();
@@ -4013,6 +4050,47 @@ void IceTransportController::UpdateFecProtection() {
                  network.feedback
                      .sent_bps[static_cast<size_t>(FecPacketKind::kMedia)],
                  sent_repairs, sent_rtx, protection_fraction);
+      }
+      // Drain diagnostics even when no encoder output is considered active;
+      // otherwise a fully starved stream would hide the rejection interval.
+      if (log) {
+        const auto snapshot = c->video_send_diagnostics.Take(now_ms);
+        for (size_t kind = 0; kind < snapshot.frames.size(); ++kind) {
+          const auto& timing = snapshot.frames[kind];
+          if (!timing.encoded && !timing.first_packet.count &&
+              !timing.last_packet.count) continue;
+          LOG_DEBUG("Video send timing: stream={} frame={} interval_ms={} "
+                    "encoded={} first_sent={} completed={} "
+                    "encode_to_first_total_ms={} encode_to_first_max_ms={} "
+                    "encode_to_last_total_ms={} encode_to_last_max_ms={} "
+                    "send_span_total_ms={} send_span_max_ms={}",
+                    item.first, kind ? "key" : "delta", snapshot.interval_ms,
+                    timing.encoded, timing.first_packet.count,
+                    timing.last_packet.count, timing.first_packet.total_ms,
+                    timing.first_packet.max_ms, timing.last_packet.total_ms,
+                    timing.last_packet.max_ms, timing.serialization.total_ms,
+                    timing.serialization.max_ms);
+        }
+        if (snapshot.HasActivity()) {
+          LOG_DEBUG("Video admission pressure: stream={} interval_ms={} "
+                    "rejected={} reject_observed_span_max_ms={} "
+                    "open_reject_observed_span_ms={} "
+                    "queue_buckets_ms=lt80/80_149/150_299/ge300 "
+                    "expected_queue_buckets=[{},{},{},{}] "
+                    "oldest_wait_buckets=[{},{},{},{}] "
+                    "expected_queue_max_ms={} oldest_wait_max_ms={} "
+                    "pending_frames={} discarded_frames={} expired_frames={} "
+                    "untracked_frames={}",
+                    item.first, snapshot.interval_ms, snapshot.rejected,
+                    snapshot.reject_run_max_ms, snapshot.reject_ongoing_ms,
+                    snapshot.expected_queue[0], snapshot.expected_queue[1],
+                    snapshot.expected_queue[2], snapshot.expected_queue[3],
+                    snapshot.oldest_wait[0], snapshot.oldest_wait[1],
+                    snapshot.oldest_wait[2], snapshot.oldest_wait[3],
+                    snapshot.expected_queue_max_ms, snapshot.oldest_wait_max_ms,
+                    snapshot.pending, snapshot.discarded, snapshot.expired,
+                    snapshot.untracked);
+        }
       }
     }
     // FEC and RTX cannot each consume an independent protection ceiling.

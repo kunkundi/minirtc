@@ -12,6 +12,7 @@
 #include <cstdint>
 #include <deque>
 #include <iterator>
+#include <optional>
 
 namespace minirtc {
 
@@ -76,7 +77,7 @@ class EncoderBitrateAdjuster {
                                              : 1.0 + excess / ideal_bits;
       network_buffer_bits_ += bits - excess;
     }
-    samples_.push_back({now_ms, bytes, factor, allocated_bits_});
+    samples_.push_back({now_ms, bytes, factor, allocated_bits_, keyframe});
     if (keyframe) last_keyframe_bytes_ = bytes;
     Cull(now_ms);
   }
@@ -126,10 +127,13 @@ class EncoderBitrateAdjuster {
       if (now_ms - sample.time_ms < 1000) bytes += sample.bytes;
     return static_cast<int>(std::min<int64_t>(bytes * 8, 1000000000));
   }
-  size_t MaxFrameBytes(int64_t now_ms) const {
+  size_t MaxFrameBytes(int64_t now_ms,
+                      std::optional<bool> keyframe = std::nullopt) const {
     size_t bytes = 0;
     for (const auto& sample : samples_)
-      if (now_ms - sample.time_ms < 1000) bytes = std::max(bytes, sample.bytes);
+      if (now_ms - sample.time_ms < 1000 &&
+          (!keyframe || sample.keyframe == *keyframe))
+        bytes = std::max(bytes, sample.bytes);
     return bytes;
   }
   size_t last_keyframe_bytes() const { return last_keyframe_bytes_; }
@@ -187,6 +191,7 @@ class EncoderBitrateAdjuster {
     size_t bytes;
     double network_factor;
     double allocated_bits;
+    bool keyframe;
   };
   struct DroppedOpportunity {
     int64_t time_ms;
