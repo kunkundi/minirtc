@@ -192,6 +192,8 @@ class PacingController {
   void SetProbingEnabled(bool enabled);
   void AbortProbing(const char* reason);
   void SetProbeAbortedCallback(std::function<void(int, const char*)> callback);
+  void SetProbeCompletedCallback(
+      std::function<void(int, int, Timestamp)> callback);
 
   // Returns the next time we expect ProcessPackets() to be called.
   Timestamp NextSendTime() const;

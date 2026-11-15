@@ -172,6 +172,11 @@ void PacingController::SetProbeAbortedCallback(
   prober_.SetProbeAbortedCallback(std::move(callback));
 }
 
+void PacingController::SetProbeCompletedCallback(
+    std::function<void(int, int, Timestamp)> callback) {
+  prober_.SetProbeCompletedCallback(std::move(callback));
+}
+
 void PacingController::SetPacingRates(DataRate pacing_rate,
                                       DataRate padding_rate) {
   if (padding_rate > pacing_rate) {

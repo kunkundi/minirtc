@@ -132,7 +132,9 @@ class RtpVideoReceiver : public ThreadBase {
   void MaybeRetryKeyFrameRequest();
   bool IsReceivingKeyFrame();
   void OnCompleteKeyFrame(int64_t now_ms);
-  bool SendKeyFrameRequest(bool enter_awaiting_state);
+  bool SendKeyFrameRequest(
+      bool enter_awaiting_state,
+      std::optional<int64_t> failed_keyframe_arrival_ms = std::nullopt);
   bool RtxEnabled() const { return rtx_ssrc_.load() != 0; }
 
  private:
@@ -217,6 +219,9 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<bool> keyframe_request_pending_{false};
   std::atomic<int64_t> keyframe_request_started_ms_{0};
   std::atomic<int64_t> next_keyframe_request_ms_{0};
+  // Protected by rtcp_sender_mtx_. A failure must belong to the latest FIR
+  // before it can shorten that request's retry interval.
+  int64_t last_keyframe_request_ms_ = 0;
   int64_t last_recovery_stats_log_ms_ = 0;
   std::atomic<bool> is_running_;
 

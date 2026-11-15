@@ -57,6 +57,11 @@ void BitrateProber::SetAllowProbeWithoutMediaPacket(bool allow) {
   MaybeSetActiveState(/*packet_size=*/DataSize::Zero());
 }
 
+void BitrateProber::SetProbeCompletedCallback(
+    std::function<void(int, int, Timestamp)> callback) {
+  probe_completed_callback_ = std::move(callback);
+}
+
 void BitrateProber::AbortProbing(const char* reason) {
   while (!clusters_.empty()) {
     const ProbeCluster& cluster = clusters_.front();
@@ -287,6 +292,9 @@ void BitrateProber::ProbeSent(Timestamp now, DataSize size, int packet_count) {
           cluster->pace_info.probe_cluster_min_bytes,
           cluster->pace_info.probe_cluster_min_probes,
           (now - cluster->started_at).ms());
+      if (probe_completed_callback_)
+        probe_completed_callback_(cluster->pace_info.probe_cluster_id,
+                                  cluster->sent_packets, now);
       clusters_.pop();
     }
     if (clusters_.empty()) {

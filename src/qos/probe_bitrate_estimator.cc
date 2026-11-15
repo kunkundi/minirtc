@@ -60,11 +60,76 @@ ProbeBitrateEstimator::ProbeBitrateEstimator() {}
 
 ProbeBitrateEstimator::~ProbeBitrateEstimator() = default;
 
+void ProbeBitrateEstimator::OnProbePacketSent(int cluster_id, DataSize size,
+                                             Timestamp at_time) {
+  if (size <= DataSize::Zero() ||
+      (max_expired_cluster_id_ && cluster_id <= *max_expired_cluster_id_))
+    return;
+  auto& cluster = clusters_[cluster_id];
+  if (cluster.send_aborted) return;
+  cluster.sent_size += size;
+  ++cluster.sent_packets;
+  cluster.last_activity_at = std::max(cluster.last_activity_at, at_time);
+  // A late local send must never retain an earlier completion claim.
+  cluster.send_complete = false;
+}
+
+std::optional<double> ProbeBitrateEstimator::OnProbeCompleted(
+    int cluster_id, int sent_packets, Timestamp at_time) {
+  auto cluster = clusters_.find(cluster_id);
+  if (cluster == clusters_.end() ||
+      cluster->second.sent_size <= DataSize::Zero() ||
+      cluster->second.send_aborted)
+    return std::nullopt;
+  if (cluster->second.sent_packets != sent_packets) {
+    // The pacer counts attempted sends; transport feedback tracks only
+    // successful sends. A failed datagram makes this cluster incomplete.
+    LOG_DEBUG("Probe completion rejected: id={} sent_packets={} "
+              "attempted_packets={}",
+              cluster_id, cluster->second.sent_packets, sent_packets);
+    OnProbeAborted(cluster_id);
+    return std::nullopt;
+  }
+  cluster->second.send_complete = true;
+  cluster->second.last_activity_at =
+      std::max(cluster->second.last_activity_at, at_time);
+  LOG_DEBUG("Probe send completed: id={} sent_packets={} sent_wire_bytes={} "
+            "received_wire_bytes={} received_fraction={}",
+            cluster_id, sent_packets, cluster->second.sent_size.bytes(),
+            cluster->second.size_total.bytes(),
+            ReceivedFraction(cluster->second));
+  if (!cluster->second.result_reported || cluster->second.rejection_reason)
+    return std::nullopt;
+  return ReceivedFraction(cluster->second);
+}
+
+void ProbeBitrateEstimator::OnProbeAborted(int cluster_id) {
+  if (max_expired_cluster_id_ && cluster_id <= *max_expired_cluster_id_) return;
+  auto& cluster = clusters_[cluster_id];
+  cluster.send_complete = false;
+  cluster.send_aborted = true;
+  cluster.rejection_reason = "send_aborted";
+  rejected_cluster_id_ = std::max(rejected_cluster_id_, cluster_id);
+  if (estimated_cluster_id_ == cluster_id) estimated_data_rate_.reset();
+}
+
+double ProbeBitrateEstimator::ReceivedFraction(
+    const AggregatedCluster& cluster) {
+  if (!cluster.send_complete || cluster.sent_size <= DataSize::Zero() ||
+      cluster.size_total > cluster.sent_size)
+    return 0;
+  return cluster.size_total / cluster.sent_size;
+}
+
 std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
-    const PacketResult& packet_feedback) {
+    const PacketResult& packet_feedback, Timestamp feedback_time) {
   int cluster_id = packet_feedback.sent_packet.pacing_info.probe_cluster_id;
 
-  RemoveExpiredClusters(packet_feedback.receive_time);
+  // Receiver timestamps describe packet spacing, not the sender's clock.
+  // Expire state only with local feedback receipt/process timestamps.
+  if (!feedback_time.IsFinite())
+    feedback_time = packet_feedback.sent_packet.send_time;
+  RemoveExpiredClusters(feedback_time);
 
   auto cluster_it = clusters_.find(cluster_id);
   if (cluster_it == clusters_.end()) {
@@ -76,6 +141,9 @@ std::optional<DataRate> ProbeBitrateEstimator::HandleProbeAndEstimateBitrate(
     cluster_it = clusters_.try_emplace(cluster_id).first;
   }
   AggregatedCluster* cluster = &cluster_it->second;
+  if (cluster->send_aborted) return std::nullopt;
+  cluster->last_activity_at =
+      std::max(cluster->last_activity_at, feedback_time);
   cluster->target_probes =
       packet_feedback.sent_packet.pacing_info.probe_cluster_min_probes;
   cluster->target_size = DataSize::Bytes(
@@ -194,10 +262,8 @@ ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate(
     *cluster_id = estimated_data_rate_ ? estimated_cluster_id_ : -1;
   if (received_fraction) {
     const auto cluster = clusters_.find(estimated_cluster_id_);
-    *received_fraction = estimated_data_rate_ && cluster != clusters_.end() &&
-                                 cluster->second.target_size > DataSize::Zero()
-                             ? cluster->second.size_total.bytes<double>() /
-                                   cluster->second.target_size.bytes<double>()
+    *received_fraction = estimated_data_rate_ && cluster != clusters_.end()
+                             ? ReceivedFraction(cluster->second)
                              : 0;
   }
   std::optional<DataRate> estimated_data_rate = estimated_data_rate_;
@@ -209,7 +275,7 @@ ProbeBitrateEstimator::FetchAndResetLastEstimatedBitrate(
 
 void ProbeBitrateEstimator::RemoveExpiredClusters(Timestamp timestamp) {
   for (auto it = clusters_.begin(); it != clusters_.end();) {
-    if (it->second.last_receive + kMaxClusterHistory < timestamp) {
+    if (it->second.last_activity_at + kMaxClusterHistory < timestamp) {
       if (!it->second.result_reported) {
         const int min_probes = static_cast<int>(
             it->second.target_probes * kMinReceivedProbesRatio);
@@ -236,6 +302,7 @@ void ProbeBitrateEstimator::RemoveExpiredClusters(Timestamp timestamp) {
           it->first > *max_expired_cluster_id_) {
         max_expired_cluster_id_ = it->first;
       }
+      if (estimated_cluster_id_ == it->first) estimated_data_rate_.reset();
       it = clusters_.erase(it);
     } else {
       ++it;

@@ -88,7 +88,12 @@ std::vector<ProbeClusterConfig> ProbeController::SetBitrates(
 std::vector<ProbeClusterConfig> ProbeController::OnNetworkAvailability(
     NetworkAvailability msg) {
   network_available_ = msg.network_available;
-  if (!network_available_) initial_retry_deadline_ = Timestamp::MinusInfinity();
+  if (!network_available_) {
+    initial_retry_deadline_ = Timestamp::MinusInfinity();
+    min_valid_probe_id_ = next_probe_cluster_id_;
+    last_probe_result_id_ = -1;
+    last_probe_received_fraction_ = 0;
+  }
 
   if (!network_available_ && state_ == State::kWaitingForProbingResult) {
     state_ = State::kProbingComplete;
@@ -174,27 +179,54 @@ TimeDelta ProbeController::ProbeResultWaitTime() const {
                   settle + TimeDelta::Millis(100));
 }
 
-const char* ProbeController::ContinuationBlockReason(Timestamp at_time) const {
+const char* ProbeController::ProbeResultBlockReason(
+    Timestamp at_time, bool require_settled) const {
   if (at_time - time_last_probing_initiated_ > ProbeResultWaitTime())
     return "result_expired";
   if (last_probe_result_id_ != next_probe_cluster_id_ - 1)
     return "waiting_valid_probe";
-  if (estimated_bitrate_ <= min_bitrate_to_probe_further_)
-    return "below_further_threshold";
   if (relay_path_ && relay_config_.probe_settle_ms > 0) {
+    if (bandwidth_limited_cause_ ==
+        BandwidthLimitedCause::kRttBasedBackOffHighRtt)
+      return "bandwidth_limited";
     // The upstream 80% threshold may publish an early useful estimate. It
-    // must not immediately authorize another relay rate doubling while the
+    // must not immediately authorize another relay rate increase while the
     // tail of this cluster and the associated loss feedback are outstanding.
     if (last_probe_received_fraction_ < 0.95) return "incomplete_feedback";
     const auto grace = PacketLossTracker::GracePeriod(feedback_rtt_);
     const auto settle = std::max(TimeDelta::Millis(relay_config_.probe_settle_ms),
                                 feedback_rtt_ + grace);
-    if (at_time < time_last_probing_initiated_ + settle) return "settling";
-    if (last_feedback_time_ < time_last_probing_initiated_ + grace ||
+    if (require_settled && at_time < time_last_probing_initiated_ + settle)
+      return "settling";
+    // A report from the beginning of the observation window does not prove
+    // that the path remained healthy through its end.
+    const auto observation = require_settled ? settle : TimeDelta::Zero();
+    if (last_feedback_time_ < time_last_probing_initiated_ + observation ||
         at_time - last_feedback_time_ > TimeDelta::Seconds(1))
       return "fresh_feedback_needed";
     if (HasSignificantSettledLoss(at_time)) return "settled_loss";
   }
+  return nullptr;
+}
+
+bool ProbeController::IsProbeResultReady(int id, Timestamp at_time) const {
+  return network_available_ && !video_paused_ &&
+         (!require_video_ || video_started_) && IsProbeResultValid(id) &&
+         id == last_probe_result_id_ &&
+         ProbeResultBlockReason(at_time, false) == nullptr;
+}
+
+const char* ProbeController::ContinuationBlockReason(Timestamp at_time) const {
+  if (const char* reason = ProbeResultBlockReason(at_time, true)) return reason;
+  // Adopting a completed measurement lets the current delay/loss estimators
+  // handle recovery. Sending more probe traffic still obeys their backoff.
+  if (relay_path_ &&
+      (bandwidth_limited_cause_ == BandwidthLimitedCause::kLossLimitedBwe ||
+       bandwidth_limited_cause_ ==
+           BandwidthLimitedCause::kDelayBasedLimitedDelayIncreased))
+    return "bandwidth_limited";
+  if (estimated_bitrate_ <= min_bitrate_to_probe_further_)
+    return "below_further_threshold";
   return nullptr;
 }
 
@@ -254,8 +286,12 @@ std::vector<ProbeClusterConfig> ProbeController::RequestProbe(
           time_of_last_large_drop_ > last_bwe_drop_probing_time_) {
         LOG_DEBUG("Detected big bandwidth drop, start probing.");
         // Track how often we probe in response to bandwidth drop in ALR.
+        // A relay recovery probe may undershoot the current path capacity.
+        // Let a successful result continue through the same bounded, settled
+        // policy instead of making each transient drop a lower ceiling.
         auto probes = InitiateProbing(
-            at_time, std::vector<DataRate>{suggested_probe}, false);
+            at_time, std::vector<DataRate>{suggested_probe},
+            relay_path_ && relay_config_.probe_settle_ms > 0);
         if (!probes.empty()) last_bwe_drop_probing_time_ = at_time;
         return probes;
       }
@@ -378,8 +414,6 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
     case BandwidthLimitedCause::kRttBasedBackOffHighRtt:
     case BandwidthLimitedCause::kDelayBasedLimitedDelayIncreased:
     case BandwidthLimitedCause::kLossLimitedBwe:
-      LOG_DEBUG("Not sending probe in bandwidth limited state: {}",
-                static_cast<int>(bandwidth_limited_cause_));
       return {};
     case BandwidthLimitedCause::kLossLimitedBweIncreasing:
       max_probe_bitrate =
@@ -423,6 +457,7 @@ void ProbeController::SetRelayPath(bool relay_path) {
     config_.first_exponential_probe_scale = relay_config_.first_probe_scale;
     config_.second_exponential_probe_scale = relay_config_.second_probe_scale;
     config_.alr_probe_scale = relay_config_.alr_probe_scale;
+    config_.further_exponential_probe_scale = relay_config_.further_probe_scale;
     // Use the same policy for startup, ALR and recovery. A late recovery
     // probe must not silently revert to short, burst-sensitive sampling.
     config_.min_probe_duration = TimeDelta::Millis(relay_config_.probe_duration_ms);

@@ -951,16 +951,19 @@ void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
 }
 
 void RtpVideoReceiver::OnCompleteKeyFrame(int64_t now_ms) {
+  std::lock_guard<std::mutex> lock(rtcp_sender_mtx_);
+  const int64_t request_started_ms =
+      keyframe_request_started_ms_.load(std::memory_order_relaxed);
+  // Process may have completed this frame before another thread sent a new
+  // FIR. Do not let that older completion clear the newer request.
+  if (request_started_ms <= 0 || now_ms < request_started_ms) {
+    return;
+  }
   if (!keyframe_request_pending_.exchange(false,
                                            std::memory_order_acq_rel)) {
     return;
   }
-
-  const int64_t request_started_ms =
-      keyframe_request_started_ms_.exchange(0, std::memory_order_relaxed);
-  if (request_started_ms <= 0 || now_ms < request_started_ms) {
-    return;
-  }
+  keyframe_request_started_ms_.store(0, std::memory_order_relaxed);
 
   const uint64_t response_ms =
       static_cast<uint64_t>(now_ms - request_started_ms);
@@ -1034,6 +1037,7 @@ bool RtpVideoReceiver::Process() {
     uint32_t dropped_timestamp = 0;
     bool dropped_frame = false;
     bool recovery_timed_out = false;
+    std::optional<int64_t> failed_keyframe_arrival_ms;
     bool soft_stall_started = false;
     bool request_soft_fir = false;
     bool completed_keyframe = false;
@@ -1121,6 +1125,9 @@ bool RtpVideoReceiver::Process() {
         pending_frames_.erase(it);
       } else if (recovery_age_ms > recovery_timing.hard_deadline_ms ||
                  frame_age_ms > kMaxFrameAssemblyMs) {
+        if (it->second.is_keyframe) {
+          failed_keyframe_arrival_ms = it->second.arrival_time;
+        }
         dropped_timestamp = it->first;
         dropped_frame = true;
         recovery_timed_out = true;
@@ -1178,9 +1185,10 @@ bool RtpVideoReceiver::Process() {
 
     if (recovery_timed_out) {
       recovery_hard_timeouts_.fetch_add(1, std::memory_order_relaxed);
-      if (now_ms >=
-          next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
-        SendKeyFrameRequest(false);
+      if (failed_keyframe_arrival_ms ||
+          now_ms >=
+              next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
+        SendKeyFrameRequest(false, failed_keyframe_arrival_ms);
       }
       return false;
     }
@@ -1392,12 +1400,15 @@ void RtpVideoReceiver::SendPreparedNackBatch(
   }
 }
 
-bool RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
+bool RtpVideoReceiver::SendKeyFrameRequest(
+    bool enter_awaiting_state,
+    std::optional<int64_t> failed_keyframe_arrival_ms) {
   if (enter_awaiting_state) {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     awaiting_keyframe_ = true;
   }
 
+  std::lock_guard<std::mutex> lock(rtcp_sender_mtx_);
   // Apply the same guard to soft/hard timeouts and periodic retries. A
   // superseded partial delta must not replace a keyframe still arriving.
   if (IsReceivingKeyFrame()) {
@@ -1405,15 +1416,24 @@ bool RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
     return false;
   }
 
-  std::lock_guard<std::mutex> lock(rtcp_sender_mtx_);
   const int64_t now_ms = clock_->CurrentTime().ms();
   // Most successful TURN keyframes in the field complete within 300-1400 ms.
   // A 1.5 s retry avoids generating a second large frame while the first is
   // still being encoded or relayed, while retaining bounded loss recovery.
   constexpr int64_t kFirRetryIntervalMs = 1500;
   constexpr int64_t kFailedFirRetryIntervalMs = 500;
+  // A keyframe received after the latest FIR has now been explicitly
+  // abandoned. Retry it without waiting for the normal in-flight allowance.
+  // Recheck under the send lock: an older failure must not bypass a newer
+  // request's cooldown or a completed request. IsReceivingKeyFrame above
+  // still protects any newer keyframe making forward progress.
+  const bool retry_failed_keyframe =
+      failed_keyframe_arrival_ms && last_keyframe_request_ms_ > 0 &&
+      *failed_keyframe_arrival_ms > last_keyframe_request_ms_ &&
+      keyframe_request_pending_.load(std::memory_order_acquire);
   if (now_ms <
-      next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
+          next_keyframe_request_ms_.load(std::memory_order_relaxed) &&
+      !retry_failed_keyframe) {
     recovery_fir_suppressed_.fetch_add(1, std::memory_order_relaxed);
     return false;
   }
@@ -1441,6 +1461,11 @@ bool RtpVideoReceiver::SendKeyFrameRequest(bool enter_awaiting_state) {
   }
   next_keyframe_request_ms_.store(now_ms + kFirRetryIntervalMs,
                                   std::memory_order_relaxed);
+  last_keyframe_request_ms_ = now_ms;
+  if (retry_failed_keyframe) {
+    LOG_DEBUG("Retry FIR after failed keyframe: channel={} frame_age_ms={}",
+              log_context_, now_ms - *failed_keyframe_arrival_ms);
+  }
   recovery_fir_sent_.fetch_add(1, std::memory_order_relaxed);
   return true;
 }

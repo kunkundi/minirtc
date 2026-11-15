@@ -41,6 +41,7 @@ class CongestionControl {
                     bool is_video = false,
                     DataSize data_in_flight = DataSize::Zero());
 
+  void OnProbeCompleted(int cluster_id, int sent_packets, Timestamp at_time);
   void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
   void OnVideoSendPaused(bool paused, Timestamp at_time);
 
@@ -80,6 +81,12 @@ class CongestionControl {
   int lost_packets_since_last_loss_update_ = 0;
   int expected_packets_since_last_loss_update_ = 0;
   PacketLossTracker loss_tracker_;
+
+  struct PendingProbe {
+    int id;
+    DataRate bitrate;
+  };
+  std::optional<PendingProbe> pending_relay_probe_;
 
   std::deque<int64_t> feedback_max_rtts_;
 

@@ -209,6 +209,13 @@ void PacedSender::SetVideoSendPausedCallback(
   });
 }
 
+void PacedSender::SetProbeCompletedCallback(
+    std::function<void(int, int, webrtc::Timestamp)> callback) {
+  RunOrPost([this, callback = std::move(callback)]() mutable {
+    pacing_controller_.SetProbeCompletedCallback(std::move(callback));
+  });
+}
+
 void PacedSender::NotifyProbeAborted(int id, const char* reason) {
   if (probe_aborted_callback_)
     probe_aborted_callback_(id, clock_->CurrentTime(), reason);

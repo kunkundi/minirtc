@@ -54,6 +54,8 @@ class BitrateProber {
   void SetAllowProbeWithoutMediaPacket(bool allow);
   void AbortProbing(const char* reason);
   void SetProbeAbortedCallback(std::function<void(int, const char*)> callback);
+  void SetProbeCompletedCallback(
+      std::function<void(int, int, Timestamp)> callback);
 
   // Returns true if the prober is in a probing session, i.e., it currently
   // wants packets to be sent out according to the time returned by
@@ -132,6 +134,7 @@ class BitrateProber {
 
   BitrateProberConfig config_;
   std::function<void(int, const char*)> probe_aborted_callback_;
+  std::function<void(int, int, Timestamp)> probe_completed_callback_;
 };
 
 }  // namespace webrtc

@@ -191,6 +191,16 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
               });
         }
       });
+  paced_sender_->SetProbeCompletedCallback(
+      [weak_this](int id, int sent_packets, webrtc::Timestamp at_time) {
+        if (auto self = weak_this.lock()) {
+          self->task_queue_cc_->PostTask(
+              [weak_this, id, sent_packets, at_time] {
+                if (auto owner = weak_this.lock(); owner && owner->controller_)
+                  owner->controller_->OnProbeCompleted(id, sent_packets, at_time);
+              });
+        }
+      });
   paced_sender_->SetVideoSendPausedCallback(
       [weak_this](bool paused, webrtc::Timestamp at_time) {
         if (auto self = weak_this.lock()) {

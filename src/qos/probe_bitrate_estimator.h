@@ -31,7 +31,17 @@ class ProbeBitrateEstimator {
   // Should be called for every probe packet we receive feedback about.
   // Returns the estimated bitrate if the probe completes a valid cluster.
   std::optional<DataRate> HandleProbeAndEstimateBitrate(
-      const PacketResult& packet_feedback);
+      const PacketResult& packet_feedback,
+      Timestamp feedback_time = Timestamp::MinusInfinity());
+
+  // Use the same packet size as transport feedback, including its overhead.
+  // The prober's minimum byte target is not the final size of a cluster.
+  void OnProbePacketSent(int cluster_id, DataSize size, Timestamp at_time);
+  // Completion follows all successful send notifications on the CC queue.
+  // A result may already exist when feedback races ahead of this notification.
+  std::optional<double> OnProbeCompleted(int cluster_id, int sent_packets,
+                                         Timestamp at_time);
+  void OnProbeAborted(int cluster_id);
 
   std::optional<DataRate> FetchAndResetLastEstimatedBitrate(
       int* cluster_id = nullptr, double* received_fraction = nullptr,
@@ -52,9 +62,16 @@ class ProbeBitrateEstimator {
     DataSize size_total = DataSize::Zero();
     int target_probes = 0;
     DataSize target_size = DataSize::Zero();
+    DataSize sent_size = DataSize::Zero();
+    int sent_packets = 0;
+    Timestamp last_activity_at = Timestamp::MinusInfinity();
+    bool send_complete = false;
+    bool send_aborted = false;
     bool result_reported = false;
     const char* rejection_reason = nullptr;
   };
+
+  static double ReceivedFraction(const AggregatedCluster& cluster);
 
   std::map<int, AggregatedCluster> clusters_;
   // Probe cluster ids increase monotonically for the lifetime of the

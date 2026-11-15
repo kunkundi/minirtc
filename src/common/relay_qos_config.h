@@ -16,20 +16,26 @@ namespace minirtc {
 // before startup to compare upstream probing/growth defaults on the same path.
 // Direct connections always use upstream defaults.
 struct RelayQosConfig {
-  int probe_duration_ms = 50;
+  // Sample beyond a short relay/token-bucket burst, rather than treating its
+  // briefly available credit as sustainable link capacity.
+  int probe_duration_ms = 100;
   int probe_delta_ms = 5;
   double first_probe_scale = 2;
   double second_probe_scale = 0;
   double alr_probe_scale = 1.5;
-  double loss_recovery_max_increase = 1.05;
+  double loss_recovery_max_increase = 1.1;
   // WebRTC supports repeated initial probes in a finite startup window.
   // MiniRTC restricts repeats to failed startup measurements, and additionally
   // lets relay feedback/loss settle before continuing an exponential chain.
-  int initial_retry_window_ms = 5000;
+  // Congestion may block all retry attempts during the first few seconds.
+  // Keep the unused attempts available briefly after that congestion clears,
+  // without turning startup recovery into unlimited periodic probing.
+  int initial_retry_window_ms = 30000;
   int initial_retry_limit = 2;
   int probe_settle_ms = 150;
+  double further_probe_scale = 1.5;
 
-  static RelayQosConfig Upstream() { return {15, 2, 3, 6, 2, 1.3, 0, 0, 0}; }
+  static RelayQosConfig Upstream() { return {15, 2, 3, 6, 2, 1.3, 0, 0, 0, 2}; }
   static RelayQosConfig FromEnvironment() {
     const char* profile = std::getenv("MINIRTC_RELAY_QOS");
     return profile && std::strcmp(profile, "upstream") == 0 ? Upstream()

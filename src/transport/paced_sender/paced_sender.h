@@ -62,6 +62,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
       std::function<void(const webrtc::RtpPacketToSend&)> callback);
   void SetProbeAbortedCallback(
       std::function<void(int, webrtc::Timestamp, const char*)> callback);
+  void SetProbeCompletedCallback(
+      std::function<void(int, int, webrtc::Timestamp)> callback);
   void SetVideoSendPausedCallback(
       std::function<void(bool, webrtc::Timestamp)> callback);
   void RegisterVideoSsrc(uint32_t media_ssrc, uint32_t rtx_ssrc,

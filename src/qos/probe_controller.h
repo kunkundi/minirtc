@@ -83,6 +83,9 @@ class ProbeController {
   void OnProbeResultRejected(int id);
   void OnProbeAborted(int id);
   bool IsProbeResultValid(int id) const;
+  // Release a relay estimate and authorize its continuation from the same
+  // completed-cluster feedback and observation window.
+  bool IsProbeResultReady(int id, Timestamp at_time) const;
   void OnTransportFeedback(Timestamp at_time, TimeDelta rtt);
   void SetTransportLossSample(int settled_packets, int settled_lost);
   void LogState(Timestamp at_time) const;
@@ -117,6 +120,8 @@ class ProbeController {
       bool probe_further);
   bool TimeForAlrProbe(Timestamp at_time) const;
   std::vector<ProbeClusterConfig> ContinueProbing(Timestamp at_time);
+  const char* ProbeResultBlockReason(Timestamp at_time,
+                                     bool require_settled) const;
   const char* ContinuationBlockReason(Timestamp at_time) const;
   bool HasSignificantSettledLoss(Timestamp at_time) const;
   TimeDelta ProbeResultWaitTime() const;

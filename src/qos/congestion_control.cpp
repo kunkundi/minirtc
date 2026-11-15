@@ -86,10 +86,14 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
       relay_path ? relay_config_.loss_recovery_max_increase : 1.3);
   if (relay_path) {
     LOG_INFO("Relay QoS: probe_duration_ms={} probe_delta_ms={} "
-             "loss_recovery_max_increase={} probe_settle_ms={} startup_retries={}", relay_config_.probe_duration_ms,
+             "loss_recovery_max_increase={} probe_settle_ms={} "
+             "further_probe_scale={} startup_retries={} startup_window_ms={}",
+             relay_config_.probe_duration_ms,
              relay_config_.probe_delta_ms,
              relay_config_.loss_recovery_max_increase,
-             relay_config_.probe_settle_ms, relay_config_.initial_retry_limit);
+             relay_config_.probe_settle_ms, relay_config_.further_probe_scale,
+             relay_config_.initial_retry_limit,
+             relay_config_.initial_retry_window_ms);
   }
   if (initial_constraints_) {
     initial_constraints_->starting_rate = start;
@@ -105,6 +109,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   alr_detector_ = std::make_unique<AlrDetector>();
   probe_controller_->Reset(at_time);
   loss_tracker_.Reset(at_time);
+  pending_relay_probe_.reset();
   feedback_max_rtts_.clear();
   next_loss_update_ = Timestamp::MinusInfinity();
   lost_packets_since_last_loss_update_ = 0;
@@ -132,6 +137,7 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
 NetworkControlUpdate CongestionControl::OnNetworkAvailability(
     NetworkAvailability msg) {
   NetworkControlUpdate update;
+  if (!msg.network_available) pending_relay_probe_.reset();
   update.probe_cluster_configs = probe_controller_->OnNetworkAvailability(msg);
   return update;
 }
@@ -215,23 +221,39 @@ void CongestionControl::OnSentPacket(size_t bytes_sent, Timestamp at_time,
                                      int probe_cluster_id, bool is_video,
                                      DataSize data_in_flight) {
   outstanding_data_ = data_in_flight;
-  if (probe_cluster_id != PacedPacketInfo::kNotAProbe)
+  if (probe_cluster_id != PacedPacketInfo::kNotAProbe &&
+      probe_controller_->IsProbeResultValid(probe_cluster_id)) {
     probe_controller_->OnProbeSent(probe_cluster_id, at_time);
+    probe_bitrate_estimator_->OnProbePacketSent(
+        probe_cluster_id, DataSize::Bytes(bytes_sent), at_time);
+  }
   if (is_video) probe_controller_->OnVideoPacketSent();
   alr_detector_->OnBytesSent(bytes_sent, at_time.ms());
   acknowledged_bitrate_estimator_->SetAlr(
       alr_detector_->GetApplicationLimitedRegionStartTime().has_value());
 }
 
+void CongestionControl::OnProbeCompleted(int cluster_id, int sent_packets,
+                                         Timestamp at_time) {
+  if (!probe_controller_->IsProbeResultValid(cluster_id)) return;
+  const auto coverage = probe_bitrate_estimator_->OnProbeCompleted(
+      cluster_id, sent_packets, at_time);
+  if (coverage) probe_controller_->OnProbeResult(cluster_id, *coverage);
+}
+
 void CongestionControl::OnProbeAborted(int cluster_id, Timestamp at_time,
                                        const char* reason) {
   probe_controller_->OnProbeAborted(cluster_id);
+  probe_bitrate_estimator_->OnProbeAborted(cluster_id);
+  if (pending_relay_probe_ && pending_relay_probe_->id == cluster_id)
+    pending_relay_probe_.reset();
   LOG_DEBUG("Probe aborted: id={} at_ms={} reason={}", cluster_id, at_time.ms(),
             reason);
 }
 
 void CongestionControl::OnVideoSendPaused(bool paused, Timestamp /*at_time*/) {
   probe_controller_->OnVideoSendPaused(paused);
+  if (paused) pending_relay_probe_.reset();
 }
 
 void CongestionControl::UpdatePacketLoss(Timestamp at_time) {
@@ -332,7 +354,8 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
       // Feedback may reach the CC queue before the successful-send task.
       // It also proves transmission, using the recorded send timestamp.
       probe_controller_->OnProbeSent(id, feedback.sent_packet.send_time);
-      probe_bitrate_estimator_->HandleProbeAndEstimateBitrate(feedback);
+      probe_bitrate_estimator_->HandleProbeAndEstimateBitrate(
+          feedback, report.feedback_time);
     }
   }
 
@@ -342,12 +365,33 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   auto probe_bitrate =
       probe_bitrate_estimator_->FetchAndResetLastEstimatedBitrate(
           &probe_id, &received_fraction, &rejected_probe_id);
-  if (rejected_probe_id >= 0)
+  if (rejected_probe_id >= 0) {
     probe_controller_->OnProbeResultRejected(rejected_probe_id);
+    if (pending_relay_probe_ && pending_relay_probe_->id == rejected_probe_id)
+      pending_relay_probe_.reset();
+  }
   if (probe_bitrate && !probe_controller_->IsProbeResultValid(probe_id))
     probe_bitrate.reset();
   if (probe_bitrate)
     probe_controller_->OnProbeResult(probe_id, received_fraction);
+  if (relay_path_ && relay_config_.probe_settle_ms > 0) {
+    // Partial relay feedback is only a candidate. Adopt it after the full
+    // send and sufficient actual receipts; another probe additionally waits
+    // for the following loss feedback to settle.
+    if (probe_bitrate &&
+        (!pending_relay_probe_ || probe_id >= pending_relay_probe_->id))
+      pending_relay_probe_ = PendingProbe{probe_id, *probe_bitrate};
+    probe_bitrate.reset();
+  }
+
+  UpdatePacketLoss(report.feedback_time);
+  int adopted_relay_probe_id = -1;
+  if (pending_relay_probe_ && probe_controller_->IsProbeResultReady(
+                                  pending_relay_probe_->id,
+                                  report.feedback_time)) {
+    probe_bitrate = pending_relay_probe_->bitrate;
+    adopted_relay_probe_id = pending_relay_probe_->id;
+  }
   // Upstream's lower bound protects against an incomplete low probe without
   // deferring valid estimates or requiring normal media to fill the link.
   if (probe_bitrate && acknowledged_bitrate) {
@@ -359,12 +403,16 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   NetworkControlUpdate update;
 
   DelayBasedBwe::Result result;
-  UpdatePacketLoss(report.feedback_time);
   result = delay_based_bwe_->IncomingPacketFeedbackVector(
       report, acknowledged_bitrate, probe_bitrate, alr_start_time.has_value());
 
   if (result.updated) {
     if (result.probe) {
+      if (adopted_relay_probe_id >= 0) {
+        LOG_DEBUG("Relay probe adopted: id={} bitrate_bps={}",
+                  adopted_relay_probe_id, result.target_bitrate.bps());
+        pending_relay_probe_.reset();
+      }
       bandwidth_estimation_->SetSendBitrate(result.target_bitrate,
                                             report.feedback_time);
     }
