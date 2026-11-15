@@ -80,6 +80,8 @@ class ProbeController {
   void OnVideoSendPaused(bool paused);
   void OnProbeSent(int id, Timestamp at_time);
   void OnProbeResult(int id, double received_fraction = 1.0);
+  // A relay candidate ends startup retries only after bandwidth adoption.
+  void OnProbeResultAdopted(int id, Timestamp at_time);
   void OnProbeResultRejected(int id);
   void OnProbeAborted(int id);
   bool IsProbeResultValid(int id) const;

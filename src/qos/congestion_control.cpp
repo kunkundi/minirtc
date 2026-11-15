@@ -409,6 +409,8 @@ NetworkControlUpdate CongestionControl::OnTransportPacketsFeedback(
   if (result.updated) {
     if (result.probe) {
       if (adopted_relay_probe_id >= 0) {
+        probe_controller_->OnProbeResultAdopted(
+            adopted_relay_probe_id, report.feedback_time);
         LOG_DEBUG("Relay probe adopted: id={} bitrate_bps={}",
                   adopted_relay_probe_id, result.target_bitrate.bps());
         pending_relay_probe_.reset();

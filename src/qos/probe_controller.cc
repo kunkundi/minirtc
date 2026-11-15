@@ -361,7 +361,7 @@ std::vector<ProbeClusterConfig> ProbeController::Process(Timestamp at_time) {
           ProbeResultWaitTime() &&
       at_time - last_feedback_time_ <= TimeDelta::Seconds(1)) {
     // Unlike unrestricted repeated initial probing, retry only while no
-    // startup cluster has yielded a valid result, at no higher than the first
+    // startup cluster has yielded an adopted result, at no higher than the first
     // attempted rate. ALR is not required for this finite recovery window.
     auto retry = InitiateProbing(
         at_time,
@@ -485,7 +485,15 @@ void ProbeController::OnProbeResult(int id, double received_fraction) {
   last_probe_result_id_ = id;
   last_probe_received_fraction_ =
       std::max(last_probe_received_fraction_, received_fraction);
-  initial_retry_deadline_ = Timestamp::MinusInfinity();
+  // A partial estimate may never pass the relay's coverage/loss checks. Keep
+  // the bounded startup retries until congestion control actually adopts it.
+  if (!relay_path_ || relay_config_.probe_settle_ms <= 0)
+    initial_retry_deadline_ = Timestamp::MinusInfinity();
+}
+
+void ProbeController::OnProbeResultAdopted(int id, Timestamp at_time) {
+  if (IsProbeResultReady(id, at_time))
+    initial_retry_deadline_ = Timestamp::MinusInfinity();
 }
 
 void ProbeController::OnProbeSent(int id, Timestamp at_time) {
