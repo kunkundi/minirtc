@@ -131,10 +131,12 @@ class RtpVideoReceiver : public ThreadBase {
   void MaybeLogRecoveryStats(bool force = false);
   void MaybeRetryKeyFrameRequest();
   bool IsReceivingKeyFrame();
-  void OnCompleteKeyFrame(int64_t now_ms);
+  void OnCompleteRecoveryFrame(uint32_t timestamp, bool is_keyframe,
+                               int64_t now_ms);
   bool SendKeyFrameRequest(
       bool enter_awaiting_state,
-      std::optional<int64_t> failed_keyframe_arrival_ms = std::nullopt);
+      std::optional<int64_t> failed_keyframe_arrival_ms = std::nullopt,
+      std::optional<uint32_t> soft_frame_timestamp = std::nullopt);
   bool RtxEnabled() const { return rtx_ssrc_.load() != 0; }
 
  private:
@@ -222,6 +224,9 @@ class RtpVideoReceiver : public ThreadBase {
   // Protected by rtcp_sender_mtx_. A failure must belong to the latest FIR
   // before it can shorten that request's retry interval.
   int64_t last_keyframe_request_ms_ = 0;
+  // Also protected by rtcp_sender_mtx_. A soft FIR does not abandon the
+  // decoder's reference chain; repairing this frame can end its event.
+  std::optional<uint32_t> soft_keyframe_request_timestamp_;
   int64_t last_recovery_stats_log_ms_ = 0;
   std::atomic<bool> is_running_;
 
@@ -253,6 +258,9 @@ class RtpVideoReceiver : public ThreadBase {
   std::atomic<uint64_t> recovery_fir_failed_{0};
   std::atomic<uint64_t> recovery_soft_fir_sent_{0};
   std::atomic<uint64_t> recovery_soft_fir_avoided_{0};
+  std::atomic<uint64_t> recovery_soft_fir_repaired_{0};
+  std::atomic<uint64_t> recovery_soft_fir_repair_total_ms_{0};
+  std::atomic<uint64_t> recovery_soft_fir_repair_max_ms_{0};
   std::atomic<uint64_t> recovery_fir_responses_{0};
   std::atomic<uint64_t> recovery_fir_response_total_ms_{0};
   std::atomic<uint64_t> recovery_fir_response_max_ms_{0};

@@ -35,7 +35,15 @@ struct RelayQosConfig {
   int probe_settle_ms = 150;
   double further_probe_scale = 1.5;
 
-  static RelayQosConfig Upstream() { return {15, 2, 3, 6, 2, 1.3, 0, 0, 0, 2}; }
+  // A short probe receipt is not evidence of sustained capacity. Observe
+  // ordinary traffic before another increase, and remember a congested probe
+  // briefly without imposing its ceiling on the media bandwidth estimator.
+  int continuation_observation_ms = 500;
+  int failed_probe_backoff_ms = 15000;
+
+  static RelayQosConfig Upstream() {
+    return {15, 2, 3, 6, 2, 1.3, 0, 0, 0, 2, 0, 0};
+  }
   static RelayQosConfig FromEnvironment() {
     const char* profile = std::getenv("MINIRTC_RELAY_QOS");
     return profile && std::strcmp(profile, "upstream") == 0 ? Upstream()

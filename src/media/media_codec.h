@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2025-05-14
- * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _MEDIA_CODEC_H_
@@ -138,6 +138,12 @@ class MediaCodec {
   // Keep encoder rate control aligned with admission when a transport adapts
   // FPS. Unsupported encoders retain their configured rate.
   virtual int SetTargetFrameRate(int frame_rate) { return -1; }
+
+  // Advisory rate of frames actually admitted to Encode(), independent of the
+  // configured capture ceiling. Implementations must not rebuild their codec
+  // for routine measurement updates. Unsupported encoders keep their settings.
+  virtual bool SupportsInputFrameRateUpdates() const { return false; }
+  virtual int SetInputFrameRate(int frame_rate) { return -1; }
 
   virtual bool SupportsDynamicEncodingSpeedPriority() const { return false; }
 

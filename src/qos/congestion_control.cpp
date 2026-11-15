@@ -87,13 +87,16 @@ NetworkControlUpdate CongestionControl::SetRelayPath(bool relay_path,
   if (relay_path) {
     LOG_INFO("Relay QoS: probe_duration_ms={} probe_delta_ms={} "
              "loss_recovery_max_increase={} probe_settle_ms={} "
-             "further_probe_scale={} startup_retries={} startup_window_ms={}",
+             "further_probe_scale={} startup_retries={} startup_window_ms={} "
+             "continuation_observation_ms={} failed_probe_backoff_ms={}",
              relay_config_.probe_duration_ms,
              relay_config_.probe_delta_ms,
              relay_config_.loss_recovery_max_increase,
              relay_config_.probe_settle_ms, relay_config_.further_probe_scale,
              relay_config_.initial_retry_limit,
-             relay_config_.initial_retry_window_ms);
+             relay_config_.initial_retry_window_ms,
+             relay_config_.continuation_observation_ms,
+             relay_config_.failed_probe_backoff_ms);
   }
   if (initial_constraints_) {
     initial_constraints_->starting_rate = start;
@@ -221,6 +224,11 @@ void CongestionControl::OnSentPacket(size_t bytes_sent, Timestamp at_time,
                                      int probe_cluster_id, bool is_video,
                                      DataSize data_in_flight) {
   outstanding_data_ = data_in_flight;
+  SentPacket sent_packet;
+  sent_packet.send_time = at_time;
+  sent_packet.size = DataSize::Bytes(bytes_sent);
+  sent_packet.data_in_flight = data_in_flight;
+  bandwidth_estimation_->OnSentPacket(sent_packet);
   if (probe_cluster_id != PacedPacketInfo::kNotAProbe &&
       probe_controller_->IsProbeResultValid(probe_cluster_id)) {
     probe_controller_->OnProbeSent(probe_cluster_id, at_time);
@@ -254,6 +262,10 @@ void CongestionControl::OnProbeAborted(int cluster_id, Timestamp at_time,
 void CongestionControl::OnVideoSendPaused(bool paused, Timestamp /*at_time*/) {
   probe_controller_->OnVideoSendPaused(paused);
   if (paused) pending_relay_probe_.reset();
+}
+
+void CongestionControl::SetMaxTotalAllocatedBitrate(DataRate bitrate) {
+  probe_controller_->SetMaxTotalAllocatedBitrate(bitrate);
 }
 
 void CongestionControl::UpdatePacketLoss(Timestamp at_time) {

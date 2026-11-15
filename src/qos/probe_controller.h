@@ -26,7 +26,8 @@ namespace minirtc {
 namespace webrtc {
 
 // Fixed GCC defaults from WebRTC 2e61fea6e37524aca68adb43ca304c41f65d4add.
-// MiniRTC has no allocation/network-state estimator or field-trial interface.
+// MiniRTC applies explicit application limits but has no independent network
+// capacity estimator or field-trial interface.
 struct ProbeControllerConfig {
   double first_exponential_probe_scale = 3.0;
   double second_exponential_probe_scale = 6.0;
@@ -75,6 +76,9 @@ class ProbeController {
       Timestamp at_time);
 
   void EnablePeriodicAlrProbing(bool enable);
+  // Zero removes the application limit. This is demand configured by the
+  // application, never throughput measured while the application is idle.
+  void SetMaxTotalAllocatedBitrate(DataRate bitrate);
   void SetRelayPath(bool relay_path);
   void OnVideoPacketSent();
   void OnVideoSendPaused(bool paused);
@@ -127,6 +131,8 @@ class ProbeController {
   const char* ContinuationBlockReason(Timestamp at_time) const;
   bool HasSignificantSettledLoss(Timestamp at_time) const;
   TimeDelta ProbeResultWaitTime() const;
+  TimeDelta ContinuationObservationTime() const;
+  void RememberCongestedProbe(Timestamp at_time);
   ProbeClusterConfig CreateProbeClusterConfig(Timestamp at_time,
                                               DataRate bitrate);
 
@@ -139,6 +145,7 @@ class ProbeController {
   DataRate estimated_bitrate_ = DataRate::Zero();
   DataRate start_bitrate_ = DataRate::Zero();
   DataRate max_bitrate_ = DataRate::PlusInfinity();
+  DataRate max_total_allocated_bitrate_ = DataRate::Zero();
   Timestamp last_bwe_drop_probing_time_ = Timestamp::Zero();
   std::optional<Timestamp> alr_start_time_;
   std::optional<Timestamp> alr_end_time_;
@@ -163,6 +170,12 @@ class ProbeController {
   TimeDelta feedback_rtt_ = TimeDelta::Millis(100);
   int settled_packets_ = 0;
   int settled_lost_ = 0;
+  DataRate last_probe_target_ = DataRate::Zero();
+  int last_adopted_probe_id_ = -1;
+  int last_failed_probe_id_ = -1;
+  int last_timed_out_probe_id_ = -1;
+  DataRate failed_probe_ceiling_ = DataRate::PlusInfinity();
+  Timestamp failed_probe_ceiling_expires_ = Timestamp::MinusInfinity();
 
   int32_t next_probe_cluster_id_ = 1;
 

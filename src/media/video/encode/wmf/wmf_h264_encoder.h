@@ -24,6 +24,8 @@ class WmfH264Encoder final : public MediaCodec {
   int ForceIdr() override;
   int SetTargetBitrate(int bitrate) override;
   int SetTargetFrameRate(int frame_rate) override;
+  bool SupportsInputFrameRateUpdates() const override { return true; }
+  int SetInputFrameRate(int frame_rate) override;
   int GetResolution(int* width, int* height) const override;
   std::string GetEncoderName() const override;
 

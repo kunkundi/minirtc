@@ -7,6 +7,7 @@
 #ifndef _PACED_SENDER_H_
 #define _PACED_SENDER_H_
 
+#include <array>
 #include <atomic>
 #include <deque>
 #include <memory>
@@ -85,22 +86,46 @@ class PacedSender : public webrtc::RtpPacketPacer,
   // Aggregate RTX allowance across all video streams, in wire bits/s.
   void SetRtxBudget(int64_t bps, uint64_t version);
   uint64_t RtxDroppedPackets() const { return rtx_dropped_.load(); }
+  struct RtxDropStats {
+    uint64_t total = 0;
+    uint64_t superseded = 0;
+    uint64_t paused = 0;
+    uint64_t not_ready = 0;
+    uint64_t congested = 0;
+    uint64_t expired = 0;
+    uint64_t budget = 0;
+    uint64_t deferred_overflow = 0;
+    uint64_t queue_discard = 0;
+    uint64_t shutdown = 0;
+  };
+  // Cumulative diagnostics. total is the sum of this snapshot's categories.
+  RtxDropStats GetRtxDropStats() const;
   // Cumulative admissions deferred while waiting for RTX credit.
   uint64_t RtxDeferredPackets() const { return rtx_deferred_.load(); }
 
  public:
   void SendPacket(std::unique_ptr<webrtc::RtpPacketToSend> packet,
                   const webrtc::PacedPacketInfo& cluster_info) override {
-    if (is_shutdown_.load() || ShouldDropVideoPacket(*packet)) {
-      NotifyRtxDropped(*packet);
+    if (is_shutdown_.load()) {
+      NotifyRtxDropped(*packet, RtxDropReason::kShutdown);
       return;
     }
-    if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
-        (rtx_congested_ || RtxExpired(*packet) || rtx_budget_bps_ == 0 ||
-         !rtx_send_budget_.Consume(packet->size() + 64,
-                                   clock_->CurrentTime().ms()))) {
-      NotifyRtxDropped(*packet);
+    if (ShouldDropVideoPacket(*packet)) {
+      NotifyRtxDropped(*packet, VideoRtxDropReason(*packet));
       return;
+    }
+    if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission) {
+      std::optional<RtxDropReason> reason;
+      if (rtx_congested_) reason = RtxDropReason::kCongested;
+      else if (RtxExpired(*packet)) reason = RtxDropReason::kExpired;
+      else if (rtx_budget_bps_ == 0 ||
+               !rtx_send_budget_.Consume(packet->size() + 64,
+                                         clock_->CurrentTime().ms()))
+        reason = RtxDropReason::kBudget;
+      if (reason) {
+        NotifyRtxDropped(*packet, *reason);
+        return;
+      }
     }
     if (packet->packet_type() == webrtc::RtpPacketMediaType::kForwardErrorCorrection) {
       const auto now = clock_->CurrentTime();
@@ -243,7 +268,14 @@ class PacedSender : public webrtc::RtpPacketPacer,
   void RemovePacketsForSsrcOnQueue(uint32_t ssrc);
   void DeferRtx(std::unique_ptr<webrtc::RtpPacketToSend> packet);
   void FlushDeferredRtx();
-  void NotifyRtxDropped(const webrtc::RtpPacketToSend& packet);
+  enum class RtxDropReason {
+    kSuperseded, kPaused, kNotReady, kCongested, kExpired, kBudget,
+    kDeferredOverflow, kQueueDiscard, kShutdown, kCount
+  };
+  void NotifyRtxDropped(const webrtc::RtpPacketToSend& packet,
+                        RtxDropReason reason);
+  // Called only after ShouldDropVideoPacket has established the drop.
+  RtxDropReason VideoRtxDropReason(const webrtc::RtpPacketToSend& packet) const;
   void NotifyProbeAborted(int id, const char* reason);
   bool RtxExpired(const webrtc::RtpPacketToSend& packet) const;
 
@@ -356,6 +388,8 @@ class PacedSender : public webrtc::RtpPacketPacer,
   uint64_t rtx_budget_version_ = 0;
   bool rtx_congested_ = false;  // Accessed only on the pacer queue.
   std::atomic<uint64_t> rtx_dropped_{0};
+  std::array<std::atomic<uint64_t>, static_cast<size_t>(RtxDropReason::kCount)>
+      rtx_drop_reasons_{};
   std::atomic<uint64_t> rtx_deferred_{0};
 
   webrtc::Timestamp last_send_time_;

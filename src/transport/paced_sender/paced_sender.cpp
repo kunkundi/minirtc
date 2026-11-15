@@ -48,6 +48,8 @@ PacedSender::PacedSender(std::shared_ptr<IceAgent> ice_agent,
       task_queue_pacer_(task_queue),
       last_send_time_(webrtc::Timestamp::Millis(0)),
       last_call_time_(webrtc::Timestamp::Millis(0)) {
+  for (auto& count : rtx_drop_reasons_)
+    count.store(0, std::memory_order_relaxed);
   // Keep pending clusters dormant even if audio/RTX is queued before video.
   pacing_controller_.SetProbingEnabled(!disable_receiver_padding_probing_);
 }
@@ -131,16 +133,52 @@ void PacedSender::SetOnRtpPacketDroppedFunc(
   });
 }
 
-void PacedSender::NotifyRtxDropped(const webrtc::RtpPacketToSend& packet) {
+PacedSender::RtxDropStats PacedSender::GetRtxDropStats() const {
+  RtxDropStats result;
+  const auto count = [this](RtxDropReason reason) {
+    return rtx_drop_reasons_[static_cast<size_t>(reason)].load(
+        std::memory_order_relaxed);
+  };
+  result.superseded = count(RtxDropReason::kSuperseded);
+  result.paused = count(RtxDropReason::kPaused);
+  result.not_ready = count(RtxDropReason::kNotReady);
+  result.congested = count(RtxDropReason::kCongested);
+  result.expired = count(RtxDropReason::kExpired);
+  result.budget = count(RtxDropReason::kBudget);
+  result.deferred_overflow = count(RtxDropReason::kDeferredOverflow);
+  result.queue_discard = count(RtxDropReason::kQueueDiscard);
+  result.shutdown = count(RtxDropReason::kShutdown);
+  result.total = result.superseded + result.paused + result.not_ready +
+                 result.congested + result.expired + result.budget +
+                 result.deferred_overflow + result.queue_discard +
+                 result.shutdown;
+  return result;
+}
+
+PacedSender::RtxDropReason PacedSender::VideoRtxDropReason(
+    const webrtc::RtpPacketToSend& packet) const {
+  return video_send_paused_ ||
+                 (video_pause_time_.IsFinite() &&
+                  packet.capture_time() <= video_pause_time_)
+             ? RtxDropReason::kPaused
+             : RtxDropReason::kSuperseded;
+}
+
+void PacedSender::NotifyRtxDropped(const webrtc::RtpPacketToSend& packet,
+                                   RtxDropReason reason) {
   if (packet.packet_type() != webrtc::RtpPacketMediaType::kRetransmission)
     return;
   ++rtx_dropped_;
+  rtx_drop_reasons_[static_cast<size_t>(reason)].fetch_add(
+      1, std::memory_order_relaxed);
   // Release the history entry's pending flag so a later NACK can retry.
   if (on_rtp_packet_dropped_func_) on_rtp_packet_dropped_func_(packet);
 }
 
 void PacedSender::OnPacketDiscarded(const webrtc::RtpPacketToSend& packet) {
-  NotifyRtxDropped(packet);
+  // The controller callback does not carry a discard cause. It can include
+  // queue expiry, SSRC removal, pause, or a keyframe flush; keep it generic.
+  NotifyRtxDropped(packet, RtxDropReason::kQueueDiscard);
   if (packet.packet_type() == webrtc::RtpPacketMediaType::kForwardErrorCorrection)
     ++fec_dropped_;
 }
@@ -185,7 +223,7 @@ void PacedSender::OnKeyframeEnqueued(uint32_t ssrc,
       continue;
     }
     deferred_rtx_bytes_ -= it->packet->size() + 64;
-    NotifyRtxDropped(*it->packet);
+    NotifyRtxDropped(*it->packet, RtxDropReason::kSuperseded);
     it = deferred_rtx_.erase(it);
   }
   // FEC shares the RTX SSRC. Forget the old partial block so a delayed flush
@@ -234,7 +272,7 @@ void PacedSender::DeferRtx(std::unique_ptr<webrtc::RtpPacketToSend> packet) {
   const size_t limit = static_cast<size_t>(
       std::clamp<int64_t>(rtx_budget_bps_ / 40, 2400, 32768));
   if (deferred_rtx_bytes_ + bytes > limit) {
-    NotifyRtxDropped(*packet);
+    NotifyRtxDropped(*packet, RtxDropReason::kDeferredOverflow);
     return;
   }
   // Keep history pending while credit refills, so repeated NACKs cannot
@@ -256,18 +294,22 @@ void PacedSender::FlushDeferredRtx() {
   for (auto it = deferred_rtx_.begin(); it != deferred_rtx_.end();) {
     const auto& packet = *it->packet;
     const size_t bytes = packet.size() + 64;
-    const bool drop = !transport_ready_ || rtx_congested_ ||
-                      rtx_budget_bps_ == 0 || ShouldDropVideoPacket(packet) ||
-                      RtxExpired(packet) || now >= it->deadline;
-    if (!drop && !rtx_admission_budget_.Consume(bytes, now.ms())) {
+    std::optional<RtxDropReason> reason;
+    if (!transport_ready_) reason = RtxDropReason::kNotReady;
+    else if (rtx_congested_) reason = RtxDropReason::kCongested;
+    else if (rtx_budget_bps_ == 0) reason = RtxDropReason::kBudget;
+    else if (ShouldDropVideoPacket(packet)) reason = VideoRtxDropReason(packet);
+    else if (RtxExpired(packet) || now >= it->deadline)
+      reason = RtxDropReason::kExpired;
+    if (!reason && !rtx_admission_budget_.Consume(bytes, now.ms())) {
       ++it;
       continue;
     }
     auto ready = std::move(it->packet);
     deferred_rtx_bytes_ -= bytes;
     it = deferred_rtx_.erase(it);
-    if (drop)
-      NotifyRtxDropped(*ready);
+    if (reason)
+      NotifyRtxDropped(*ready, *reason);
     else
       EnqueueReadyPacket(std::move(ready));
   }
@@ -476,14 +518,19 @@ void PacedSender::EnqueuePacketOnQueue(
   // Also discard retransmissions posted late by the history queue, including
   // after a quick pause/resume. They still carry the old capture timestamp.
   if (ShouldDropVideoPacket(*packet)) {
-    NotifyRtxDropped(*packet);
+    NotifyRtxDropped(*packet, VideoRtxDropReason(*packet));
     return;
   }
-  if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
-      (!transport_ready_ || rtx_congested_ || RtxExpired(*packet) ||
-       rtx_budget_bps_ == 0)) {
-    NotifyRtxDropped(*packet);
-    return;
+  if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission) {
+    std::optional<RtxDropReason> reason;
+    if (!transport_ready_) reason = RtxDropReason::kNotReady;
+    else if (rtx_congested_) reason = RtxDropReason::kCongested;
+    else if (RtxExpired(*packet)) reason = RtxDropReason::kExpired;
+    else if (rtx_budget_bps_ == 0) reason = RtxDropReason::kBudget;
+    if (reason) {
+      NotifyRtxDropped(*packet, *reason);
+      return;
+    }
   }
   if (packet->packet_type() == webrtc::RtpPacketMediaType::kRetransmission &&
       !rtx_admission_budget_.Consume(packet->size() + 64,
@@ -528,7 +575,7 @@ void PacedSender::RemovePacketsForSsrcOnQueue(uint32_t ssrc) {
       continue;
     }
     deferred_rtx_bytes_ -= it->packet->size() + 64;
-    NotifyRtxDropped(*it->packet);
+    NotifyRtxDropped(*it->packet, RtxDropReason::kQueueDiscard);
     it = deferred_rtx_.erase(it);
   }
   pacing_controller_.RemovePacketsForSsrc(ssrc);

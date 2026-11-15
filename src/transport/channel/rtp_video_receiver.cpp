@@ -850,6 +850,14 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
   const uint64_t fir_failed = take(recovery_fir_failed_);
   const uint64_t soft_fir_sent = take(recovery_soft_fir_sent_);
   const uint64_t soft_fir_avoided = take(recovery_soft_fir_avoided_);
+  const uint64_t soft_fir_repaired = take(recovery_soft_fir_repaired_);
+  const uint64_t soft_fir_repair_total_ms =
+      take(recovery_soft_fir_repair_total_ms_);
+  const uint64_t soft_fir_repair_max_ms =
+      take(recovery_soft_fir_repair_max_ms_);
+  const int64_t soft_fir_repair_avg_ms = soft_fir_repaired != 0
+      ? static_cast<int64_t>(soft_fir_repair_total_ms / soft_fir_repaired)
+      : -1;
   const uint64_t fir_responses = take(recovery_fir_responses_);
   const uint64_t fir_response_total_ms =
       take(recovery_fir_response_total_ms_);
@@ -864,7 +872,7 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
       discarded_frames != 0 || soft_stalls != 0 || hard_timeouts != 0 ||
       obsolete_packets != 0 || accepted_rtx_packets != 0 || fir_sent != 0 ||
       fir_suppressed != 0 || fir_failed != 0 || soft_fir_sent != 0 ||
-      soft_fir_avoided != 0 || fir_responses != 0;
+      soft_fir_avoided != 0 || soft_fir_repaired != 0 || fir_responses != 0;
   if (!has_recovery_activity) {
     return;
   }
@@ -886,7 +894,8 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
         "discarded_frames={} soft_stalls={} hard_timeouts={} "
         "obsolete_packets={} accepted_rtx_packets={} late_rtx_packets={} "
         "fir_pending={} fir_sent={} fir_suppressed={} fir_failed={} "
-        "soft_fir_sent={} soft_fir_avoided={} "
+        "soft_fir_sent={} soft_fir_avoided={} soft_fir_repaired={} "
+        "soft_fir_repair_avg_ms={} soft_fir_repair_max_ms={} "
         "fir_response_count={} fir_response_avg_ms={} fir_response_max_ms={}",
         log_context_, remote_ssrc_.load(), interval_ms, rtt_ms,
         recovery_timing.soft_deadline_ms,
@@ -896,6 +905,7 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
         accepted_rtx_packets, late_rtx_packets,
         keyframe_request_pending_.load(std::memory_order_relaxed), fir_sent,
         fir_suppressed, fir_failed, soft_fir_sent, soft_fir_avoided,
+        soft_fir_repaired, soft_fir_repair_avg_ms, soft_fir_repair_max_ms,
         fir_responses, fir_response_avg_ms, fir_response_max_ms);
   } else {
     LOG_DEBUG(
@@ -905,7 +915,8 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
         "discarded_frames={} soft_stalls={} hard_timeouts={} "
         "obsolete_packets={} accepted_rtx_packets={} late_rtx_packets={} "
         "fir_pending={} fir_sent={} fir_suppressed={} fir_failed={} "
-        "soft_fir_sent={} soft_fir_avoided={} "
+        "soft_fir_sent={} soft_fir_avoided={} soft_fir_repaired={} "
+        "soft_fir_repair_avg_ms={} soft_fir_repair_max_ms={} "
         "fir_response_count={} fir_response_avg_ms={} fir_response_max_ms={}",
         log_context_, remote_ssrc_.load(), interval_ms, rtt_ms,
         recovery_timing.soft_deadline_ms,
@@ -915,6 +926,7 @@ void RtpVideoReceiver::MaybeLogRecoveryStats(bool force) {
         accepted_rtx_packets, late_rtx_packets,
         keyframe_request_pending_.load(std::memory_order_relaxed), fir_sent,
         fir_suppressed, fir_failed, soft_fir_sent, soft_fir_avoided,
+        soft_fir_repaired, soft_fir_repair_avg_ms, soft_fir_repair_max_ms,
         fir_responses, fir_response_avg_ms, fir_response_max_ms);
   }
 }
@@ -950,13 +962,24 @@ void RtpVideoReceiver::MaybeRetryKeyFrameRequest() {
   }
 }
 
-void RtpVideoReceiver::OnCompleteKeyFrame(int64_t now_ms) {
+void RtpVideoReceiver::OnCompleteRecoveryFrame(uint32_t timestamp,
+                                              bool is_keyframe,
+                                              int64_t now_ms) {
+  if (!keyframe_request_pending_.load(std::memory_order_acquire)) {
+    return;
+  }
   std::lock_guard<std::mutex> lock(rtcp_sender_mtx_);
+  std::lock_guard<std::mutex> pending_lock(pending_frames_mtx_);
   const int64_t request_started_ms =
       keyframe_request_started_ms_.load(std::memory_order_relaxed);
-  // Process may have completed this frame before another thread sent a new
-  // FIR. Do not let that older completion clear the newer request.
-  if (request_started_ms <= 0 || now_ms < request_started_ms) {
+  // Process clears awaiting_keyframe_ while accepting a synchronization
+  // frame. A new explicit request may have re-entered that state before this
+  // completion gets the send lock, even within the same clock millisecond.
+  // An older keyframe also cannot close a newer soft frame's recovery event.
+  if (awaiting_keyframe_ || now_ms < request_started_ms ||
+      (soft_keyframe_request_timestamp_ &&
+       webrtc::AheadOf(*soft_keyframe_request_timestamp_, timestamp)) ||
+      (!is_keyframe && soft_keyframe_request_timestamp_ != timestamp)) {
     return;
   }
   if (!keyframe_request_pending_.exchange(false,
@@ -964,18 +987,29 @@ void RtpVideoReceiver::OnCompleteKeyFrame(int64_t now_ms) {
     return;
   }
   keyframe_request_started_ms_.store(0, std::memory_order_relaxed);
+  soft_keyframe_request_timestamp_.reset();
+  // Keep the FIR send cooldown. Finishing a soft repair must not cause another
+  // request merely to tidy up an already healthy decoder reference chain.
 
   const uint64_t response_ms =
       static_cast<uint64_t>(now_ms - request_started_ms);
-  recovery_fir_responses_.fetch_add(1, std::memory_order_relaxed);
-  recovery_fir_response_total_ms_.fetch_add(response_ms,
-                                             std::memory_order_relaxed);
-  uint64_t previous_max =
-      recovery_fir_response_max_ms_.load(std::memory_order_relaxed);
+  auto& completed = is_keyframe ? recovery_fir_responses_
+                               : recovery_soft_fir_repaired_;
+  auto& total_ms = is_keyframe ? recovery_fir_response_total_ms_
+                              : recovery_soft_fir_repair_total_ms_;
+  auto& max_ms = is_keyframe ? recovery_fir_response_max_ms_
+                            : recovery_soft_fir_repair_max_ms_;
+  completed.fetch_add(1, std::memory_order_relaxed);
+  total_ms.fetch_add(response_ms, std::memory_order_relaxed);
+  uint64_t previous_max = max_ms.load(std::memory_order_relaxed);
   while (previous_max < response_ms &&
-         !recovery_fir_response_max_ms_.compare_exchange_weak(
+         !max_ms.compare_exchange_weak(
              previous_max, response_ms, std::memory_order_relaxed)) {
   }
+  LOG_DEBUG("Video recovery completed: channel={} outcome={} "
+            "first_fir_age_ms={} last_fir_age_ms={}",
+            log_context_, is_keyframe ? "keyframe" : "repaired_without_keyframe",
+            response_ms, now_ms - last_keyframe_request_ms_);
 }
 
 void RtpVideoReceiver::DropFrameAssembly(uint32_t timestamp) {
@@ -1041,6 +1075,7 @@ bool RtpVideoReceiver::Process() {
     bool soft_stall_started = false;
     bool request_soft_fir = false;
     bool completed_keyframe = false;
+    uint32_t recovery_timestamp = 0;
     bool soft_fir_avoided = false;
     const int64_t now_ms = clock_->CurrentTime().ms();
 
@@ -1054,6 +1089,7 @@ bool RtpVideoReceiver::Process() {
       }
 
       auto it = pending_frames_.begin();
+      recovery_timestamp = it->first;
       const int64_t frame_age_ms = now_ms - it->second.arrival_time;
       const auto missing_since =
           nack_ ? nack_->FirstMissingTime(it->second.last_sequence_number)
@@ -1201,7 +1237,7 @@ bool RtpVideoReceiver::Process() {
     if (request_soft_fir) {
       if (now_ms >=
           next_keyframe_request_ms_.load(std::memory_order_relaxed)) {
-        if (SendKeyFrameRequest(false)) {
+        if (SendKeyFrameRequest(false, std::nullopt, recovery_timestamp)) {
           recovery_soft_fir_sent_.fetch_add(1,
                                              std::memory_order_relaxed);
         }
@@ -1214,9 +1250,7 @@ bool RtpVideoReceiver::Process() {
     }
 
     if (completed_frame) {
-      if (completed_keyframe) {
-        OnCompleteKeyFrame(now_ms);
-      }
+      OnCompleteRecoveryFrame(recovery_timestamp, completed_keyframe, now_ms);
       recovery_completed_frames_.fetch_add(1, std::memory_order_relaxed);
       if (on_receive_complete_frame_) {
         on_receive_complete_frame_(std::move(completed_frame));
@@ -1402,7 +1436,8 @@ void RtpVideoReceiver::SendPreparedNackBatch(
 
 bool RtpVideoReceiver::SendKeyFrameRequest(
     bool enter_awaiting_state,
-    std::optional<int64_t> failed_keyframe_arrival_ms) {
+    std::optional<int64_t> failed_keyframe_arrival_ms,
+    std::optional<uint32_t> soft_frame_timestamp) {
   if (enter_awaiting_state) {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     awaiting_keyframe_ = true;
@@ -1457,6 +1492,7 @@ bool RtpVideoReceiver::SendKeyFrameRequest(
 
   if (!request_already_pending) {
     keyframe_request_started_ms_.store(now_ms, std::memory_order_relaxed);
+    soft_keyframe_request_timestamp_ = soft_frame_timestamp;
     keyframe_request_pending_.store(true, std::memory_order_release);
   }
   next_keyframe_request_ms_.store(now_ms + kFirRetryIntervalMs,

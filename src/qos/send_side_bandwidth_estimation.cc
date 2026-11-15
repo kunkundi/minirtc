@@ -88,7 +88,7 @@ DataRate LinkCapacityTracker::estimate() const {
 }
 
 RttBasedBackoff::RttBasedBackoff()
-    : disabled_(true),
+    : disabled_(false),
       configured_limit_(TimeDelta::Seconds(3)),
       drop_fraction_(0.8),
       drop_interval_(TimeDelta::Seconds(1)),
@@ -106,15 +106,23 @@ RttBasedBackoff::RttBasedBackoff()
 
 void RttBasedBackoff::UpdatePropagationRtt(Timestamp at_time,
                                            TimeDelta propagation_rtt) {
+  if (!at_time.IsFinite() || !propagation_rtt.IsFinite() ||
+      propagation_rtt < TimeDelta::Zero() ||
+      (last_propagation_rtt_update_.IsFinite() &&
+       at_time < last_propagation_rtt_update_))
+    return;
   last_propagation_rtt_update_ = at_time;
   last_propagation_rtt_ = propagation_rtt;
 }
 
 bool RttBasedBackoff::IsRttAboveLimit() const {
-  return CorrectedRtt() > rtt_limit_;
+  return !disabled_ && CorrectedRtt() > rtt_limit_;
 }
 
 TimeDelta RttBasedBackoff::CorrectedRtt() const {
+  if (!last_packet_sent_.IsFinite() ||
+      !last_propagation_rtt_update_.IsFinite())
+    return TimeDelta::Zero();
   // Avoid timeout when no packets are being sent.
   TimeDelta timeout_correction = std::max(
       last_packet_sent_ - last_propagation_rtt_update_, TimeDelta::Zero());
@@ -306,7 +314,10 @@ void SendSideBandwidthEstimation::UpdateRtt(TimeDelta rtt, Timestamp at_time) {
 
 void SendSideBandwidthEstimation::UpdateEstimate(Timestamp at_time) {
   if (rtt_backoff_.IsRttAboveLimit()) {
+    // Process ticks alone must not keep reducing an idle sender. Outstanding
+    // data remains guarded by CWND/queue limits; another send resumes backoff.
     if (at_time - time_last_decrease_ >= rtt_backoff_.drop_interval_ &&
+        rtt_backoff_.last_packet_sent_ > time_last_decrease_ &&
         current_target_ > rtt_backoff_.bandwidth_floor_) {
       time_last_decrease_ = at_time;
       DataRate new_bitrate =
@@ -419,6 +430,23 @@ void SendSideBandwidthEstimation::UpdatePropagationRtt(
 
 void SendSideBandwidthEstimation::OnSentPacket(const SentPacket& sent_packet) {
   // Only feedback-triggering packets will be reported here.
+  if (!sent_packet.send_time.IsFinite() ||
+      sent_packet.send_time < rtt_backoff_.last_packet_sent_)
+    return;
+  // Begin the feedback clock with the first packet, including when no report
+  // ever arrives. An empty previous flight also starts a fresh waiting period:
+  // idle desktop time must not look like a feedback blackout after resuming.
+  // The adapter includes this packet in data_in_flight. Zero means unknown for
+  // callers without in-flight accounting, not proof that the path has drained.
+  const bool previous_flight_empty =
+      sent_packet.size > DataSize::Zero() &&
+      sent_packet.data_in_flight > DataSize::Zero() &&
+      sent_packet.data_in_flight <= sent_packet.size;
+  if (rtt_backoff_.last_propagation_rtt_update_.IsInfinite() ||
+      previous_flight_empty) {
+    rtt_backoff_.UpdatePropagationRtt(sent_packet.send_time,
+                                    rtt_backoff_.last_propagation_rtt_);
+  }
   rtt_backoff_.last_packet_sent_ = sent_packet.send_time;
 }
 

@@ -29,6 +29,7 @@
 #include "congestion_control_feedback.h"
 #include "data_channel_receive.h"
 #include "data_channel_send.h"
+#include "encoder_input_timing.h"
 #include "ice_agent.h"
 #include "media_channel.h"
 #include "media_codec.h"
@@ -244,6 +245,8 @@ class IceTransportController
     std::optional<int> applied_target_bitrate;
     bool bitrate_update_queued = false;
     VideoEncoderRateControl video_rate_control;
+    EncoderInputCadence encoder_input_cadence;
+    int applied_input_frame_rate = 0;
     FecAdaptationController fec_controller;
     FecProtectionConfig fec_protection;
     int64_t fec_last_active_ms = -1;
@@ -318,6 +321,11 @@ class IceTransportController
     size_t encoded_frame_rate_valid_window_count = 0;
     std::atomic<uint64_t> capture_input_frame_total{0};
     std::atomic<uint64_t> pacer_rejected_frame_total{0};
+    // Mutually exclusive causes, with the same stream lifetime as the total.
+    // Admission-window resets retain these cumulative counters.
+    std::atomic<uint64_t> pacer_rejected_expected_queue_only_total{0};
+    std::atomic<uint64_t> pacer_rejected_oldest_wait_only_total{0};
+    std::atomic<uint64_t> pacer_rejected_both_total{0};
     std::atomic<uint64_t> encode_queue_dropped_frame_total{0};
     int64_t frame_admission_window_started_ms = 0;
     uint64_t frame_admission_window_capture_start = 0;
@@ -387,6 +395,18 @@ class IceTransportController
       next_resolution_upgrade_probe_ms = 0;
     }
 
+    void RecordPacerRejection(bool expected_queue_full,
+                              bool oldest_packet_expired) {
+      if (!expected_queue_full && !oldest_packet_expired) return;
+      pacer_rejected_frame_total.fetch_add(1, std::memory_order_relaxed);
+      auto& cause = expected_queue_full && oldest_packet_expired
+                        ? pacer_rejected_both_total
+                        : (expected_queue_full
+                               ? pacer_rejected_expected_queue_only_total
+                               : pacer_rejected_oldest_wait_only_total);
+      cause.fetch_add(1, std::memory_order_relaxed);
+    }
+
     void ResetFrameAdmissionTracking() {
       frame_admission_window_started_ms = 0;
       frame_admission_window_capture_start =
@@ -408,6 +428,8 @@ class IceTransportController
     }
 
     void ResetEncodedFrameRateTracking() {
+      encoder_input_cadence.Reset();
+      applied_input_frame_rate = 0;
       encoded_frame_rate_window_started_ms = 0;
       encoded_frame_rate_window_frame_count = 0;
       measured_encoded_frame_rate = 0;

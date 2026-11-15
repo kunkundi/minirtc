@@ -159,6 +159,9 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
 
   controller_ = std::make_unique<CongestionControl>(
       starting_bitrates_, disable_receiver_padding_probing_);
+  if (video_bitrate_limit_bps_ > 0)
+    controller_->SetMaxTotalAllocatedBitrate(
+        DataRate::BitsPerSec(video_bitrate_limit_bps_));
   const int relay_path_state =
       relay_path_state_.load(std::memory_order_acquire);
   if (relay_path_state >= 0) {
@@ -815,17 +818,21 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       }
     }
     if (media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent &&
-        paced_sender_ &&
-        (paced_sender_->ExpectedQueueTime() >=
-             TimeDelta::Millis(kDesktopFrameAdmissionQueueMs) ||
-         paced_sender_->OldestPacketWaitTime() >=
-             TimeDelta::Millis(kDesktopPacerQueueLimitMs))) {
-      // Remote desktop frames expire quickly. Stop admitting new frames while
-      // the packet queue drains instead of extending end-to-end latency with
-      // content the viewer will only see long after it was captured.
-      context->pacer_rejected_frame_total.fetch_add(
-          1, std::memory_order_relaxed);
-      return 0;
+        paced_sender_) {
+      const bool expected_queue_full =
+          paced_sender_->ExpectedQueueTime() >=
+          TimeDelta::Millis(kDesktopFrameAdmissionQueueMs);
+      const bool oldest_packet_expired =
+          paced_sender_->OldestPacketWaitTime() >=
+          TimeDelta::Millis(kDesktopPacerQueueLimitMs);
+      if (expected_queue_full || oldest_packet_expired) {
+        // Remote desktop frames expire quickly. Stop admitting new frames
+        // while the packet queue drains, and retain both sampled causes when
+        // the queue's expected delay and oldest packet exceed their limits.
+        context->RecordPacerRejection(expected_queue_full,
+                                      oldest_packet_expired);
+        return 0;
+      }
     }
 
     // Reject coalesced frames before copying the full desktop buffer. At 4K,
@@ -1017,11 +1024,23 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
             LOG_DEBUG("Force I frame for stream [{}]", channel_name);
           }
         }
+        std::optional<int> input_frame_rate;
         {
           std::unique_lock lock(self->stream_senders_mutex_);
           if (self->video_send_paused_ ||
               context->video_settings_generation != settings_generation) return;
-          context->video_rate_control.OnEncoderInput(self->clock_->CurrentTimeMs());
+          const int64_t input_time_ms = self->clock_->CurrentTimeMs();
+          context->video_rate_control.OnEncoderInput(input_time_ms);
+          input_frame_rate = context->encoder_input_cadence.Observe(
+              input_time_ms, self->media_config_.max_frame_rate);
+        }
+        // Already on the encode queue. Feed cadence even when bitrate stayed
+        // unchanged, without posting rate tasks that compete with frame work.
+        if (input_frame_rate &&
+            context->codec->SupportsInputFrameRateUpdates() &&
+            context->codec->SetInputFrameRate(*input_frame_rate) == 0) {
+          std::unique_lock lock(self->stream_senders_mutex_);
+          context->applied_input_frame_rate = *input_frame_rate;
         }
         context->codec->Encode(
             std::move(frame),
@@ -1485,7 +1504,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "encoder_target_bps={} cwnd_drop_interval={} media_budget_bps={} "
         "encoded_bps={} encoder_utilization={} keyframe_bytes={} pacer_queue_ms={} "
         "applied_target_bps={} encoder_input_fps={} encoder_network_utilization={} "
-        "max_frame_bytes={} pacer_oldest_ms={}",
+        "max_frame_bytes={} pacer_oldest_ms={} qp={} normalized_qp_ewma={} "
+        "applied_input_fps={} pacer_rejected_total={} "
+        "pacer_rejected_expected_queue_only_total={} "
+        "pacer_rejected_oldest_wait_only_total={} pacer_rejected_both_total={}",
         channel_name, context->measured_encoded_frame_rate,
         low_frame_rate_window_count,
         context->encoded_frame_rate_valid_window_count,
@@ -1508,7 +1530,14 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->video_rate_control.encoder_input_fps(now_ms),
         context->video_rate_control.encoder_network_utilization(now_ms),
         context->video_rate_control.max_frame_bytes(now_ms),
-        paced_sender_ ? paced_sender_->OldestPacketWaitTime().ms() : 0);
+        paced_sender_ ? paced_sender_->OldestPacketWaitTime().ms() : 0,
+        context->last_encoder_quality_stats.qp, context->normalized_qp_ewma,
+        context->applied_input_frame_rate,
+        context->pacer_rejected_frame_total.load(std::memory_order_relaxed),
+        context->pacer_rejected_expected_queue_only_total.load(
+            std::memory_order_relaxed),
+        context->pacer_rejected_oldest_wait_only_total.load(std::memory_order_relaxed),
+        context->pacer_rejected_both_total.load(std::memory_order_relaxed));
   }
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==
@@ -2800,6 +2829,9 @@ int IceTransportController::UpdateVideoBitrateLimit(int max_bitrate_bps) {
     if (!self || !self->is_running_.load()) return;
     if (self->video_bitrate_limit_bps_ == max_bitrate_bps) return;
     self->video_bitrate_limit_bps_ = max_bitrate_bps;
+    if (self->controller_)
+      self->controller_->SetMaxTotalAllocatedBitrate(
+          DataRate::BitsPerSec(max_bitrate_bps));
     if (self->paced_sender_)
       self->paced_sender_->SetProbeBitrateLimit(max_bitrate_bps);
     self->UpdateFecProtection();
@@ -4006,9 +4038,15 @@ void IceTransportController::UpdateFecProtection() {
     fec_log_ms_ = now_ms;
     LOG_DEBUG("FEC pacer: dropped={} media_bps={} fec_bps={}",
              paced_sender_->FecDroppedPackets(), media_total, fec_total);
-    LOG_DEBUG("RTX pacer: dropped={} limit_bps={} reserved_bps={} deferred={}",
-              paced_sender_->RtxDroppedPackets(), rtx_limit, rtx_reserved,
-              paced_sender_->RtxDeferredPackets());
+    const auto rtx_drops = paced_sender_->GetRtxDropStats();
+    LOG_DEBUG("RTX pacer: dropped={} limit_bps={} reserved_bps={} deferred={} "
+              "superseded={} paused={} not_ready={} congested={} expired={} "
+              "budget={} deferred_overflow={} queue_discard={} shutdown={}",
+              rtx_drops.total, rtx_limit, rtx_reserved,
+              paced_sender_->RtxDeferredPackets(), rtx_drops.superseded,
+              rtx_drops.paused, rtx_drops.not_ready, rtx_drops.congested,
+              rtx_drops.expired, rtx_drops.budget, rtx_drops.deferred_overflow,
+              rtx_drops.queue_discard, rtx_drops.shutdown);
   }
   if (!publish)
     return;
@@ -4181,6 +4219,9 @@ void IceTransportController::ApplyVideoBitrateUpdateOnEncodeQueue(
 
     if (result == 0) {
       context->applied_target_bitrate = target_bitrate;
+      // Keep the configured ceiling here. The adjuster already measures actual
+      // inputs and accounts for CWND gaps; the codec's separate cadence hint
+      // must not reduce that ceiling or apply intentional drops a second time.
       context->video_rate_control.OnEncoderRateApplied(
           target_bitrate, media_config_.max_frame_rate, clock_->CurrentTimeMs());
     }

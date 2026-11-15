@@ -44,6 +44,7 @@ class CongestionControl {
   void OnProbeCompleted(int cluster_id, int sent_packets, Timestamp at_time);
   void OnProbeAborted(int cluster_id, Timestamp at_time, const char* reason);
   void OnVideoSendPaused(bool paused, Timestamp at_time);
+  void SetMaxTotalAllocatedBitrate(DataRate bitrate);
 
   NetworkControlUpdate SetRelayPath(bool relay_path, Timestamp at_time,
                                     bool route_changed = false);

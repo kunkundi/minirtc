@@ -7,6 +7,7 @@
 #include <chrono>
 #include <limits>
 
+#include "encoder_input_timing.h"
 #include "h264_bitstream_parser.h"
 #include "openh264/openh264_encoder.h"
 #include "wmf/wmf_utils.h"
@@ -63,6 +64,7 @@ class WmfH264Encoder::Impl {
     sequence_ = 0;
     buffer_size_bytes_ = 0;
     force_idr_ = true;
+    sample_clock_.Reset();
   }
 
   void UpdateBufferSize(int bitrate) {
@@ -264,13 +266,13 @@ class WmfH264Encoder::Impl {
       if (FAILED(hr)) return hr;
     }
     ComPtr<IMFSample> input;
-    const LONGLONG duration = 10'000'000LL / config_.max_frame_rate;
+    const auto timing = sample_clock_.Next(
+        raw.CapturedTimestamp(), clock_->CurrentTimeUs(), input_frame_rate_);
     size_t input_size = 0;
     GetNv12FrameSize(raw.Width(), raw.Height(), &input_size);
-    HRESULT hr = wmf::CreateSample(raw.Buffer(), input_size, next_time_,
-                                   duration, input);
+    HRESULT hr = wmf::CreateSample(raw.Buffer(), input_size, timing.time_100ns,
+                                   timing.duration_100ns, input);
     if (FAILED(hr)) return hr;
-    next_time_ += duration;
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(2);
     bool submitted = false;
@@ -348,7 +350,8 @@ class WmfH264Encoder::Impl {
   bool async_ = false, force_idr_ = true, reconfigure_ = false;
   bool initialized_ = false;
   uint64_t sequence_ = 0;
-  LONGLONG next_time_ = 0;
+  int input_frame_rate_ = 60;
+  EncoderSampleClock sample_clock_;
   std::vector<uint8_t> sps_, pps_;
   H264BitstreamParser parser_;
   std::unique_ptr<OpenH264Encoder> fallback_;
@@ -376,6 +379,7 @@ int WmfH264Encoder::Init(const MediaCodecConfig& config) {
   return impl_->worker_.Call([&] {
     impl_->fallback_.reset();
     impl_->config_ = config;
+    impl_->input_frame_rate_ = config.max_frame_rate;
     impl_->config_.init_bitrate =
         ClampEncoderTargetBitrate(config.init_bitrate, config.max_bitrate);
     impl_->initialized_ = SUCCEEDED(impl_->Initialize());
@@ -405,6 +409,7 @@ int WmfH264Encoder::Encode(const RawFrame& raw,
         impl_->fallback_.reset();
         return -1;
       }
+      impl_->fallback_->SetTargetFrameRate(impl_->input_frame_rate_);
     }
     return impl_->fallback_->Encode(raw, [&](const EncodedFrame& frame) {
       frames.push_back(frame);
@@ -447,12 +452,32 @@ int WmfH264Encoder::SetTargetFrameRate(int frame_rate) {
   return impl_->worker_.Call([&] {
     if (impl_->fallback_) {
       const int result = impl_->fallback_->SetTargetFrameRate(frame_rate);
-      if (result == 0) impl_->config_.max_frame_rate = frame_rate;
+      if (result == 0) {
+        impl_->config_.max_frame_rate = frame_rate;
+        impl_->input_frame_rate_ = frame_rate;
+      }
       return result;
     }
     if (!impl_->encoder_) return -1;
     if (impl_->config_.max_frame_rate != frame_rate) impl_->reconfigure_ = true;
     impl_->config_.max_frame_rate = frame_rate;
+    impl_->input_frame_rate_ = frame_rate;
+    return 0;
+  });
+}
+
+int WmfH264Encoder::SetInputFrameRate(int frame_rate) {
+  if (frame_rate <= 0 || frame_rate > 240) return -1;
+  return impl_->worker_.Call([&] {
+    if (!impl_->initialized_) return -1;
+    const int fps = std::min(frame_rate, impl_->config_.max_frame_rate);
+    if (fps == impl_->input_frame_rate_) return 0;
+    if (impl_->fallback_ && impl_->fallback_->SetTargetFrameRate(fps) != 0)
+      return -1;
+    // Keep the negotiated MFT type/capture ceiling stable. Cadence changes are
+    // represented by real sample PTS and duration, not streaming type changes
+    // that reset the hardware encoder and force an IDR every second.
+    impl_->input_frame_rate_ = fps;
     return 0;
   });
 }

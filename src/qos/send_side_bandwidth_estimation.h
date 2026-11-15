@@ -91,6 +91,8 @@ class SendSideBandwidthEstimation {
   DataRate GetEstimatedLinkCapacity() const;
   // Call periodically to update estimate.
   void UpdateEstimate(Timestamp at_time);
+  // Starts feedback timeout tracking on the first send. data_in_flight includes
+  // this packet; pass zero only when in-flight accounting is unavailable.
   void OnSentPacket(const SentPacket& sent_packet);
   void UpdatePropagationRtt(Timestamp at_time, TimeDelta propagation_rtt);
 
