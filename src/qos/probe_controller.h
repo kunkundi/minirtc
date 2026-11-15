@@ -143,6 +143,7 @@ class ProbeController {
   void RememberCongestedProbe(Timestamp at_time);
   void RecordProbeFailure(Timestamp at_time, const char* reason);
   bool HasProbeRiskPolicy() const;
+  bool IsRecoveringProbeRisk() const;
   std::vector<ProbeClusterConfig> RecoverProbing(Timestamp at_time);
   ProbeClusterConfig CreateProbeClusterConfig(Timestamp at_time,
                                               DataRate bitrate);
@@ -203,8 +204,11 @@ class ProbeController {
   };
   std::optional<ProbeEpisode> probe_episode_;
   int probe_failure_count_ = 0;
+  // Backoff can relax after a healthy low-rate step, but that does not prove
+  // the previously failed range is sustainable. Keep single-step discovery
+  // until ordinary traffic has exercised that range successfully.
+  DataRate recovery_risk_bitrate_ = DataRate::Zero();
   Timestamp next_recovery_probe_time_ = Timestamp::MinusInfinity();
-  bool recovery_release_pending_ = false;
 
   int32_t next_probe_cluster_id_ = 1;
 

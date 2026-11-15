@@ -192,6 +192,10 @@ bool ProbeController::HasProbeRiskPolicy() const {
          relay_config_.failed_probe_backoff_ms > 0;
 }
 
+bool ProbeController::IsRecoveringProbeRisk() const {
+  return HasProbeRiskPolicy() && recovery_risk_bitrate_ > DataRate::Zero();
+}
+
 void ProbeController::RecordProbeFailure(Timestamp at_time,
                                          const char* reason) {
   if (probe_episode_ && probe_episode_->failed) return;
@@ -207,12 +211,12 @@ void ProbeController::RecordProbeFailure(Timestamp at_time,
              ? std::min(failed_probe_ceiling_, ceiling) : ceiling);
   int64_t hold_ms = relay_config_.failed_probe_backoff_ms;
   if (HasProbeRiskPolicy()) {
+    recovery_risk_bitrate_ = std::max(recovery_risk_bitrate_, target);
     probe_failure_count_ = std::min(probe_failure_count_ + 1, 3);
     for (int i = 1; i < probe_failure_count_; ++i) hold_ms *= 2;
     hold_ms = std::min<int64_t>(hold_ms, std::max(
         relay_config_.failed_probe_backoff_ms,
         relay_config_.failed_probe_max_backoff_ms));
-    recovery_release_pending_ = false;
   }
   failed_probe_ceiling_expires_ = at_time + TimeDelta::Millis(hold_ms);
   next_recovery_probe_time_ = failed_probe_ceiling_expires_;
@@ -288,12 +292,22 @@ void ProbeController::OnProbeHealthFeedback(
             "adopted_bps={} target_bps={} failures={}", episode.first_id,
             episode.last_id, healthy ? "healthy" : "insufficient_evidence",
             episode.adopted_rate.bps(), bitrate.bps(), probe_failure_count_);
-  if (healthy && probe_failure_count_ > 0) {
-    --probe_failure_count_;
-    if (probe_failure_count_ == 0) {
+  if (healthy && IsRecoveringProbeRisk()) {
+    if (probe_failure_count_ > 0) --probe_failure_count_;
+    // A low-rate recovery validates only that step. Do not reopen exponential
+    // probing until sustained ordinary traffic reaches the failed range.
+    const bool risk_exercised =
+        std::min(bitrate, episode.adopted_rate) >= recovery_risk_bitrate_ &&
+        episode.non_probe_received >= recovery_risk_bitrate_ *
+            TimeDelta::Millis(relay_config_.post_probe_observation_ms) * 0.5;
+    if (risk_exercised) {
+      LOG_DEBUG("Relay probe recovery complete: risk_bps={} validated_bps={}",
+                recovery_risk_bitrate_.bps(),
+                std::min(bitrate, episode.adopted_rate).bps());
+      recovery_risk_bitrate_ = DataRate::Zero();
+      probe_failure_count_ = 0;
       failed_probe_ceiling_ = DataRate::PlusInfinity();
       failed_probe_ceiling_expires_ = Timestamp::MinusInfinity();
-      recovery_release_pending_ = true;
     } else {
       failed_probe_ceiling_ = std::max(failed_probe_ceiling_,
           bitrate * relay_config_.recovery_probe_scale);
@@ -304,16 +318,12 @@ void ProbeController::OnProbeHealthFeedback(
 
 std::vector<ProbeClusterConfig> ProbeController::RecoverProbing(
     Timestamp at_time) {
-  if (!HasProbeRiskPolicy() ||
-      (probe_failure_count_ == 0 && !recovery_release_pending_) ||
+  if (!IsRecoveringProbeRisk() ||
       at_time < failed_probe_ceiling_expires_ ||
       at_time < next_recovery_probe_time_ ||
       at_time - last_feedback_time_ > TimeDelta::Seconds(1)) return {};
-  auto probes = InitiateProbing(at_time,
-      {estimated_bitrate_ * relay_config_.recovery_probe_scale},
-      recovery_release_pending_);
-  if (!probes.empty()) recovery_release_pending_ = false;
-  return probes;
+  return InitiateProbing(at_time,
+      {estimated_bitrate_ * relay_config_.recovery_probe_scale}, false);
 }
 
 const char* ProbeController::ProbeResultBlockReason(
@@ -352,7 +362,7 @@ bool ProbeController::IsProbeResultReady(int id, Timestamp at_time) const {
 }
 
 const char* ProbeController::ContinuationBlockReason(Timestamp at_time) const {
-  if (HasProbeRiskPolicy() && probe_failure_count_ > 0)
+  if (IsRecoveringProbeRisk())
     return "recovery_single_step";
   if (const char* reason = ProbeResultBlockReason(at_time, true)) return reason;
   // A sparse desktop does not exercise the newly measured rate. Keep periodic
@@ -465,8 +475,8 @@ void ProbeController::Reset(Timestamp at_time) {
   failed_probe_ceiling_expires_ = Timestamp::MinusInfinity();
   probe_episode_.reset();
   probe_failure_count_ = 0;
+  recovery_risk_bitrate_ = DataRate::Zero();
   next_recovery_probe_time_ = Timestamp::MinusInfinity();
-  recovery_release_pending_ = false;
   video_started_ = false;
   alr_start_time_.reset();
   bandwidth_limited_cause_ = BandwidthLimitedCause::kDelayBasedLimited;
@@ -576,9 +586,14 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
       video_paused_)
     return {};
   if (HasSignificantSettledLoss(now)) return {};
-  const bool recovering = HasProbeRiskPolicy() && probe_failure_count_ > 0;
-  if (recovering && (now < failed_probe_ceiling_expires_ ||
-                     now < next_recovery_probe_time_)) return {};
+  const bool recovering = IsRecoveringProbeRisk();
+  // Keep the final recovery interval even after its observation clears risk.
+  // RequestProbe, ALR and allocation-triggered probes must not bypass it.
+  if (HasProbeRiskPolicy() &&
+      (now < failed_probe_ceiling_expires_ ||
+       now < next_recovery_probe_time_)) return {};
+  if (recovering && now - last_feedback_time_ > TimeDelta::Seconds(1))
+    return {};
   // A remembered burst bound is not permanent capacity. Sparse probes can
   // test one small step above it without claiming sustained media evidence.
   const auto recovery_ceiling = recovering
@@ -630,6 +645,9 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
       probe_further = false;
     }
     pending_probes.push_back(CreateProbeClusterConfig(now, bitrate));
+    // Every entry point, including startup and allocation changes, obeys the
+    // same recovery budget even if it supplied more than one cluster.
+    if (recovering) break;
   }
   time_last_probing_initiated_ = now;
   last_probe_target_ = pending_probes.back().target_data_rate;
@@ -639,7 +657,7 @@ std::vector<ProbeClusterConfig> ProbeController::InitiateProbing(
     probe_episode_->highest_target = std::max(probe_episode_->highest_target,
                                               last_probe_target_);
   }
-  if (HasProbeRiskPolicy()) next_recovery_probe_time_ = now +
+  if (recovering) next_recovery_probe_time_ = now +
       TimeDelta::Millis(relay_config_.recovery_probe_interval_ms);
   if (probe_further) {
     UpdateState(State::kWaitingForProbingResult);
@@ -762,7 +780,7 @@ void ProbeController::LogState(Timestamp at_time) const {
   LOG_DEBUG("Probe state: state={} latest_id={} result_id={} received_fraction={} "
             "continuation={} startup_retries={} startup_window_ms={} "
             "allocation_limit_bps={} failure_ceiling_bps={} failure_hold_ms={} "
-            "probe_failures={} recovery_wait_ms={}",
+            "probe_failures={} recovery_wait_ms={} recovery_risk_bps={}",
             static_cast<int>(state_), next_probe_cluster_id_ - 1,
             last_probe_result_id_, last_probe_received_fraction_,
             reason ? reason : "ready", initial_retry_count_,
@@ -771,12 +789,13 @@ void ProbeController::LogState(Timestamp at_time) const {
                 : 0,
             max_total_allocated_bitrate_.bps(),
             failed_probe_ceiling_.IsFinite() &&
-                    (at_time < failed_probe_ceiling_expires_ || probe_failure_count_ > 0)
+                    (at_time < failed_probe_ceiling_expires_ || IsRecoveringProbeRisk())
                 ? failed_probe_ceiling_.bps() : 0,
             at_time < failed_probe_ceiling_expires_
                 ? (failed_probe_ceiling_expires_ - at_time).ms() : 0,
             probe_failure_count_, at_time < next_recovery_probe_time_
-                ? (next_recovery_probe_time_ - at_time).ms() : 0);
+                ? (next_recovery_probe_time_ - at_time).ms() : 0,
+            recovery_risk_bitrate_.bps());
 }
 
 }  // namespace webrtc
