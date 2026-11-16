@@ -21,6 +21,9 @@
 #include "websocketpp/client.hpp"
 #include "websocketpp/common/memory.hpp"
 #include "websocketpp/config/asio_client.hpp"
+#ifndef NDEBUG
+#include "ws_connection_diagnostics.h"
+#endif
 
 struct WsClientConfig : websocketpp::config::asio_tls_client {
   struct transport_config
@@ -73,7 +76,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   WsStatus GetStatus();
 
-  // void OnSocketInit(client *c, websocketpp::connection_hdl hdl);
+#ifndef NDEBUG
+  uint64_t DiagnosticId() const { return diagnostic_id_; }
+  void TraceSignal(const char* event);
+#endif
 
   ssl_context_ptr OnTlsInit(websocketpp::connection_hdl hdl);
 
@@ -137,12 +143,20 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   struct Transport {
     std::shared_ptr<client> endpoint;
     websocketpp::connection_hdl handle;
+#ifndef NDEBUG
+    std::shared_ptr<WsConnectionDiagnostics> diagnostics;
+#endif
   };
   Transport GetTransport();
   std::mutex transport_mutex_;
   // Also owned by the I/O worker until run() returns.
   std::shared_ptr<client> m_endpoint_;
   websocketpp::connection_hdl connection_handle_;
+#ifndef NDEBUG
+  const uint64_t diagnostic_id_;
+  std::atomic<uint64_t> diagnostic_attempt_{0};
+  std::shared_ptr<WsConnectionDiagnostics> diagnostics_;
+#endif
 
   std::thread m_thread_;
   std::thread ping_thread_;

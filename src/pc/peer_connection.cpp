@@ -418,6 +418,10 @@ int PeerConnection::Init(PeerConnectionParams params) {
         return 0;
       });
   if (ws_transport_) {
+#ifndef NDEBUG
+    LOG_INFO("Signaling peer: client={} local_user={}",
+             ws_transport_->DiagnosticId(), user_id_);
+#endif
     ws_transport_->Connect(uri_);
   }
 
@@ -487,6 +491,9 @@ int PeerConnection::Login() {
   legacy_turn_config_.reset();
   per_connection_ice_config_ = false;
 
+#ifndef NDEBUG
+  if (ws_transport_) ws_transport_->TraceSignal("login_requested");
+#endif
   const int exchange = ExchangeSignal(MiniRtcSignalExchangeStage::PrepareLogin, message.dump());
   if (exchange != 0) return exchange > 0 ? 0 : -1;
 
@@ -509,6 +516,9 @@ int PeerConnection::SendJoinRequestLocked(
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
+#ifndef NDEBUG
+    ws_transport_->TraceSignal("join_submitted");
+#endif
     LOG_INFO("Sending join transmission request");
     LOG_DEBUG("[{}] Join transmission [{}]", user_id_,
               transmission_id.substr(0, transmission_id.find('@')));
@@ -532,6 +542,9 @@ int PeerConnection::Join(const std::string& transmission_id) {
       signal_status_ == MiniRtcSignalStatus::MiniRtcSignalReconnecting) {
     pending_join_transmission_id_ = transmission_id;
     leave_ = false;
+#ifndef NDEBUG
+    if (ws_transport_) ws_transport_->TraceSignal("join_waiting_for_login");
+#endif
     LOG_INFO("Queue join transmission until signal login completes");
     return 0;
   }
@@ -1213,6 +1226,9 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 
         MiniRtcNetTrafficStats net_traffic_stats{};
 
+#ifndef NDEBUG
+        if (ws_transport_) ws_transport_->TraceSignal("login_accepted");
+#endif
         on_net_status_report_(user_id_with_pwd.data(), user_id_with_pwd.size(),
                               MiniRtcTraversalMode::MiniRtcTraversalUnknown, &net_traffic_stats,
                               user_id_.data(), user_id_.size(), user_data_);
@@ -1317,6 +1333,9 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
 
       if (j.contains("sdp")) {
         std::string remote_sdp = j["sdp"].get<std::string>();
+#ifndef NDEBUG
+        if (ws_transport_) ws_transport_->TraceSignal("offer_received");
+#endif
         LOG_INFO("Received remote offer");
 
         if (remote_user_id.empty()) {

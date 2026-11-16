@@ -10,6 +10,10 @@ package("websocketpp")
     -- C++20 rejects template-ids in constructor/destructor declarations (CWG 2237).
     add_patches("0.8.2", path.join(os.scriptdir(), "patches", "cpp20_constructors_0.8.2.patch"),
         "00cb9fc3af60d3115ae66dfb6da7b3e3698a29b9644e4c7a5328cee465c98e10")
+    add_patches("0.8.2", path.join(os.scriptdir(), "patches", "tls_diagnostics_0.8.2.patch"),
+        "ac524b88cd14bbbe9cde7f3836cf7d70ee5084670537c5d86107e4cecb54e362")
+    add_configs("tls_diagnostics_revision", {default = "2", type = "string", readonly = true,
+        description = "Optional native TLS handshake and shutdown diagnostics"})
     -- Use a new package hash so prebuilt images/caches cannot reuse unpatched headers.
     add_configs("cpp20_compat_revision", {default = "1", type = "string", readonly = true,
         description = "C++20-compatible constructor and destructor declarations"})

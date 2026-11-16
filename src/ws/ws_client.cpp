@@ -14,9 +14,19 @@
 
 namespace minirtc {
 
+#ifndef NDEBUG
+namespace {
+std::atomic<uint64_t> next_diagnostic_id{0};
+}  // namespace
+#endif
+
 WsClient::WsClient(std::function<void(const std::string&)> on_receive_msg_cb,
                    std::function<void(WsStatus)> on_ws_status_cb)
-    : on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
+    :
+#ifndef NDEBUG
+      diagnostic_id_(++next_diagnostic_id),
+#endif
+      on_receive_msg_(on_receive_msg_cb), on_ws_status_(on_ws_status_cb) {}
 
 namespace {
 thread_local const WsClient* active_callback_client = nullptr;
@@ -51,6 +61,10 @@ void WsClient::Shutdown() {
     return;
   }
   LOG_INFO("WebSocket shutdown started");
+#ifndef NDEBUG
+  const auto diagnostics = GetTransport().diagnostics;
+  if (diagnostics) diagnostics->Event("client_shutdown_start");
+#endif
 
   // Shutdown is terminal. In particular, wake and invalidate a delayed
   // reconnect before waiting for any worker so an obsolete client cannot be
@@ -113,9 +127,16 @@ void WsClient::Shutdown() {
   }
   heartbeat_started_ = false;
   LOG_INFO("WebSocket shutdown completed");
+#ifndef NDEBUG
+  if (diagnostics) diagnostics->Event("client_shutdown_complete");
+#endif
 }
 
 void WsClient::StopThreads() {
+#ifndef NDEBUG
+  const auto diagnostics = GetTransport().diagnostics;
+  if (diagnostics) diagnostics->Event("workers_stop_start");
+#endif
   running_ = false;
   cond_var_.notify_all();
 
@@ -138,6 +159,9 @@ void WsClient::StopThreads() {
     connection_handle_.reset();
   }
   heartbeat_started_ = false;
+#ifndef NDEBUG
+  if (diagnostics) diagnostics->Event("workers_stop_complete");
+#endif
 }
 
 void WsClient::StartCallbacks() {
@@ -285,14 +309,26 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
         base_ms + std::uniform_int_distribution<int>(0, jitter_ms)(random_engine));
   }
 
+#ifndef NDEBUG
+  LOG_INFO("Will retry connection after {} ms (base backoff: {} seconds) "
+           "client={} attempt={}", delay.count(), delay_seconds,
+           diagnostic_id_, diagnostic_attempt_.load());
+  const auto scheduled_at = Clock::now();
+  const auto diagnostics = GetTransport().diagnostics;
+  if (diagnostics) diagnostics->Event("retry_scheduled");
+#else
   LOG_INFO("Will retry connection after {} ms (base backoff: {} seconds)",
            delay.count(), delay_seconds);
+#endif
 
   // capture current generation to detect cancellation
   uint64_t current_generation = reconnect_generation_.load();
 
   std::weak_ptr<WsClient> weak_self = shared_from_this();
   std::thread reconnect_thread([weak_self, delay,
+#ifndef NDEBUG
+                                scheduled_at, diagnostics,
+#endif
                                 current_generation]() {
     if (auto self = weak_self.lock()) {
       // Keep certificate failures visible during backoff instead of immediately
@@ -320,6 +356,13 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
         }
       }
 
+#ifndef NDEBUG
+      if (diagnostics) diagnostics->Event("retry_started");
+      LOG_INFO("Signaling retry wait: client={} attempt={} planned_ms={} actual_ms={}",
+               self->diagnostic_id_, self->diagnostic_attempt_.load(), delay.count(),
+               std::chrono::duration_cast<std::chrono::milliseconds>(
+                   Clock::now() - scheduled_at).count());
+#endif
       self->ReConnect();
       std::lock_guard<std::mutex> lock(self->reconnect_mtx_);
       self->is_reconnecting_.store(false);
@@ -353,9 +396,6 @@ void WsClient::RegisterHandlers() {
   m_endpoint_->set_access_channels(websocketpp::log::alevel::none);
 
   std::weak_ptr<WsClient> weak_self = shared_from_this();
-  // m_endpoint_->set_socket_init_handler(
-  //     websocketpp::lib::bind(&WsClient::OnSocketInit, this,
-  //     m_endpoint_.get(), websocketpp::lib::placeholders::_1));
   m_endpoint_->set_tls_init_handler(
       [weak_self](websocketpp::connection_hdl hdl) {
         if (auto self = weak_self.lock()) {
@@ -418,8 +458,22 @@ int WsClient::Connect(const std::string& uri) {
 
   StartCallbacks();
   tls_failure_count_ = 0;
+#ifndef NDEBUG
+  const auto diagnostics = std::make_shared<WsConnectionDiagnostics>(
+      diagnostic_id_, ++diagnostic_attempt_);
+  diagnostics->Event("connect_start");
+  const websocketpp::uri target(uri);
+  diagnostics->Target(target.get_host(), target.get_port());
+  LOG_INFO("Signaling timeouts: client={} attempt={} tls_ms={} shutdown_ms={}",
+           diagnostic_id_, diagnostic_attempt_.load(),
+           long(WsClientConfig::transport_config::timeout_socket_post_init),
+           long(WsClientConfig::transport_config::timeout_socket_shutdown));
+#endif
   {
     std::lock_guard lock(transport_mutex_);
+#ifndef NDEBUG
+    diagnostics_ = diagnostics;
+#endif
     m_endpoint_ = std::make_shared<client>();
   }
   SetStatus(WsOpening);
@@ -434,11 +488,40 @@ int WsClient::Connect(const std::string& uri) {
   websocketpp::lib::error_code ec;
   auto con = m_endpoint_->get_connection(uri, ec);
   if (ec || !con) {
+#ifndef NDEBUG
+    diagnostics->Event("connection_setup_failed", ec);
+#endif
     LOG_ERROR("get_connection error: {}", ec.message());
     StopThreads();
     return -1;
   }
 
+#ifndef NDEBUG
+  con->set_tls_diagnostic_handler(
+      [diagnostics](const char* event,
+                    const websocketpp::lib::asio::error_code& error) {
+        diagnostics->Event(event, error);
+      });
+  std::weak_ptr<client::connection_type> weak_connection = con;
+  con->set_tcp_pre_init_handler(
+      [diagnostics, weak_connection](websocketpp::connection_hdl) {
+        diagnostics->Event("tcp_connected");
+        try {
+          if (const auto connection = weak_connection.lock()) {
+            websocketpp::lib::asio::error_code local_error, remote_error;
+            const auto local = connection->get_raw_socket().local_endpoint(local_error);
+            const auto remote = connection->get_raw_socket().remote_endpoint(remote_error);
+            const auto address = [](const auto& endpoint) {
+              return "[" + endpoint.address().to_string() + "]:" +
+                     std::to_string(endpoint.port());
+            };
+            diagnostics->Endpoints(local_error ? "unavailable" : address(local),
+                                   remote_error ? "unavailable" : address(remote));
+          }
+        } catch (...) {}
+      });
+  diagnostics->Event("connect_dispatched");
+#endif
   m_endpoint_->connect(con);
   SetStatus(WsConnecting);
   return 0;
@@ -491,8 +574,19 @@ void WsClient::Close() {
 
 WsClient::Transport WsClient::GetTransport() {
   std::lock_guard lock(transport_mutex_);
+#ifndef NDEBUG
+  return {m_endpoint_, connection_handle_, diagnostics_};
+#else
   return {m_endpoint_, connection_handle_};
+#endif
 }
+
+#ifndef NDEBUG
+void WsClient::TraceSignal(const char* event) {
+  if (const auto diagnostics = GetTransport().diagnostics)
+    diagnostics->Event(event);
+}
+#endif
 
 void WsClient::Send(const std::string& message) {
   websocketpp::lib::error_code ec;
@@ -612,10 +706,6 @@ void WsClient::PingLoop(websocketpp::connection_hdl hdl) {
   if (connection_lost && !shutdown_) AsyncReConnect();
 }
 
-// void WsClient::OnSocketInit(client *, websocketpp::connection_hdl) {
-//   LOG_INFO("OnSocketInit");
-// }
-
 ssl_context_ptr WsClient::OnTlsInit(websocketpp::connection_hdl) {
   namespace asio = websocketpp::lib::asio;
   auto ctx = std::make_shared<asio::ssl::context>(asio::ssl::context::sslv23);
@@ -682,6 +772,9 @@ void WsClient::OnOpen(client* c, websocketpp::connection_hdl hdl) {
     return;
   }
   LOG_INFO("WebSocket connection opened");
+#ifndef NDEBUG
+  TraceSignal("websocket_open");
+#endif
   {
     std::lock_guard lock(transport_mutex_);
     connection_handle_ = hdl;
@@ -699,18 +792,30 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
   std::string error_msg = con ? con->get_ec().message() : "unknown";
   websocketpp::lib::error_code ec =
       con ? con->get_ec() : websocketpp::lib::error_code();
+#ifndef NDEBUG
+  if (const auto diagnostics = GetTransport().diagnostics)
+    diagnostics->Event("websocket_failed", ec);
+#endif
 
   const bool certificate_failed = tls_failure_count_.load() > 0;
-  const bool wrapped_transport_error =
-      ec == websocketpp::transport::error::pass_through ||
-      ec == websocketpp::transport::error::tls_error;
-  const auto transport_error = con && wrapped_transport_error
-                                   ? con->get_transport_ec()
-                                   : websocketpp::lib::asio::error_code();
+  // WebSocket++ may overwrite this during shutdown. Debug builds preserve the
+  // original handshake result separately through the diagnostic observer.
+  const auto transport_error = con ? con->get_transport_ec()
+                                  : websocketpp::lib::asio::error_code();
   // Fixed fields are safe for credential-filtered controller diagnostics.
-  LOG_WARN("Signaling transport failure: category={} code={} transport_category={} transport_code={} certificate_failed={}",
+#ifndef NDEBUG
+  LOG_WARN("Signaling transport failure: category={} code={} transport_category={} "
+           "transport_code={} certificate_failed={} client={} attempt={} "
+           "transport_error_phase=post_shutdown",
+           ec.category().name(), ec.value(), transport_error.category().name(),
+           transport_error.value(), certificate_failed, diagnostic_id_,
+           diagnostic_attempt_.load());
+#else
+  LOG_WARN("Signaling transport failure: category={} code={} transport_category={} "
+           "transport_code={} certificate_failed={}",
            ec.category().name(), ec.value(), transport_error.category().name(),
            transport_error.value(), certificate_failed);
+#endif
   bool is_tls_error = certificate_failed;
   if (con) {
     std::string ec_msg = error_msg;
@@ -756,6 +861,11 @@ void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
     return;
   }
   auto con = c->get_con_from_hdl(hdl);
+#ifndef NDEBUG
+  if (const auto diagnostics = GetTransport().diagnostics)
+    diagnostics->Event("websocket_closed",
+                       con ? con->get_ec() : websocketpp::lib::error_code{});
+#endif
   // blank/abnormal_close means the transport died without a close frame, which
   // is what separates a server-initiated shutdown from a network drop.
   const websocketpp::close::status::value close_code =
