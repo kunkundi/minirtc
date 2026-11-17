@@ -11,7 +11,7 @@ package("websocketpp")
     add_patches("0.8.2", path.join(os.scriptdir(), "patches", "cpp20_constructors_0.8.2.patch"),
         "00cb9fc3af60d3115ae66dfb6da7b3e3698a29b9644e4c7a5328cee465c98e10")
     add_patches("0.8.2", path.join(os.scriptdir(), "patches", "tls_diagnostics_0.8.2.patch"),
-        "ac524b88cd14bbbe9cde7f3836cf7d70ee5084670537c5d86107e4cecb54e362")
+        "4e585b02b521e32384275d21507d481e9148d92e8a548380a3695a385181de1b")
     add_configs("tls_diagnostics_revision", {default = "2", type = "string", readonly = true,
         description = "Optional native TLS handshake and shutdown diagnostics"})
     -- Use a new package hash so prebuilt images/caches cannot reuse unpatched headers.

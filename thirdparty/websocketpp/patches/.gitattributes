@@ -1,0 +1,2 @@
+# Preserve unified diff context markers and line endings on every platform.
+*.patch text eol=lf -whitespace
