@@ -220,6 +220,7 @@ class IceAgent {
   gulong punch_packet_handler_ = 0;
   std::atomic<int64_t> punch_relay_ready_ms_{0};
   int64_t punch_original_deadline_ms_ = 0;
+  bool punch_mapping_updated_ = false;
   bool punch_attempted_ = false;
   // Only the owning Nice/DTLS context can export. No keys before fingerprint
   // verification; output is cleared even on failure.

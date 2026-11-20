@@ -177,6 +177,7 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   punch_remote_supported_ = false;
   punch_retry_supported_ = false;
   punch_negotiated_once_ = false;
+  punch_mapping_updated_ = false;
   punch_attempted_ = false;
   punch_relay_ready_ms_ = 0;
   punch_original_deadline_ms_ = 0;
@@ -864,6 +865,12 @@ void IceAgent::OnStunMappingStatic(NiceAgent*, NiceCandidate* sample,
            g_get_monotonic_time() / 1000, sequence});
     }
     analysis = AnalyzeNatMappings(samples);
+  }
+  if (self->punch_config_.enabled() && analysis.samples >= 2) {
+    self->DispatchIceCallback([self] {
+      self->punch_mapping_updated_ = true;
+      self->MaybeStartPunch();
+    });
   }
   LOG_INFO(
       "ICE STUN sample: sequence={} samples={} mapping={} "
@@ -1628,10 +1635,15 @@ void IceAgent::OnNiceSelectedPairStatic(NiceAgent* agent, guint stream,
 
 void IceAgent::MaybeStartPunch() {
   if (!gcontext_ || !g_main_context_is_owner(gcontext_)) return;
-  if (!CanAdvertiseUdpPunch() || !punch_remote_supported_ ||
-      !dtls_peer_verified_ || send_disabled_ || punch_source_ ||
-      punch_attempted_ || !punch_relay_ready_ms_)
+  if (punch_attempted_ || !punch_mapping_updated_ || punch_source_ ||
+      !punch_relay_ready_ms_ || !punch_remote_supported_ ||
+      !dtls_peer_verified_ || send_disabled_ || !CanAdvertiseUdpPunch())
     return;
+  if (punch_original_deadline_ms_ &&
+      g_get_monotonic_time() / 1000 >= punch_original_deadline_ms_) {
+    punch_attempted_ = true;
+    return;
+  }
   NiceCandidate *local = nullptr, *remote = nullptr;
   if (!nice_agent_get_selected_pair(agent_, stream_id_, 1, &local, &remote) ||
       !local || !remote ||
@@ -1682,7 +1694,6 @@ gboolean IceAgent::PunchTickStatic(gpointer data) {
       // until the backend is READY again and validates that window itself.
       keep = true;
     } else {
-      self->punch_attempted_ = true;
       const auto deadline =
           nice_agent_punch_get_deadline(self->agent_, self->stream_id_, 1) /
           1000;
@@ -1706,6 +1717,7 @@ gboolean IceAgent::PunchTickStatic(gpointer data) {
         }
       }
       std::vector<PunchMappingSnapshot> snapshots;
+      self->punch_mapping_updated_ = false;
       {
         std::lock_guard<std::mutex> lock(self->nat_mutex_);
         for (const auto& entry : self->punch_snapshots_)
@@ -1714,6 +1726,9 @@ gboolean IceAgent::PunchTickStatic(gpointer data) {
       auto chosen = SelectPunchMapping(
           snapshots, selected_ip, selected_port, self->punch_epoch_, now,
           self->punch_config_.mapping_sample_max_age_ms);
+      // An unusable snapshot can be superseded by a later STUN observation.
+      // Leave the timer idle until then, within the same relay upgrade window.
+      self->punch_attempted_ = deadline <= now || chosen.has_value();
       if (deadline > now && chosen && self->ExportPunchKeys(keys, generation)) {
         self->punch_runtime_ = std::make_unique<PunchRuntime>(
             self->agent_, self->stream_id_, self->punch_offer_peer_,
