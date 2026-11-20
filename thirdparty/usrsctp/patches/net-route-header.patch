@@ -1,0 +1,65 @@
+diff --git a/CMakeLists.txt b/CMakeLists.txt
+index 5e3319542..70be997d6 100644
+--- a/CMakeLists.txt
++++ b/CMakeLists.txt
+@@ -110,6 +110,11 @@ if (have_netinet_ip_icmp_h)
+ 	add_definitions(-DHAVE_NETINET_IP_ICMP_H)
+ endif ()
+ 
++check_include_files("net/route.h" have_net_route_h)
++if (have_net_route_h)
++	add_definitions(-DHAVE_NET_ROUTE_H)
++endif ()
++
+ check_include_files("stdatomic.h" have_stdatomic_h)
+ if (have_stdatomic_h)
+ 	add_definitions(-DHAVE_STDATOMIC_H)
+diff --git a/configure.ac b/configure.ac
+index 204e7ebde..4b5aefcb8 100644
+--- a/configure.ac
++++ b/configure.ac
+@@ -143,6 +143,7 @@ AC_CHECK_HEADERS(sys/queue.h)
+ AC_CHECK_HEADERS(linux/if_addr.h, [], [], [#include <sys/socket.h>])
+ AC_CHECK_HEADERS(linux/rtnetlink.h, [], [], [#include <sys/socket.h>])
+ AC_CHECK_HEADERS(netinet/ip_icmp.h, [], [], [#include <netinet/ip.h>])
++AC_CHECK_HEADERS(net/route.h)
+ 
+ AC_CHECK_MEMBER(struct sockaddr.sa_len,
+                 AC_DEFINE(HAVE_SA_LEN, 1, [Define this if your stack has sa_len in sockaddr struct.]),,
+diff --git a/meson.build b/meson.build
+index daac925bd..f42903d6b 100644
+--- a/meson.build
++++ b/meson.build
+@@ -114,6 +114,11 @@ if have_sys_types and have_netinet_in and have_netinet_ip and have_netinet_ip_ic
+     add_project_arguments('-DHAVE_NETINET_IP_ICMP_H', language: 'c')
+ endif
+ 
++# Feature: net/route
++if compiler.has_header('net/route.h')
++    add_project_arguments('-DHAVE_NET_ROUTE_H', language: 'c')
++endif
++
+ # Feature: stdatomic
+ if compiler.has_header('stdatomic.h')
+     add_project_arguments('-DHAVE_STDATOMIC_H', language: 'c')
+diff --git a/usrsctplib/user_recv_thread.c b/usrsctplib/user_recv_thread.c
+index bb436cd20..74819b7ec 100755
+--- a/usrsctplib/user_recv_thread.c
++++ b/usrsctplib/user_recv_thread.c
+@@ -56,8 +56,14 @@
+ #endif
+ #endif
+ #endif
+-#if defined(__APPLE__) || defined(__DragonFly__) || defined(__FreeBSD__)
+-#include <net/route.h>
++#if defined(HAVE_NET_ROUTE_H)
++# include <net/route.h>
++#elif defined(__APPLE__)
++/* Apple SDKs for iOS, tvOS, watchOS, etc. don't ship this header */
++# define RTM_NEWADDR 0xc
++# define RTM_DELADDR 0xd
++# define RTAX_IFA 5
++# define RTAX_MAX 8
+ #endif
+ /* local macros and datatypes used to get IP addresses system independently */
+ #if !defined(IP_PKTINFO) && !defined(IP_RECVDSTADDR)
