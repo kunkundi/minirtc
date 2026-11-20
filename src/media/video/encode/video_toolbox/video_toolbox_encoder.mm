@@ -30,6 +30,9 @@ class VideoToolboxEncoder::Impl {
   int ForceIdr();
   int SetTargetBitrate(int bitrate);
   int SetTargetFrameRate(int frame_rate);
+  bool SupportsDynamicEncodingSpeedPriority() const {
+    return speed_priority_supported_.load();
+  }
   int SetPrioritizeEncodingSpeedOverQuality(bool prioritize_speed);
   int GetResolution(int* width, int* height);
   std::string GetEncoderName() { return "VideoToolbox (H.264)"; }
@@ -40,9 +43,12 @@ class VideoToolboxEncoder::Impl {
     uint64_t generation = 0;
   };
 
-  int CreateCompressionSession(int width, int height, VTCompressionSessionRef* session_out);
+  int CreateCompressionSession(int width, int height, bool try_low_latency,
+                               VTCompressionSessionRef* session_out);
+  int TryCompressionSession(int width, int height, CFDictionaryRef encoder_spec,
+                            bool low_latency, VTCompressionSessionRef* session_out);
   int ResetEncodeResolution(int width, int height);
-  int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate);
+  int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate, bool low_latency);
   int ApplyEncodingSpeedPriority(VTCompressionSessionRef session,
                                  bool prioritize_speed);
   void ResetCodecState();
@@ -70,6 +76,8 @@ class VideoToolboxEncoder::Impl {
   int keyframe_interval_ = 30;
   int seq_ = 0;
   bool prioritize_encoding_speed_ = false;
+  bool low_latency_active_ = false;
+  std::atomic<bool> speed_priority_supported_{false};
   std::atomic<bool> force_idr_ = false;
   std::atomic<bool> native_input_logged_ = false;
 
@@ -178,8 +186,8 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   return 0;
 }
 
-int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
-                                                        VTCompressionSessionRef* session_out) {
+int VideoToolboxEncoder::Impl::CreateCompressionSession(
+    int width, int height, bool try_low_latency, VTCompressionSessionRef* session_out) {
   if (!session_out || width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0) {
     LOG_ERROR("Invalid VideoToolbox encoder resolution [{}x{}]", width, height);
     return -1;
@@ -188,7 +196,7 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
   *session_out = nullptr;
 
   CFMutableDictionaryRef encoder_spec = CFDictionaryCreateMutable(
-      nullptr, 1, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
+      nullptr, 0, &kCFTypeDictionaryKeyCallBacks, &kCFTypeDictionaryValueCallBacks);
 
   if (!encoder_spec) {
     LOG_ERROR("Failed to create VideoToolbox encoder specification");
@@ -209,26 +217,53 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
       kCFBooleanTrue);
 #endif
 
+#if TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED >= 110300
+  if (@available(macOS 11.3, *)) {
+    if (try_low_latency) {
+      CFDictionarySetValue(encoder_spec, kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
+                           kCFBooleanTrue);
+      if (TryCompressionSession(width, height, encoder_spec, true, session_out) == 0) {
+        CFRelease(encoder_spec);
+        return 0;
+      }
+      CFDictionaryRemoveValue(encoder_spec, kVTVideoEncoderSpecification_EnableLowLatencyRateControl);
+      LOG_WARN("Retrying VideoToolbox H.264 with standard rate control at {}x{}", width, height);
+    }
+  }
+#endif
+  const int result = TryCompressionSession(width, height, encoder_spec, false, session_out);
+  CFRelease(encoder_spec);
+  return result;
+}
+
+int VideoToolboxEncoder::Impl::TryCompressionSession(
+    int width, int height, CFDictionaryRef encoder_spec, bool low_latency,
+    VTCompressionSessionRef* session_out) {
   VTCompressionSessionRef new_session = nullptr;
   OSStatus status =
       VTCompressionSessionCreate(nullptr, width, height, kCMVideoCodecType_H264, encoder_spec,
                                  nullptr, nullptr, CompressionOutputCallback, this, &new_session);
-  CFRelease(encoder_spec);
   if (status != noErr || new_session == nullptr) {
     LOG_ERROR("Failed to create VideoToolbox encoder session [{}x{}]: {}", width, height, status);
     return -1;
   }
 
-  // kVTCompressionPropertyKey_MinAllowedFrameQP/kVTCompressionPropertyKey_MaxAllowedFrameQP
-
-  ApplyEncodingSpeedPriority(new_session, prioritize_encoding_speed_);
+  const bool speed_priority_supported =
+      ApplyEncodingSpeedPriority(new_session, prioritize_encoding_speed_) == 0;
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_RealTime, kCFBooleanTrue);
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MoreFramesBeforeStart,
                        kCFBooleanFalse);
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_AllowFrameReordering,
                        kCFBooleanFalse);
-  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_ProfileLevel,
-                       kVTProfileLevel_H264_High_5_2);
+  status = VTSessionSetProperty(new_session, kVTCompressionPropertyKey_ProfileLevel,
+                                low_latency ? kVTProfileLevel_H264_High_AutoLevel
+                                            : kVTProfileLevel_H264_High_5_2);
+  if (low_latency && status != noErr) {
+    LOG_WARN("VideoToolbox rejected H.264 High AutoLevel: {}", status);
+    VTCompressionSessionInvalidate(new_session);
+    CFRelease(new_session);
+    return -1;
+  }
 
   CFNumberRef frameIntervalRef = CFNumberCreate(nullptr, kCFNumberIntType, &keyframe_interval_);
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MaxKeyFrameInterval,
@@ -239,7 +274,7 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_ExpectedFrameRate, fpsRef);
   CFRelease(fpsRef);
 
-  if (ApplyBitrateProperties(new_session, average_bitrate_) != 0) {
+  if (ApplyBitrateProperties(new_session, average_bitrate_, low_latency) != 0) {
     VTCompressionSessionInvalidate(new_session);
     CFRelease(new_session);
     return -1;
@@ -260,16 +295,23 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(int width, int height,
     return -1;
   }
 
+  low_latency_active_ = low_latency;
+  speed_priority_supported_.store(speed_priority_supported);
   *session_out = new_session;
+  LOG_INFO("VideoToolbox H.264 session {}x{}: low_latency={}", width, height, low_latency);
   return 0;
 }
 
 int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
   const int previous_width = width_;
   const int previous_height = height_;
+  const bool retry_failed_session =
+      session_ && failed_generation_.load() == session_generation_.load() &&
+      width == previous_width && height == previous_height;
   // Revoke pending output before invalidation so it cannot be delivered as
   // frames from the replacement session.
   session_generation_.fetch_add(1);
+  speed_priority_supported_.store(false);
   CancelPendingFrameCallbacks();
   if (session_) {
     VTCompressionSessionInvalidate(session_);
@@ -278,7 +320,7 @@ int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
   }
 
   VTCompressionSessionRef new_session = nullptr;
-  if (CreateCompressionSession(width, height, &new_session) != 0) {
+  if (CreateCompressionSession(width, height, !retry_failed_session, &new_session) != 0) {
     next_recovery_attempt_ms_ = clock_->CurrentTimeMs() + 1000;
     return -1;
   }
@@ -297,26 +339,28 @@ int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
 }
 
 int VideoToolboxEncoder::Impl::ApplyBitrateProperties(VTCompressionSessionRef session,
-                                                      int bitrate) {
+                                                      int bitrate, bool low_latency) {
   if (!session || bitrate <= 0) {
     LOG_ERROR("Invalid VideoToolbox bitrate [{}]", bitrate);
     return -1;
   }
 
 #if __MAC_OS_X_VERSION_MAX_ALLOWED >= 130000
-  if (@available(macOS 13.0, *)) {
-    CFNumberRef bit_rate_ref =
-        CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate);
-    OSStatus cbr_status = VTSessionSetProperty(
-        session, kVTCompressionPropertyKey_ConstantBitRate, bit_rate_ref);
-    CFRelease(bit_rate_ref);
-    if (cbr_status == noErr) {
-      return 0;
+  if (!low_latency) {
+    if (@available(macOS 13.0, *)) {
+      CFNumberRef bit_rate_ref =
+          CFNumberCreate(nullptr, kCFNumberSInt32Type, &bitrate);
+      OSStatus cbr_status = VTSessionSetProperty(
+          session, kVTCompressionPropertyKey_ConstantBitRate, bit_rate_ref);
+      CFRelease(bit_rate_ref);
+      if (cbr_status == noErr) {
+        return 0;
+      }
+      LOG_WARN(
+          "VideoToolbox CBR is unavailable; falling back to a constrained "
+          "bitrate: status={}",
+          cbr_status);
     }
-    LOG_WARN(
-        "VideoToolbox CBR is unavailable; falling back to a constrained "
-        "bitrate: status={}",
-        cbr_status);
   }
 #endif
 
@@ -357,6 +401,7 @@ int VideoToolboxEncoder::Impl::ApplyEncodingSpeedPriority(
   OSStatus status = VTSessionSetProperty(
       session, kVTCompressionPropertyKey_PrioritizeEncodingSpeedOverQuality,
       prioritize_speed ? kCFBooleanTrue : kCFBooleanFalse);
+  if (status == kVTPropertyNotSupportedErr) return -1;
   if (status != noErr) {
     LOG_WARN(
         "Failed to set VideoToolbox encoding speed priority: enabled={} status={}",
@@ -655,7 +700,7 @@ int VideoToolboxEncoder::Impl::SetTargetBitrate(int bitrate) {
              bitrate, max_bitrate_);
   }
   if (!session_) return -1;
-  if (ApplyBitrateProperties(session_, average_bitrate_) != 0) {
+  if (ApplyBitrateProperties(session_, average_bitrate_, low_latency_active_) != 0) {
     return -1;
   }
   return 0;
@@ -677,7 +722,7 @@ int VideoToolboxEncoder::Impl::SetTargetFrameRate(int frame_rate) {
 int VideoToolboxEncoder::Impl::SetPrioritizeEncodingSpeedOverQuality(
     bool prioritize_speed) {
   lock_guard<mutex> guard(lock_);
-  if (!session_) {
+  if (!session_ || !SupportsDynamicEncodingSpeedPriority()) {
     return -1;
   }
   if (prioritize_encoding_speed_ == prioritize_speed) {
@@ -868,6 +913,10 @@ int VideoToolboxEncoder::SetTargetBitrate(int bitrate) { return impl_->SetTarget
 
 int VideoToolboxEncoder::SetTargetFrameRate(int frame_rate) {
   return impl_->SetTargetFrameRate(frame_rate);
+}
+
+bool VideoToolboxEncoder::SupportsDynamicEncodingSpeedPriority() const {
+  return impl_->SupportsDynamicEncodingSpeedPriority();
 }
 
 int VideoToolboxEncoder::SetPrioritizeEncodingSpeedOverQuality(
