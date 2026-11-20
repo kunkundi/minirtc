@@ -557,7 +557,7 @@ int NvDecoder::setReconfigParams(const Rect *pCropRect, const Dim *pResizeDim) {
   ++m_currentFrameGeneration;
   m_nDecodedFrame = 0;
   m_nDecodedFrameReturned = 0;
-  m_vTimestamp.clear();
+  m_outputTiming.clear();
 
   // Clear existing output buffers of different size.
   uint8_t *pFrame = NULL;
@@ -585,7 +585,13 @@ int NvDecoder::HandlePictureDecode(CUVIDPICPARAMS *pPicParams) {
     NVDEC_THROW_ERROR("Decoder not initialized.", CUDA_ERROR_NOT_INITIALIZED);
     return false;
   }
-  m_nPicNumInDecodeOrder[pPicParams->CurrPicIdx] = m_nDecodePicCnt++;
+  auto &surface = m_decodeSurfaces[pPicParams->CurrPicIdx];
+  surface.decodeOrder = m_nDecodePicCnt++;
+  // The parser identifies the same surface in decode and display callbacks.
+  // Keep the first field's timing when a picture arrives as two fields.
+  if (!pPicParams->field_pic_flag || !pPicParams->second_field) {
+    surface.input = m_currentInputTiming;
+  }
   CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
   NVDEC_API_CALL(cuvidDecodePicture_ld(m_hDecoder, pPicParams));
   if (m_bForce_zero_latency &&
@@ -627,7 +633,7 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
       (DecodeStatus.decodeStatus == cuvidDecodeStatus_Error ||
        DecodeStatus.decodeStatus == cuvidDecodeStatus_Error_Concealed)) {
     printf("Decode Error occurred for picture %d\n",
-           m_nPicNumInDecodeOrder[pDispInfo->picture_index]);
+           m_decodeSurfaces[pDispInfo->picture_index].decodeOrder);
   }
 
   uint8_t *pDecodedFrame = nullptr;
@@ -650,9 +656,12 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
         pFrame = new uint8_t[GetFrameSize()];
       }
       m_vpFrame.push_back(pFrame);
+      m_outputTiming.emplace_back();
       m_frameGeneration[pFrame] = m_currentFrameGeneration;
     }
     pDecodedFrame = m_vpFrame[m_nDecodedFrame - 1];
+    m_outputTiming[m_nDecodedFrame - 1] = {
+        pDispInfo->timestamp, m_decodeSurfaces[pDispInfo->picture_index].input};
   }
 
   // Copy luma plane
@@ -688,11 +697,6 @@ int NvDecoder::HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo) {
   }
   CUDA_DRVAPI_CALL(cuStreamSynchronize_ld(m_cuvidStream));
   CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
-
-  if ((int)m_vTimestamp.size() < m_nDecodedFrame) {
-    m_vTimestamp.resize(m_vpFrame.size());
-  }
-  m_vTimestamp[m_nDecodedFrame - 1] = pDispInfo->timestamp;
 
   NVDEC_API_CALL(cuvidUnmapVideoFrame_ld(m_hDecoder, dpSrcFrame));
   return 1;
@@ -762,7 +766,7 @@ NvDecoder::~NvDecoder() {
 }
 
 int NvDecoder::Decode(const uint8_t *pData, int nSize, int nFlags,
-                      int64_t nTimestamp) {
+                      int64_t nTimestamp, const FrameTiming *frameTiming) {
   m_nDecodedFrame = 0;
   m_nDecodedFrameReturned = 0;
   CUVIDSOURCEDATAPACKET packet = {0};
@@ -770,6 +774,7 @@ int NvDecoder::Decode(const uint8_t *pData, int nSize, int nFlags,
   packet.payload_size = nSize;
   packet.flags = nFlags | CUVID_PKT_TIMESTAMP;
   packet.timestamp = nTimestamp;
+  m_currentInputTiming = frameTiming ? *frameTiming : FrameTiming{};
   if (!pData || nSize == 0) {
     packet.flags |= CUVID_PKT_ENDOFSTREAM;
   }
@@ -779,30 +784,32 @@ int NvDecoder::Decode(const uint8_t *pData, int nSize, int nFlags,
   return m_nDecodedFrame;
 }
 
-uint8_t *NvDecoder::GetFrame(int64_t *pTimestamp) {
+uint8_t *NvDecoder::GetFrame(int64_t *pTimestamp, FrameTiming *frameTiming) {
   if (m_nDecodedFrame > 0) {
     std::lock_guard<std::mutex> lock(m_mtxVPFrame);
     m_nDecodedFrame--;
-    if (pTimestamp) *pTimestamp = m_vTimestamp[m_nDecodedFrameReturned];
+    const auto &timing = m_outputTiming[m_nDecodedFrameReturned];
+    if (pTimestamp) *pTimestamp = timing.presentationTimestamp;
+    if (frameTiming) *frameTiming = timing.input;
     return m_vpFrame[m_nDecodedFrameReturned++];
   }
 
   return NULL;
 }
 
-uint8_t *NvDecoder::GetLockedFrame(int64_t *pTimestamp) {
+uint8_t *NvDecoder::GetLockedFrame(int64_t *pTimestamp,
+                                   FrameTiming *frameTiming) {
   uint8_t *pFrame;
-  uint64_t timestamp;
   if (m_nDecodedFrame > 0) {
     std::lock_guard<std::mutex> lock(m_mtxVPFrame);
     m_nDecodedFrame--;
     pFrame = m_vpFrame[0];
     m_vpFrame.erase(m_vpFrame.begin(), m_vpFrame.begin() + 1);
 
-    timestamp = m_vTimestamp[0];
-    m_vTimestamp.erase(m_vTimestamp.begin(), m_vTimestamp.begin() + 1);
-
-    if (pTimestamp) *pTimestamp = timestamp;
+    const auto &timing = m_outputTiming.front();
+    if (pTimestamp) *pTimestamp = timing.presentationTimestamp;
+    if (frameTiming) *frameTiming = timing.input;
+    m_outputTiming.erase(m_outputTiming.begin());
 
     return pFrame;
   }
@@ -840,7 +847,6 @@ void NvDecoder::UnlockFrame(uint8_t **pFrame) {
 
   m_vpFrame.push_back(*pFrame);
 
-  // add a dummy entry for timestamp
-  m_vTimestamp.push_back(0);
+  m_outputTiming.emplace_back();
 }
 }  // namespace minirtc

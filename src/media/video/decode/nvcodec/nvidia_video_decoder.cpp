@@ -237,7 +237,12 @@ int NvidiaVideoDecoder::Decode(
 
   int num_frame_returned = 0;
   try {
-    num_frame_returned = state_->decoder->Decode(data, (int)size);
+    const NvDecoder::FrameTiming timing{received_frame->CapturedTimestamp(),
+                                        received_frame->ReceivedTimestamp()};
+    // MiniRTC delivers complete access units. Parse this picture now so its
+    // decode surface keeps these timestamps until the display callback.
+    num_frame_returned = state_->decoder->Decode(
+        data, (int)size, CUVID_PKT_ENDOFPICTURE, 0, &timing);
   } catch (const NVDECException& error) {
     LOG_WARN("NVDEC runtime failure, code={}: {}",
              static_cast<int>(error.getErrorCode()), error.what());
@@ -259,10 +264,10 @@ int NvidiaVideoDecoder::Decode(
   for (size_t i = 0; i < num_frame_returned; ++i) {
     cudaVideoSurfaceFormat format = state_->decoder->GetOutputFormat();
     if (format == cudaVideoSurfaceFormat_NV12) {
-      uint8_t* decoded_frame_buffer = nullptr;
-      decoded_frame_buffer = native_video_output_
-                                 ? state_->decoder->GetLockedFrame()
-                                 : state_->decoder->GetFrame();
+      NvDecoder::FrameTiming timing;
+      uint8_t* decoded_frame_buffer =
+          native_video_output_ ? state_->decoder->GetLockedFrame(nullptr, &timing)
+                               : state_->decoder->GetFrame(nullptr, &timing);
       frame_width_ = state_->decoder->GetWidth();
       frame_height_ = state_->decoder->GetHeight();
       if (decoded_frame_buffer) {
@@ -284,10 +289,8 @@ int NvidiaVideoDecoder::Decode(
             native_decoded_frame.SetHeight(frame_height_);
             native_decoded_frame.SetDecodedWidth(frame_width_);
             native_decoded_frame.SetDecodedHeight(frame_height_);
-            native_decoded_frame.SetReceivedTimestamp(
-                received_frame->ReceivedTimestamp());
-            native_decoded_frame.SetCapturedTimestamp(
-                received_frame->CapturedTimestamp());
+            native_decoded_frame.SetReceivedTimestamp(timing.received_us);
+            native_decoded_frame.SetCapturedTimestamp(timing.captured_us);
             native_decoded_frame.SetDecodedTimestamp(clock_->CurrentTime());
             native_decoded_frame.SetNativeFrame(native_frame->Descriptor());
             on_receive_decoded_frame(&native_decoded_frame);
@@ -301,10 +304,8 @@ int NvidiaVideoDecoder::Decode(
           decoded_frame_->SetHeight(frame_height_);
           decoded_frame_->SetDecodedWidth(frame_width_);
           decoded_frame_->SetDecodedHeight(frame_height_);
-          decoded_frame_->SetReceivedTimestamp(
-              received_frame->ReceivedTimestamp());
-          decoded_frame_->SetCapturedTimestamp(
-              received_frame->CapturedTimestamp());
+          decoded_frame_->SetReceivedTimestamp(timing.received_us);
+          decoded_frame_->SetCapturedTimestamp(timing.captured_us);
           decoded_frame_->SetDecodedTimestamp(clock_->CurrentTime());
 #ifdef SAVE_DECODED_NV12_STREAM
           fwrite((unsigned char*)decoded_frame_->Buffer(), 1,

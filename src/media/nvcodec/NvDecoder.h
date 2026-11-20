@@ -92,6 +92,11 @@ struct Dim {
  */
 class NvDecoder {
  public:
+  struct FrameTiming {
+    int64_t captured_us = 0;
+    int64_t received_us = 0;
+  };
+
   /**
    *  @brief This function is used to initialize the decoder session.
    *  Application must call this function to initialize the decoder, before
@@ -239,16 +244,19 @@ class NvDecoder {
    *   @param  nSize - size of the data buffer in bytes
    *   @param  nFlags - CUvideopacketflags for setting decode options
    *   @param  nTimestamp - presentation timestamp
+   *   @param  frameTiming - optional timing for one complete input picture or
+   * field submitted with CUVID_PKT_ENDOFPICTURE.
    */
   int Decode(const uint8_t *pData, int nSize, int nFlags = 0,
-             int64_t nTimestamp = 0);
+             int64_t nTimestamp = 0, const FrameTiming *frameTiming = nullptr);
 
   /**
    *   @brief  This function returns a decoded frame and timestamp. This
    * function should be called in a loop for fetching all the frames that are
    * available for display.
    */
-  uint8_t *GetFrame(int64_t *pTimestamp = nullptr);
+  uint8_t *GetFrame(int64_t *pTimestamp = nullptr,
+                    FrameTiming *frameTiming = nullptr);
 
   /**
    *   @brief  This function decodes a frame and returns the locked frame
@@ -256,7 +264,8 @@ class NvDecoder {
    * the buffers getting overwritten, even if subsequent decode calls are made.
    * The frame buffers remain locked, until UnlockFrame() is called
    */
-  uint8_t *GetLockedFrame(int64_t *pTimestamp = nullptr);
+  uint8_t *GetLockedFrame(int64_t *pTimestamp = nullptr,
+                          FrameTiming *frameTiming = nullptr);
 
   /**
    *   @brief  This function unlocks the frame buffer and makes the frame
@@ -400,10 +409,19 @@ class NvDecoder {
   // returned to the new output pool.
   std::unordered_map<uint8_t *, uint64_t> m_frameGeneration;
   uint64_t m_currentFrameGeneration = 0;
-  // timestamps of decoded frames
-  std::vector<int64_t> m_vTimestamp;
+  struct OutputTiming {
+    int64_t presentationTimestamp = 0;
+    FrameTiming input;
+  };
+  std::vector<OutputTiming> m_outputTiming;
+  FrameTiming m_currentInputTiming;
+  struct DecodeSurface {
+    int decodeOrder = 0;
+    FrameTiming input;
+  };
+  DecodeSurface m_decodeSurfaces[32];
   int m_nDecodedFrame = 0, m_nDecodedFrameReturned = 0;
-  int m_nDecodePicCnt = 0, m_nPicNumInDecodeOrder[32];
+  int m_nDecodePicCnt = 0;
   bool m_bEndDecodeDone = false;
   std::mutex m_mtxVPFrame;
   int m_nFrameAlloc = 0;
