@@ -25,6 +25,10 @@ class VideoToolboxEncoder::Impl {
   Impl(std::shared_ptr<SystemClock> clock);
   ~Impl();
 
+  void FinishPendingOutput() {
+    CancelPendingFrameCallbacks();
+    WaitForActiveCallbacks();
+  }
   int Init(const MediaCodecConfig& config);
   int Encode(const RawFrame& raw_frame, function<int(const EncodedFrame&)> on_encoded_image);
   int ForceIdr();
@@ -264,6 +268,13 @@ int VideoToolboxEncoder::Impl::TryCompressionSession(
     CFRelease(new_session);
     return -1;
   }
+
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_YCbCrMatrix,
+                       kCVImageBufferYCbCrMatrix_ITU_R_601_4);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_ColorPrimaries,
+                       kCVImageBufferColorPrimaries_ITU_R_709_2);
+  VTSessionSetProperty(new_session, kVTCompressionPropertyKey_TransferFunction,
+                       kCVImageBufferTransferFunction_sRGB);
 
   CFNumberRef frameIntervalRef = CFNumberCreate(nullptr, kCFNumberIntType, &keyframe_interval_);
   VTSessionSetProperty(new_session, kVTCompressionPropertyKey_MaxKeyFrameInterval,
@@ -899,6 +910,8 @@ VideoToolboxEncoder::VideoToolboxEncoder(std::shared_ptr<SystemClock> clock)
     : impl_(new Impl(clock)) {}
 
 VideoToolboxEncoder::~VideoToolboxEncoder() = default;
+
+void VideoToolboxEncoder::FinishPendingOutput() { impl_->FinishPendingOutput(); }
 
 int VideoToolboxEncoder::Init(const MediaCodecConfig& config) { return impl_->Init(config); }
 

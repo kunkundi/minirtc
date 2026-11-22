@@ -259,10 +259,37 @@ uint32_t CeilLog2(uint32_t value) {
 
 }  // namespace
 
+std::optional<uint8_t> H264BitstreamParser::ReadSpsProfile(const uint8_t* data, size_t size) {
+  size_t start = 0, prefix = 0;
+  while (FindStartCode(data, size, start, &start, &prefix)) {
+    const size_t payload = start + prefix;
+    if (size - payload < 2) break;
+    const auto type = data[payload] & kNaluTypeMask;
+    if (type == kNaluSps) return data[payload + 1];
+    if (type == 1 || type == 5) break;
+    start = payload + 1;
+  }
+  return std::nullopt;
+}
+
 void H264BitstreamParser::Reset() {
   sps_.reset();
   pps_.reset();
   last_slice_qp_delta_.reset();
+}
+
+void H264BitstreamParser::ParseColorInfo(const uint8_t* bitstream, size_t length) {
+  size_t start = 0, prefix = 0;
+  while (FindStartCode(bitstream, length, start, &start, &prefix)) {
+    const size_t payload = start + prefix;
+    if (payload >= length) return;
+    const auto type = bitstream[payload] & kNaluTypeMask;
+    if (type == 1 || type == 5) return;
+    size_t end = length, next_prefix = 0;
+    FindStartCode(bitstream, length, payload + 1, &end, &next_prefix);
+    if (type == kNaluSps) sps_ = ParseSps(bitstream + payload + 1, end - payload - 1);
+    start = end;
+  }
 }
 
 void H264BitstreamParser::ParseBitstream(const uint8_t* bitstream,
@@ -445,6 +472,16 @@ H264BitstreamParser::ParseSps(const uint8_t* data, size_t length) const {
     sps.width = width;
     sps.height = height;
   }
+  bool present = false;
+  if (!reader.ReadBit(&present) || !present) return sps;  // VUI
+  if (!reader.ReadBit(&present)) return sps;
+  if (present && (!reader.ReadBits(8, &value) || (value == 255 && !reader.SkipBits(32))))
+    return sps;
+  if (!reader.ReadBit(&present) || (present && !reader.SkipBits(1))) return sps;
+  if (!reader.ReadBit(&present) || !present || !reader.SkipBits(3) ||
+      !reader.ReadBit(&sps.color.full_range) || !reader.ReadBit(&present))
+    return sps;
+  if (present && reader.SkipBits(16) && reader.ReadBits(8, &value)) sps.color.bt709 = value == 1;
   return sps;
 }
 

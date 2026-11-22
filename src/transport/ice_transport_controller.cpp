@@ -871,6 +871,19 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       return 0;
     }
 
+    // Capture may already have tone-mapped the frame for SDR viewers.
+    bool tone_map = false;
+    if (native_frame && native_frame->type == MiniRtcNativeVideoFrameHdr10) {
+      uint32_t accepted = native_frame->payload.hdr10.codec_mask;
+      if (!accepted) accepted = MiniRtcHdrCodecAv1;
+      const auto codec = video_codec_type_ == VideoCodecType::AV1
+                             ? MiniRtcHdrCodecAv1 : MiniRtcHdrCodecH264;
+      tone_map = (accepted & codec) == 0 ||
+                 !context->codec->SupportsNativeFrameInput(native_frame->type);
+    }
+    if (tone_map && valid_cpu_frame) {
+      native_frame = nullptr;
+    }
     RawFrame raw_frame = native_frame
                              ? RawFrame(*native_frame)
                              : RawFrame(
@@ -985,11 +998,11 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     const int target_width = target_resolution.first;
     const int target_height = target_resolution.second;
     auto post_encode = [weak_self, weak_context, encode_queue, channel_name,
-                        force_i_frame, target_width, target_height,
+                        force_i_frame, target_width, target_height, tone_map,
                         settings_generation](RawFrame&& frame) mutable {
       encode_queue->PostTask([weak_self, weak_context, encode_queue,
                               channel_name, force_i_frame, target_width,
-                              target_height, settings_generation,
+                              target_height, settings_generation, tone_map,
                               frame = std::move(frame)]() mutable {
         auto self = weak_self.lock();
         auto context = weak_context.lock();
@@ -1017,7 +1030,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
             (target_width < frame.Width() || target_height < frame.Height());
         if (const auto* native_frame = frame.NativeFrame();
             native_frame &&
-            (needs_scaling ||
+            (tone_map || (needs_scaling && native_frame->type != MiniRtcNativeVideoFrameHdr10) ||
              !context->codec->SupportsNativeFrameInput(native_frame->type))) {
           if (!frame.MaterializeNativeFrame()) {
             LOG_ERROR("Failed to materialize native video frame for stream [{}]",
@@ -3070,7 +3083,7 @@ int IceTransportController::UpdateVideoSettings(
     }
     lock.unlock();
     for (auto& prepared : encoders) {
-      prepared.codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
+      prepared.codec = VideoEncoderFactory::CreateNativeSessionEncoder(
           self->clock_, prepared.config, self->video_encoder_hardware_,
           self->video_codec_type_);
       if (!prepared.codec) {
@@ -3221,7 +3234,7 @@ int IceTransportController::CreateStreamCodecs(
       if (context->type == StreamType::kVideo) {
         if (!context->codec) {
           context->codec =
-              VideoEncoderFactory::CreateInitializedVideoEncoder(
+              VideoEncoderFactory::CreateNativeSessionEncoder(
                   clock, media_config_, hardware_acceleration, codec_type);
           if (!context->codec) {
             LOG_ERROR("Create and initialize encoder for [{}] failed",
@@ -3272,7 +3285,7 @@ int IceTransportController::CreateStreamCodecs(
       }
       if (!context->codec) {
         if (context->type == StreamType::kVideo) {
-          context->codec = VideoDecoderFactory::CreateInitializedVideoDecoder(
+          context->codec = VideoDecoderFactory::CreateNativeSessionDecoder(
               clock, hardware_acceleration, codec_type, native_video_output_);
           if (!context->codec) {
             LOG_ERROR("Decoder [{}] init failed", channel_name);

@@ -125,6 +125,13 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
       encoder_params_.iTargetBitrate;
   encoder_params_.sSpatialLayers[0].iMaxSpatialBitrate =
       encoder_params_.iMaxBitrate;
+  auto& color = encoder_params_.sSpatialLayers[0];
+  color.bVideoSignalTypePresent = true;
+  color.bColorDescriptionPresent = true;
+  color.bFullRange = false;
+  color.uiColorPrimaries = CP_BT709;
+  color.uiTransferCharacteristics = TRC_IEC61966_2_1;
+  color.uiColorMatrix = CM_SMPTE170M;
   encoder_params_.sSpatialLayers[0].uiLevelIdc = LEVEL_5_2;
 
   // SingleNalUnit

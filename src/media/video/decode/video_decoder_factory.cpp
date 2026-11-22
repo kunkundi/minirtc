@@ -2,6 +2,10 @@
 
 #include <exception>
 
+#ifdef MINIRTC_H264_HIGH10
+#include "h264_high10.h"
+#endif
+
 #include "dav1d/dav1d_av1_decoder.h"
 #if defined(_WIN32) || defined(_WIN64)
 #include "wmf/d3d11_h264_decoder.h"
@@ -160,6 +164,18 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateInitializedVideoDecoder(
   }
 #endif
   return nullptr;
+}
+
+std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateNativeSessionDecoder(
+    std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
+    VideoCodecType codec_type, bool native_video_output) {
+  auto decoder = CreateInitializedVideoDecoder(
+      clock, hardware_acceleration, codec_type, native_video_output);
+#ifdef MINIRTC_H264_HIGH10
+  if (decoder && codec_type == VideoCodecType::H264)
+    return MakeHigh10Decoder(std::move(decoder), clock, native_video_output);
+#endif
+  return decoder;
 }
 
 bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(

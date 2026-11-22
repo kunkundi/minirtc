@@ -182,6 +182,8 @@ enum MiniRtcNativeVideoFrameType : uint32_t {
   MiniRtcNativeVideoFrameCVPixelBuffer = 3,
   /// Output-only Surface buffer.
   MiniRtcNativeVideoFrameAndroidMediaCodec = 4,
+  /// Packed I010 (Y, U, V), BT.2020 non-constant luminance, PQ, limited range.
+  MiniRtcNativeVideoFrameHdr10 = 5,
 };
 
 /// NV12 planes in CPU memory. Strides are bytes per row, including padding.
@@ -219,9 +221,22 @@ typedef struct {
   int (*render)(void* owner, void* native_window);
 } MiniRtcAndroidMediaCodecFrame;
 
+enum MiniRtcHdrCodec {
+  MiniRtcHdrCodecAv1 = 1,
+  MiniRtcHdrCodecH264 = 2,
+};
+
 /// Access only the member named by MiniRtcNativeVideoFrame::type.
 typedef union {
   MiniRtcCpuNv12Frame cpu_nv12;
+  /// Host-endian 16-bit samples with 10 significant low bits. Chroma is 4:2:0.
+  struct {
+    const uint16_t* i010;
+    /// Reference white used for local SDR copies, in cd/m². Zero selects 203.
+    float sdr_white_nits;
+    /// Input only. HDR codecs accepted by this receiver. Zero means AV1 only.
+    uint32_t codec_mask;
+  } hdr10;
   MiniRtcAndroidMediaCodecFrame android_media_codec;
   MiniRtcCudaNv12Frame cuda_nv12;
   /// NV12 CVPixelBufferRef; use Apple APIs for plane access.
@@ -1016,6 +1031,9 @@ MINIRTC_API int MiniRtcIsDirectAddressPair(
 /// precedence over legacy reason strings. Invalid/missing data returns an
 /// Unknown/MiniRtcConnectionFailed result with zero retry_after. Exceptions are contained.
 MINIRTC_API MiniRtcJoinFailure MiniRtcParseJoinFailure(const char* message, size_t message_size);
+
+/// Whether native sessions in this build support H.264 High 10 HDR.
+MINIRTC_API bool MiniRtcSupportsH264High10();
 
 /**
  * @brief Read the peer's monotonic clock in microseconds for frame timestamps.

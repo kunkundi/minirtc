@@ -1,4 +1,5 @@
 #include "resolution_adapter.h"
+#include "hdr_video_frame.h"
 
 #include <algorithm>
 #include <cmath>
@@ -356,6 +357,24 @@ int ResolutionAdapter::ResolutionDowngrade(const RawFrame& video_frame,
                                            RawFrame& scaled_frame) {
   if (target_width <= 0 || target_height <= 0) {
     return -1;
+  }
+
+  if (const auto* native = video_frame.NativeFrame();
+      native && native->type == MiniRtcNativeVideoFrameHdr10) {
+    auto dst =
+        HdrVideoFrame::Create(target_width, target_height, native->payload.hdr10.sdr_white_nits);
+    if (!dst) return -1;
+    const int w = native->width, h = native->height;
+    const auto* y = native->payload.hdr10.i010;
+    const auto* u = y + size_t(w) * h;
+    if (libyuv::I420Scale_16(y, w, u, w / 2, u + size_t(w) * h / 4, w / 2, w, h, dst->Y(),
+                             target_width, dst->U(), target_width / 2, dst->V(), target_width / 2,
+                             target_width, target_height,
+                             ScaleFilterForContent(video_content_type_)) != 0)
+      return -1;
+    scaled_frame = RawFrame(*dst->Descriptor());
+    scaled_frame.SetCapturedTimestamp(video_frame.CapturedTimestamp());
+    return 0;
   }
 
   const size_t scaled_resolution =

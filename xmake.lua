@@ -8,6 +8,12 @@ option("USE_CUDA")
     set_description("Use CUDA for hardware codec acceleration")
 option_end()
 
+option("MINIRTC_ENABLE_H264_HIGH10")
+    set_default(false)
+    set_showmenu(true)
+    set_description("Enable the GPL x264 High 10 backend for desktop HDR")
+option_end()
+
 option("MINIRTC_ENABLE_AOM")
     set_default(false)
     set_showmenu(true)
@@ -108,6 +114,13 @@ else
     add_packages("asio", "nlohmann_json", "spdlog", "libnice", "websocketpp", "libsrtp", "openfec", "libopus", "openh264", "dav1d", "libyuv", "concurrentqueue")
     add_requires("svt-av1 v3.0.2", {system = false, configs = {shared = false, tools = false}})
     add_packages("svt-av1")
+end
+
+local h264_high10 = is_config("MINIRTC_ENABLE_H264_HIGH10", true) and is_plat("windows", "macosx")
+if h264_high10 then
+    includes("thirdparty/ffmpeg-h264")
+    add_requires("ffmpeg-h264 8.1.3", {system = false})
+    add_requires("x264 v2024.02.27", {system = false, configs = {opencl = false, gpl = true}})
 end
 
 if is_config("MINIRTC_ENABLE_AOM", true) then
@@ -266,6 +279,12 @@ target("transport")
     "src/transport/paced_sender", {public = true})
 
 target("media")
+    if h264_high10 then
+        add_defines("MINIRTC_H264_HIGH10")
+        add_packages("ffmpeg-h264", "x264")
+        add_files("src/media/video/high10/*.cpp")
+        add_includedirs("src/media/video/high10")
+    end
     set_kind("object")
     add_deps("log", "frame", "common", "rtp")
     if is_harmony then
@@ -385,6 +404,10 @@ target("pc")
     add_includedirs("src/pc", "src/api", {public = true})
 
 target("minirtc")
+    if h264_high10 then
+        add_defines("MINIRTC_H264_HIGH10")
+        add_packages("ffmpeg-h264", "x264", {public = true})
+    end
     set_kind("static")
     add_deps("log", "pc")
     add_files("src/rtc/*.cpp")
