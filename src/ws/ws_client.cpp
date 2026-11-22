@@ -903,7 +903,7 @@ bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
     const auto queue_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                               ping_dispatched_at_ - ping_queued_at_)
                               .count();
-    LOG_INFO(
+    LOG_DEBUG(
         "WebSocket heartbeat: seq={} rtt_ms={} io_queue_ms={} "
         "callback_queue_ms={} callback_execution_ms={}",
         ping_sequence_, last_pong_rtt_ms_, queue_ms, callback_queue_ms_.load(),
