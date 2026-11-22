@@ -60,6 +60,13 @@ add_defines("USE_CUDA=" .. (is_config("USE_CUDA", true) and "1" or "0"))
 local is_iphoneos = is_plat("iphoneos")
 local is_android = is_plat("android")
 local is_harmony = is_plat("harmony")
+if is_plat("windows") then
+    -- The MSVC gettext port omits this prototype when resolving relative
+    -- catalog directories. An implicit int return truncates the x64 pointer.
+    local header = path.join(os.scriptdir(), "thirdparty/libintl/windows_wgetcwd.h")
+    add_requireconfs("**.libintl", {version = "1.0", override = true,
+        configs = {cflags = '/FI"' .. header .. '"'}})
+end
 if is_harmony then
     add_requireconfs("**.usrsctp", {configs = {cxflags = "-D_GNU_SOURCE"}})
 end

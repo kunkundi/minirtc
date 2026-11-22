@@ -20,16 +20,18 @@ bool IsValidAudioFrameInput(const MiniRtcAudioFrame* audio_frame) {
 }  // namespace
 
 MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params) {
+  return MiniRtcCreatePeerWithLogDirectory(params, nullptr);
+}
+
+MiniRtcPeerPtr* MiniRtcCreatePeerWithLogDirectory(const MiniRtcParams* params,
+                                                 const char* log_directory) {
   if (!params) {
     std::cerr << "Params is null" << std::endl;
     return nullptr;
   }
 
-  if (params->log_path[0] != '\0') {
-    InitLogger(params->log_path);
-  } else {
-    InitLogger("logs");
-  }
+  const char* directory = log_directory ? log_directory : params->log_path;
+  InitLogger(*directory ? directory : "logs");
 
   MiniRtcPeerPtr* peer_ptr = new MiniRtcPeerPtr{};
 #ifdef USE_LIBDATACHANNEL_CONNECTION
