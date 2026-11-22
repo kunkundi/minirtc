@@ -354,6 +354,13 @@ class IceTransportController
     int64_t severe_encode_backlog_since_ms = 0;
     int64_t critical_encode_backlog_since_ms = 0;
     int64_t post_upgrade_protection_until_ms = 0;
+    // Receive side. Inputs submitted since the decoder last delivered a frame.
+    // A decoder without a synchronization point ignores delta access units and
+    // still reports success, so this count is the only observable signal. The
+    // decode task increments it; output delivery, which may run on a decoder
+    // thread, clears it.
+    std::atomic<int> decode_inputs_without_output{0};
+    int64_t last_decode_stall_request_ms = 0;
 
     void FinishStartupKeyframe() {
       startup_keyframe_pending = false;

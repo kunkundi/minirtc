@@ -39,6 +39,11 @@ constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
 constexpr int64_t kStartupKeyFrameBudgetMs = 600;
 constexpr size_t kStartupKeyFrameMaxBytes = 128 * 1024;
 constexpr int64_t kStartupKeyFrameTimeoutMs = 1500;
+// A decoder that never receives a synchronization point parses every delta
+// access unit, emits no frame, and reports success. Thirty inputs give a
+// half-second window at 60 fps, far longer than any healthy decode.
+constexpr int kInputsWithoutDecodedOutput = 30;
+constexpr int64_t kDecodeStallRequestIntervalMs = 1000;
 
 bool UsesKeyframeSizeBudget(const MediaCodecConfig& config) {
   return config.video_content_type == MiniRtcVideoContentType::ScreenContent &&
@@ -2658,6 +2663,7 @@ void IceTransportController::OnReceiveCompleteFrame(
 
     std::shared_ptr<MediaCodec> codec;
     std::shared_ptr<MediaChannel> transceiver;
+    std::shared_ptr<StreamContext> stream_context;
     OnReceiveVideo on_receive_video = nullptr;
     std::string remote_user_id;
     void* user_data = nullptr;
@@ -2677,6 +2683,7 @@ void IceTransportController::OnReceiveCompleteFrame(
 
       codec = context->codec;
       transceiver = context->transceiver;
+      stream_context = context;
       on_receive_video = self->on_receive_video_;
       remote_user_id = self->remote_user_id_;
       user_data = self->user_data_;
@@ -2691,11 +2698,24 @@ void IceTransportController::OnReceiveCompleteFrame(
             user_data) != 0 && transceiver) {
       transceiver->RequestKeyFrame();
     }
+    if (stream_context) {
+      stream_context->decode_inputs_without_output.fetch_add(
+          1, std::memory_order_relaxed);
+    }
     int num_frame_returned = codec->Decode(
         std::move(received_frame),
         [on_receive_video, remote_user_id, channel_name,
-         user_data](const DecodedFrame* decoded_frame) {
-          if (!on_receive_video || !decoded_frame) {
+         user_data, stream_context](const DecodedFrame* decoded_frame) {
+          if (!decoded_frame) {
+            return;
+          }
+          // Asynchronous decoders deliver here on their own thread, so keep
+          // the reset atomic rather than tied to the Decode call.
+          if (stream_context) {
+            stream_context->decode_inputs_without_output.store(
+                0, std::memory_order_relaxed);
+          }
+          if (!on_receive_video) {
             return;
           }
 
@@ -2716,6 +2736,29 @@ void IceTransportController::OnReceiveCompleteFrame(
       LOG_WARN("Decoder failed for stream [{}], requesting key frame",
                channel_name);
       transceiver->RequestKeyFrame();
+    }
+    // A decoder fed only delta access units parses them, emits nothing, and
+    // reports success, so no existing recovery path fires. Without this check
+    // the stream stays blank until the sender's next scheduled keyframe, which
+    // is up to a full GOP away. Ask for a synchronization point as soon as the
+    // run of unanswered input is long enough to have produced a frame.
+    if (stream_context && transceiver) {
+      const int inputs_without_output =
+          stream_context->decode_inputs_without_output.load(
+              std::memory_order_relaxed);
+      if (inputs_without_output >= kInputsWithoutDecodedOutput) {
+        const int64_t now_ms = self->clock_->CurrentTimeMs();
+        if (now_ms - stream_context->last_decode_stall_request_ms >=
+            kDecodeStallRequestIntervalMs) {
+          stream_context->last_decode_stall_request_ms = now_ms;
+          stream_context->decode_inputs_without_output.store(
+              0, std::memory_order_relaxed);
+          LOG_WARN("Decoder delivered no frame for {} inputs on stream [{}]; "
+                   "requesting a key frame",
+                   inputs_without_output, channel_name);
+          transceiver->RequestKeyFrame();
+        }
+      }
     }
   });
 }
