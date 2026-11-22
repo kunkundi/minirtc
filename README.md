@@ -1,64 +1,64 @@
 # MiniRTC
 
-轻量级跨平台实时音视频传输库，为 [CrossDesk](https://github.com/kunkundi/crossdesk) 提供媒体编解码、P2P / TURN 连接、网络自适应和数据传输能力。应用负责采集、播放、渲染及业务协议，MiniRTC 负责传输链路。
+A lightweight, cross-platform real-time media library powering [CrossDesk](https://github.com/kunkundi/crossdesk), with codecs, P2P / TURN connectivity, network adaptation, and data transport. Applications provide capture, playback, rendering, and business protocols; MiniRTC handles the transport pipeline.
 
-[English](README_EN.md) · [公开 API](src/api/minirtc.h) · [CrossDesk](https://github.com/kunkundi/crossdesk) · [信令服务端](https://github.com/kunkundi/crossdesk-server)
+[中文](README_ZH.md) · [Public API](src/api/minirtc.h) · [CrossDesk](https://github.com/kunkundi/crossdesk) · [Signaling server](https://github.com/kunkundi/crossdesk-server)
 
 [![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20%7C%20macOS%20%7C%20iOS%20%7C%20Android%20%7C%20HarmonyOS-blue?style=flat)](#platforms)
 [![License: LGPL v3](https://img.shields.io/badge/license-LGPL--3.0-blue)](LICENSE)
 [![GitHub issues](https://img.shields.io/github/issues/kunkundi/minirtc)](https://github.com/kunkundi/minirtc/issues)
 
-[核心能力](#features) · [平台与编解码](#platforms) · [构建](#build) · [接入流程](#integration) · [媒体与内存](#frames) · [连接配置](#network) · [排查与验证](#validation)
+[Features](#features) · [Platforms and codecs](#platforms) · [Build](#build) · [Integration](#integration) · [Media and memory](#frames) · [Connectivity](#network) · [Validation](#validation)
 
 <a id="features"></a>
 
-## 核心能力
+## Features
 
-- **媒体传输：** H.264 / AV1 视频、Opus 音频、多媒体流和面向指定 Peer 的发送接口。
-- **连接与穿透：** WSS 信令、ICE / STUN、TURN UDP / TCP、动态 TURN 凭据，以及可用网关上的 UPnP 映射。
-- **网络自适应：** SRTP、RTP / RTCP、NACK 重传、带宽估计、拥塞控制，以及帧率 / 分辨率降级策略。
-- **数据传输：** 可靠与非可靠数据流；键鼠、剪贴板、文件等数据的序列化与业务处理由应用实现。
-- **浏览器互通：** 通过 libdatachannel 路径与 [CrossDesk Web Client](https://github.com/kunkundi/crossdesk-web-client) 交互。需要匹配的信令与媒体协商，不是任意 WebRTC 服务的即插即用客户端。
+- **Media:** H.264 / AV1 video, Opus audio, multiple media streams, and APIs for sending to a specific peer.
+- **Connectivity:** WSS signaling, ICE / STUN, TURN UDP / TCP, dynamic TURN credentials, and UPnP mapping on supported gateways.
+- **Network adaptation:** SRTP, RTP / RTCP, NACK retransmission, bandwidth estimation, congestion control, and frame-rate / resolution degradation policies.
+- **Data:** reliable and unreliable streams. Applications implement serialization and handling for mouse, keyboard, clipboard, file, and other messages.
+- **Browser interoperability:** a libdatachannel path supports [CrossDesk Web Client](https://github.com/kunkundi/crossdesk-web-client). Matching signaling and media negotiation are required; this is not a drop-in client for arbitrary WebRTC services.
 
-构建产物是 **C++17 静态库**，公开函数采用 `extern "C"` 链接。当前头文件含 C++ 类型与语法，不能直接作为纯 C 头文件使用。
+The build produces a **C++17 static library** with `extern "C"` function linkage. The public header uses C++ types and syntax and cannot be included directly as a pure C header.
 
 <a id="platforms"></a>
 
-## 平台与编解码
+## Platforms and codecs
 
-| 平台 | 编码 | 解码 |
+| Platform | Encoding | Decoding |
 | --- | --- | --- |
-| Windows x64 / Linux x86-64 | H.264：CUDA NVENC 或 OpenH264；AV1：SVT-AV1 | H.264：CUDA NVDEC 或 OpenH264；AV1：dav1d |
-| Linux arm64 | H.264：OpenH264；AV1：SVT-AV1 | H.264：OpenH264；AV1：dav1d |
-| macOS | H.264：VideoToolbox 或 OpenH264；AV1：SVT-AV1 | H.264：VideoToolbox 或 OpenH264；AV1：dav1d |
-| iOS | H.264：VideoToolbox；AV1：SVT-AV1 | H.264：VideoToolbox；AV1：dav1d |
-| Android arm64 | H.264 / AV1：MediaCodec，失败回退 OpenH264 / SVT-AV1 | H.264 / AV1：MediaCodec，失败回退 OpenH264 / dav1d |
-| HarmonyOS arm64（开发版） | H.264：OpenH264；AV1：SVT-AV1 | H.264 / AV1 原生解码，失败回退 OpenH264 / dav1d |
+| Windows x64 / Linux x86-64 | H.264: NVENC with CUDA, or OpenH264; AV1: SVT-AV1 | H.264: NVDEC with CUDA, or OpenH264; AV1: dav1d |
+| Linux arm64 | H.264: OpenH264; AV1: SVT-AV1 | H.264: OpenH264; AV1: dav1d |
+| macOS | H.264: VideoToolbox or OpenH264; AV1: SVT-AV1 | H.264: VideoToolbox or OpenH264; AV1: dav1d |
+| iOS | H.264: VideoToolbox; AV1: SVT-AV1 | H.264: VideoToolbox; AV1: dav1d |
+| Android arm64 | H.264 / AV1: MediaCodec with OpenH264 / SVT-AV1 fallback | H.264 / AV1: MediaCodec with OpenH264 / dav1d fallback |
+| HarmonyOS arm64 (development) | H.264: OpenH264; AV1: SVT-AV1 | Native H.264 / AV1 decoding with OpenH264 / dav1d fallback |
 
-硬件路径要求 `hardware_acceleration=true`，并受构建配置和设备能力影响。iOS 不构建 OpenH264，真机 H.264 依赖 VideoToolbox；模拟器解码路径可使用 VideoToolbox 软件实现，但不代表所有模拟器配置都已验证。Apple 平台 AV1 仍使用软件路径；可选 libaom 后端不替代默认 AV1 工厂。
+Hardware paths require `hardware_acceleration=true`, a matching build, and device support. iOS does not build OpenH264: physical-device H.264 requires VideoToolbox; its simulator decode path can use VideoToolbox software decoding, without implying support for every simulator configuration. Apple AV1 remains software-based. libaom is optional and does not replace the default AV1 factories.
 
-原生输出随后端使用 CPU NV12、CUDA NV12、Apple `CVPixelBuffer` 或 Android MediaCodec 缓冲区，不代表每条路径都零拷贝。详见 [编码工厂](src/media/video/encode/video_encoder_factory.cpp)、[解码工厂](src/media/video/decode/video_decoder_factory.cpp) 和 [帧生命周期](docs/INTEGRATION.md#frames)。
+Native output varies by backend: CPU NV12, CUDA NV12, Apple `CVPixelBuffer`, or Android MediaCodec buffers. It does not imply zero-copy support on every path. See the [encoder](src/media/video/encode/video_encoder_factory.cpp), [decoder](src/media/video/decode/video_decoder_factory.cpp), and [frame ownership guide](docs/INTEGRATION_EN.md#frames).
 
-### Windows Media Foundation 编码缓冲
+### Windows Media Foundation encoder buffering
 
-ScreenContent 的可选 `CODECAPI_AVEncCommonBufferSize` 配置与平均码率、真实 PTS、无 B 帧和发送准入相互独立。以下环境变量须在启动进程前设置：
+The optional ScreenContent `CODECAPI_AVEncCommonBufferSize` policy is independent of average bitrate, real PTS, no-B-frame encoding and packet admission. Set these variables before starting the process:
 
-| 变量 | 行为 |
+| Variable | Behavior |
 | --- | --- |
-| `MINIRTC_WMF_BUFFER_MS` | 默认 300；普通帧请求该时长，IDR/恢复至少 600ms。0 禁止本程序配置该属性，并不关闭驱动内部缓冲。允许 100–2000ms。 |
-| `MINIRTC_WMF_INITIAL_BUFFER_MS` | 可选初始化实验，允许 100–2000ms，包含首个 IDR。未设置、0 或无效值使用 `max(普通帧时长, 600)`；不覆盖上一变量的禁用状态。 |
+| `MINIRTC_WMF_BUFFER_MS` | Defaults to 300ms for ordinary frames; IDR/recovery requests use at least 600ms. 0 leaves the property untouched, without disabling the driver's internal buffering. Accepts 100–2000ms. |
+| `MINIRTC_WMF_INITIAL_BUFFER_MS` | Optional initialization experiment, 100–2000ms, including the first IDR. Missing, zero or invalid values use `max(ordinary duration, 600)`. Does not override disabled buffer control. |
 
-300/600 两个普通帧选项默认采用相同的初始化恢复预算。预算按协商码率换算为 bytes，限制到 4096–131072，再适配已知驱动范围。实验性初始化 300ms 与默认初始化 600ms 应使用第二个变量在全新进程/MFT 中对照，不能忽略首帧、周期 IDR、FIR 恢复和画质。
+The ordinary 300/600 options use the same initial recovery allowance by default. Durations are converted to bytes at the negotiated bitrate, clamped to 4096–131072, then adjusted to a known driver range. Use the second variable with fresh processes/MFTs to compare initial 300ms and 600ms, checking first frames, periodic IDRs, FIR recovery and quality.
 
-初始化读回成功不代表支持运行时修改。动态请求必须读回已知且满足要求的值；`S_OK`、`IsSupported` 或未知读回均不能证明生效。紧预算失败后最多请求一次恢复预算，失败即停止该实例的可选写入，不重建、不丢弃待处理 IDR；若恢复仅保留旧值，也停止动态探测。正常分辨率重建后重新查询能力。
+Successful initialization readback does not establish runtime support. Dynamic writes require known, satisfactory readback; `S_OK`, `IsSupported` and unknown readback alone prove nothing. A failed tighter request gets at most one recovery attempt. Failure stops optional writes for that instance without rebuilding or losing a pending IDR. Recovery that only retains the old value also stops probing. Normal resolution rebuilds negotiate capability again.
 
-`WMF encoder buffer state` 日志分别记录初始化确认、`dynamic_capability`、最近请求和当前读回值。`fixed_readback` 表示保留当前观察到的固定 bytes；随码率变化，`readback_equivalent_ms` 也会改变，不能持续称为 600ms。停止写入后仍周期性及在 IDR 后只读观察。`readback_verified` 仅验证属性变化，不能证明码流 HRD 合规或单帧硬上限。可选设置破坏初始化时保留一次不写该属性的全新 MFT 重试。
+`WMF encoder buffer state` logs separate initialization confirmation, `dynamic_capability`, the last request and current readback. `fixed_readback` retains the observed bytes; its `readback_equivalent_ms` changes with bitrate and must not continually be described as 600ms. Read-only monitoring continues periodically and after IDRs when writes stop. `readback_verified` confirms property changes only, not bitstream HRD compliance or a hard per-frame cap. Initialization broken by an optional write retains one clean MFT retry without that property.
 
 <a id="build"></a>
 
-## 快速构建
+## Build quickly
 
-准备 Git、[Xmake](https://xmake.io/guide/quick-start.html#installation) 和 C++17 编译器。Windows 使用 MSVC 与 Windows SDK，x64 的 libyuv 依赖还使用 `clang-cl`；macOS 使用 Xcode，Linux 使用 GCC / Clang。
+Install Git, [Xmake](https://xmake.io/guide/quick-start.html#installation), and a C++17 compiler. Windows uses MSVC and the Windows SDK; the libyuv dependency also uses `clang-cl` on x64. macOS uses Xcode, and Linux uses GCC / Clang.
 
 ```sh
 git clone https://github.com/kunkundi/minirtc.git
@@ -67,51 +67,51 @@ xmake f -m release --USE_CUDA=false -y
 xmake b minirtc
 ```
 
-首次构建由 Xmake 解析和下载依赖，生成 `libminirtc.a` 或 `minirtc.lib`；最终应用还需链接匹配的依赖库与系统库。CUDA、iOS、Android、HarmonyOS、构建选项及安装方法见 [构建指南](docs/INTEGRATION.md#build)。嵌入 CrossDesk 的构建应使用对应应用的平台脚本。
+Xmake resolves dependencies on the first build. The result is `libminirtc.a` or `minirtc.lib`; final applications also need the matching dependency and system libraries. See the [build guide](docs/INTEGRATION_EN.md#build) for CUDA, iOS, Android, HarmonyOS, build options, and installation. Existing builds embedded in CrossDesk should use that application's platform scripts.
 
 <a id="integration"></a>
 
-## 接入应用
+## Integrate into an application
 
-公开函数、类型、回调及全局枚举项统一使用 `MiniRtc` 前缀。头文件先定义类型与配置，再按生命周期、信令、流、媒体、数据、直连和辅助操作组织函数。调用方需迁移到新名称，并使用匹配的库重新构建。
+Public functions, types, callbacks and unscoped enum values use the `MiniRtc` prefix. The header groups type/configuration definitions first, followed by lifecycle, signaling, stream, media, data, direct-session and utility functions. Consumers migrate to the new names and rebuild against the matching library.
 
-公开函数与数据类型统一声明在 `minirtc.h`，SDK 安装该头文件。日志回调和级别通过 `MiniRtcConfigureLogging` 配置，地址与连接拒绝解析、Android JavaVM 设置也通过该入口提供。
+Public functions and data types are declared in `minirtc.h`, the header installed by the SDK. Use `MiniRtcConfigureLogging` for log callbacks and thresholds. Address parsing, join-rejection parsing, and Android JavaVM configuration are also available through this header.
 
-1. 清零 `MiniRtcParams`，填写信令地址、本机身份、编解码选项、TURN 模式、SRTP 和回调。
-2. 创建 Peer 并检查结果，在协商前注册视频、音频和数据流。
-3. 调用 `MiniRtcInit`，等待 `MiniRtcSignalConnected`；返回 0 本身不表示登录成功。
-4. 加入远程会话，等待 `MiniRtcConnectionConnected` 后再发送帧或数据。
-5. 结束时停止应用侧采集和发送、退出会话，再销毁 Peer。
+1. Zero-initialize `MiniRtcParams`, then set the signaling endpoint, identity, codec options, TURN mode, SRTP, and callbacks.
+2. Create a peer, check the result, and register video, audio, and data streams before session negotiation.
+3. Call `MiniRtcInit` and wait for `MiniRtcSignalConnected`; a zero return value alone does not mean login succeeded.
+4. Join the remote session and wait for `MiniRtcConnectionConnected` before sending frames or data.
+5. Stop application capture and sending, leave the session, and destroy the peer when finished.
 
-从 [初始化示例与回调约定](docs/INTEGRATION.md#integration) 开始，并以 [公开头文件](src/api/minirtc.h) 为接口依据。当前调用路径要求三个状态 / 报告回调有效；`tests/` 中的旧示例不能作为现行接入教程。
+Start with the [configuration example and callback rules](docs/INTEGRATION_EN.md#integration), then consult the [public header](src/api/minirtc.h). The three status/report callbacks are required by current call paths. Old samples under `tests/` are not a current integration tutorial.
 
 <a id="frames"></a>
 
-## 媒体与内存
+## Media and memory
 
-- CPU 视频输入为连续 **NV12**，宽高为正偶数。
-- 音频输入为 **48 kHz、单声道、16-bit PCM**，每帧恰好 **10 ms / 960 字节**。
-- 采集时间戳使用**单调时钟微秒**。
-- 回调缓冲区是借用数据。异步使用前复制 CPU 数据；原生描述符需复制并保留所有者，使用后释放。Android MediaCodec 输出使用独立的渲染约定。
+- CPU video input is packed **NV12** with positive even dimensions.
+- Audio input is **48 kHz, mono, 16-bit PCM**, exactly **10 ms / 960 bytes** per frame.
+- Capture timestamps use **monotonic microseconds**.
+- Callback buffers are borrowed. Copy CPU data before asynchronous use; copy and retain native descriptors, then release them after use. Android MediaCodec output has a separate rendering contract.
 
-实现采集与渲染前请阅读 [媒体格式和生命周期](docs/INTEGRATION.md#frames)。
+See [media formats and ownership](docs/INTEGRATION_EN.md#frames) before implementing capture or rendering.
 
 <a id="network"></a>
 
-## 连接与自托管
+## Connectivity and self-hosting
 
-使用 [CrossDesk Server](https://github.com/kunkundi/crossdesk-server) 提供 WSS 信令，Coturn 提供中继。当前会话使用服务端下发的 ICE 列表和临时 TURN 凭据；额外 STUN / TURN 节点在服务端配置。两端需要兼容的信令服务并信任其证书。
+Use [CrossDesk Server](https://github.com/kunkundi/crossdesk-server) for WSS signaling and Coturn for relay. Current sessions use server-issued ICE lists and temporary TURN credentials; configure additional STUN / TURN endpoints on the server. Both peers must use compatible signaling and trust its certificate.
 
-[ICE 与 TURN 模式](docs/INTEGRATION.md#network) · [TLS 与 INI 配置](docs/INTEGRATION.md#tls-与-ini-配置) · [浏览器客户端](https://github.com/kunkundi/crossdesk-web-client)
+[ICE and TURN modes](docs/INTEGRATION_EN.md#network) · [TLS and INI configuration](docs/INTEGRATION_EN.md#tls-and-ini-configuration) · [Browser client](https://github.com/kunkundi/crossdesk-web-client)
 
 <a id="validation"></a>
 
-## 排查与验证
+## Troubleshooting and validation
 
-[排查指南](docs/INTEGRATION.md#validation) 覆盖登录、回调、原生帧、音频、CUDA 和依赖问题。集成后需在目标平台验证登录、直连 / 中继、媒体与数据传输及退出重连；当前 Xmake 没有为旧 `tests/` 目录注册可直接运行的目标。
+The [troubleshooting guide](docs/INTEGRATION_EN.md#validation) covers login, callbacks, native frames, audio, CUDA, and dependency problems. Validate login, direct / relay sessions, media/data transfer, and teardown on the target platform. The current Xmake file does not register runnable targets for the legacy `tests/` directory.
 
-## 反馈与许可
+## Feedback and license
 
-[提交问题](https://github.com/kunkundi/minirtc/issues)时附上源码版本、目标平台 / 架构、Xmake 配置、编解码与 TURN 模式，以及脱敏日志。
+[Report issues](https://github.com/kunkundi/minirtc/issues) with the source revision, target platform / architecture, Xmake configuration, codec and TURN modes, and sanitized logs.
 
-MiniRTC 原创代码使用 [LGPL-3.0-only](LICENSE)。第三方代码、依赖和分发注意事项见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。
+MiniRTC's original code uses [LGPL-3.0-only](LICENSE). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for third-party code, dependencies, and distribution notes.

@@ -1,6 +1,6 @@
 # MiniRTC build and integration guide
 
-[Project overview](../README_EN.md) · [中文](INTEGRATION.md)
+[Project overview](../README.md) · [中文](INTEGRATION.md)
 
 [Build](#build) · [Integration](#integration) · [Frames and ownership](#frames) · [Connectivity](#network) · [Troubleshooting](#validation)
 

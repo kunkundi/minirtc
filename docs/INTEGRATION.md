@@ -1,6 +1,6 @@
 # MiniRTC 构建与接入指南
 
-[返回项目首页](../README.md) · [English](INTEGRATION_EN.md)
+[返回项目首页](../README_ZH.md) · [English](INTEGRATION_EN.md)
 
 [构建](#build) · [接入流程](#integration) · [媒体与内存](#frames) · [连接配置](#network) · [排查与验证](#validation)
 
