@@ -355,6 +355,10 @@ typedef struct MiniRtcNetTrafficStats {
   // available; distinct backends across streams are joined with " / ".
   char video_encoder[128] = {};
   char video_decoder[128] = {};
+  /// Selected direct ICE endpoints as IPv4:port or [IPv6]:port.
+  /// Both are empty for relay paths and before a pair is selected.
+  char local_endpoint[64] = {};
+  char remote_endpoint[64] = {};
 } MiniRtcNetTrafficStats;
 
 // -----------------------------------------------------------------------------

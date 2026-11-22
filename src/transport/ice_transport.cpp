@@ -5,6 +5,7 @@
 #include <charconv>
 #include <chrono>
 #include <cstddef>
+#include <cstdio>
 #include <cstring>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -360,10 +361,7 @@ int IceTransport::InitIceTransmission(
           if (ice_transport_controller_)
             ice_transport_controller_->PopulateVideoCodecStats(
                 minirtc_net_traffic_stats);
-          on_receive_net_status_report_(
-              user_id_.data(), user_id_.size(), MiniRtcTraversalMode(traversal_type_),
-              &minirtc_net_traffic_stats, remote_user_id_.data(),
-              remote_user_id_.size(), user_data_);
+          ReportNetworkStats(minirtc_net_traffic_stats);
         }
       });
 
@@ -555,12 +553,22 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
            CandidateTransportName(local->transport),
            CandidateTypeName(remote->type),
            CandidateTransportName(remote->transport));
-  LOG_DEBUG("Selected ICE addresses: local={} remote={}",
-            CandidateAddress(local->addr), CandidateAddress(remote->addr));
-  if (local->type == NICE_CANDIDATE_TYPE_RELAYED ||
-      remote->type == NICE_CANDIDATE_TYPE_RELAYED) {
+  const auto local_address = CandidateAddress(local->addr);
+  const auto remote_address = CandidateAddress(remote->addr);
+  LOG_DEBUG("Selected ICE addresses: local={} remote={}", local_address, remote_address);
+  const bool relay = local->type == NICE_CANDIDATE_TYPE_RELAYED ||
+                     remote->type == NICE_CANDIDATE_TYPE_RELAYED;
+  TraversalType previous;
+  {
+    std::lock_guard lock(selected_pair_mutex_);
+    previous = traversal_type_;
+    traversal_type_ = relay ? TraversalType::TRelay : TraversalType::TP2P;
+    local_endpoint_ = relay ? "" : local_address;
+    remote_endpoint_ = relay ? "" : remote_address;
+  }
+  if (relay) {
     LOG_INFO("Traversal using relay server");
-    if (traversal_type_ != TraversalType::TRelay &&
+    if (previous != TraversalType::TRelay &&
         g_object_class_find_property(G_OBJECT_GET_CLASS(agent),
                                      "relay-upgrade-timeout") != nullptr) {
       guint upgrade_window_ms = 0;
@@ -571,32 +579,40 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
             upgrade_window_ms);
       }
     }
-    traversal_type_ = TraversalType::TRelay;
   } else {
-    if (traversal_type_ == TraversalType::TRelay) {
+    if (previous == TraversalType::TRelay) {
       LOG_INFO("ICE relay upgraded to P2P without restarting media");
     }
     LOG_INFO("Traversal using p2p");
-    traversal_type_ = TraversalType::TP2P;
   }
   if (ice_transport_controller_) {
     // A selected-pair change can alter path asymmetry. Discard calibrations
     // and outstanding exchanges from the previous path, even for P2P -> P2P.
     receiver_rtt_.Reset();
     ice_transport_controller_->ResetTransportClockOffset();
-    ice_transport_controller_->SetRelayPath(traversal_type_ ==
-                                             TraversalType::TRelay);
+    ice_transport_controller_->SetRelayPath(relay);
   }
   MiniRtcNetTrafficStats net_traffic_stats{};
   net_traffic_stats.srtp_active = ice_transport_controller_ &&
                                 ice_transport_controller_->IsSrtpActive();
 
-  if (on_receive_net_status_report_) {
-    on_receive_net_status_report_(user_id_.data(), user_id_.size(),
-                                MiniRtcTraversalMode(traversal_type_),
-                                &net_traffic_stats, remote_user_id_.data(),
-                                remote_user_id_.size(), user_data_);
+  ReportNetworkStats(net_traffic_stats);
+}
+
+void IceTransport::ReportNetworkStats(MiniRtcNetTrafficStats& stats) {
+  if (!on_receive_net_status_report_) return;
+  MiniRtcTraversalMode mode;
+  {
+    std::lock_guard lock(selected_pair_mutex_);
+    mode = static_cast<MiniRtcTraversalMode>(traversal_type_);
+    std::snprintf(stats.local_endpoint, sizeof(stats.local_endpoint), "%s",
+                  local_endpoint_.c_str());
+    std::snprintf(stats.remote_endpoint, sizeof(stats.remote_endpoint), "%s",
+                  remote_endpoint_.c_str());
   }
+  on_receive_net_status_report_(user_id_.data(), user_id_.size(), mode, &stats,
+                                remote_user_id_.data(), remote_user_id_.size(),
+                                user_data_);
 }
 
 void IceTransport::OnDtlsHandshakeDone(gpointer user_ptr) {

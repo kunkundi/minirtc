@@ -178,6 +178,8 @@ class IceTransport {
                          const char* lfoundation, const char* rfoundation,
                          gpointer user_ptr);
 
+  void ReportNetworkStats(MiniRtcNetTrafficStats& stats);
+
   void OnReceiveBuffer(NiceAgent* agent, guint stream_id, guint component_id,
                        guint size, gchar* buffer, gpointer user_ptr);
 
@@ -265,7 +267,10 @@ class IceTransport {
   bool remote_gathering_done_ = false;
   std::atomic<NiceComponentState> state_{NICE_COMPONENT_STATE_DISCONNECTED};
   IceComponentStateTracker component_state_tracker_;
-  TraversalType traversal_type_ = TraversalType::TP2P;
+  std::mutex selected_pair_mutex_;
+  TraversalType traversal_type_ = TraversalType::TUnknown;
+  std::string local_endpoint_;
+  std::string remote_endpoint_;
   void* user_data_ = nullptr;
 
  private:
