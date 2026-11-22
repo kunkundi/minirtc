@@ -198,9 +198,7 @@ int MiniRtcConnection::SendReliableDataFrame(const char* data, size_t size,
     return -1;
   }
 
-  ice_transport_->SendReliableDataFrame(data, size, stream_id);
-
-  return 0;
+  return ice_transport_->SendReliableDataFrame(data, size, stream_id);
 }
 
 void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
