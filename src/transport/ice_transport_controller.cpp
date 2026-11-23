@@ -31,6 +31,10 @@ namespace {
 
 constexpr int64_t kDesktopPacerQueueLimitMs = 100;
 constexpr int64_t kDesktopFrameAdmissionQueueMs = 80;
+// Completed frames allowed to wait for the decoder before the receiver holds
+// new ones back. Two keeps the added delay to roughly two decode intervals
+// while still absorbing normal arrival jitter.
+constexpr int kMaxDecodeBacklog = 2;
 constexpr int64_t kRelayPacerBurstIntervalMs = 5;
 // Limit regular keyframe bytes independently of the pacer's queue draining.
 constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
@@ -665,6 +669,23 @@ uint32_t IceTransportController::AddVideoReceiveChannel(
       LOG_ERROR("Video stream receiver [{}:{}] create failed", channel_name,
                 ssrc);
       return 0;
+    }
+
+    // Bound the decode backlog. A decoder that falls behind would otherwise
+    // accumulate an unbounded FIFO of complete frames, which shows up as
+    // end-to-end latency that grows the longer the session runs. Holding the
+    // frame in the receiver keeps NACK/recovery state intact and lets the
+    // existing hard deadline decide when a frame is no longer worth showing.
+    // transceiver is a MediaChannel handle; the concrete type was just created
+    // above and is the only one that carries a video recovery state machine.
+    if (auto video_channel =
+            std::static_pointer_cast<VideoChannelReceive>(context->transceiver)) {
+      video_channel->SetFrameAdmissionFunc([weak_self] {
+        auto self = weak_self.lock();
+        if (!self) return false;
+        const auto queue = self->task_queue_decode_;
+        return !queue || queue->PendingTasks() < kMaxDecodeBacklog;
+      });
     }
   }
 

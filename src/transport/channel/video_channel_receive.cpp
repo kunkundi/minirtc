@@ -35,6 +35,7 @@ void VideoChannelReceive::Initialize(rtp::PAYLOAD_TYPE payload_type) {
       [this](std::unique_ptr<ReceivedFrame> received_frame) -> void {
         on_receive_complete_frame_(std::move(received_frame));
       });
+  rtp_video_receiver_->SetFrameAdmissionFunc(frame_admission_);
 
   rtp_video_receiver_->SetSendDataFunc([this](const char* data,
                                               size_t size) -> int {
@@ -62,6 +63,14 @@ void VideoChannelReceive::SetAbsoluteSendTimeExtensionId(
   abs_send_time_ext_id_ = extension_id;
   if (rtp_video_receiver_) {
     rtp_video_receiver_->SetAbsoluteSendTimeExtensionId(extension_id);
+  }
+}
+
+void VideoChannelReceive::SetFrameAdmissionFunc(
+    std::function<bool()> frame_admission) {
+  frame_admission_ = std::move(frame_admission);
+  if (rtp_video_receiver_) {
+    rtp_video_receiver_->SetFrameAdmissionFunc(frame_admission_);
   }
 }
 

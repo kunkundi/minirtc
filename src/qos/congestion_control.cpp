@@ -177,12 +177,13 @@ NetworkControlUpdate CongestionControl::OnProcessInterval(ProcessInterval msg) {
     const auto loss = loss_tracker_.recent();
     const auto pacing = GetPacingRates(msg.at_time);
     LOG_DEBUG("BWE state: target_bps={} ack_bps={} in_alr={} limited_cause={} "
-              "settled_lost={} settled_packets={} pacing_bps={} padding_bps={}",
+              "settled_lost={} settled_packets={} pacing_bps={} padding_bps={} "
+              "feedback={}",
               last_loss_based_target_rate_.bps(), ack ? ack->bps() : 0,
               start_time_ms.has_value(),
               last_probe_limited_cause_ ? static_cast<int>(*last_probe_limited_cause_) : -1,
               loss.lost, loss.packets, pacing.data_rate().bps(),
-              pacing.pad_rate().bps());
+              pacing.pad_rate().bps(), first_feedback_received_);
     probe_controller_->LogState(msg.at_time);
   }
 
@@ -562,9 +563,17 @@ void CongestionControl::MaybeTriggerOnNetworkChanged(
 }
 
 PacerConfig CongestionControl::GetPacingRates(Timestamp at_time) const {
+  // Screen content arrives as large per-frame bursts: one delta frame can be
+  // several times the average frame, and a key frame can exceed a full second
+  // of budget. Pacing needs headroom to drain that burst, otherwise a single
+  // frame's transmission time approaches the frame interval and the pacer
+  // queue holds a standing delay until desktop frame admission (80 ms
+  // expected / 100 ms oldest packet) starts dropping frames.
+  // Keep the WebRTC default multiplier for the whole session. The delay-based
+  // estimator still reacts to the larger bursts, and the admission guard above
+  // still bounds the queue when the path is genuinely saturated.
   const DataRate pacing_rate =
-      last_loss_based_target_rate_ *
-      (first_feedback_received_ ? 1.1 : kDefaultPaceMultiplier);
+      last_loss_based_target_rate_ * kDefaultPaceMultiplier;
   const DataRate padding_rate =
       last_loss_base_state_ == LossBasedState::kIncreaseUsingPadding
           ? last_pushback_target_rate_

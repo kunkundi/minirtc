@@ -26,8 +26,13 @@ constexpr int kMaxNackRetries = 100;
 constexpr int kMaxReorderedPackets = 128;
 constexpr int kNumReorderingBuckets = 10;
 constexpr TimeDelta kFailedSendRetryDelay = TimeDelta::Millis(20);
-// constexpr TimeDelta kDefaultSendNackDelay = TimeDelta::Zero();
-constexpr TimeDelta kDefaultSendNackDelay = TimeDelta::Millis(10);
+// Upper bound for the first NACK of a missing packet. WebRTC's historical
+// default of 10 ms exists to absorb reordering, but GetNackBatch already gates
+// on the reordering histogram (send_at_seq_num / WaitNumberOfPackets), so the
+// full delay is pure added latency on a short path: the repair cannot start
+// until it expires. Scale it with the measured RTT instead and keep the old
+// value only as a cap for long/high-variance paths.
+constexpr int64_t kMaxSendNackDelayMs = 10;
 }  // namespace
 
 NackRequester::NackInfo::NackInfo(uint16_t seq_num, uint16_t send_at_seq_num,
@@ -47,8 +52,7 @@ NackRequester::NackRequester(std::shared_ptr<Clock> clock)
       rtt_(kDefaultRtt),
       has_rtt_sample_(false),
       keyframe_request_pending_(false),
-      newest_seq_num_(0),
-      send_nack_delay_(kDefaultSendNackDelay) {}
+      newest_seq_num_(0) {}
 
 NackRequester::~NackRequester() {}
 
@@ -189,12 +193,19 @@ void NackRequester::AddPacketsToNack(uint16_t seq_num_start,
   }
 }
 
+TimeDelta NackRequester::SendNackDelay() const {
+  const int64_t rtt_ms = has_rtt_sample_ ? rtt_.ms() : kDefaultRtt.ms();
+  return TimeDelta::Millis(
+      std::clamp<int64_t>(rtt_ms / 4, 0, kMaxSendNackDelayMs));
+}
+
 std::vector<uint16_t> NackRequester::GetNackBatch(NackFilterOptions options) {
   // Called on worker_thread_.
 
   bool consider_seq_num = options != kTimeOnly;
   bool consider_timestamp = options != kSeqNumOnly;
   Timestamp now = clock_->CurrentTime();
+  const TimeDelta send_nack_delay = SendNackDelay();
   std::vector<uint16_t> nack_batch;
   auto it = nack_list_.begin();
   while (it != nack_list_.end()) {
@@ -202,7 +213,8 @@ std::vector<uint16_t> NackRequester::GetNackBatch(NackFilterOptions options) {
       ++it;
       continue;
     }
-    bool delay_timed_out = now - it->second.created_at_time >= send_nack_delay_;
+    bool delay_timed_out =
+        now - it->second.created_at_time >= send_nack_delay;
     TimeDelta retry_delay = rtt_;
     if (it->second.retries > 0) {
       retry_delay =

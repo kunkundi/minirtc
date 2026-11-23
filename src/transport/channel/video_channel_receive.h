@@ -43,6 +43,10 @@ class VideoChannelReceive : public MediaChannel {
   void OnClockOffset(int64_t offset_us, int64_t rtt_us) override;
   void ResetClockOffset() override;
 
+  /// Returns false while the decode consumer is behind; completed frames stay
+  /// queued in that case. Settable before or after Initialize().
+  void SetFrameAdmissionFunc(std::function<bool()> frame_admission);
+
   void OnSenderReport(const SenderReport &sender_report) override {
     if (rtp_video_receiver_) {
       rtp_video_receiver_->OnSenderReport(sender_report);
@@ -58,6 +62,7 @@ class VideoChannelReceive : public MediaChannel {
   std::shared_ptr<IOStatistics> ice_io_statistics_ = nullptr;
   std::unique_ptr<RtpVideoReceiver> rtp_video_receiver_ = nullptr;
   std::optional<uint8_t> abs_send_time_ext_id_;
+  std::function<bool()> frame_admission_;
   std::function<void(std::unique_ptr<ReceivedFrame>)>
       on_receive_complete_frame_ = nullptr;
 

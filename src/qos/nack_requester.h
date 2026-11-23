@@ -66,6 +66,9 @@ class NackRequester {
   std::vector<uint16_t> GetNackBatch(NackFilterOptions options);
   void UpdateReorderingStatistics(uint16_t seq_num);
   int WaitNumberOfPackets(float probability) const;
+  // First-NACK delay, scaled by the measured RTT. Called with the requester
+  // state consistent (same thread as the packet handlers).
+  TimeDelta SendNackDelay() const;
 
  private:
   std::shared_ptr<Clock> clock_;
@@ -77,7 +80,6 @@ class NackRequester {
   bool has_rtt_sample_;
   bool keyframe_request_pending_;
   uint16_t newest_seq_num_;
-  const TimeDelta send_nack_delay_;
 };
 }  // namespace minirtc
 
