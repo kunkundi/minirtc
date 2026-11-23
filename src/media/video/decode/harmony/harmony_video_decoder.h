@@ -21,6 +21,7 @@ class HarmonyVideoDecoder final : public MediaCodec {
   HarmonyVideoDecoder(std::shared_ptr<SystemClock> clock, VideoCodecType type);
   ~HarmonyVideoDecoder() override;
   int Init() override;
+  void RecoverAtKeyFrame() override;
   int Decode(std::unique_ptr<ReceivedFrame> frame, std::function<void(const DecodedFrame*)> callback) override;
   int GetResolution(int* width, int* height) const override;
   std::string GetDecoderName() const override;

@@ -20,6 +20,7 @@ class VideoToolboxDecoder : public MediaCodec {
   ~VideoToolboxDecoder();
 
   int Init() override;
+  void RecoverAtKeyFrame() override;
   int Decode(std::unique_ptr<ReceivedFrame> received_frame,
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)
       override;

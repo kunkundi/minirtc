@@ -17,6 +17,7 @@ class AndroidVideoDecoder final : public MediaCodec {
   AndroidVideoDecoder(std::shared_ptr<SystemClock> clock, VideoCodecType type,
                       bool native_video_output = false);
   int Init() override;
+  void RecoverAtKeyFrame() override;
   int Decode(std::unique_ptr<ReceivedFrame> frame,
              std::function<void(const DecodedFrame*)> callback) override;
   int GetResolution(int* width, int* height) const override;

@@ -101,6 +101,11 @@ bool HarmonyVideoDecoder::Configure(int w, int h) {
   configured_width_ = w; configured_height_ = h; width_ = w; height_ = h;
   failed_ = false; stop_ = false; output_ = std::thread([this] { Drain(); }); return true;
 }
+void HarmonyVideoDecoder::RecoverAtKeyFrame() {
+  std::lock_guard lock(mutex_);
+  if (!software_) Fallback("hardware decoder stopped producing frames");
+}
+
 int HarmonyVideoDecoder::Decode(std::unique_ptr<ReceivedFrame> frame, std::function<void(const DecodedFrame*)> callback) {
   std::lock_guard lock(mutex_);
   if (!initialized_ || !frame || !frame->Buffer() || !frame->Size() || frame->Size() > 8*1024*1024) return -1;

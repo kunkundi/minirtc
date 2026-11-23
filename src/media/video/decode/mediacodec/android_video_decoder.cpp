@@ -38,6 +38,11 @@ int AndroidVideoDecoder::Fallback(const char* reason) {
   return 0;
 }
 
+void AndroidVideoDecoder::RecoverAtKeyFrame() {
+  std::lock_guard lock(mutex_);
+  if (!software_) Fallback("hardware decoder stopped producing frames");
+}
+
 int AndroidVideoDecoder::Decode(
     std::unique_ptr<ReceivedFrame> frame,
     std::function<void(const DecodedFrame*)> callback) {

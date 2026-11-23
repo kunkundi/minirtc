@@ -176,6 +176,7 @@ class VideoToolboxDecoder::Impl {
   Impl(std::shared_ptr<SystemClock> clock, bool native_video_output);
   ~Impl();
 
+  void RecoverAtKeyFrame() { session_needs_recovery_.store(true); }
   int Init();
   int Decode(std::unique_ptr<ReceivedFrame> frame,
              std::function<void(const DecodedFrame*)> on_decoded_cb);
@@ -635,6 +636,8 @@ VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock,
     : impl_(std::make_shared<Impl>(std::move(clock), native_video_output)) {}
 
 VideoToolboxDecoder::~VideoToolboxDecoder() = default;
+
+void VideoToolboxDecoder::RecoverAtKeyFrame() { impl_->RecoverAtKeyFrame(); }
 
 int VideoToolboxDecoder::Init() { return impl_->Init(); }
 

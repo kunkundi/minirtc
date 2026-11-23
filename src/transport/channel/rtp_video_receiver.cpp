@@ -1116,16 +1116,6 @@ bool RtpVideoReceiver::Process() {
       if (pending_frames_.empty()) {
         break;
       }
-      // The decode consumer is behind. Hold this frame in the pending queue
-      // (with its NACK/recovery state) instead of growing an unbounded decode
-      // backlog; the hard deadline below still bounds how long it can wait, and
-      // the decode callback only reads an atomic so calling it under our locks
-      // is safe.
-      if (frame_admission_ && !frame_admission_()) {
-        recovery_admission_stalls_.fetch_add(1, std::memory_order_relaxed);
-        break;
-      }
-
       auto it = pending_frames_.begin();
       recovery_timestamp = it->first;
       recovery_request_generation = it->second.request_generation;
@@ -1171,18 +1161,7 @@ bool RtpVideoReceiver::Process() {
         dropped_frame = true;
         pending_frames_.erase(it);
       } else if (it->second.is_complete && awaiting_keyframe_ &&
-                 it->second.is_keyframe) {
-        soft_fir_avoided = it->second.recovery_escalated &&
-                           !it->second.soft_fir_requested;
-        awaiting_keyframe_ = false;
-        if (nack_ && it->second.last_sequence_number.has_value()) {
-          nack_->ClearUpTo(*it->second.last_sequence_number);
-        }
-        last_complete_frame_ts_ = it->first;
-        completed_keyframe = true;
-        completed_frame = std::move(it->second.frame);
-        pending_frames_.erase(it);
-      } else if (it->second.is_complete && awaiting_keyframe_) {
+                 !it->second.is_keyframe) {
         // An incomplete frame may still be missing its IDR header. Preserve
         // that repair opportunity; only discard known complete deltas here.
         dropped_timestamp = it->first;
@@ -1191,15 +1170,9 @@ bool RtpVideoReceiver::Process() {
           nack_->ClearUpTo(*it->second.last_sequence_number);
         MarkFrameDiscardedLocked(dropped_timestamp);
         pending_frames_.erase(it);
-      } else if (it->second.is_complete && !has_blocking_nacks) {
-        soft_fir_avoided = it->second.recovery_escalated &&
-                           !it->second.soft_fir_requested;
-        last_complete_frame_ts_ = it->first;
-        completed_keyframe = it->second.is_keyframe;
-        completed_frame = std::move(it->second.frame);
-        pending_frames_.erase(it);
-      } else if (recovery_age_ms > recovery_timing.hard_deadline_ms ||
-                 frame_age_ms > kMaxFrameAssemblyMs) {
+      } else if (frame_age_ms > kMaxFrameAssemblyMs ||
+                 (recovery_age_ms > recovery_timing.hard_deadline_ms &&
+                  (!it->second.is_complete || (has_blocking_nacks && !awaiting_keyframe_)))) {
         if (it->second.is_keyframe) {
           failed_keyframe = FailedKeyFrame{it->second.arrival_time,
                                           it->second.request_generation,
@@ -1219,6 +1192,22 @@ bool RtpVideoReceiver::Process() {
           // state.
           nack_->ClearUpTo(*it->second.last_sequence_number);
         }
+        pending_frames_.erase(it);
+      } else if (it->second.is_complete &&
+                 (!has_blocking_nacks || (awaiting_keyframe_ && it->second.is_keyframe))) {
+        if (frame_admission_ && !frame_admission_(it->second.is_keyframe)) {
+          recovery_admission_stalls_.fetch_add(1, std::memory_order_relaxed);
+          break;
+        }
+        if (awaiting_keyframe_ && nack_ && it->second.last_sequence_number) {
+          nack_->ClearUpTo(*it->second.last_sequence_number);
+        }
+        awaiting_keyframe_ = false;
+        soft_fir_avoided = it->second.recovery_escalated &&
+                           !it->second.soft_fir_requested;
+        last_complete_frame_ts_ = it->first;
+        completed_keyframe = it->second.is_keyframe;
+        completed_frame = std::move(it->second.frame);
         pending_frames_.erase(it);
       } else if (!it->second.recovery_escalated &&
                  recovery_age_ms > recovery_timing.soft_deadline_ms) {

@@ -154,8 +154,6 @@ class IceTransportController
   int OnReceiveDataAckRtpPacket(const char* data, size_t size, uint32_t ssrc,
                                 const std::string& channel_name);
 
-  void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame,
-                              const std::string& channel_name);
   void OnReceiveCompleteAudio(const char* data, size_t size,
                               const std::string& channel_name,
                               uint16_t sequence, uint32_t timestamp);
@@ -228,6 +226,23 @@ class IceTransportController
   std::function<int(const char*, size_t)> CreateUnpacedSendFunction(
       StreamType type);
   enum class StreamDirection { kSend, kReceive };
+
+  // Each receive channel owns one counter. The output callback keeps its
+  // reservation alive across asynchronous decode, including drops and resets.
+  struct DecodeBacklog {
+    std::atomic<int> pending{0};
+    int64_t last_submission_ms = 0;  // Accessed only on the RTP delivery thread.
+  };
+  struct DecodeReservation {
+    explicit DecodeReservation(const std::shared_ptr<DecodeBacklog>& backlog)
+        : backlog(backlog), previously_pending(backlog->pending.fetch_add(1)) {}
+    ~DecodeReservation() { --backlog->pending; }
+    std::shared_ptr<DecodeBacklog> backlog;
+    const int previously_pending;
+  };
+  void OnReceiveCompleteFrame(std::unique_ptr<ReceivedFrame> received_frame,
+                              const std::string& channel_name,
+                              std::shared_ptr<DecodeReservation> reservation);
 
   class StreamContext {
    public:

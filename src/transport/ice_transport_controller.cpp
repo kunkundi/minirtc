@@ -39,6 +39,7 @@ constexpr int64_t kQueueDelayWindowMs = 1000;
 // new ones back. Two keeps the added delay to roughly two decode intervals
 // while still absorbing normal arrival jitter.
 constexpr int kMaxDecodeBacklog = 2;
+constexpr int64_t kDecodeOutputTimeoutMs = 2000;
 constexpr int64_t kRelayPacerBurstIntervalMs = 5;
 // Limit regular keyframe bytes independently of the pacer's queue draining.
 constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
@@ -659,38 +660,29 @@ uint32_t IceTransportController::AddVideoReceiveChannel(
 
   if (!context->transceiver) {
     std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-    context->transceiver = std::make_shared<VideoChannelReceive>(
+    auto backlog = std::make_shared<DecodeBacklog>();
+    auto video_channel = std::make_shared<VideoChannelReceive>(
         channel_name, ssrc, context->rtx_ssrc.value_or(0), clock_, ice_agent_,
         ice_io_statistics_,
-        [this, weak_self,
-         channel_name](std::unique_ptr<ReceivedFrame> received_frame) {
+        [weak_self, channel_name, backlog](std::unique_ptr<ReceivedFrame> frame) {
           if (auto self = weak_self.lock()) {
-            OnReceiveCompleteFrame(std::move(received_frame), channel_name);
+            backlog->last_submission_ms = self->clock_->CurrentTimeMs();
+            self->OnReceiveCompleteFrame(std::move(frame), channel_name,
+                                         std::make_shared<DecodeReservation>(backlog));
           }
         });
-
-    if (!context->transceiver) {
-      LOG_ERROR("Video stream receiver [{}:{}] create failed", channel_name,
-                ssrc);
-      return 0;
-    }
-
-    // Bound the decode backlog. A decoder that falls behind would otherwise
-    // accumulate an unbounded FIFO of complete frames, which shows up as
-    // end-to-end latency that grows the longer the session runs. Holding the
-    // frame in the receiver keeps NACK/recovery state intact and lets the
-    // existing hard deadline decide when a frame is no longer worth showing.
-    // transceiver is a MediaChannel handle; the concrete type was just created
-    // above and is the only one that carries a video recovery state machine.
-    if (auto video_channel =
-            std::static_pointer_cast<VideoChannelReceive>(context->transceiver)) {
-      video_channel->SetFrameAdmissionFunc([weak_self] {
-        auto self = weak_self.lock();
-        if (!self) return false;
-        const auto queue = self->task_queue_decode_;
-        return !queue || queue->PendingTasks() < kMaxDecodeBacklog;
-      });
-    }
+    video_channel->SetFrameAdmissionFunc([weak_self, backlog](bool keyframe) {
+      auto self = weak_self.lock();
+      if (!self || !self->task_queue_decode_) return false;
+      const int queued = self->task_queue_decode_->PendingTasks();
+      if (queued >= kMaxDecodeBacklog) return false;
+      if (backlog->pending < kMaxDecodeBacklog) return true;
+      // A decoder which lost its output callbacks needs a fresh IDR to
+      // reset. Allow one recovery task after the normal output timeout.
+      return keyframe && queued == 0 && backlog->pending == kMaxDecodeBacklog &&
+             self->clock_->CurrentTimeMs() - backlog->last_submission_ms >= kDecodeOutputTimeoutMs;
+    });
+    context->transceiver = std::move(video_channel);
   }
 
   return ssrc;
@@ -2703,17 +2695,18 @@ int IceTransportController::OnReceiveDataAckRtpPacket(
 }
 
 void IceTransportController::OnReceiveCompleteFrame(
-    std::unique_ptr<ReceivedFrame> received_frame,
-    const std::string& channel_name) {
+    std::unique_ptr<ReceivedFrame> received_frame, const std::string& channel_name,
+    std::shared_ptr<DecodeReservation> reservation) {
   if (!task_queue_decode_) {
     LOG_ERROR("Decode task queue is nullptr");
     return;
   }
 
   std::weak_ptr<IceTransportController> weak_self = shared_from_this();
-  task_queue_decode_->PostTask([weak_self,
-                                received_frame = std::move(received_frame),
-                                channel_name]() mutable {
+  task_queue_decode_->PostTask([weak_self, received_frame = std::move(received_frame),
+                                queued = std::move(reservation), channel_name]() mutable {
+    // The task queue can retain its last callable while idle.
+    auto reservation = std::move(queued);
     auto self = weak_self.lock();
     if (!self) {
       return;
@@ -2760,19 +2753,20 @@ void IceTransportController::OnReceiveCompleteFrame(
       stream_context->decode_inputs_without_output.fetch_add(
           1, std::memory_order_relaxed);
     }
+    if (reservation->previously_pending >= kMaxDecodeBacklog &&
+        reservation->backlog->pending > kMaxDecodeBacklog) {
+      codec->RecoverAtKeyFrame();
+    }
     int num_frame_returned = codec->Decode(
         std::move(received_frame),
         [on_receive_video, remote_user_id, channel_name,
-         user_data, stream_context](const DecodedFrame* decoded_frame) {
-          if (!decoded_frame) {
-            return;
-          }
+         user_data, weak_context = std::weak_ptr<StreamContext>(stream_context),
+         reservation = std::move(reservation)](const DecodedFrame* decoded_frame) {
+          auto stream_context = weak_context.lock();
+          if (!decoded_frame || !stream_context) return;
           // Asynchronous decoders deliver here on their own thread, so keep
           // the reset atomic rather than tied to the Decode call.
-          if (stream_context) {
-            stream_context->decode_inputs_without_output.store(
-                0, std::memory_order_relaxed);
-          }
+          stream_context->decode_inputs_without_output.store(0, std::memory_order_relaxed);
           if (!on_receive_video) {
             return;
           }

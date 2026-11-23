@@ -76,12 +76,9 @@ class RtpVideoReceiver : public ThreadBase {
           on_receive_complete_frame) {
     on_receive_complete_frame_ = on_receive_complete_frame;
   }
-  // Consulted before a completed frame leaves the pending queue. Returning
-  // false leaves the frame queued (and keeps its NACK/recovery state) until the
-  // consumer catches up, which bounds end-to-end latency: a decoder that falls
-  // behind delays delivery instead of accumulating an unbounded backlog. The
-  // hard frame-recovery deadline still discards frames that cannot be shown.
-  void SetFrameAdmissionFunc(std::function<bool()> frame_admission) {
+  // Called only for a complete, decodable frame. Recovery and expiry keep
+  // running while the consumer is full.
+  void SetFrameAdmissionFunc(std::function<bool(bool is_keyframe)> frame_admission) {
     std::lock_guard<std::mutex> lock(pending_frames_mtx_);
     frame_admission_ = std::move(frame_admission);
   }
@@ -205,7 +202,7 @@ class RtpVideoReceiver : public ThreadBase {
   };
   std::map<uint32_t, PendingFrame, RtpTimestampLess> pending_frames_;
   std::mutex pending_frames_mtx_;
-  std::function<bool()> frame_admission_;
+  std::function<bool(bool is_keyframe)> frame_admission_;
   bool awaiting_keyframe_ = false;
   std::optional<uint32_t> last_discarded_frame_ts_;
 

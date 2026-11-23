@@ -131,6 +131,10 @@ class MediaCodec {
     return 0;
   }
 
+  // Invoked on the decode queue before a fresh keyframe if outstanding
+  // asynchronous submissions stopped completing.
+  virtual void RecoverAtKeyFrame() {}
+
   virtual int ForceIdr() { return 0; }
 
   virtual int SetTargetBitrate(int bitrate) { return 0; }

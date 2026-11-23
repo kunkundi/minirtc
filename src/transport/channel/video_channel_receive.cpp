@@ -67,7 +67,7 @@ void VideoChannelReceive::SetAbsoluteSendTimeExtensionId(
 }
 
 void VideoChannelReceive::SetFrameAdmissionFunc(
-    std::function<bool()> frame_admission) {
+    std::function<bool(bool is_keyframe)> frame_admission) {
   frame_admission_ = std::move(frame_admission);
   if (rtp_video_receiver_) {
     rtp_video_receiver_->SetFrameAdmissionFunc(frame_admission_);
