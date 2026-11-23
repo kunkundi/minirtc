@@ -190,13 +190,13 @@ class VideoToolboxDecoder::Impl {
  private:
   std::shared_ptr<SystemClock> clock_;
   const bool native_video_output_;
-  std::function<void(const DecodedFrame*)> on_receive_decoded_frame_;
   std::atomic<uint64_t> submitted_frame_count_{0};
   std::atomic<uint64_t> decoded_frame_count_{0};
   std::atomic<bool> session_needs_recovery_{false};
   struct FrameTimestamps {
     int64_t captured_us;
     int64_t received_us;
+    std::function<void(const DecodedFrame*)> on_decoded;
   };
   std::mutex timestamps_mutex_;
   std::unordered_map<uintptr_t, FrameTimestamps> pending_timestamps_;
@@ -285,10 +285,6 @@ int VideoToolboxDecoder::Impl::Decode(
   if (!received_frame) {
     LOG_ERROR("Received frame is null");
     return -1;
-  }
-
-  if (!on_receive_decoded_frame_) {
-    on_receive_decoded_frame_ = on_receive_decoded_frame;
   }
 
   const uint8_t* data = received_frame->Buffer();
@@ -400,7 +396,8 @@ int VideoToolboxDecoder::Impl::Decode(
     std::lock_guard lock(timestamps_mutex_);
     frame_id = ++next_frame_id_;
     pending_timestamps_[frame_id] = {received_frame->CapturedTimestamp(),
-                                     received_frame->ReceivedTimestamp()};
+                                     received_frame->ReceivedTimestamp(),
+                                     std::move(on_receive_decoded_frame)};
   }
   VTDecodeInfoFlags decode_flags = 0;
   status = VTDecompressionSessionDecodeFrame(decompression_session_, sample_buffer,
@@ -524,10 +521,9 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
     std::lock_guard lock(impl->timestamps_mutex_);
     const auto it =
         impl->pending_timestamps_.find(reinterpret_cast<uintptr_t>(source_frame_ref_con));
-    if (it != impl->pending_timestamps_.end()) {
-      timestamps = it->second;
-      impl->pending_timestamps_.erase(it);
-    }
+    if (it == impl->pending_timestamps_.end()) return;
+    timestamps = std::move(it->second);
+    impl->pending_timestamps_.erase(it);
   }
 
   if (status != noErr) {
@@ -623,12 +619,12 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
              frame_count, width, height, pixel_format);
   }
 
-  if (impl->on_receive_decoded_frame_) {
+  if (timestamps.on_decoded) {
 #ifdef SAVE_DECODED_NV12_STREAM
     fwrite((unsigned char*)decoded_frame.Buffer(), 1, decoded_frame.Size(),
            impl->file_nv12_);
 #endif
-    impl->on_receive_decoded_frame_(&decoded_frame);
+    timestamps.on_decoded(&decoded_frame);
   }
 }
 
