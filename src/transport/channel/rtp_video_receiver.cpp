@@ -221,7 +221,7 @@ void RtpVideoReceiver::CommitPendingFrame(
     uint32_t timestamp, std::unique_ptr<ReceivedFrame> frame,
     bool is_keyframe, uint16_t end_sequence_number,
     bool require_existing_entry) {
-  std::lock_guard<std::mutex> lock(pending_frames_mtx_);
+  std::unique_lock<std::mutex> lock(pending_frames_mtx_);
   auto pending_it = pending_frames_.find(timestamp);
   if (require_existing_entry && pending_it == pending_frames_.end()) {
     return;
@@ -239,6 +239,10 @@ void RtpVideoReceiver::CommitPendingFrame(
   pending_frame = {std::move(frame), true, first_arrival_time, is_keyframe,
                    end_sequence_number};
   pending_frame.request_generation = request_generation;
+  lock.unlock();
+  // Deliver complete frames promptly. The periodic pass also runs while
+  // packets are missing or the decoder is applying backpressure.
+  RequestProcess();
 }
 
 void RtpVideoReceiver::ClearFrameMarkers(uint32_t timestamp) {

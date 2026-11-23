@@ -28,6 +28,9 @@ class ThreadBase {
 
   virtual bool Process() = 0;
 
+ protected:
+  void RequestProcess();
+
  private:
   void Run();
 
@@ -38,6 +41,7 @@ class ThreadBase {
 
   std::condition_variable cv_;
   std::mutex cv_mtx_;
+  bool process_requested_ = false;
 
   std::atomic<bool> running_;
   std::atomic<bool> pause_;

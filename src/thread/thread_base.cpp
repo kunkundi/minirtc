@@ -59,13 +59,24 @@ std::string ThreadBase::GetThreadName() {
   return thread_name_;
 }
 
+void ThreadBase::RequestProcess() {
+  {
+    std::lock_guard<std::mutex> lock(cv_mtx_);
+    process_requested_ = true;
+  }
+  cv_.notify_one();
+}
+
 void ThreadBase::Run() {
+  std::unique_lock<std::mutex> lock(cv_mtx_);
   while (running_) {
-    std::unique_lock<std::mutex> lock(cv_mtx_);
-    cv_.wait_for(lock, period_, [this] { return !running_; });
-    if (running_) {
-      Process();
-    }
+    cv_.wait_for(lock, period_,
+                 [this] { return !running_ || process_requested_; });
+    if (!running_) break;
+    process_requested_ = false;
+    lock.unlock();
+    Process();
+    lock.lock();
   }
 }
 }  // namespace minirtc
