@@ -367,6 +367,7 @@ class IceTransportController
     int average_encode_queue_delay_ms = 0;
     int p95_encode_queue_delay_ms = 0;
 
+#if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
     // Encode-path stage timings in microseconds, sampled over the same window
     // as the queue delay. Splitting the path is what tells a frame-budget
     // overrun apart: the capture-side copy into RawFrame, the whole synchronous
@@ -405,6 +406,7 @@ class IceTransportController
     StageTiming encode_sync_timing;
     StageTiming encoder_upload_timing;
     StageTiming encoder_submit_timing;
+#endif
     int64_t encode_backlog_since_ms = 0;
     int64_t severe_encode_backlog_since_ms = 0;
     int64_t critical_encode_backlog_since_ms = 0;
@@ -518,11 +520,13 @@ class IceTransportController
       encode_backlog_since_ms = 0;
       severe_encode_backlog_since_ms = 0;
       critical_encode_backlog_since_ms = 0;
+#if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
       ++encode_timing_generation;
       encode_copy_timing.samples.clear();
       encode_sync_timing.samples.clear();
       encoder_upload_timing.samples.clear();
       encoder_submit_timing.samples.clear();
+#endif
     }
 
     std::shared_ptr<MediaChannel> transceiver;

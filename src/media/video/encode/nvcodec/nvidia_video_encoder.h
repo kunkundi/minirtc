@@ -32,6 +32,7 @@ class NvidiaVideoEncoder : public MediaCodec {
     return frame_type == MiniRtcNativeVideoFrameCpuNv12;
   }
 
+#if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
   // Diagnostics: splits Encode() into the host-to-device copy and the encoder
   // call so a 4K frame budget overrun can be attributed to one of them. Both
   // stages run synchronously inside Encode(), so the values describe the last
@@ -41,8 +42,9 @@ class NvidiaVideoEncoder : public MediaCodec {
     if (!upload_us || !submit_us) return false;
     *upload_us = last_upload_us_.load(std::memory_order_relaxed);
     *submit_us = last_submit_us_.load(std::memory_order_relaxed);
-    return true;
+    return *upload_us >= 0;
   }
+#endif
 
   int GetResolution(int* width, int* height) const override {
     if (seq_ == 0) {
@@ -65,9 +67,11 @@ class NvidiaVideoEncoder : public MediaCodec {
   int index_of_gpu_ = 0;
   CUdevice cuda_device_ = 0;
 
+#if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
   // Microseconds spent in the two synchronous stages of the last Encode().
-  std::atomic<int64_t> last_upload_us_{0};
+  std::atomic<int64_t> last_upload_us_{-1};
   std::atomic<int64_t> last_submit_us_{0};
+#endif
 
   GUID codec_guid_ = NV_ENC_CODEC_H264_GUID;
   GUID preset_guid_ = NV_ENC_PRESET_P7_GUID;
