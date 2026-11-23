@@ -236,9 +236,11 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
 int SvtAv1Encoder::Encode(
     const RawFrame& raw_frame,
     std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
-  if (!svt_av1_encoder_) {
-    LOG_ERROR("Invalid SVT-AV1 encoder");
-    return -1;
+  if (!svt_av1_encoder_ || raw_frame.Width() != frame_width_ ||
+      raw_frame.Height() != frame_height_) {
+    if (ResetEncodeResolution(raw_frame.Width(), raw_frame.Height()) != 0) {
+      return -1;
+    }
   }
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
@@ -254,13 +256,6 @@ int SvtAv1Encoder::Encode(
     yuv420p_frame_capacity_ = raw_frame.Size();
     delete[] yuv420p_frame_;
     yuv420p_frame_ = new unsigned char[yuv420p_frame_capacity_];
-  }
-
-  if (raw_frame.Width() != frame_width_ ||
-      raw_frame.Height() != frame_height_) {
-    if (ResetEncodeResolution(raw_frame.Width(), raw_frame.Height()) != 0) {
-      return -1;
-    }
   }
 
   Nv12ToI420((unsigned char*)raw_frame.Buffer(), raw_frame.Width(),
