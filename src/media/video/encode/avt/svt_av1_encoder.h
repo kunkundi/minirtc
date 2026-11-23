@@ -8,7 +8,7 @@
 #define _SVT_AV1_ENCODER_H_
 
 #include <functional>
-#include <vector>
+#include <memory>
 
 #include "svt-av1/EbSvtAv1.h"
 #include "svt-av1/EbSvtAv1Enc.h"
@@ -41,7 +41,6 @@ class SvtAv1Encoder : public MediaCodec {
   std::shared_ptr<SystemClock> clock_ = nullptr;
   EbComponentType* svt_av1_encoder_ = nullptr;
   EbSvtAv1EncConfiguration enc_config_ = {};
-  EbBufferHeaderType* stream_header_buffer_ = nullptr;
   uint32_t frame_width_ = 1280;
   uint32_t frame_height_ = 720;
   int key_frame_interval_ = 3000;
@@ -59,7 +58,7 @@ class SvtAv1Encoder : public MediaCodec {
   FILE* file_nv12_ = nullptr;
   std::string av1_file_name_;
   std::string nv12_file_name_;
-  unsigned char* yuv420p_frame_ = nullptr;
+  std::unique_ptr<uint8_t[]> yuv420p_frame_;
   size_t yuv420p_frame_capacity_ = 0;
 };
 }  // namespace minirtc
