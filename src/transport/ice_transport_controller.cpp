@@ -898,9 +898,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
                                        video_frame->data),
                                    video_frame->size, video_frame->width,
                                    video_frame->height);
-    context->encode_copy_timing.Add(clock_->CurrentTimeMs(),
-                                    clock_->CurrentTimeUs() - copy_started_us,
-                                    kQueueDelayWindowMs);
+    const int64_t copy_us = clock_->CurrentTimeUs() - copy_started_us;
     raw_frame.SetCapturedTimestamp(
         video_frame->captured_timestamp != 0
             ? static_cast<int64_t>(video_frame->captured_timestamp)
@@ -998,6 +996,8 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     std::weak_ptr<StreamContext> weak_context = context;
     std::shared_ptr<TaskQueueLockFree> encode_queue = task_queue_encode_;
 
+    context->encode_copy_timing.Add(clock_->CurrentTimeMs(), copy_us, kQueueDelayWindowMs);
+    const uint64_t timing_generation = context->encode_timing_generation;
     const uint64_t settings_generation = context->video_settings_generation;
     // Clamp even the first frame and any stale adaptation target after a
     // display/viewport change. Scaling happens once, on the encode queue.
@@ -1009,11 +1009,11 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     const int target_height = target_resolution.second;
     auto post_encode = [weak_self, weak_context, encode_queue, channel_name,
                         force_i_frame, target_width, target_height,
-                        settings_generation](RawFrame&& frame) mutable {
+                        settings_generation, timing_generation](RawFrame&& frame) mutable {
       encode_queue->PostTask([weak_self, weak_context, encode_queue,
                               channel_name, force_i_frame, target_width,
                               target_height, settings_generation,
-                              frame = std::move(frame)]() mutable {
+                              timing_generation, frame = std::move(frame)]() mutable {
         auto self = weak_self.lock();
         auto context = weak_context.lock();
         if (!self || !context || !self->is_running_.load()) {
@@ -1093,7 +1093,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
           context->applied_input_frame_rate = *input_frame_rate;
         }
         const int64_t encode_started_us = self->clock_->CurrentTimeUs();
-        context->codec->Encode(
+        const int encode_result = context->codec->Encode(
             std::move(frame),
             [weak_self, weak_context, channel_name, queue_delay_ms,
              settings_generation, is_first_callback = true](
@@ -1119,13 +1119,18 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         // inside the Encode() callback above, so it reports the previous frame's
         // stages; over a one-second window that difference is irrelevant.
         const int64_t encode_finished_us = self->clock_->CurrentTimeUs();
-        const int64_t encode_finished_ms = self->clock_->CurrentTimeMs();
+        int64_t upload_us = 0;
+        int64_t submit_us = 0;
+        const bool has_stages = encode_result == 0 &&
+            context->codec->GetLastEncodeStageTimingUs(&upload_us, &submit_us);
+        std::unique_lock lock(self->stream_senders_mutex_);
+        if (context->video_settings_generation != settings_generation ||
+            context->encode_timing_generation != timing_generation) return;
+        const int64_t encode_finished_ms = encode_finished_us / 1000;
         context->encode_sync_timing.Add(encode_finished_ms,
                                         encode_finished_us - encode_started_us,
                                         kQueueDelayWindowMs);
-        int64_t upload_us = 0;
-        int64_t submit_us = 0;
-        if (context->codec->GetLastEncodeStageTimingUs(&upload_us, &submit_us)) {
+        if (has_stages) {
           context->encoder_upload_timing.Add(encode_finished_ms, upload_us,
                                              kQueueDelayWindowMs);
           context->encoder_submit_timing.Add(encode_finished_ms, submit_us,
@@ -1556,12 +1561,19 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
   const bool sustained_high_encode_queue_drop =
       VideoAdaptationPolicy::IsFrameHealthPressureSustained(
           now_ms, context->high_encode_queue_drop_since_ms);
-  if (encoded_frame_rate_window_updated) {
+#if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
+  if (encoded_frame_rate_window_updated &&
+      get_logger()->should_log(spdlog::level::debug)) {
     const size_t low_frame_rate_window_count =
         VideoAdaptationPolicy::CountLowFrameRateWindows(
             media_config_.max_frame_rate,
             context->encoded_frame_rate_windows,
             context->encoded_frame_rate_valid_window_count, balanced);
+    const int64_t since_ms = now_ms - kQueueDelayWindowMs;
+    const auto [copy_avg, copy_p95] = context->encode_copy_timing.Summary(since_ms);
+    const auto [sync_avg, sync_p95] = context->encode_sync_timing.Summary(since_ms);
+    const auto [upload_avg, upload_p95] = context->encoder_upload_timing.Summary(since_ms);
+    const auto [submit_avg, submit_p95] = context->encoder_submit_timing.Summary(since_ms);
     LOG_DEBUG(
         "Video frame health: channel={} encoded_fps={} low_windows={}/{} "
         "capture_fps={} pacer_reject_percent={} "
@@ -1610,15 +1622,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
             std::memory_order_relaxed),
         context->pacer_rejected_oldest_wait_only_total.load(std::memory_order_relaxed),
         context->pacer_rejected_both_total.load(std::memory_order_relaxed),
-        context->encode_copy_timing.average_us,
-        context->encode_copy_timing.p95_us,
-        context->encode_sync_timing.average_us,
-        context->encode_sync_timing.p95_us,
-        context->encoder_upload_timing.average_us,
-        context->encoder_upload_timing.p95_us,
-        context->encoder_submit_timing.average_us,
-        context->encoder_submit_timing.p95_us);
+        copy_avg, copy_p95, sync_avg, sync_p95, upload_avg, upload_p95,
+        submit_avg, submit_p95);
   }
+#endif
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==
           context->resolution_upgrade_probe_target_width &&

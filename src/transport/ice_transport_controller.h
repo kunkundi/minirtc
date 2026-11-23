@@ -374,8 +374,6 @@ class IceTransportController
     // host-to-device copy and the encoder call inside it.
     struct StageTiming {
       std::deque<std::pair<int64_t, int64_t>> samples;
-      int64_t average_us = 0;
-      int64_t p95_us = 0;
 
       void Add(int64_t now_ms, int64_t value_us, int64_t window_ms) {
         if (value_us < 0) return;
@@ -383,27 +381,26 @@ class IceTransportController
         while (!samples.empty() && samples.front().first < now_ms - window_ms) {
           samples.pop_front();
         }
+      }
+
+      // Compute the aggregate only when the health log is due. A stage may
+      // have stopped producing samples before the other stages.
+      std::pair<int64_t, int64_t> Summary(int64_t since_ms) const {
         int64_t sum = 0;
         std::vector<int64_t> values;
         values.reserve(samples.size());
-        for (const auto& [_, value] : samples) {
-          sum += value;
+        for (const auto& [time, value] : samples) {
+          if (time < since_ms) continue;
           values.push_back(value);
+          sum += value;
         }
-        if (values.empty()) return;
-        average_us = sum / static_cast<int64_t>(values.size());
-        const size_t p95_index = (values.size() * 95 + 99) / 100 - 1;
-        std::nth_element(values.begin(), values.begin() + p95_index,
-                         values.end());
-        p95_us = values[p95_index];
-      }
-
-      void Clear() {
-        samples.clear();
-        average_us = 0;
-        p95_us = 0;
+        if (values.empty()) return {0, 0};
+        const size_t p95 = (values.size() * 95 + 99) / 100 - 1;
+        std::nth_element(values.begin(), values.begin() + p95, values.end());
+        return {sum / static_cast<int64_t>(values.size()), values[p95]};
       }
     };
+    uint64_t encode_timing_generation = 0;
     StageTiming encode_copy_timing;
     StageTiming encode_sync_timing;
     StageTiming encoder_upload_timing;
@@ -521,10 +518,11 @@ class IceTransportController
       encode_backlog_since_ms = 0;
       severe_encode_backlog_since_ms = 0;
       critical_encode_backlog_since_ms = 0;
-      encode_copy_timing.Clear();
-      encode_sync_timing.Clear();
-      encoder_upload_timing.Clear();
-      encoder_submit_timing.Clear();
+      ++encode_timing_generation;
+      encode_copy_timing.samples.clear();
+      encode_sync_timing.samples.clear();
+      encoder_upload_timing.samples.clear();
+      encoder_submit_timing.samples.clear();
     }
 
     std::shared_ptr<MediaChannel> transceiver;
