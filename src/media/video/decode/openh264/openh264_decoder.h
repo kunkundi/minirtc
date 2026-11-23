@@ -17,7 +17,6 @@
 #include <vector>
 
 #include "media_codec.h"
-#include "../../encode/h264_bitstream_parser.h"
 
 namespace minirtc {
 
@@ -46,7 +45,6 @@ class OpenH264Decoder : public MediaCodec {
 #if defined(_WIN32) || defined(__linux__)
   std::shared_ptr<NativeNv12FramePool> native_frame_pool_;
 #endif
-  H264BitstreamParser color_parser_;
   ISVCDecoder* openh264_decoder_ = nullptr;
   DecodedFrame* decoded_frame_ = nullptr;
   bool get_first_keyframe_ = false;

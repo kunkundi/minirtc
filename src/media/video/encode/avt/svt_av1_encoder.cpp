@@ -8,7 +8,47 @@
 // #define SAVE_RECEIVED_NV12_STREAM
 // #define SAVE_ENCODED_AV1_STREAM
 
+#define INPUT_SIZE_240p_TH 0x28500    // 0.165 Million
+#define INPUT_SIZE_360p_TH 0x4CE00    // 0.315 Million
+#define INPUT_SIZE_480p_TH 0xA1400    // 0.661 Million
+#define INPUT_SIZE_720p_TH 0x16DA00   // 1.5 Million
+#define INPUT_SIZE_1080p_TH 0x535200  // 5.46 Million
+#define INPUT_SIZE_4K_TH 0x140A000    // 21 Million
+#define INPUT_SIZE_8K_TH 0X5028000    // 84 Million
+#define EB_OUTPUTSTREAMBUFFERSIZE_MACRO(ResolutionSize) \
+  ((ResolutionSize) < (INPUT_SIZE_720p_TH) ? 0x1E8480 : 0x2DC6C0)
+
 namespace minirtc {
+
+static void Nv12ToI420(unsigned char* Src_data, int src_width, int src_height,
+                       unsigned char* Dst_data) {
+  // NV12
+  int NV12_Y_Size = src_width * src_height;
+
+  // YUV420
+  int I420_Y_Size = src_width * src_height;
+  int I420_U_Size = (src_width >> 1) * (src_height >> 1);
+  int I420_V_Size = I420_U_Size;
+
+  // src: buffer address of Y channel and UV channel
+  unsigned char* Y_data_Src = Src_data;
+  unsigned char* UV_data_Src = Src_data + NV12_Y_Size;
+  int src_stride_y = src_width;
+  int src_stride_uv = src_width;
+
+  // dst: buffer address of Y channel、U channel and V channel
+  unsigned char* Y_data_Dst = Dst_data;
+  unsigned char* U_data_Dst = Dst_data + I420_Y_Size;
+  unsigned char* V_data_Dst = Dst_data + I420_Y_Size + I420_V_Size;
+  int Dst_Stride_Y = src_width;
+  int Dst_Stride_U = src_width >> 1;
+  int Dst_Stride_V = Dst_Stride_U;
+
+  libyuv::NV12ToI420(
+      (const uint8_t*)Y_data_Src, src_stride_y, (const uint8_t*)UV_data_Src,
+      src_stride_uv, (uint8_t*)Y_data_Dst, Dst_Stride_Y, (uint8_t*)U_data_Dst,
+      Dst_Stride_U, (uint8_t*)V_data_Dst, Dst_Stride_V, src_width, src_height);
+}
 
 SvtAv1Encoder::SvtAv1Encoder(std::shared_ptr<SystemClock> clock)
     : clock_(clock) {}
@@ -43,6 +83,18 @@ void SvtAv1Encoder::Release() {
     svt_av1_enc_deinit_handle(svt_av1_encoder_);
     svt_av1_encoder_ = nullptr;
   }
+
+  if (stream_header_buffer_) {
+    if (stream_header_buffer_->p_buffer) {
+      delete[] stream_header_buffer_->p_buffer;
+      stream_header_buffer_->p_buffer = nullptr;
+    }
+    delete stream_header_buffer_;
+    stream_header_buffer_ = nullptr;
+  }
+
+  delete[] yuv420p_frame_;
+  yuv420p_frame_ = nullptr;
 }
 
 int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
@@ -80,11 +132,32 @@ int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
 int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   EbErrorType ret;
 
-  Release();
-  ret = svt_av1_enc_init_handle(&svt_av1_encoder_, &enc_config_);
-  if (ret != EB_ErrorNone) {
-    LOG_ERROR("Failed to initialize SVT-AV1 encoder handle");
-    return -1;
+  if (svt_av1_encoder_) {
+    EbBufferHeaderType stream_header_buffer;
+    memset(&stream_header_buffer, 0, sizeof(stream_header_buffer));
+    stream_header_buffer.pic_type = EB_AV1_INVALID_PICTURE;
+    stream_header_buffer.flags = EB_BUFFERFLAG_EOS;
+    svt_av1_enc_send_picture(svt_av1_encoder_, &stream_header_buffer);
+    svt_av1_enc_deinit(svt_av1_encoder_);
+    svt_av1_enc_deinit_handle(svt_av1_encoder_);
+    svt_av1_encoder_ = nullptr;
+  }
+
+  if (!svt_av1_encoder_) {
+    ret = svt_av1_enc_init_handle(&svt_av1_encoder_, &enc_config_);
+    if (ret != EB_ErrorNone) {
+      LOG_ERROR("Fail to init svt_av1_encoder_");
+      return -1;
+    }
+  }
+
+  if (stream_header_buffer_) {
+    if (stream_header_buffer_->p_buffer) {
+      delete[] stream_header_buffer_->p_buffer;
+      stream_header_buffer_->p_buffer = nullptr;
+    }
+    delete stream_header_buffer_;
+    stream_header_buffer_ = nullptr;
   }
 
   // Set default config
@@ -93,11 +166,7 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
   enc_config_.source_width = frame_width_;
   enc_config_.source_height = frame_height_;
   enc_config_.encoder_color_format = EB_YUV420;
-  enc_config_.encoder_bit_depth = hdr_ ? 10 : 8;
-  enc_config_.color_primaries = hdr_ ? EB_CICP_CP_BT_2020 : EB_CICP_CP_BT_709;
-  enc_config_.transfer_characteristics = hdr_ ? EB_CICP_TC_SMPTE_2084 : EB_CICP_TC_SRGB;
-  enc_config_.matrix_coefficients = hdr_ ? EB_CICP_MC_BT_2020_NCL : EB_CICP_MC_BT_601;
-  enc_config_.color_range = EB_CR_STUDIO_RANGE;
+  enc_config_.encoder_bit_depth = 8;
   enc_config_.frame_rate_numerator = max_fps_;
   enc_config_.frame_rate_denominator = 1;
   enc_config_.enc_mode =
@@ -137,7 +206,24 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
     return -1;
   }
 
-  if (!hdr_) yuv420p_frame_.resize(size_t(frame_width_) * frame_height_ * 3 / 2);
+  stream_header_buffer_ = new EbBufferHeaderType{};
+  if (!stream_header_buffer_) {
+    LOG_ERROR("Failed to allocate stream header buffer");
+    return -1;
+  }
+  stream_header_buffer_->size = sizeof(EbBufferHeaderType);
+  stream_header_buffer_->p_buffer =
+      new uint8_t[EB_OUTPUTSTREAMBUFFERSIZE_MACRO(frame_width * frame_height)];
+  if (!stream_header_buffer_->p_buffer) {
+    LOG_ERROR("Failed to allocate input picture buffer");
+    delete stream_header_buffer_;
+    stream_header_buffer_ = nullptr;
+    return -1;
+  }
+
+  yuv420p_frame_capacity_ = frame_width_ * frame_height_ * 3 / 2;
+  delete[] yuv420p_frame_;
+  yuv420p_frame_ = new uint8_t[yuv420p_frame_capacity_];
 
   // A reconfigured SVT instance starts a new coded sequence. Make the
   // requirement explicit and restart the periodic key-frame interval.
@@ -150,50 +236,71 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
 int SvtAv1Encoder::Encode(
     const RawFrame& raw_frame,
     std::function<int(const EncodedFrame& encoded_frame)> on_encoded_image) {
-  const auto* native = raw_frame.NativeFrame();
-  const bool hdr = native && native->type == MiniRtcNativeVideoFrameHdr10;
-  if (!svt_av1_encoder_ || hdr != hdr_ || raw_frame.Width() != frame_width_ ||
+  if (!svt_av1_encoder_) {
+    LOG_ERROR("Invalid SVT-AV1 encoder");
+    return -1;
+  }
+
+#ifdef SAVE_RECEIVED_NV12_STREAM
+  fwrite(raw_frame.Buffer(), 1, raw_frame.Size(), file_nv12_);
+#endif
+
+  if (!yuv420p_frame_) {
+    yuv420p_frame_capacity_ = raw_frame.Size();
+    yuv420p_frame_ = new unsigned char[yuv420p_frame_capacity_];
+  }
+
+  if (yuv420p_frame_capacity_ < raw_frame.Size()) {
+    yuv420p_frame_capacity_ = raw_frame.Size();
+    delete[] yuv420p_frame_;
+    yuv420p_frame_ = new unsigned char[yuv420p_frame_capacity_];
+  }
+
+  if (raw_frame.Width() != frame_width_ ||
       raw_frame.Height() != frame_height_) {
-    hdr_ = hdr;
-    if (Reconfigure(raw_frame.Width(), raw_frame.Height()) != 0) return -1;
-  }
-
-  const size_t plane = size_t(frame_width_) * frame_height_;
-  const size_t bytes_per_sample = hdr ? 2 : 1;
-  uint8_t* planar = yuv420p_frame_.data();
-  if (hdr) {
-    // SVT borrows the plane addresses during send_picture and uses sample strides.
-    planar = reinterpret_cast<uint8_t*>(const_cast<uint16_t*>(native->payload.hdr10.i010));
-  } else {
-    if (!raw_frame.Buffer() || raw_frame.Size() < plane * 3 / 2) return -1;
-    if (libyuv::NV12ToI420(raw_frame.Buffer(), frame_width_, raw_frame.Buffer() + plane,
-                           frame_width_, planar, frame_width_, planar + plane, frame_width_ / 2,
-                           planar + plane + plane / 4, frame_width_ / 2, frame_width_,
-                           frame_height_) != 0)
+    if (ResetEncodeResolution(raw_frame.Width(), raw_frame.Height()) != 0) {
       return -1;
+    }
   }
-  EbSvtIOFormat picture{};
-  EbBufferHeaderType input{};
-  input.size = sizeof(input);
-  input.p_buffer = reinterpret_cast<uint8_t*>(&picture);
-  picture.luma = planar;
-  picture.cb = planar + plane * bytes_per_sample;
-  picture.cr = picture.cb + plane / 4 * bytes_per_sample;
-  picture.y_stride = frame_width_;
-  picture.cb_stride = frame_width_ / 2;
-  picture.cr_stride = frame_width_ / 2;
-  input.n_filled_len = static_cast<uint32_t>(plane * 3 / 2 * bytes_per_sample);
-  input.pts = raw_frame.CapturedTimestamp();
 
+  Nv12ToI420((unsigned char*)raw_frame.Buffer(), raw_frame.Width(),
+             raw_frame.Height(), yuv420p_frame_);
+
+  EbSvtIOFormat* input_picture_buffer =
+      (EbSvtIOFormat*)stream_header_buffer_->p_buffer;
+
+  const int y_stride = frame_width_;
+  const int uv_stride = frame_width_ / 2;
+  const int y_plane_size = y_stride * frame_height_;
+  const int uv_plane_size = uv_stride * (frame_height_ / 2);
+
+  uint8_t* y_dst = yuv420p_frame_;
+  uint8_t* u_dst = y_dst + y_plane_size;
+  uint8_t* v_dst = u_dst + uv_plane_size;
+
+  input_picture_buffer->luma = y_dst;
+  input_picture_buffer->cb = u_dst;
+  input_picture_buffer->cr = v_dst;
+  input_picture_buffer->y_stride = frame_width_;
+  input_picture_buffer->cb_stride = frame_width_ / 2;
+  input_picture_buffer->cr_stride = frame_width_ / 2;
+  stream_header_buffer_->n_filled_len = frame_width_ * frame_height_ * 3 / 2;
+  stream_header_buffer_->flags = 0;
+  stream_header_buffer_->p_app_private = nullptr;
+  stream_header_buffer_->pts = raw_frame.CapturedTimestamp();
+  stream_header_buffer_->metadata = nullptr;
+
+  VideoFrameType frame_type;
   if (0 == seq_++ % key_frame_interval_ || force_idr_) {
-    input.pic_type = EB_AV1_KEY_PICTURE;
+    stream_header_buffer_->pic_type = EB_AV1_KEY_PICTURE;
     force_idr_ = false;
   } else {
-    input.pic_type = EB_AV1_INVALID_PICTURE;
+    stream_header_buffer_->pic_type = EB_AV1_INVALID_PICTURE;
+    // stream_header_buffer_->qp = 10;
   }
 
   EbErrorType ret;
-  ret = svt_av1_enc_send_picture(svt_av1_encoder_, &input);
+  ret = svt_av1_enc_send_picture(svt_av1_encoder_, stream_header_buffer_);
   if (ret != EB_ErrorNone) {
     LOG_ERROR("Failed to send picture");
     return -1;

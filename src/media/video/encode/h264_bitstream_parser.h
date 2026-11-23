@@ -18,7 +18,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
-#include "sdr_color.h"
 
 namespace minirtc {
 
@@ -28,13 +27,9 @@ class H264BitstreamParser {
  public:
   H264BitstreamParser() = default;
 
-  static std::optional<uint8_t> ReadSpsProfile(const uint8_t* data, size_t size);
   void ParseBitstream(const uint8_t* bitstream, size_t length);
   std::optional<int> GetLastSliceQp() const;
   void Reset();
-  // Scan parameter sets without parsing slice QP in the decoder.
-  void ParseColorInfo(const uint8_t* bitstream, size_t length);
-  SdrColor Color() const { return sps_ ? sps_->color : SdrColor{}; }
   bool GetResolution(int* width, int* height) const;
 
  private:
@@ -47,7 +42,6 @@ class H264BitstreamParser {
   struct SpsState {
     uint32_t id = 0;
     int width = 0, height = 0;
-    SdrColor color;
     uint32_t chroma_format_idc = 1;
     bool separate_colour_plane_flag = false;
     uint32_t log2_max_frame_num = 4;

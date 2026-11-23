@@ -1,5 +1,4 @@
 #include "video_toolbox_decoder.h"
-#include "sdr_color.h"
 #include <CoreMedia/CoreMedia.h>
 #include <TargetConditionals.h>
 #include <VideoToolbox/VideoToolbox.h>
@@ -18,13 +17,6 @@
 
 namespace minirtc {
 namespace {
-SdrColor PixelColor(CVPixelBufferRef buffer) {
-  auto matrix = CVBufferCopyAttachment(buffer, kCVImageBufferYCbCrMatrixKey, nullptr);
-  const bool bt709 = matrix && CFEqual(matrix, kCVImageBufferYCbCrMatrix_ITU_R_709_2);
-  if (matrix) CFRelease(matrix);
-  return {CVPixelBufferGetPixelFormatType(buffer) == kCVPixelFormatType_420YpCbCr8BiPlanarFullRange,
-          bt709};
-}
 
 void RetainPixelBufferOwner(void* owner) {
   if (owner) {
@@ -79,7 +71,6 @@ int CopyPixelBufferToNv12(void* owner, uint8_t* destination,
     }
   }
   CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
-  if (result == 0) PixelColor(pixel_buffer).Normalize(destination, width, height);
   return result;
 }
 
@@ -185,12 +176,6 @@ class VideoToolboxDecoder::Impl {
   Impl(std::shared_ptr<SystemClock> clock, bool native_video_output);
   ~Impl();
 
-  void FinishPendingOutput() {
-    if (decompression_session_) {
-      VTDecompressionSessionFinishDelayedFrames(decompression_session_);
-      VTDecompressionSessionWaitForAsynchronousFrames(decompression_session_);
-    }
-  }
   int Init();
   int Decode(std::unique_ptr<ReceivedFrame> frame,
              std::function<void(const DecodedFrame*)> on_decoded_cb);
@@ -574,11 +559,7 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
 
   DecodedFrame decoded_frame;
   MiniRtcNativeVideoFrame native_frame{};
-  bool native_output = impl->native_video_output_;
-#if defined(MINIRTC_IOS)
-  native_output = native_output && !PixelColor(pixel_buffer).NeedsConversion();
-#endif
-  if (native_output) {
+  if (impl->native_video_output_) {
     // All Apple consumers can present the IOSurface-backed image directly.
     // The descriptor remains borrowed and is valid only during this callback.
     native_frame.struct_size = sizeof(native_frame);
@@ -593,10 +574,42 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
     decoded_frame.SetNativeFrame(&native_frame);
     decoded_frame.SetSize(static_cast<size_t>(width) * height * 3U / 2U);
   } else {
-    decoded_frame = DecodedFrame(size_t(width) * height * 3 / 2, width, height);
-    if (CopyPixelBufferToNv12(pixel_buffer, decoded_frame.MutableBuffer(), decoded_frame.Size()) !=
-        0)
+    CVReturn lock_status =
+        CVPixelBufferLockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+    if (lock_status != kCVReturnSuccess) {
+      LOG_ERROR("Failed to lock decoded pixel buffer: {}", lock_status);
       return;
+    }
+
+    const size_t y_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 0);
+    const size_t uv_stride = CVPixelBufferGetBytesPerRowOfPlane(pixel_buffer, 1);
+    const uint8_t* y_plane = static_cast<const uint8_t*>(
+        CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 0));
+    const uint8_t* uv_plane = static_cast<const uint8_t*>(
+        CVPixelBufferGetBaseAddressOfPlane(pixel_buffer, 1));
+
+    if (!y_plane || !uv_plane || y_stride < width || uv_stride < width) {
+      LOG_ERROR("Invalid decoded NV12 planes: {}x{}, strides {} / {}", width,
+                height, y_stride, uv_stride);
+      CVPixelBufferUnlockBaseAddress(pixel_buffer, kCVPixelBufferLock_ReadOnly);
+      return;
+    }
+
+    const size_t packed_size = static_cast<size_t>(width) * height * 3 / 2;
+    std::vector<uint8_t> packed_nv12(packed_size);
+    for (size_t row = 0; row < height; ++row) {
+      memcpy(packed_nv12.data() + row * width, y_plane + row * y_stride,
+             width);
+    }
+    uint8_t* uv_dst =
+        packed_nv12.data() + static_cast<size_t>(width) * height;
+    for (size_t row = 0; row < height / 2; ++row) {
+      memcpy(uv_dst + row * width, uv_plane + row * uv_stride, width);
+    }
+    CVPixelBufferUnlockBaseAddress(pixel_buffer,
+                                   kCVPixelBufferLock_ReadOnly);
+
+    decoded_frame.UpdateBuffer(packed_nv12.data(), packed_nv12.size());
   }
   decoded_frame.SetDecodedWidth(width);
   decoded_frame.SetDecodedHeight(height);
@@ -626,8 +639,6 @@ VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock,
     : impl_(std::make_shared<Impl>(std::move(clock), native_video_output)) {}
 
 VideoToolboxDecoder::~VideoToolboxDecoder() = default;
-
-void VideoToolboxDecoder::FinishPendingOutput() { impl_->FinishPendingOutput(); }
 
 int VideoToolboxDecoder::Init() { return impl_->Init(); }
 

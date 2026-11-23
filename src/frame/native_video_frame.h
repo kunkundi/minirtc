@@ -22,10 +22,10 @@ inline bool GetNv12FrameSize(uint32_t width, uint32_t height, size_t* size) {
     return false;
   }
   const size_t pixels = static_cast<size_t>(width) * height;
-  if (pixels > std::numeric_limits<size_t>::max() - pixels / 2U) {
+  if (pixels > std::numeric_limits<size_t>::max() / 3U * 2U) {
     return false;
   }
-  *size = pixels + pixels / 2U;
+  *size = pixels * 3U / 2U;
   return true;
 }
 
@@ -43,10 +43,6 @@ inline const MiniRtcNativeVideoFrame* GetNativeVideoFrame(
   }
 
   switch (frame->type) {
-    case MiniRtcNativeVideoFrameHdr10:
-      return frame->payload.hdr10.i010 && frame_size <= std::numeric_limits<size_t>::max() / 2
-                 ? frame
-                 : nullptr;
     case MiniRtcNativeVideoFrameCpuNv12:
       return frame->payload.cpu_nv12.y_plane &&
                      frame->payload.cpu_nv12.uv_plane &&

@@ -2,10 +2,6 @@
 
 #include <exception>
 
-#ifdef MINIRTC_H264_HIGH10
-#include "h264_high10.h"
-#endif
-
 #include "avt/svt_av1_encoder.h"
 #if !defined(MINIRTC_IOS)
 #include "openh264/openh264_encoder.h"
@@ -163,18 +159,6 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
   return TryInitEncoder(
       CreateVideoEncoder(clock, false, VideoCodecType::H264), config);
 #endif
-}
-
-std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateNativeSessionEncoder(
-    std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
-    bool hardware_acceleration, VideoCodecType codec_type) {
-  auto encoder = CreateInitializedVideoEncoder(
-      clock, config, hardware_acceleration, codec_type);
-#ifdef MINIRTC_H264_HIGH10
-  if (encoder && codec_type == VideoCodecType::H264)
-    return MakeHigh10Encoder(std::move(encoder), clock, config);
-#endif
-  return encoder;
 }
 
 bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(

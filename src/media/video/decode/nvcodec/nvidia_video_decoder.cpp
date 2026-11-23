@@ -1,5 +1,4 @@
 #include "nvidia_video_decoder.h"
-#include "sdr_color.h"
 
 #include <atomic>
 #include <new>
@@ -271,8 +270,6 @@ int NvidiaVideoDecoder::Decode(
                                : state_->decoder->GetFrame(nullptr, &timing);
       frame_width_ = state_->decoder->GetWidth();
       frame_height_ = state_->decoder->GetHeight();
-      const auto signal = state_->decoder->GetVideoFormatInfo().video_signal_description;
-      const SdrColor color{signal.video_full_range_flag != 0, signal.matrix_coefficients == 1};
       if (decoded_frame_buffer) {
         if (on_receive_decoded_frame) {
           if (native_video_output_) {
@@ -295,19 +292,7 @@ int NvidiaVideoDecoder::Decode(
             native_decoded_frame.SetReceivedTimestamp(timing.received_us);
             native_decoded_frame.SetCapturedTimestamp(timing.captured_us);
             native_decoded_frame.SetDecodedTimestamp(clock_->CurrentTime());
-            if (color.NeedsConversion()) {
-              const auto* descriptor = native_frame->Descriptor();
-              DecodedFrame converted(native_decoded_frame.Size(), frame_width_, frame_height_);
-              if (descriptor->copy_to_nv12(descriptor->owner, converted.MutableBuffer(),
-                                           converted.Size()) != 0) {
-                native_frame->Release();
-                return -1;
-              }
-              color.Normalize(converted.MutableBuffer(), frame_width_, frame_height_);
-              native_decoded_frame.UpdateBuffer(converted.Buffer(), converted.Size());
-            } else {
-              native_decoded_frame.SetNativeFrame(native_frame->Descriptor());
-            }
+            native_decoded_frame.SetNativeFrame(native_frame->Descriptor());
             on_receive_decoded_frame(&native_decoded_frame);
             native_frame->Release();
             continue;
@@ -315,7 +300,6 @@ int NvidiaVideoDecoder::Decode(
 
           decoded_frame_->UpdateBuffer(decoded_frame_buffer,
                                        frame_width_ * frame_height_ * 3 / 2);
-          color.Normalize(decoded_frame_->MutableBuffer(), frame_width_, frame_height_);
           decoded_frame_->SetWidth(frame_width_);
           decoded_frame_->SetHeight(frame_height_);
           decoded_frame_->SetDecodedWidth(frame_width_);

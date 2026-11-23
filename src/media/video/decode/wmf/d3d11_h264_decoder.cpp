@@ -1,5 +1,4 @@
 #include "d3d11_h264_decoder.h"
-#include "sdr_color.h"
 
 #include <codecapi.h>
 #include <d3d10_1.h>
@@ -107,9 +106,6 @@ class D3D11H264Decoder::Impl {
       if (FAILED(hr)) continue;
       hr = MFGetAttributeSize(type.Get(), MF_MT_FRAME_SIZE, &width_, &height_);
       if (FAILED(hr)) return hr;
-      color_ = {
-          MFGetAttributeUINT32(type.Get(), MF_MT_VIDEO_NOMINAL_RANGE, 0) == MFNominalRange_0_255,
-          MFGetAttributeUINT32(type.Get(), MF_MT_YUV_MATRIX, 0) == MFVideoTransferMatrix_BT709};
       crop_x_ = crop_y_ = 0;
       MFVideoArea area{};
       if (SUCCEEDED(type->GetBlob(MF_MT_MINIMUM_DISPLAY_APERTURE,
@@ -244,7 +240,6 @@ class D3D11H264Decoder::Impl {
                   source + (desc.Height + crop_y_ / 2 + y) * pitch + crop_x_,
                   width_);
     context_->Unmap(staging_.Get(), 0);
-    color_.Normalize(destination, width_, height_);
     LONGLONG time = 0;
     hr = sample->GetSampleTime(&time);
     if (FAILED(hr)) return hr;
@@ -322,7 +317,6 @@ class D3D11H264Decoder::Impl {
   ComPtr<IMFDXGIDeviceManager> manager_;
   ComPtr<IMFTransform> decoder_;
   ComPtr<ID3D11Texture2D> staging_;
-  SdrColor color_;
   UINT width_ = 0, height_ = 0, crop_x_ = 0, crop_y_ = 0;
   LONGLONG next_time_ = 0;
   std::map<LONGLONG, std::pair<int64_t, int64_t>> timestamps_;

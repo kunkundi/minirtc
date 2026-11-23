@@ -24,7 +24,6 @@ class VideoToolboxEncoder : public MediaCodec {
   explicit VideoToolboxEncoder(std::shared_ptr<SystemClock> clock);
   virtual ~VideoToolboxEncoder();
 
-  void FinishPendingOutput() override;
   int Init(const MediaCodecConfig& config) override;
 
   int Encode(const RawFrame& raw_frame,

@@ -26,9 +26,6 @@ class SvtAv1Encoder : public MediaCodec {
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame& encoded_frame)>
                  on_encoded_image) override;
-  bool SupportsNativeFrameInput(MiniRtcNativeVideoFrameType type) const override {
-    return type == MiniRtcNativeVideoFrameHdr10;
-  }
   int ForceIdr() override;
   int SetTargetBitrate(int bitrate) override;
   int GetResolution(int* width, int* height) const override;
@@ -44,6 +41,7 @@ class SvtAv1Encoder : public MediaCodec {
   std::shared_ptr<SystemClock> clock_ = nullptr;
   EbComponentType* svt_av1_encoder_ = nullptr;
   EbSvtAv1EncConfiguration enc_config_ = {};
+  EbBufferHeaderType* stream_header_buffer_ = nullptr;
   uint32_t frame_width_ = 1280;
   uint32_t frame_height_ = 720;
   int key_frame_interval_ = 3000;
@@ -54,7 +52,6 @@ class SvtAv1Encoder : public MediaCodec {
   MiniRtcVideoContentType video_content_type_ = MiniRtcVideoContentType::ScreenContent;
   MiniRtcVideoDegradationPreference video_degradation_preference_ =
       MiniRtcVideoDegradationPreference::MaintainFrameRate;
-  bool hdr_ = false;
   bool force_idr_ = false;
   unsigned int seq_ = 0;
 
@@ -62,7 +59,8 @@ class SvtAv1Encoder : public MediaCodec {
   FILE* file_nv12_ = nullptr;
   std::string av1_file_name_;
   std::string nv12_file_name_;
-  std::vector<uint8_t> yuv420p_frame_;
+  unsigned char* yuv420p_frame_ = nullptr;
+  size_t yuv420p_frame_capacity_ = 0;
 };
 }  // namespace minirtc
 

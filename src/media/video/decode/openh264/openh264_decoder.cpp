@@ -141,7 +141,9 @@ int OpenH264Decoder::Decode(
   }
 #endif
 
-  color_parser_.ParseColorInfo(data, size);
+  if (size > 4 && (*(data + 4) & 0x1f) == 0x07) {
+    // Key frame received
+  }
 
   SBufferInfo sDstBufInfo;
   memset(&sDstBufInfo, 0, sizeof(SBufferInfo));
@@ -189,7 +191,6 @@ int OpenH264Decoder::Decode(
           return -1;
         }
 
-        color_parser_.Color().Normalize(native_frame->YPlane(), frame_width_, frame_height_);
         DecodedFrame native_decoded_frame;
         native_decoded_frame.SetSize(native_frame->Size());
         native_decoded_frame.SetWidth(frame_width_);
@@ -230,7 +231,6 @@ int OpenH264Decoder::Decode(
           nv12_frame_.data() + frame_width_ * frame_height_, frame_width_,
           frame_width_, frame_height_);
 
-      color_parser_.Color().Normalize(nv12_frame_.data(), frame_width_, frame_height_);
       decoded_frame_->UpdateBuffer(nv12_frame_.data(), frame_size_);
       decoded_frame_->SetWidth(frame_width_);
       decoded_frame_->SetHeight(frame_height_);

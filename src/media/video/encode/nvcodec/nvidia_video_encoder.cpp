@@ -152,14 +152,6 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
     encodeConfig.encodeCodecConfig.h264Config.idrPeriod =
         encodeConfig.gopLength;
     encodeConfig.encodeCodecConfig.h264Config.level = NV_ENC_LEVEL_H264_52;
-    auto& vui = encodeConfig.encodeCodecConfig.h264Config.h264VUIParameters;
-    vui.videoSignalTypePresentFlag = 1;
-    vui.videoFormat = 5;
-    vui.videoFullRangeFlag = 0;
-    vui.colourDescriptionPresentFlag = 1;
-    vui.colourPrimaries = 1;           // BT.709 primaries
-    vui.transferCharacteristics = 13;  // IEC 61966-2-1
-    vui.colourMatrix = 6;              // BT.601
     encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 0;
     encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
 

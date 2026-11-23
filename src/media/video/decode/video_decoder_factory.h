@@ -27,10 +27,6 @@ class VideoDecoderFactory {
       std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
       VideoCodecType codec_type, bool native_video_output = false);
 
-  static std::unique_ptr<MediaCodec> CreateNativeSessionDecoder(
-      std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
-      VideoCodecType codec_type, bool native_video_output);
-
   static bool CheckIsHardwareAccelerationSupported(VideoCodecType codec_type);
 
  private:

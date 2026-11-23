@@ -316,10 +316,6 @@ class WmfH264Encoder::Impl {
     if (FAILED(hr)) return hr;
     output->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
     output->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-    output->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT601);
-    output->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
-    output->SetUINT32(MF_MT_VIDEO_PRIMARIES, MFVideoPrimaries_BT709);
-    output->SetUINT32(MF_MT_TRANSFER_FUNCTION, MFVideoTransFunc_sRGB);
     output->SetUINT32(MF_MT_AVG_BITRATE, config_.init_bitrate);
     output->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
     // Baseline forbids B pictures even on drivers that ignore the optional

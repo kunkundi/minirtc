@@ -131,9 +131,6 @@ class MediaCodec {
     return 0;
   }
 
-  // Finish or discard asynchronous callbacks before switching video backends.
-  virtual void FinishPendingOutput() {}
-
   virtual int ForceIdr() { return 0; }
 
   virtual int SetTargetBitrate(int bitrate) { return 0; }

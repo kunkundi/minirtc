@@ -19,7 +19,6 @@ class VideoToolboxDecoder : public MediaCodec {
                                bool native_video_output = false);
   ~VideoToolboxDecoder();
 
-  void FinishPendingOutput() override;
   int Init() override;
   int Decode(std::unique_ptr<ReceivedFrame> received_frame,
              std::function<void(const DecodedFrame*)> on_receive_decoded_frame)

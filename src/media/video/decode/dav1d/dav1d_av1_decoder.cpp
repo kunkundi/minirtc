@@ -8,8 +8,6 @@
 // #define SAVE_RECEIVED_AV1_STREAM
 
 #include "libyuv.h"
-#include "hdr_video_frame.h"
-#include "sdr_color.h"
 #if defined(_WIN32) || defined(__linux__)
 #include "native_nv12_frame.h"
 #endif
@@ -44,7 +42,9 @@ Dav1dAv1Decoder::Dav1dAv1Decoder(std::shared_ptr<SystemClock> clock,
                                  bool native_video_output)
     : clock_(std::move(clock)),
       native_video_output_(native_video_output) {
-
+#if !defined(_WIN32) && !defined(__linux__)
+  native_video_output_ = false;
+#endif
 }
 
 Dav1dAv1Decoder::~Dav1dAv1Decoder() {
@@ -173,44 +173,12 @@ int Dav1dAv1Decoder::Decode(
     }
   }
 
-  const auto& pic = dav1d_picture;
-  if (pic.p.layout != DAV1D_PIXEL_LAYOUT_I420 || ((pic.p.w | pic.p.h) & 1)) return -1;
-  if (pic.p.bpc == 10 && pic.seq_hdr && !pic.seq_hdr->color_range &&
-      pic.seq_hdr->pri == DAV1D_COLOR_PRI_BT2020 && pic.seq_hdr->mtrx == DAV1D_MC_BT2020_NCL &&
-      pic.seq_hdr->trc == DAV1D_TRC_SMPTE2084) {
-    auto hdr = HdrVideoFrame::Create(pic.p.w, pic.p.h);
-    if (!hdr) return -1;
-    libyuv::I010Copy(static_cast<const uint16_t*>(pic.data[0]), static_cast<int>(pic.stride[0] / 2),
-                     static_cast<const uint16_t*>(pic.data[1]), static_cast<int>(pic.stride[1] / 2),
-                     static_cast<const uint16_t*>(pic.data[2]), static_cast<int>(pic.stride[1] / 2),
-                     hdr->Y(), pic.p.w, hdr->U(), pic.p.w / 2, hdr->V(), pic.p.w / 2, pic.p.w,
-                     pic.p.h);
-    DecodedFrame decoded;
-    const size_t size = size_t(pic.p.w) * pic.p.h * 3 / 2;
-    if (native_video_output_) {
-      decoded.SetNativeFrame(hdr->Descriptor());
-      decoded.SetSize(size);
-    } else {
-      decoded = DecodedFrame(size, pic.p.w, pic.p.h);
-      if (hdr->CopySdr(decoded.MutableBuffer(), size) != 0) return -1;
-    }
-    decoded.SetWidth(pic.p.w);
-    decoded.SetHeight(pic.p.h);
-    decoded.SetDecodedWidth(pic.p.w);
-    decoded.SetDecodedHeight(pic.p.h);
-    decoded.SetReceivedTimestamp(received_frame->ReceivedTimestamp());
-    decoded.SetCapturedTimestamp(received_frame->CapturedTimestamp());
-    decoded.SetDecodedTimestamp(clock_->CurrentTime());
-    on_receive_decoded_frame(&decoded);
-    return 0;
-  }
-  if (pic.p.bpc != 8) {
+  if (dav1d_picture.p.bpc != 8) {
+    // Only accept 8 bit depth.
     LOG_ERROR("Dav1dDecoder::Decode unhandled bit depth: {}",
               dav1d_picture.p.bpc);
     return -1;
   }
-  const SdrColor color{pic.seq_hdr && pic.seq_hdr->color_range,
-                       pic.seq_hdr && pic.seq_hdr->mtrx == DAV1D_MC_BT709};
   frame_width_ = dav1d_picture.p.w;
   frame_height_ = dav1d_picture.p.h;
   nv12_frame_size_ = dav1d_picture.p.w * dav1d_picture.p.h * 3 / 2;
@@ -241,7 +209,6 @@ int Dav1dAv1Decoder::Decode(
       return -1;
     }
 
-    color.Normalize(native_frame->YPlane(), frame_width_, frame_height_);
     DecodedFrame native_decoded_frame;
     native_decoded_frame.SetSize(native_frame->Size());
     native_decoded_frame.SetWidth(received_frame->Width());
@@ -290,7 +257,6 @@ int Dav1dAv1Decoder::Decode(
 
   // A smaller frame may reuse a larger allocation after a resolution change.
   // Publish only the decoded pixels, never the allocation's stale tail.
-  color.Normalize(nv12_frame_, frame_width_, frame_height_);
   decoded_frame_->UpdateBuffer(nv12_frame_, nv12_frame_size_);
   decoded_frame_->SetWidth(frame_width_);
   decoded_frame_->SetHeight(frame_height_);
