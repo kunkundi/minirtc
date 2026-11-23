@@ -31,6 +31,10 @@ namespace {
 
 constexpr int64_t kDesktopPacerQueueLimitMs = 100;
 constexpr int64_t kDesktopFrameAdmissionQueueMs = 80;
+// Rolling window shared by the encode queue delay and the encode stage timings
+// below. File scope so the capture-side copy, which is measured before the
+// frame reaches the encode queue, can use the same window.
+constexpr int64_t kQueueDelayWindowMs = 1000;
 // Completed frames allowed to wait for the decoder before the receiver holds
 // new ones back. Two keeps the added delay to roughly two decode intervals
 // while still absorbing normal arrival jitter.
@@ -892,6 +896,9 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       return 0;
     }
 
+    // Time the capture-side copy separately: at 4K this moves 12 MB before the
+    // frame is even queued, and it must not be confused with encoder cost.
+    const int64_t copy_started_us = clock_->CurrentTimeUs();
     RawFrame raw_frame = native_frame
                              ? RawFrame(*native_frame)
                              : RawFrame(
@@ -899,6 +906,9 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
                                        video_frame->data),
                                    video_frame->size, video_frame->width,
                                    video_frame->height);
+    context->encode_copy_timing.Add(clock_->CurrentTimeMs(),
+                                    clock_->CurrentTimeUs() - copy_started_us,
+                                    kQueueDelayWindowMs);
     raw_frame.SetCapturedTimestamp(
         video_frame->captured_timestamp != 0
             ? static_cast<int64_t>(video_frame->captured_timestamp)
@@ -1090,6 +1100,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
           std::unique_lock lock(self->stream_senders_mutex_);
           context->applied_input_frame_rate = *input_frame_rate;
         }
+        const int64_t encode_started_us = self->clock_->CurrentTimeUs();
         context->codec->Encode(
             std::move(frame),
             [weak_self, weak_context, channel_name, queue_delay_ms,
@@ -1112,6 +1123,22 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
                   channel_name, context, static_cast<int>(queue_delay_ms),
                   measure_encode_delay, encoded_frame, settings_generation);
             });
+        // Attribute the synchronous encode cost. The health log is emitted from
+        // inside the Encode() callback above, so it reports the previous frame's
+        // stages; over a one-second window that difference is irrelevant.
+        const int64_t encode_finished_us = self->clock_->CurrentTimeUs();
+        const int64_t encode_finished_ms = self->clock_->CurrentTimeMs();
+        context->encode_sync_timing.Add(encode_finished_ms,
+                                        encode_finished_us - encode_started_us,
+                                        kQueueDelayWindowMs);
+        int64_t upload_us = 0;
+        int64_t submit_us = 0;
+        if (context->codec->GetLastEncodeStageTimingUs(&upload_us, &submit_us)) {
+          context->encoder_upload_timing.Add(encode_finished_ms, upload_us,
+                                             kQueueDelayWindowMs);
+          context->encoder_submit_timing.Add(encode_finished_ms, submit_us,
+                                             kQueueDelayWindowMs);
+        }
       });
     };
 
@@ -1229,7 +1256,6 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       media_config_.video_content_type == MiniRtcVideoContentType::ScreenContent;
   constexpr int kCriticalFrameRate = 20;
   constexpr int kUpgradeProbeInputWaitMs = 5000;
-  constexpr int kQueueDelayWindowMs = 1000;
   constexpr int kQueueBacklogSustainMs = 500;
   constexpr int kCriticalQueueBacklogSustainMs = 250;
   constexpr int kCriticalQueueDelayMs = 100;
@@ -1556,7 +1582,10 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         "pacer_oldest_ms={} qp={} normalized_qp_ewma={} "
         "applied_input_fps={} pacer_rejected_total={} "
         "pacer_rejected_expected_queue_only_total={} "
-        "pacer_rejected_oldest_wait_only_total={} pacer_rejected_both_total={}",
+        "pacer_rejected_oldest_wait_only_total={} pacer_rejected_both_total={} "
+        "copy_avg_us={} copy_p95_us={} encode_sync_avg_us={} "
+        "encode_sync_p95_us={} enc_upload_avg_us={} enc_upload_p95_us={} "
+        "enc_submit_avg_us={} enc_submit_p95_us={}",
         channel_name, context->measured_encoded_frame_rate,
         low_frame_rate_window_count,
         context->encoded_frame_rate_valid_window_count,
@@ -1588,7 +1617,15 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
         context->pacer_rejected_expected_queue_only_total.load(
             std::memory_order_relaxed),
         context->pacer_rejected_oldest_wait_only_total.load(std::memory_order_relaxed),
-        context->pacer_rejected_both_total.load(std::memory_order_relaxed));
+        context->pacer_rejected_both_total.load(std::memory_order_relaxed),
+        context->encode_copy_timing.average_us,
+        context->encode_copy_timing.p95_us,
+        context->encode_sync_timing.average_us,
+        context->encode_sync_timing.p95_us,
+        context->encoder_upload_timing.average_us,
+        context->encoder_upload_timing.p95_us,
+        context->encoder_submit_timing.average_us,
+        context->encoder_submit_timing.p95_us);
   }
   if (context->resolution_upgrade_probe_active &&
       static_cast<int>(encoded_frame.EncodedWidth()) ==

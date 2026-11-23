@@ -15,6 +15,7 @@
 #include <shared_mutex>
 #include <unordered_map>
 #include <unordered_set>
+#include <vector>
 
 #include "api/clock/clock.h"
 #include "api/transport/network_types.h"
@@ -350,6 +351,48 @@ class IceTransportController
     bool encode_queue_delay_window_ready = false;
     int average_encode_queue_delay_ms = 0;
     int p95_encode_queue_delay_ms = 0;
+
+    // Encode-path stage timings in microseconds, sampled over the same window
+    // as the queue delay. Splitting the path is what tells a frame-budget
+    // overrun apart: the capture-side copy into RawFrame, the whole synchronous
+    // Encode() call, and (for hardware encoders that report it) the
+    // host-to-device copy and the encoder call inside it.
+    struct StageTiming {
+      std::deque<std::pair<int64_t, int64_t>> samples;
+      int64_t average_us = 0;
+      int64_t p95_us = 0;
+
+      void Add(int64_t now_ms, int64_t value_us, int64_t window_ms) {
+        if (value_us < 0) return;
+        samples.emplace_back(now_ms, value_us);
+        while (!samples.empty() && samples.front().first < now_ms - window_ms) {
+          samples.pop_front();
+        }
+        int64_t sum = 0;
+        std::vector<int64_t> values;
+        values.reserve(samples.size());
+        for (const auto& [_, value] : samples) {
+          sum += value;
+          values.push_back(value);
+        }
+        if (values.empty()) return;
+        average_us = sum / static_cast<int64_t>(values.size());
+        const size_t p95_index = (values.size() * 95 + 99) / 100 - 1;
+        std::nth_element(values.begin(), values.begin() + p95_index,
+                         values.end());
+        p95_us = values[p95_index];
+      }
+
+      void Clear() {
+        samples.clear();
+        average_us = 0;
+        p95_us = 0;
+      }
+    };
+    StageTiming encode_copy_timing;
+    StageTiming encode_sync_timing;
+    StageTiming encoder_upload_timing;
+    StageTiming encoder_submit_timing;
     int64_t encode_backlog_since_ms = 0;
     int64_t severe_encode_backlog_since_ms = 0;
     int64_t critical_encode_backlog_since_ms = 0;
@@ -463,6 +506,10 @@ class IceTransportController
       encode_backlog_since_ms = 0;
       severe_encode_backlog_since_ms = 0;
       critical_encode_backlog_since_ms = 0;
+      encode_copy_timing.Clear();
+      encode_sync_timing.Clear();
+      encoder_upload_timing.Clear();
+      encoder_submit_timing.Clear();
     }
 
     std::shared_ptr<MediaChannel> transceiver;

@@ -242,6 +242,10 @@ int NvidiaVideoEncoder::Encode(
 
   const NvEncInputFrame* encoder_inputframe = encoder_->GetNextInputFrame();
   const MiniRtcNativeVideoFrame* native_frame = raw_frame.NativeFrame();
+  // Stage timing for diagnostics only: at 4K the host-to-device copy is a
+  // 12 MB transfer, so a frame budget overrun has to be attributed either to
+  // this copy or to the encoder call itself.
+  const auto upload_started = std::chrono::steady_clock::now();
   if (native_frame && native_frame->type == MiniRtcNativeVideoFrameCpuNv12) {
     const auto& nv12 = native_frame->payload.cpu_nv12;
     NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
@@ -260,8 +264,19 @@ int NvidiaVideoEncoder::Encode(
         encoder_inputframe->bufferFormat, encoder_inputframe->chromaOffsets,
         encoder_inputframe->numChromaPlanes);
   }
+  last_upload_us_.store(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - upload_started)
+          .count(),
+      std::memory_order_relaxed);
 
+  const auto submit_started = std::chrono::steady_clock::now();
   encoder_->EncodeFrame(encoded_packets_, nullptr, &encoded_packet_qps_);
+  last_submit_us_.store(
+      std::chrono::duration_cast<std::chrono::microseconds>(
+          std::chrono::steady_clock::now() - submit_started)
+          .count(),
+      std::memory_order_relaxed);
 
   if (encoded_packets_.size() < 1) {
     return -1;

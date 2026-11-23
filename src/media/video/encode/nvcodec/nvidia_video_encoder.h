@@ -1,6 +1,8 @@
 #ifndef _NVIDIA_VIDEO_ENCODER_H_
 #define _NVIDIA_VIDEO_ENCODER_H_
 
+#include <atomic>
+#include <cstdint>
 #include <functional>
 
 #include "NvEncoderCuda.h"
@@ -30,6 +32,18 @@ class NvidiaVideoEncoder : public MediaCodec {
     return frame_type == MiniRtcNativeVideoFrameCpuNv12;
   }
 
+  // Diagnostics: splits Encode() into the host-to-device copy and the encoder
+  // call so a 4K frame budget overrun can be attributed to one of them. Both
+  // stages run synchronously inside Encode(), so the values describe the last
+  // completed call.
+  bool GetLastEncodeStageTimingUs(int64_t* upload_us,
+                                  int64_t* submit_us) const override {
+    if (!upload_us || !submit_us) return false;
+    *upload_us = last_upload_us_.load(std::memory_order_relaxed);
+    *submit_us = last_submit_us_.load(std::memory_order_relaxed);
+    return true;
+  }
+
   int GetResolution(int* width, int* height) const override {
     if (seq_ == 0) {
       return -1;
@@ -50,6 +64,10 @@ class NvidiaVideoEncoder : public MediaCodec {
   std::shared_ptr<SystemClock> clock_ = nullptr;
   int index_of_gpu_ = 0;
   CUdevice cuda_device_ = 0;
+
+  // Microseconds spent in the two synchronous stages of the last Encode().
+  std::atomic<int64_t> last_upload_us_{0};
+  std::atomic<int64_t> last_submit_us_{0};
 
   GUID codec_guid_ = NV_ENC_CODEC_H264_GUID;
   GUID preset_guid_ = NV_ENC_PRESET_P7_GUID;
