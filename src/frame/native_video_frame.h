@@ -22,10 +22,10 @@ inline bool GetNv12FrameSize(uint32_t width, uint32_t height, size_t* size) {
     return false;
   }
   const size_t pixels = static_cast<size_t>(width) * height;
-  if (pixels > std::numeric_limits<size_t>::max() / 3U * 2U) {
+  if (pixels > std::numeric_limits<size_t>::max() - pixels / 2U) {
     return false;
   }
-  *size = pixels * 3U / 2U;
+  *size = pixels + pixels / 2U;
   return true;
 }
 

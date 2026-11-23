@@ -8,6 +8,7 @@
 // #define SAVE_RECEIVED_AV1_STREAM
 
 #include "libyuv.h"
+#include "native_video_frame.h"
 #if defined(_WIN32) || defined(__linux__)
 #include "native_nv12_frame.h"
 #endif
@@ -173,15 +174,16 @@ int Dav1dAv1Decoder::Decode(
     }
   }
 
-  if (dav1d_picture.p.bpc != 8) {
-    // Only accept 8 bit depth.
-    LOG_ERROR("Dav1dDecoder::Decode unhandled bit depth: {}",
-              dav1d_picture.p.bpc);
+  const auto& format = dav1d_picture.p;
+  if (format.bpc != 8 || format.layout != DAV1D_PIXEL_LAYOUT_I420 ||
+      format.w <= 0 || format.h <= 0 ||
+      !GetNv12FrameSize(format.w, format.h, &nv12_frame_size_)) {
+    LOG_ERROR("Unsupported dav1d output: {}x{}, layout={}, bit depth={}",
+              format.w, format.h, static_cast<int>(format.layout), format.bpc);
     return -1;
   }
-  frame_width_ = dav1d_picture.p.w;
-  frame_height_ = dav1d_picture.p.h;
-  nv12_frame_size_ = dav1d_picture.p.w * dav1d_picture.p.h * 3 / 2;
+  frame_width_ = format.w;
+  frame_height_ = format.h;
 
 #if defined(_WIN32) || defined(__linux__)
   if (native_video_output_) {
@@ -243,15 +245,19 @@ int Dav1dAv1Decoder::Decode(
     nv12_frame_ = new unsigned char[nv12_frame_capacity_];
   }
 
-  libyuv::I420ToNV12(
+  const int conversion_result = libyuv::I420ToNV12(
       (const uint8_t *)dav1d_picture.data[0], (int)dav1d_picture.stride[0],
       (const uint8_t *)dav1d_picture.data[1], (int)dav1d_picture.stride[1],
       (const uint8_t *)dav1d_picture.data[2], (int)dav1d_picture.stride[1],
       nv12_frame_, frame_width_, nv12_frame_ + frame_width_ * frame_height_,
       frame_width_, frame_width_, frame_height_);
+  if (conversion_result != 0) {
+    LOG_ERROR("dav1d I420 to NV12 conversion failed, ret {}", conversion_result);
+    return -1;
+  }
 
   if (!decoded_frame_) {
-    decoded_frame_ = new DecodedFrame(frame_width_ * frame_height_ * 3 / 2,
+    decoded_frame_ = new DecodedFrame(nv12_frame_size_,
                                       frame_width_, frame_height_);
   }
 
