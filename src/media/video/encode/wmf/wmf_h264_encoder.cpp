@@ -2,11 +2,14 @@
 
 #include <codecapi.h>
 #include <strmif.h>
+#include <wrl/implements.h>
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <limits>
+#include <mutex>
 
 #include "encoder_input_timing.h"
 #include "h264_bitstream_parser.h"
@@ -17,6 +20,61 @@
 namespace minirtc {
 namespace {
 using wmf::ComPtr;
+
+// One reader per transform. Encode waits for one notification at a time;
+// the MF callback never references the encoder or its current frame.
+class MftEventReader final
+    : public Microsoft::WRL::RuntimeClass<
+          Microsoft::WRL::RuntimeClassFlags<Microsoft::WRL::ClassicCom>,
+          IMFAsyncCallback> {
+ public:
+  explicit MftEventReader(IMFMediaEventGenerator* source) : source_(source) {}
+
+  HRESULT Next(std::chrono::steady_clock::time_point deadline,
+               ComPtr<IMFMediaEvent>& event) {
+    HRESULT hr = source_->BeginGetEvent(this, nullptr);
+    if (FAILED(hr)) return hr;
+    std::unique_lock lock(mutex_);
+    if (!ready_.wait_until(lock, deadline, [this] { return completed_; })) {
+      // Reset will shut down this transform. Break the reference back to it
+      // even if a stalled driver never delivers the pending notification.
+      source_.Reset();
+      return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
+    }
+    event = std::move(event_);
+    completed_ = false;
+    return status_;
+  }
+
+  STDMETHODIMP GetParameters(DWORD*, DWORD*) override { return E_NOTIMPL; }
+
+  STDMETHODIMP Invoke(IMFAsyncResult* result) override {
+    ComPtr<IMFMediaEventGenerator> source;
+    {
+      std::lock_guard lock(mutex_);
+      source = source_;
+    }
+    if (!source) return S_OK;
+    ComPtr<IMFMediaEvent> event;
+    const HRESULT hr = source->EndGetEvent(result, &event);
+    {
+      std::lock_guard lock(mutex_);
+      event_ = std::move(event);
+      status_ = hr;
+      completed_ = true;
+    }
+    ready_.notify_one();
+    return S_OK;
+  }
+
+ private:
+  ComPtr<IMFMediaEventGenerator> source_;
+  ComPtr<IMFMediaEvent> event_;
+  std::mutex mutex_;
+  std::condition_variable ready_;
+  bool completed_ = false;
+  HRESULT status_ = S_OK;
+};
 
 HRESULT SetUint(ICodecAPI* api, const GUID& key, ULONG value) {
   VARIANT variant{};
@@ -56,7 +114,7 @@ class WmfH264Encoder::Impl {
   }
 
   void Reset() {
-    events_.Reset();
+    event_reader_.Reset();
     api_.Reset();
     wmf::ShutdownTransform(encoder_);
     input_credit_ = 0;
@@ -274,13 +332,14 @@ class WmfH264Encoder::Impl {
     ComPtr<IMFAttributes> attributes;
     hr = encoder_->GetAttributes(&attributes);
     if (FAILED(hr)) return hr;
-    async_ =
-        MFGetAttributeUINT32(attributes.Get(), MF_TRANSFORM_ASYNC, FALSE) != 0;
-    if (async_) {
+    if (MFGetAttributeUINT32(attributes.Get(), MF_TRANSFORM_ASYNC, FALSE)) {
       hr = attributes->SetUINT32(MF_TRANSFORM_ASYNC_UNLOCK, TRUE);
       if (FAILED(hr)) return hr;
-      hr = encoder_.As(&events_);
+      ComPtr<IMFMediaEventGenerator> events;
+      hr = encoder_.As(&events);
       if (FAILED(hr)) return hr;
+      event_reader_ = Microsoft::WRL::Make<MftEventReader>(events.Get());
+      if (!event_reader_) return E_OUTOFMEMORY;
     }
     DWORD inputs = 0, outputs = 0;
     hr = encoder_->GetStreamCount(&inputs, &outputs);
@@ -299,11 +358,8 @@ class WmfH264Encoder::Impl {
     api_->SetValue(&CODECAPI_AVLowLatencyMode, &low_latency);
     SetUint(api_.Get(), CODECAPI_AVEncMPVDefaultBPictureCount, 0);
     SetUint(api_.Get(), CODECAPI_AVEncMPVGOPSize, config_.key_frame_interval);
-    SetUint(api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed,
-            config_.video_degradation_preference ==
-                    MiniRtcVideoDegradationPreference::MaintainFrameRate
-                ? 0
-                : 50);
+    HRESULT speed_hr =
+        SetUint(api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed, 0);
 
     // Offer the optional HRD setting before media-type negotiation, when an
     // MFT can still accept static options. Recheck after stream start rather
@@ -337,6 +393,8 @@ class WmfH264Encoder::Impl {
     input->SetUINT32(MF_MT_DEFAULT_STRIDE, config_.init_width);
     hr = encoder_->SetInputType(input_id_, input.Get(), 0);
     if (FAILED(hr)) return hr;
+    if (speed_hr != S_OK)
+      speed_hr = SetUint(api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed, 0);
     hr = SetUint(api_.Get(), CODECAPI_AVEncCommonMeanBitRate,
                  config_.init_bitrate);
     if (FAILED(hr)) return hr;
@@ -345,6 +403,13 @@ class WmfH264Encoder::Impl {
     if (FAILED(hr)) return hr;
     hr = encoder_->ProcessMessage(MFT_MESSAGE_NOTIFY_START_OF_STREAM, 0);
     if (FAILED(hr)) return hr;
+    VARIANT speed{};
+    const HRESULT read_hr = api_->GetValue(&CODECAPI_AVEncCommonQualityVsSpeed,
+                                           &speed);
+    LOG_INFO("WMF encoder speed: requested=0 readback={} set_status=0x{:08x}",
+             read_hr == S_OK && speed.vt == VT_UI4 ? int64_t(speed.ulVal) : -1,
+             static_cast<uint32_t>(speed_hr));
+    VariantClear(&speed);
     if (configure_buffer) ConfigureBufferControl("streaming", true);
     if (!buffer_control_requested_)
       LogBufferState("without_optional_buffer", config_.init_bitrate);
@@ -488,61 +553,52 @@ class WmfH264Encoder::Impl {
     bool submitted = false;
     // Low-latency, no-B-frame mode must produce this frame before accepting the
     // next one. A bounded wait also handles driver/device loss without hanging
-    // the media thread. No callbacks or input references escape Encode().
+    // the media thread.
     while (std::chrono::steady_clock::now() < deadline) {
-      bool have_output = !async_;
-      bool received_event = false;
-      if (async_) {
-        ComPtr<IMFMediaEvent> event;
-        hr = events_->GetEvent(MF_EVENT_FLAG_NO_WAIT, &event);
-        if (hr != MF_E_NO_EVENTS_AVAILABLE) {
-          if (FAILED(hr)) return hr;
-          received_event = true;
-          HRESULT status = S_OK;
-          hr = event->GetStatus(&status);
-          if (FAILED(hr)) return hr;
-          if (FAILED(status)) return status;
-          MediaEventType type = MEUnknown;
-          hr = event->GetType(&type);
-          if (FAILED(hr)) return hr;
-          if (type == METransformNeedInput) ++input_credit_;
-          if (type == METransformHaveOutput) have_output = true;
-        }
-      }
-      if (!submitted && (!async_ || input_credit_)) {
+      if (!submitted && (!event_reader_ || input_credit_)) {
         hr = encoder_->ProcessInput(input_id_, input.Get(), 0);
         if (SUCCEEDED(hr)) {
           submitted = true;
-          if (async_) --input_credit_;
+          if (event_reader_) --input_credit_;
         } else if (hr != MF_E_NOTACCEPTING)
           return hr;
       }
-      if (have_output) {
-        ComPtr<IMFSample> output;
-        hr = wmf::ReadOutput(encoder_.Get(), output_id_, output);
-        if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
-          ComPtr<IMFMediaType> type;
-          hr = encoder_->GetOutputAvailableType(output_id_, 0, &type);
-          if (FAILED(hr)) return hr;
-          hr = encoder_->SetOutputType(output_id_, type.Get(), 0);
-          if (FAILED(hr)) return hr;
-          // An asynchronous MFT consumes the HaveOutput notification even
-          // when it reports a format change. Wait for the next notification;
-          // another ProcessOutput here fails with E_UNEXPECTED on Intel MFTs.
-          if (async_) continue;
-          hr = wmf::ReadOutput(encoder_.Get(), output_id_, output);
-        }
-        if (FAILED(hr) && hr != MF_E_TRANSFORM_NEED_MORE_INPUT) return hr;
-        if (SUCCEEDED(hr) && output) {
-          hr = ReadFrame(output.Get(), raw, frames);
-          if (FAILED(hr)) return hr;
-          ++sequence_;
-          return S_OK;
-        }
+      if (event_reader_) {
+        ComPtr<IMFMediaEvent> event;
+        hr = event_reader_->Next(deadline, event);
+        if (FAILED(hr)) return hr;
+        HRESULT status = S_OK;
+        hr = event->GetStatus(&status);
+        if (FAILED(hr)) return hr;
+        if (FAILED(status)) return status;
+        MediaEventType type = MEUnknown;
+        hr = event->GetType(&type);
+        if (FAILED(hr)) return hr;
+        if (type == METransformNeedInput) ++input_credit_;
+        if (type != METransformHaveOutput) continue;
       }
-      // Drain queued notifications without adding a timer delay per event.
-      // Only poll with a delay when idle; keep the bounded wait above.
-      if (!received_event)
+      ComPtr<IMFSample> output;
+      hr = wmf::ReadOutput(encoder_.Get(), output_id_, output);
+      if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
+        ComPtr<IMFMediaType> type;
+        hr = encoder_->GetOutputAvailableType(output_id_, 0, &type);
+        if (FAILED(hr)) return hr;
+        hr = encoder_->SetOutputType(output_id_, type.Get(), 0);
+        if (FAILED(hr)) return hr;
+        // An asynchronous MFT consumes the HaveOutput notification even
+        // when it reports a format change. Wait for the next notification;
+        // another ProcessOutput here fails with E_UNEXPECTED on Intel MFTs.
+        if (event_reader_) continue;
+        hr = wmf::ReadOutput(encoder_.Get(), output_id_, output);
+      }
+      if (FAILED(hr) && hr != MF_E_TRANSFORM_NEED_MORE_INPUT) return hr;
+      if (SUCCEEDED(hr) && output) {
+        hr = ReadFrame(output.Get(), raw, frames);
+        if (FAILED(hr)) return hr;
+        ++sequence_;
+        return S_OK;
+      }
+      if (!event_reader_)
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
     }
     return HRESULT_FROM_WIN32(WAIT_TIMEOUT);
@@ -552,7 +608,7 @@ class WmfH264Encoder::Impl {
   std::shared_ptr<SystemClock> clock_;
   MediaCodecConfig config_;
   ComPtr<IMFTransform> encoder_;
-  ComPtr<IMFMediaEventGenerator> events_;
+  ComPtr<MftEventReader> event_reader_;
   ComPtr<ICodecAPI> api_;
   DWORD input_id_ = 0, output_id_ = 0;
   unsigned input_credit_ = 0;
@@ -566,7 +622,7 @@ class WmfH264Encoder::Impl {
   int last_buffer_observation_bitrate_ = 0;
   int last_buffer_request_bitrate_ = 0;
   int buffer_initial_bitrate_ = 0;
-  bool async_ = false, force_idr_ = true, reconfigure_ = false;
+  bool force_idr_ = true, reconfigure_ = false;
   bool initialized_ = false;
   uint64_t sequence_ = 0;
   int input_frame_rate_ = 60;
