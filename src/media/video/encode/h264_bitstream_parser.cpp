@@ -265,6 +265,20 @@ void H264BitstreamParser::Reset() {
   last_slice_qp_delta_.reset();
 }
 
+void H264BitstreamParser::ParseColorInfo(const uint8_t* bitstream, size_t length) {
+  size_t start = 0, prefix = 0;
+  while (FindStartCode(bitstream, length, start, &start, &prefix)) {
+    const size_t payload = start + prefix;
+    if (payload >= length) return;
+    const auto type = bitstream[payload] & kNaluTypeMask;
+    if (type == 1 || type == 5) return;
+    size_t end = length, next_prefix = 0;
+    FindStartCode(bitstream, length, payload + 1, &end, &next_prefix);
+    if (type == kNaluSps) sps_ = ParseSps(bitstream + payload + 1, end - payload - 1);
+    start = end;
+  }
+}
+
 void H264BitstreamParser::ParseBitstream(const uint8_t* bitstream,
                                          size_t length) {
   last_slice_qp_delta_.reset();
@@ -445,6 +459,16 @@ H264BitstreamParser::ParseSps(const uint8_t* data, size_t length) const {
     sps.width = width;
     sps.height = height;
   }
+  bool present = false;
+  if (!reader.ReadBit(&present) || !present) return sps;  // VUI
+  if (!reader.ReadBit(&present)) return sps;
+  if (present && (!reader.ReadBits(8, &value) || (value == 255 && !reader.SkipBits(32))))
+    return sps;
+  if (!reader.ReadBit(&present) || (present && !reader.SkipBits(1))) return sps;
+  if (!reader.ReadBit(&present) || !present || !reader.SkipBits(3) ||
+      !reader.ReadBit(&sps.color.full_range) || !reader.ReadBit(&present))
+    return sps;
+  if (present && reader.SkipBits(16) && reader.ReadBits(8, &value)) sps.color.bt709 = value == 1;
   return sps;
 }
 

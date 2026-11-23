@@ -9,6 +9,7 @@
 
 #include "libyuv.h"
 #include "native_video_frame.h"
+#include "sdr_color.h"
 #if defined(_WIN32) || defined(__linux__)
 #include "native_nv12_frame.h"
 #endif
@@ -182,6 +183,9 @@ int Dav1dAv1Decoder::Decode(
               format.w, format.h, static_cast<int>(format.layout), format.bpc);
     return -1;
   }
+  const auto* sequence = dav1d_picture.seq_hdr;
+  const SdrColor color{sequence && sequence->color_range,
+                       sequence && sequence->mtrx == DAV1D_MC_BT709};
   frame_width_ = format.w;
   frame_height_ = format.h;
 
@@ -211,6 +215,7 @@ int Dav1dAv1Decoder::Decode(
       return -1;
     }
 
+    color.Normalize(native_frame->YPlane(), frame_width_, frame_height_);
     DecodedFrame native_decoded_frame;
     native_decoded_frame.SetSize(native_frame->Size());
     native_decoded_frame.SetWidth(received_frame->Width());
@@ -263,6 +268,7 @@ int Dav1dAv1Decoder::Decode(
 
   // A smaller frame may reuse a larger allocation after a resolution change.
   // Publish only the decoded pixels, never the allocation's stale tail.
+  color.Normalize(nv12_frame_, frame_width_, frame_height_);
   decoded_frame_->UpdateBuffer(nv12_frame_, nv12_frame_size_);
   decoded_frame_->SetWidth(frame_width_);
   decoded_frame_->SetHeight(frame_height_);
