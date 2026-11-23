@@ -13,6 +13,7 @@
 #include "native_video_frame.h"
 #include "resolution_adapter.h"
 #include "video_adaptation_policy.h"
+#include "video_recovery_timing.h"
 #include "video_resolution_limit.h"
 #include "video_frame_wrapper.h"
 
@@ -39,7 +40,6 @@ constexpr int64_t kQueueDelayWindowMs = 1000;
 // new ones back. Two keeps the added delay to roughly two decode intervals
 // while still absorbing normal arrival jitter.
 constexpr int kMaxDecodeBacklog = 2;
-constexpr int64_t kDecodeOutputTimeoutMs = 2000;
 constexpr int64_t kRelayPacerBurstIntervalMs = 5;
 // Limit regular keyframe bytes independently of the pacer's queue draining.
 constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
@@ -680,7 +680,8 @@ uint32_t IceTransportController::AddVideoReceiveChannel(
       // A decoder which lost its output callbacks needs a fresh IDR to
       // reset. Allow one recovery task after the normal output timeout.
       return keyframe && queued == 0 && backlog->pending == kMaxDecodeBacklog &&
-             self->clock_->CurrentTimeMs() - backlog->last_submission_ms >= kDecodeOutputTimeoutMs;
+             self->clock_->CurrentTimeMs() - backlog->last_submission_ms >=
+                 video_recovery::kDecodeOutputTimeoutMs;
     });
     context->transceiver = std::move(video_channel);
   }

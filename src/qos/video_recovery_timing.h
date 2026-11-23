@@ -13,6 +13,8 @@
 namespace minirtc {
 namespace video_recovery {
 
+constexpr int64_t kDecodeOutputTimeoutMs = 2000;
+
 // `successful_nack_count` is the number of successful NACK transmissions for
 // one missing packet.  Once an RTT sample exists, keep the early recovery
 // attempts close together: a 1x/1x/2x schedule gives a lossy TURN path four

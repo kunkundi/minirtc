@@ -1174,45 +1174,33 @@ bool RtpVideoReceiver::Process() {
           nack_->ClearUpTo(*it->second.last_sequence_number);
         MarkFrameDiscardedLocked(dropped_timestamp);
         pending_frames_.erase(it);
-      } else if (frame_age_ms > kMaxFrameAssemblyMs ||
-                 (recovery_age_ms > recovery_timing.hard_deadline_ms &&
-                  (!it->second.is_complete || (has_blocking_nacks && !awaiting_keyframe_)))) {
-        if (it->second.is_keyframe) {
-          failed_keyframe = FailedKeyFrame{it->second.arrival_time,
-                                          it->second.request_generation,
-                                          it->first};
-        }
-        dropped_timestamp = it->first;
-        dropped_frame = true;
-        recovery_timed_out = true;
-        LOG_DEBUG("Video frame recovery timeout: channel={} timestamp={} "
-                  "keyframe={} frame_age_ms={} recovery_age_ms={} missing={}",
-                  log_context_, it->first, it->second.is_keyframe, frame_age_ms,
-                  recovery_age_ms, has_blocking_nacks);
-        awaiting_keyframe_ = true;
-        if (nack_ && it->second.last_sequence_number.has_value()) {
-          // Only abandon losses that can affect this frame. Newer frames,
-          // especially an in-flight keyframe, retain their retransmission
-          // state.
-          nack_->ClearUpTo(*it->second.last_sequence_number);
-        }
-        pending_frames_.erase(it);
       } else if (it->second.is_complete &&
-                 (!has_blocking_nacks || (awaiting_keyframe_ && it->second.is_keyframe))) {
+                 (!has_blocking_nacks || (awaiting_keyframe_ && it->second.is_keyframe)) &&
+                 (it->second.is_keyframe || frame_age_ms <= kMaxFrameAssemblyMs)) {
         if (frame_admission_ && !frame_admission_(it->second.is_keyframe)) {
           recovery_admission_stalls_.fetch_add(1, std::memory_order_relaxed);
-          break;
+          if (!it->second.is_keyframe) break;
+          // A complete IDR can recover a stalled decoder when its output
+          // timeout expires. Start its wait at the first admission refusal.
+          auto& since = it->second.admission_blocked_since_ms;
+          if (!since) since = now_ms;
+          if (now_ms - *since < video_recovery::kDecodeOutputTimeoutMs) break;
+          recovery_timed_out = true;
+        } else {
+          if (awaiting_keyframe_ && nack_ && it->second.last_sequence_number) {
+            nack_->ClearUpTo(*it->second.last_sequence_number);
+          }
+          awaiting_keyframe_ = false;
+          soft_fir_avoided = it->second.recovery_escalated &&
+                             !it->second.soft_fir_requested;
+          last_complete_frame_ts_ = it->first;
+          completed_keyframe = it->second.is_keyframe;
+          completed_frame = std::move(it->second.frame);
+          pending_frames_.erase(it);
         }
-        if (awaiting_keyframe_ && nack_ && it->second.last_sequence_number) {
-          nack_->ClearUpTo(*it->second.last_sequence_number);
-        }
-        awaiting_keyframe_ = false;
-        soft_fir_avoided = it->second.recovery_escalated &&
-                           !it->second.soft_fir_requested;
-        last_complete_frame_ts_ = it->first;
-        completed_keyframe = it->second.is_keyframe;
-        completed_frame = std::move(it->second.frame);
-        pending_frames_.erase(it);
+      } else if (frame_age_ms > kMaxFrameAssemblyMs ||
+                 recovery_age_ms > recovery_timing.hard_deadline_ms) {
+        recovery_timed_out = true;
       } else if (!it->second.recovery_escalated &&
                  recovery_age_ms > recovery_timing.soft_deadline_ms) {
         // Treat the soft deadline as a warning first. A short confirmation
@@ -1236,6 +1224,25 @@ bool RtpVideoReceiver::Process() {
       }
 
       if (recovery_timed_out) {
+        if (it->second.is_keyframe) {
+          failed_keyframe = FailedKeyFrame{it->second.arrival_time,
+                                          it->second.request_generation,
+                                          it->first};
+        }
+        dropped_timestamp = it->first;
+        dropped_frame = true;
+        LOG_DEBUG("Video frame recovery timeout: channel={} timestamp={} "
+                  "keyframe={} frame_age_ms={} recovery_age_ms={} missing={}",
+                  log_context_, it->first, it->second.is_keyframe, frame_age_ms,
+                  recovery_age_ms, has_blocking_nacks);
+        awaiting_keyframe_ = true;
+        if (nack_ && it->second.last_sequence_number.has_value()) {
+          // Only abandon losses that can affect this frame. Newer frames,
+          // especially an in-flight keyframe, retain their retransmission
+          // state.
+          nack_->ClearUpTo(*it->second.last_sequence_number);
+        }
+        pending_frames_.erase(it);
         // A hard timeout is an explicit decision to abandon this timestamp.
         // Remember it before releasing the lock so late fragments cannot
         // recreate the same pending frame and time out a second time.

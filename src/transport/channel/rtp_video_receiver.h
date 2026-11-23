@@ -194,6 +194,7 @@ class RtpVideoReceiver : public ThreadBase {
     bool soft_fir_requested = false;
     int64_t last_progress_time = 0;
     uint64_t request_generation = 0;
+    std::optional<int64_t> admission_blocked_since_ms;
   };
   struct RtpTimestampLess {
     bool operator()(uint32_t lhs, uint32_t rhs) const {
