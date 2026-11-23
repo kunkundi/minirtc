@@ -72,6 +72,7 @@ void WsClient::Shutdown() {
   {
     std::lock_guard<std::mutex> lock(reconnect_mtx_);
     shutdown_ = true;
+    retry_requested_ = false;
     reconnect_generation_.fetch_add(1);
   }
   running_ = false;
@@ -266,10 +267,10 @@ void WsClient::CleanupPendingThreads() {
   }
 }
 
-void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
+void WsClient::ScheduleReconnect(bool force) {
   // Serialize a forced wake with both scheduling and entering the wait, so a
   // click just before the worker starts waiting cannot be lost.
-  std::unique_lock<std::mutex> schedule_lock(reconnect_mtx_);
+  std::lock_guard<std::mutex> schedule_lock(reconnect_mtx_);
   if (shutdown_) {
     return;
   }
@@ -277,24 +278,30 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
     reconnect_attempts_ = 0;
   }
 
-  // ensure only one reconnect attempt is scheduled at a time.
-  bool expected = false;
-  if (!is_reconnecting_.compare_exchange_strong(expected, true)) {
-    if (force && reconnect_waiting_) {
+  if (reconnect_phase_ != ReconnectPhase::Idle) {
+    if (force && reconnect_phase_ == ReconnectPhase::Waiting) {
       reconnect_now_ = true;
       reconnect_cv_.notify_all();
+    } else if (!force && reconnect_phase_ == ReconnectPhase::Connecting) {
+      // The new endpoint can fail before connect() returns to this worker.
+      retry_requested_ = true;
     }
-    LOG_DEBUG("Reconnect already in progress, skipping.");
     return;
   }
-  if (delay_seconds < 0) {
+  StartReconnectLocked(force);
+}
+
+void WsClient::StartReconnectLocked(bool force) {
+  int delay_seconds = 0;
+  if (!force) {
     const int attempt = std::min(reconnect_attempts_.load() + 1, 6);
     reconnect_attempts_ = attempt;
     delay_seconds = std::min(1 << attempt, 60);
     LOG_INFO("Scheduling signaling reconnect: attempt={} base_seconds={}",
              attempt, delay_seconds);
   }
-  reconnect_waiting_ = true;
+  reconnect_phase_ = ReconnectPhase::Waiting;
+  retry_requested_ = false;
   reconnect_now_ = force;
 
   auto delay = std::chrono::milliseconds::zero();
@@ -345,15 +352,15 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
               return self->shutdown_.load() || self->reconnect_now_ ||
                      self->reconnect_generation_.load() != current_generation;
             });
-        self->reconnect_waiting_ = false;
         self->reconnect_now_ = false;
 
         // Generation changed or shutdown started; cancel this attempt.
         if (self->shutdown_ ||
             self->reconnect_generation_.load() != current_generation) {
-          self->is_reconnecting_.store(false);
+          self->reconnect_phase_ = ReconnectPhase::Idle;
           return;
         }
+        self->reconnect_phase_ = ReconnectPhase::ReplacingEndpoint;
       }
 
 #ifndef NDEBUG
@@ -363,32 +370,31 @@ void WsClient::ScheduleReconnect(int delay_seconds, bool force) {
                std::chrono::duration_cast<std::chrono::milliseconds>(
                    Clock::now() - scheduled_at).count());
 #endif
-      self->ReConnect();
+      int result = -1;
+      try {
+        result = self->ReConnect();
+      } catch (const std::exception& error) {
+        LOG_ERROR("Signaling reconnect threw: {}", error.what());
+        self->StopThreads();
+      } catch (...) {
+        LOG_ERROR("Signaling reconnect threw an unknown exception");
+        self->StopThreads();
+      }
       std::lock_guard<std::mutex> lock(self->reconnect_mtx_);
-      self->is_reconnecting_.store(false);
+      self->reconnect_phase_ = ReconnectPhase::Idle;
+      if (!self->shutdown_ && (result != 0 || self->retry_requested_)) {
+        self->StartReconnectLocked(false);
+      }
     }
   });
 
-  // Serialize publication of the new worker with Shutdown(). Recheck the
-  // terminal flag while holding the same mutex so Shutdown cannot miss a
-  // reconnect thread created concurrently.
-  {
-    std::lock_guard<std::mutex> lock(pending_threads_mtx_);
-    if (shutdown_) {
-      reconnect_generation_.fetch_add(1);
-      reconnect_cv_.notify_all();
-      is_reconnecting_ = false;
-    } else {
-      if (reconnect_thread_.joinable()) {
-        pending_threads_.push_back(std::move(reconnect_thread_));
-      }
-      reconnect_thread_ = std::move(reconnect_thread);
-      return;
-    }
+  // The caller holds reconnect_mtx_ until publication, so Shutdown cannot
+  // invalidate scheduling and collect workers in the middle of this handoff.
+  std::lock_guard<std::mutex> lock(pending_threads_mtx_);
+  if (reconnect_thread_.joinable()) {
+    pending_threads_.push_back(std::move(reconnect_thread_));
   }
-
-  schedule_lock.unlock();
-  JoinThread(reconnect_thread);
+  reconnect_thread_ = std::move(reconnect_thread);
 }
 
 void WsClient::RegisterHandlers() {
@@ -469,18 +475,28 @@ int WsClient::Connect(const std::string& uri) {
            long(WsClientConfig::transport_config::timeout_socket_post_init),
            long(WsClientConfig::transport_config::timeout_socket_shutdown));
 #endif
+  // Shutdown and the next retry can stop any published endpoint. Initialize
+  // its I/O service first so that a setup exception leaves teardown safe.
+  auto endpoint = std::make_shared<client>();
+  endpoint->init_asio();
+  endpoint->start_perpetual();
   {
     std::lock_guard lock(transport_mutex_);
 #ifndef NDEBUG
     diagnostics_ = diagnostics;
 #endif
-    m_endpoint_ = std::make_shared<client>();
+    m_endpoint_ = endpoint;
   }
   SetStatus(WsOpening);
-  m_endpoint_->init_asio();
-  m_endpoint_->start_perpetual();
 
   RegisterHandlers();
+  {
+    std::lock_guard lock(reconnect_mtx_);
+    // StopThreads has drained the retired endpoint and its callbacks. Only
+    // failures from this point on should rearm an in-flight reconnect.
+    if (reconnect_phase_ == ReconnectPhase::ReplacingEndpoint)
+      reconnect_phase_ = ReconnectPhase::Connecting;
+  }
   // Keep the endpoint alive while run() unwinds, including when the final
   // WsClient reference is released by a callback on this worker.
   m_thread_ = std::thread([endpoint = m_endpoint_]() { endpoint->run(); });
@@ -522,8 +538,8 @@ int WsClient::Connect(const std::string& uri) {
       });
   diagnostics->Event("connect_dispatched");
 #endif
-  m_endpoint_->connect(con);
   SetStatus(WsConnecting);
+  m_endpoint_->connect(con);
   return 0;
 }
 
@@ -550,8 +566,6 @@ int WsClient::ReConnect() {
     }
   }
 
-  StopThreads();
-
   return Connect(uri_);
 }
 
@@ -560,12 +574,12 @@ void WsClient::AsyncReConnect() {
     return;
   }
 
-  ScheduleReconnect(-1);
+  ScheduleReconnect(false);
 }
 
 void WsClient::ForceReconnect() {
   LOG_INFO("Forcing a signaling reconnect");
-  ScheduleReconnect(0, true);
+  ScheduleReconnect(true);
 }
 
 void WsClient::Close() {
@@ -847,7 +861,7 @@ void WsClient::OnFail(client* c, websocketpp::connection_hdl hdl) {
           "with certificate verification enabled");
     }
 
-    if (!shutdown_) ScheduleReconnect(-1);
+    if (!shutdown_) ScheduleReconnect(false);
   } else {
     LOG_WARN("Connection failed (non-TLS error): {}", error_msg);
     if (!shutdown_) {

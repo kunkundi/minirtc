@@ -137,7 +137,8 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   void CleanupPendingThreads();
 
-  void ScheduleReconnect(int delay_seconds, bool force = false);
+  void ScheduleReconnect(bool force);
+  void StartReconnectLocked(bool force);
 
  private:
   struct Transport {
@@ -167,7 +168,9 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   std::mutex reconnect_mtx_;
   // Protected by reconnect_mtx_. A force request wakes an existing delay but
   // does not start a second connection while the worker is already connecting.
-  bool reconnect_waiting_ = false;
+  enum class ReconnectPhase { Idle, Waiting, ReplacingEndpoint, Connecting };
+  ReconnectPhase reconnect_phase_ = ReconnectPhase::Idle;
+  bool retry_requested_ = false;
   bool reconnect_now_ = false;
   std::mutex shutdown_mtx_;
 
@@ -193,7 +196,6 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
   std::atomic<bool> shutdown_{false};
-  std::atomic<bool> is_reconnecting_{false};
   std::atomic<int> reconnect_attempts_{0};
   std::atomic<int> tls_failure_count_{0};
   std::atomic<uint64_t> reconnect_generation_{0};
