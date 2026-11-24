@@ -27,6 +27,7 @@
 #include "video_encoder_factory.h"
 #include "ws_client.h"
 #include "reconnect_login.h"
+#include "announcement_sync.h"
 
 namespace minirtc {
 
@@ -149,6 +150,9 @@ class PeerConnection {
 
   int64_t GetSystemTimeMicros();
 
+  void SetAnnouncementCacheDirectory(const char* path) {
+    announcements_ = std::make_unique<AnnouncementSync>(std::filesystem::u8path(path));
+  }
   int SendSignalMessage(const char* message, size_t size);
 
   int ForceSignalReconnect();
@@ -235,6 +239,7 @@ class PeerConnection {
   std::string user_id_ = "";
   std::string user_id_with_pwd_ = "";
   ReconnectLogin reconnect_login_;
+  std::unique_ptr<AnnouncementSync> announcements_;
   std::string remote_user_id_ = "";
   std::string local_transmission_id_ = "";
   std::string remote_transmission_id_ = "";

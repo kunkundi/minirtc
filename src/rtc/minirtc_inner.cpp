@@ -430,6 +430,12 @@ int MiniRtcSendSignalMessage(MiniRtcPeerPtr* peer_ptr, const char* message,
   return peer_ptr->peer_connection->SendSignalMessage(message, size);
 }
 
+int MiniRtcSetAnnouncementCacheDirectory(MiniRtcPeerPtr* peer, const char* directory) {
+  if (!peer || !peer->peer_connection || !directory || !*directory) return -1;
+  peer->peer_connection->SetAnnouncementCacheDirectory(directory);
+  return 0;
+}
+
 int MiniRtcReconnectSignal(MiniRtcPeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");

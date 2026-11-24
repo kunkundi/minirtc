@@ -760,6 +760,11 @@ MINIRTC_API int MiniRtcDisconnectPeerConnection(
 MINIRTC_API int MiniRtcSendSignalMessage(
     MiniRtcPeerPtr* peer_ptr, const char* message, size_t size);
 
+/** Enable versioned public announcements for an identity peer before MiniRtcInit.
+ * The directory is copied. Controller and other peers can omit this opt-in. */
+MINIRTC_API int MiniRtcSetAnnouncementCacheDirectory(MiniRtcPeerPtr* peer_ptr,
+                                                     const char* directory);
+
 /**
  * @brief Retry signaling now, skipping the exponential reconnect backoff.
  * @return 0 when signaling is authenticated or a retry was requested; -1 for

@@ -357,6 +357,16 @@ int PeerConnection::Init(PeerConnectionParams params) {
           j.contains("user_id") && j["user_id"] == user_id_) {
         reconnect_login_.Clear();
       }
+      if (announcements_ && (t == "announcement_catalog" || t == "announcement_body")) {
+        json reply;
+        if (announcements_->Receive(j, reply)) {
+          if (!reply.is_null() && on_signal_message_) {
+            const auto text = reply.dump();
+            on_signal_message_(text.data(), text.size(), user_data_);
+          }
+          return;
+        }
+      }
       if (internal_signal_types_.find(t) != internal_signal_types_.end()) {
         ProcessSignal(msg);
         return;
@@ -486,6 +496,7 @@ int PeerConnection::Login() {
   json message = on_signal_exchange_
       ? json{{"type", "login"}, {"user_id", user_id_with_pwd_}}
       : reconnect_login_.Request(user_id_with_pwd_, now);
+  if (announcements_) announcements_->PrepareLogin(message, uri_, user_id_);
   message["session_resume_version"] = 1;
   message["ice_config_version"] = 1;
   legacy_turn_config_.reset();
@@ -1051,6 +1062,18 @@ int PeerConnection::SendSignalMessage(const char* message, size_t size) {
     LOG_ERROR("Websocket not opened");
     return -1;
   }
+  if (announcements_ && size <= 8192) {
+    const auto request = json::parse(message, message + size, nullptr, false);
+    json reply, wire;
+    if (announcements_->Request(request, reply, wire)) {
+      if (!wire.is_null()) ws_transport_->Send(wire.dump());
+      if (!reply.is_null() && on_signal_message_) {
+        const auto text = reply.dump();
+        on_signal_message_(text.data(), text.size(), user_data_);
+      }
+      return 0;
+    }
+  }
   ws_transport_->Send(std::string(message, size));
   return 0;
 }
@@ -1220,6 +1243,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           password = "";
         }
 
+        if (announcements_) announcements_->LoggedIn(j, uri_, user_id_);
         if (!on_signal_exchange_) reconnect_login_.Accepted(j, user_id_with_pwd_,
             std::chrono::duration_cast<std::chrono::seconds>(
                 std::chrono::system_clock::now().time_since_epoch()).count());
