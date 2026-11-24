@@ -14,6 +14,7 @@
 
 namespace minirtc {
 struct AndroidCodecState;
+struct AndroidCodecInfo;
 // Internal NDK backend shared by the video encoder and decoder adapters.
 // Input methods and bitrate changes are serialized; output is drained
 // independently of input. Software fallback belongs to the adapters.
@@ -47,6 +48,7 @@ class AndroidMediaCodec final {
 
  private:
   bool Configure(int width, int height);
+  bool ConfigureCandidate(const AndroidCodecInfo& info, int width, int height, bool request_cbr);
   void DrainLoop();
   void StopCodec();
   std::shared_ptr<SystemClock> clock_;

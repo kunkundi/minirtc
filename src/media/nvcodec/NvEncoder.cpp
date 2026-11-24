@@ -669,14 +669,10 @@ void NvEncoder::WaitForCompletionEvent(int iEvent) {
   if (0U == sInitializeParams.enableEncodeAsync) {
     return;
   }
-#ifdef DEBUG
-  WaitForSingleObject(m_vpCompletionEvent[iEvent], INFINITE);
-#else
-  // wait for 20s which is infinite on terms of gpu time
-  if (WaitForSingleObject(m_vpCompletionEvent[iEvent], 20000) == WAIT_FAILED) {
-    NVENC_THROW_ERROR("Failed to encode frame", NV_ENC_ERR_GENERIC);
+  // Do not enter blocking nvEncLockBitstream after a timeout/device reset.
+  if (WaitForSingleObject(m_vpCompletionEvent[iEvent], 20000) != WAIT_OBJECT_0) {
+    NVENC_THROW_ERROR("NVENC completion event did not signal", NV_ENC_ERR_GENERIC);
   }
-#endif
 #endif
 }
 

@@ -412,84 +412,97 @@ bool AndroidMediaCodec::Configure(int w, int h) {
   if (!AndroidMediaCodec::IsValidSize(w, h)) return false;
   for (const auto& info : FindAndroidCodecs(type_, encoder_, w, h)) {
     if (!encoder_ && !native_output_ && !info.color) continue;
-    auto s = std::make_shared<AndroidCodecState>();
-    s->encoder = encoder_;
-    s->surface_output = !encoder_ && native_output_;
-    s->type = type_;
-    s->name = info.name;
-    s->width = w;
-    s->height = h;
-    s->stride = w;
-    s->slice_height = h;
-    s->crop_right = w - 1;
-    s->crop_bottom = h - 1;
-    s->color = info.color;
-    s->codec = AMediaCodec_createCodecByName(info.name.c_str());
-    if (!s->codec) continue;
-    auto f = NewFormat();
-    AMediaFormat_setString(
-        f.get(), "mime",
-        type_ == VideoCodecType::H264 ? "video/avc" : "video/av01");
-    AMediaFormat_setInt32(f.get(), "width", w);
-    AMediaFormat_setInt32(f.get(), "height", h);
-    AMediaFormat_setInt32(f.get(), "priority", 0);  // Real-time.
-    if (encoder_) {
-      AMediaFormat_setInt32(f.get(), "color-format", info.color);
-      AMediaFormat_setInt32(f.get(), "bitrate", config_.init_bitrate);
-      AMediaFormat_setInt32(f.get(), "frame-rate",
-                            std::max(1, config_.max_frame_rate));
-      AMediaFormat_setInt32(
-          f.get(), "i-frame-interval",
-          std::max(1, config_.key_frame_interval /
-                          std::max(1, config_.max_frame_rate)));
-      AMediaFormat_setInt32(f.get(), "max-bframes", 0);
-      if (type_ == VideoCodecType::H264) {
-        AMediaFormat_setInt32(f.get(), "profile", 1);  // Baseline, no B frames.
-        AMediaFormat_setInt32(f.get(), "level", info.avc_level);
-      }
-      AMediaFormat_setInt32(f.get(), "stride", w);
-      AMediaFormat_setInt32(f.get(), "slice-height", h);
-    } else {
-      AMediaFormat_setInt32(f.get(), "max-input-size", 8 * 1024 * 1024);
-      if (info.low_latency) AMediaFormat_setInt32(f.get(), "low-latency", 1);
-      if (s->surface_output) {
-        s->placeholder = std::make_unique<AndroidSurface>();
-        if (!s->placeholder->window) continue;
-      } else
-        AMediaFormat_setInt32(f.get(), "color-format", info.color);
-    }
-    auto* window = s->placeholder ? s->placeholder->window : nullptr;
-    if (AMediaCodec_configure(
-            s->codec, f.get(), window, nullptr,
-            encoder_ ? AMEDIACODEC_CONFIGURE_FLAG_ENCODE : 0) != AMEDIA_OK ||
-        AMediaCodec_start(s->codec) != AMEDIA_OK)
-      continue;
-    s->started = true;
-    if (encoder_) {
-      using GetInputFormat = AMediaFormat* (*)(AMediaCodec*);
-      static const auto get_input_format = reinterpret_cast<GetInputFormat>(
-          dlsym(RTLD_DEFAULT, "AMediaCodec_getInputFormat"));
-      if (get_input_format) {
-        Format input(get_input_format(s->codec), AMediaFormat_delete);
-        if (input) {
-          s->stride = Field(input.get(), "stride", w);
-          s->slice_height = Field(input.get(), "slice-height", h);
-          if (!s->slice_height) s->slice_height = h;
-          s->color = Field(input.get(), "color-format", info.color);
-        }
-      }
-      if ((s->color != 19 && s->color != 21) || s->stride < w ||
-          s->slice_height < h || s->stride > 16384 || s->slice_height > 16384 ||
-          (s->stride & 1) || (s->slice_height & 1))
-        continue;
-    }
-    state_ = std::move(s);
-    LOG_INFO(
-        "Using MediaCodec [{}] {}x{}{}", info.name, w, h,
-        native_output_ && !encoder_ ? " Surface output" : " ByteBuffer output");
-    return true;
+    if (encoder_ && config_.UseDesktopRealtimeRateControl() &&
+        ConfigureCandidate(info, w, h, true)) return true;
+    // A vendor codec can reject CBR for a particular profile or size. Retry
+    // that same codec with its original format before moving to the next one.
+    if (ConfigureCandidate(info, w, h, false)) return true;
   }
   return false;
+}
+
+bool AndroidMediaCodec::ConfigureCandidate(const AndroidCodecInfo& info, int w, int h,
+                                           bool request_cbr) {
+  auto s = std::make_shared<AndroidCodecState>();
+  s->encoder = encoder_;
+  s->surface_output = !encoder_ && native_output_;
+  s->type = type_;
+  s->name = info.name;
+  s->width = w;
+  s->height = h;
+  s->stride = w;
+  s->slice_height = h;
+  s->crop_right = w - 1;
+  s->crop_bottom = h - 1;
+  s->color = info.color;
+  s->codec = AMediaCodec_createCodecByName(info.name.c_str());
+  if (!s->codec) return false;
+  auto f = NewFormat();
+  AMediaFormat_setString(
+      f.get(), "mime",
+      type_ == VideoCodecType::H264 ? "video/avc" : "video/av01");
+  AMediaFormat_setInt32(f.get(), "width", w);
+  AMediaFormat_setInt32(f.get(), "height", h);
+  AMediaFormat_setInt32(f.get(), "priority", 0);  // Real-time.
+  if (encoder_) {
+    AMediaFormat_setInt32(f.get(), "color-format", info.color);
+    AMediaFormat_setInt32(f.get(), "bitrate", config_.init_bitrate);
+    if (request_cbr) {
+      // MediaCodecInfo.EncoderCapabilities.BITRATE_MODE_CBR (API 21).
+      AMediaFormat_setInt32(f.get(), "bitrate-mode", 2);
+    }
+    AMediaFormat_setInt32(f.get(), "frame-rate",
+                          std::max(1, config_.max_frame_rate));
+    AMediaFormat_setInt32(
+        f.get(), "i-frame-interval",
+        std::max(1, config_.key_frame_interval /
+                        std::max(1, config_.max_frame_rate)));
+    AMediaFormat_setInt32(f.get(), "max-bframes", 0);
+    if (type_ == VideoCodecType::H264) {
+      AMediaFormat_setInt32(f.get(), "profile", 1);  // Baseline, no B frames.
+      AMediaFormat_setInt32(f.get(), "level", info.avc_level);
+    }
+    AMediaFormat_setInt32(f.get(), "stride", w);
+    AMediaFormat_setInt32(f.get(), "slice-height", h);
+  } else {
+    AMediaFormat_setInt32(f.get(), "max-input-size", 8 * 1024 * 1024);
+    if (info.low_latency) AMediaFormat_setInt32(f.get(), "low-latency", 1);
+    if (s->surface_output) {
+      s->placeholder = std::make_unique<AndroidSurface>();
+      if (!s->placeholder->window) return false;
+    } else
+      AMediaFormat_setInt32(f.get(), "color-format", info.color);
+  }
+  auto* window = s->placeholder ? s->placeholder->window : nullptr;
+  if (AMediaCodec_configure(
+          s->codec, f.get(), window, nullptr,
+          encoder_ ? AMEDIACODEC_CONFIGURE_FLAG_ENCODE : 0) != AMEDIA_OK ||
+      AMediaCodec_start(s->codec) != AMEDIA_OK)
+    return false;
+  s->started = true;
+  if (encoder_) {
+    using GetInputFormat = AMediaFormat* (*)(AMediaCodec*);
+    static const auto get_input_format = reinterpret_cast<GetInputFormat>(
+        dlsym(RTLD_DEFAULT, "AMediaCodec_getInputFormat"));
+    if (get_input_format) {
+      Format input(get_input_format(s->codec), AMediaFormat_delete);
+      if (input) {
+        s->stride = Field(input.get(), "stride", w);
+        s->slice_height = Field(input.get(), "slice-height", h);
+        if (!s->slice_height) s->slice_height = h;
+        s->color = Field(input.get(), "color-format", info.color);
+      }
+    }
+    if ((s->color != 19 && s->color != 21) || s->stride < w ||
+        s->slice_height < h || s->stride > 16384 || s->slice_height > 16384 ||
+        (s->stride & 1) || (s->slice_height & 1))
+      return false;
+  }
+  state_ = std::move(s);
+  LOG_INFO(
+      "Using MediaCodec [{}] {}x{}{}", info.name, w, h,
+      native_output_ && !encoder_ ? " Surface output" : " ByteBuffer output");
+  return true;
 }
 
 void AndroidMediaCodec::DrainLoop() {

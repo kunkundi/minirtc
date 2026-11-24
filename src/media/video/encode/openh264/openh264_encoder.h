@@ -63,6 +63,7 @@ class OpenH264Encoder : public MediaCodec {
   int max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   int max_payload_size_ = 1150;
   int max_fps_ = 30;
+  bool desktop_realtime_rate_control_ = false;
   MiniRtcVideoContentType video_content_type_ = MiniRtcVideoContentType::ScreenContent;
   MiniRtcVideoDegradationPreference video_degradation_preference_ =
       MiniRtcVideoDegradationPreference::MaintainFrameRate;

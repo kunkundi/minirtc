@@ -155,6 +155,12 @@ enum MiniRtcVideoQuality {
 /// Preferred native video codec. H.265 requires hardware HEVC Main encoding and decoding.
 enum class MiniRtcVideoCodec : uint8_t { H264 = 0, AV1 = 1, H265 = 2 };
 
+/// Encoding policy for desktop content. Zero selects the low-load policy.
+enum class MiniRtcDesktopEncodingMode : uint8_t {
+  LowLoad = 0,        ///< Prefer lower encoder load when supported.
+  EncoderDefault = 1  ///< Use the encoder's own rate-control settings.
+};
+
 /// Content hint supplied to video encoding and adaptation logic.
 enum class MiniRtcVideoContentType : uint8_t {
   /// Camera/video content.
@@ -173,6 +179,8 @@ enum class MiniRtcVideoDegradationPreference : uint8_t {
   Balanced = 2,
 };
 
+struct MiniRtcNativeVideoFrame;
+
 /// Tag selecting exactly one MiniRtcNativeVideoFramePayload member.
 enum MiniRtcNativeVideoFrameType : uint32_t {
   /// No native payload.
@@ -185,6 +193,8 @@ enum MiniRtcNativeVideoFrameType : uint32_t {
   MiniRtcNativeVideoFrameCVPixelBuffer = 3,
   /// Output-only Surface buffer.
   MiniRtcNativeVideoFrameAndroidMediaCodec = 4,
+  /// Immutable D3D11 NV12 texture with a DXGI shared handle (Windows input).
+  MiniRtcNativeVideoFrameD3D11Nv12 = 5,
 };
 
 /// NV12 planes in CPU memory. Strides are bytes per row, including padding.
@@ -227,6 +237,15 @@ typedef union {
   MiniRtcCpuNv12Frame cpu_nv12;
   MiniRtcAndroidMediaCodecFrame android_media_codec;
   MiniRtcCudaNv12Frame cuda_nv12;
+  /// ID3D11Texture2D and its borrowed IDXGIResource::GetSharedHandle value.
+  /// Readers acquire and release keyed mutex key 0 while accessing the pixels.
+  struct {
+    void* texture;
+    void* shared_handle;
+    /// Optional. Returns one owned reference to an immutable scaled texture.
+    /// Release it through the returned descriptor, including on validation failure.
+    const MiniRtcNativeVideoFrame* (*scale)(void* owner, uint32_t width, uint32_t height);
+  } d3d11_nv12;
   /// NV12 CVPixelBufferRef; use Apple APIs for plane access.
   void* cv_pixel_buffer;
 } MiniRtcNativeVideoFramePayload;
@@ -245,7 +264,7 @@ typedef union {
  * existing reference. Input descriptors require non-null owner, retain,
  * release, and copy_to_nv12 fields.
  */
-typedef struct {
+struct MiniRtcNativeVideoFrame {
   /// Set to sizeof(MiniRtcNativeVideoFrame).
   uint32_t struct_size;
   /// Active payload tag.
@@ -264,7 +283,7 @@ typedef struct {
   /// Copy to packed CPU NV12 (Y then UV, no row padding). Destination must hold
   /// at least width * height * 3 / 2 bytes. Return 0 on success, negative on error.
   int (*copy_to_nv12)(void* owner, uint8_t* destination, size_t destination_size);
-} MiniRtcNativeVideoFrame;
+};
 
 /**
  * @brief Captured input or decoded output video frame; no storage ownership.
@@ -573,7 +592,20 @@ typedef struct {
   /// Applies per connection to direct and relay paths; browser WebRTC is separate.
   /// INI mode reads [bandwidth] disable_receiver_padding_probing (default false).
   bool disable_receiver_padding_probing;
+  /// Applies to desktop encoding. MiniRtcParams{} selects LowLoad.
+  /// INI mode reads [video encoding] disable_desktop_realtime_rate_control.
+  MiniRtcDesktopEncodingMode desktop_encoding_mode;
 } MiniRtcParams;
+
+/// Parameters updated together by MiniRtcUpdateConnectionParams.
+/// With {} the codec is H.264, hardware acceleration and TURN are off, and
+/// desktop encoding uses LowLoad.
+typedef struct {
+  MiniRtcVideoCodec video_codec;
+  bool hardware_acceleration;
+  MiniRtcTurnMode turn_mode;
+  MiniRtcDesktopEncodingMode desktop_encoding_mode;
+} MiniRtcConnectionParams;
 
 // -----------------------------------------------------------------------------
 // IP direct configuration
@@ -692,19 +724,13 @@ MINIRTC_API MiniRtcPeerPtr* MiniRtcCreatePeerWithVideoCodec(
 MINIRTC_API int MiniRtcInit(MiniRtcPeerPtr* peer_ptr);
 
 /**
- * @brief Update codec and ICE defaults without reconnecting signaling.
- *
- * Call after MiniRtcInit. The settings are copied atomically for subsequent remote
- * connections; existing or already negotiating connections keep their snapshot.
- * Returns 0 on success, -1 for an invalid peer or TURN mode. As with other peer
- * APIs, the caller must prevent concurrent destruction of the handle.
+ * @brief Update the parameters this peer uses for future remote connections.
+ * Call after MiniRtcInit. All four fields take effect together for connections
+ * that begin negotiating after the update. Active sessions keep their parameters.
+ * @return 0 on success, -1 for a null argument or an invalid settings value.
  */
-MINIRTC_API int MiniRtcUpdateConnectionSettings(MiniRtcPeerPtr* peer_ptr,
-    bool hardware_acceleration, bool av1_encoding, MiniRtcTurnMode turn_mode);
-
-/// Update the codec and ICE defaults for subsequent connections.
-MINIRTC_API int MiniRtcUpdateConnectionSettingsWithCodec(MiniRtcPeerPtr* peer_ptr,
-    bool hardware_acceleration, MiniRtcVideoCodec codec, MiniRtcTurnMode turn_mode);
+MINIRTC_API int MiniRtcUpdateConnectionParams(
+    MiniRtcPeerPtr* peer, const MiniRtcConnectionParams* params);
 
 /**
  * @brief Stop the peer, release its resources, and set the caller's handle null.
@@ -1039,6 +1065,20 @@ MINIRTC_API MiniRtcJoinFailure MiniRtcParseJoinFailure(const char* message, size
  * invalid peer. Call after MiniRtcInit; this is not a Unix/wall-clock timestamp.
  */
 MINIRTC_API int64_t MiniRtcGetSystemTimeMicros(MiniRtcPeerPtr* peer_ptr);
+
+// -----------------------------------------------------------------------------
+// Legacy connection settings
+// -----------------------------------------------------------------------------
+
+/// @deprecated Use MiniRtcUpdateConnectionParams for new code. This entry point
+/// selects H.264 or AV1 and preserves the peer's desktop encoding mode.
+MINIRTC_API int MiniRtcUpdateConnectionSettings(MiniRtcPeerPtr* peer,
+    bool hardware_acceleration, bool prefer_av1, MiniRtcTurnMode turn_mode);
+
+/// @deprecated Use MiniRtcUpdateConnectionParams for new code. This entry point
+/// preserves the peer's desktop encoding mode.
+MINIRTC_API int MiniRtcUpdateConnectionSettingsWithCodec(MiniRtcPeerPtr* peer,
+    bool hardware_acceleration, MiniRtcVideoCodec video_codec, MiniRtcTurnMode turn_mode);
 
 #ifdef __cplusplus
 }

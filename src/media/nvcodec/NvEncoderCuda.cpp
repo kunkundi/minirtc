@@ -12,6 +12,20 @@
 #include "NvEncoderCuda.h"
 
 namespace minirtc {
+namespace {
+// CUDA copy/allocation failures throw. Restore the encoder thread's previous
+// context before trying another backend on that same thread.
+class ScopedCudaContext {
+ public:
+  explicit ScopedCudaContext(CUcontext context) {
+    CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(context));
+  }
+  ~ScopedCudaContext() { cuCtxPopCurrent_ld(nullptr); }
+  ScopedCudaContext(const ScopedCudaContext&) = delete;
+  ScopedCudaContext& operator=(const ScopedCudaContext&) = delete;
+};
+}  // namespace
+
 
 NvEncoderCuda::NvEncoderCuda(CUcontext cuContext, uint32_t nWidth,
                              uint32_t nHeight,
@@ -46,23 +60,24 @@ void NvEncoderCuda::AllocateInputBuffers(int32_t numInputBuffers) {
   int numCount = m_bMotionEstimationOnly ? 2 : 1;
 
   for (int count = 0; count < numCount; count++) {
-    CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
     std::vector<void *> inputFrames;
-    for (int i = 0; i < numInputBuffers; i++) {
-      CUdeviceptr pDeviceFrame;
-      uint32_t chromaHeight =
-          GetNumChromaPlanes(GetPixelFormat()) *
-          GetChromaHeight(GetPixelFormat(), GetMaxEncodeHeight());
-      if (GetPixelFormat() == NV_ENC_BUFFER_FORMAT_YV12 ||
-          GetPixelFormat() == NV_ENC_BUFFER_FORMAT_IYUV)
-        chromaHeight = GetChromaHeight(GetPixelFormat(), GetMaxEncodeHeight());
-      CUDA_DRVAPI_CALL(cuMemAllocPitch_ld(
-          (CUdeviceptr *)&pDeviceFrame, &m_cudaPitch,
-          GetWidthInBytes(GetPixelFormat(), GetMaxEncodeWidth()),
-          GetMaxEncodeHeight() + chromaHeight, 16));
-      inputFrames.push_back((void *)pDeviceFrame);
+    {
+      ScopedCudaContext current(m_cuContext);
+      for (int i = 0; i < numInputBuffers; i++) {
+        CUdeviceptr pDeviceFrame;
+        uint32_t chromaHeight =
+            GetNumChromaPlanes(GetPixelFormat()) *
+            GetChromaHeight(GetPixelFormat(), GetMaxEncodeHeight());
+        if (GetPixelFormat() == NV_ENC_BUFFER_FORMAT_YV12 ||
+            GetPixelFormat() == NV_ENC_BUFFER_FORMAT_IYUV)
+          chromaHeight = GetChromaHeight(GetPixelFormat(), GetMaxEncodeHeight());
+        CUDA_DRVAPI_CALL(cuMemAllocPitch_ld(
+            (CUdeviceptr *)&pDeviceFrame, &m_cudaPitch,
+            GetWidthInBytes(GetPixelFormat(), GetMaxEncodeWidth()),
+            GetMaxEncodeHeight() + chromaHeight, 16));
+        inputFrames.push_back((void *)pDeviceFrame);
+      }
     }
-    CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
 
     RegisterInputResources(
         inputFrames, NV_ENC_INPUT_RESOURCE_TYPE_CUDADEVICEPTR,
@@ -90,7 +105,11 @@ void NvEncoderCuda::ReleaseCudaResources() {
 
   UnregisterInputResources();
 
-  cuCtxPushCurrent_ld(m_cuContext);
+  if (cuCtxPushCurrent_ld(m_cuContext) != CUDA_SUCCESS) {
+    // The owner destroys the lost context; never pop the caller's context.
+    m_cuContext = nullptr;
+    return;
+  }
 
   for (uint32_t i = 0; i < m_vInputFrames.size(); ++i) {
     if (m_vInputFrames[i].inputPtr) {
@@ -123,7 +142,7 @@ void NvEncoderCuda::CopyToDeviceFrame(
                       NV_ENC_ERR_INVALID_PARAM);
   }
 
-  CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(device));
+  ScopedCudaContext current(device);
 
   uint32_t srcPitch =
       nSrcPitch ? nSrcPitch : NvEncoder::GetWidthInBytes(pixelFormat, width);
@@ -177,7 +196,6 @@ void NvEncoderCuda::CopyToDeviceFrame(
       }
     }
   }
-  CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
 }
 
 void NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
@@ -192,7 +210,7 @@ void NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
                       NV_ENC_ERR_INVALID_PARAM);
   }
 
-  CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(device));
+  ScopedCudaContext current(device);
 
   CUDA_MEMCPY2D copy = {0};
   copy.srcMemoryType = CU_MEMORYTYPE_HOST;
@@ -213,7 +231,6 @@ void NvEncoderCuda::CopyHostNv12PlanesToDeviceFrame(
   CUDA_DRVAPI_CALL(stream == NULL ? cuMemcpy2D_ld(&copy)
                                   : cuMemcpy2DAsync_ld(&copy, stream));
 
-  CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
 }
 
 void NvEncoderCuda::CopyToDeviceFrame(
@@ -228,7 +245,7 @@ void NvEncoderCuda::CopyToDeviceFrame(
                       NV_ENC_ERR_INVALID_PARAM);
   }
 
-  CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(device));
+  ScopedCudaContext current(device);
 
   uint32_t srcPitch =
       nSrcPitch ? nSrcPitch : NvEncoder::GetWidthInBytes(pixelFormat, width);
@@ -279,6 +296,5 @@ void NvEncoderCuda::CopyToDeviceFrame(
       }
     }
   }
-  CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
 }
 }  // namespace minirtc

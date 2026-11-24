@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <memory>
 
 #include "NvEncoderCuda.h"
 #include "log.h"
@@ -11,6 +12,10 @@
 #include "nvcodec_common.h"
 
 namespace minirtc {
+
+#ifdef _WIN32
+class NvEncoderD3D11;
+#endif
 
 class NvidiaVideoEncoder : public MediaCodec {
  public:
@@ -25,17 +30,25 @@ class NvidiaVideoEncoder : public MediaCodec {
                  on_encoded_image) override;
 
   int ForceIdr() override;
+#ifdef _WIN32
+  bool SupportsInputFrameRateUpdates() const override;
+  int SetInputFrameRate(int fps) override;
+  int SetTargetFrameRate(int fps) override;
+#endif
 
   int SetTargetBitrate(int bitrate) override;
 
   bool SupportsNativeFrameInput(
       MiniRtcNativeVideoFrameType frame_type) const override {
-    return frame_type == MiniRtcNativeVideoFrameCpuNv12;
+#ifdef _WIN32
+    if (frame_type == MiniRtcNativeVideoFrameD3D11Nv12) return directx_ != nullptr;
+#endif
+    return encoder_ && frame_type == MiniRtcNativeVideoFrameCpuNv12;
   }
 
 #if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
-  // Diagnostics: splits Encode() into the host-to-device copy and the encoder
-  // call so a 4K frame budget overrun can be attributed to one of them. Both
+  // Separate input preparation (texture acquisition or upload) from the
+  // encoder call (including the wait for completed bitstream output). Both
   // stages run synchronously inside Encode(), so the values describe the last
   // completed call.
   bool GetLastEncodeStageTimingUs(int64_t* upload_us,
@@ -48,7 +61,10 @@ class NvidiaVideoEncoder : public MediaCodec {
 #endif
 
   int GetResolution(int* width, int* height) const override {
-    if (seq_ == 0) {
+#ifdef _WIN32
+    if (auto fallback = std::atomic_load(&fallback_)) return fallback->GetResolution(width, height);
+#endif
+    if (!encoder_ || seq_ == 0) {
       return -1;
     }
 
@@ -58,11 +74,18 @@ class NvidiaVideoEncoder : public MediaCodec {
   }
 
   std::string GetEncoderName() const override {
+#ifdef _WIN32
+    if (auto fallback = std::atomic_load(&fallback_)) return fallback->GetEncoderName();
+#endif
     return codec_guid_ == NV_ENC_CODEC_HEVC_GUID ? "NVENC (H.265)"
                                                  : "NVENC (H.264)";
   }
 
  private:
+  int EncodeHardware(const RawFrame& frame,
+                     const std::function<int(const EncodedFrame&)>& callback);
+  int InitBackend(const MediaCodecConfig& config, bool use_directx);
+  MediaCodecConfig CurrentConfig(unsigned width, unsigned height) const;
   void ReleaseEncoderResources();
   int ResetEncodeResolution(unsigned int width, unsigned int height);
 
@@ -99,8 +122,13 @@ class NvidiaVideoEncoder : public MediaCodec {
   uint32_t average_bitrate_ = MINIRTC_AVERAGE_BITRATE;
   uint32_t max_bitrate_ = kDefaultMaxEncoderBitrateBps;
   uint32_t max_fps_ = 60;
-  int max_payload_size_ = 1150;
+  MediaCodecConfig initial_config_;
   NvEncoder* encoder_ = nullptr;
+#ifdef _WIN32
+  std::shared_ptr<MediaCodec> fallback_;  // Published to the stats thread.
+  int64_t retry_backend_at_ms_ = 0;
+  NvEncoderD3D11* directx_ = nullptr;  // Owned by encoder_.
+#endif
   CUcontext cuda_context_ = nullptr;
   std::vector<std::vector<uint8_t>> encoded_packets_;
   std::vector<uint32_t> encoded_packet_qps_;

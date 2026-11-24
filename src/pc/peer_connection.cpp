@@ -210,6 +210,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     starting_bitrates.relay_bps = StartingBitrates::Parse(
         reader.Get("bandwidth", "relay_start_bitrate_bps", ""),
         defaults.relay_bps);
+    connection_info_.desktop_realtime_rate_control = !reader.GetBoolean(
+        "video encoding", "disable_desktop_realtime_rate_control", false);
     cfg_signal_server_ip_ = reader.Get("signal server", "ip", "-1");
     cfg_signal_server_port_ = reader.Get("signal server", "port", "-1");
     cfg_hardware_acceleration_ =
@@ -254,6 +256,8 @@ int PeerConnection::Init(PeerConnectionParams params) {
     starting_bitrates = StartingBitrates::Normalize(
         params.direct_start_bitrate_bps, params.relay_start_bitrate_bps);
     disable_receiver_padding_probing = params.disable_receiver_padding_probing;
+    connection_info_.desktop_realtime_rate_control =
+        params.desktop_encoding_mode == MiniRtcDesktopEncodingMode::LowLoad;
     cfg_signal_server_ip_ = params.signal_server_ip;
     signal_server_port_ = params.signal_server_port;
     hardware_acceleration_ = params.hardware_acceleration;
@@ -450,13 +454,16 @@ int PeerConnection::Init(PeerConnectionParams params) {
 }
 
 int PeerConnection::UpdateConnectionSettings(bool hardware_acceleration,
-                                              MiniRtcVideoCodec codec,
-                                              MiniRtcTurnMode turn_mode) {
+                                            MiniRtcVideoCodec codec,
+                                            MiniRtcTurnMode turn_mode,
+                                            std::optional<bool> desktop_realtime_rate_control) {
   if (!IsValidTurnMode(turn_mode) || codec > MiniRtcVideoCodec::H265) return -1;
   std::lock_guard lock(connection_info_mutex_);
   connection_info_.hardware_acceleration = hardware_acceleration;
   connection_info_.video_codec = codec;
   connection_info_.turn_mode = turn_mode;
+  if (desktop_realtime_rate_control.has_value())
+    connection_info_.desktop_realtime_rate_control = *desktop_realtime_rate_control;
   return 0;
 }
 

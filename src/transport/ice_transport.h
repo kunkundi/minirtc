@@ -60,7 +60,8 @@ class IceTransport {
                            std::vector<int>& video_payload_types,
                            std::vector<int>& audio_payload_types,
                            StartingBitrates starting_bitrates = {},
-                           bool disable_receiver_padding_probing = false);
+                           bool disable_receiver_padding_probing = false,
+                           bool desktop_realtime_rate_control = true);
 
   void SetDirectPolicy(const DirectIcePolicy& policy,
                        std::function<void(MiniRtcDirectError)> error) {
@@ -214,6 +215,7 @@ class IceTransport {
   bool hardware_acceleration_ = false;
   StartingBitrates starting_bitrates_;
   bool disable_receiver_padding_probing_ = false;
+  bool desktop_realtime_rate_control_ = true;
   bool native_video_output_ = false;
   bool use_trickle_ice_ = true;
   bool use_reliable_ice_ = false;

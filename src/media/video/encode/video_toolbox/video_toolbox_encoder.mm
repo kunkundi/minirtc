@@ -46,10 +46,11 @@ class VideoToolboxEncoder::Impl {
     uint64_t generation = 0;
   };
 
-  int CreateCompressionSession(int width, int height, bool try_low_latency,
+  int CreateCompressionSession(int width, int height, bool try_realtime_options,
                                VTCompressionSessionRef* session_out);
   int TryCompressionSession(int width, int height, CFDictionaryRef encoder_spec,
-                            bool low_latency, VTCompressionSessionRef* session_out);
+                            bool low_latency, bool try_spatial_aq,
+                            VTCompressionSessionRef* session_out);
   int ResetEncodeResolution(int width, int height);
   int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate, bool low_latency);
   int ApplyEncodingSpeedPriority(VTCompressionSessionRef session,
@@ -81,6 +82,9 @@ class VideoToolboxEncoder::Impl {
   int seq_ = 0;
   bool prioritize_encoding_speed_ = false;
   bool low_latency_active_ = false;
+#if TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+  bool desktop_realtime_rate_control_ = false;
+#endif
   std::atomic<bool> speed_priority_supported_{false};
   std::atomic<bool> force_idr_ = false;
   std::atomic<bool> native_input_logged_ = false;
@@ -157,6 +161,9 @@ VideoToolboxEncoder::Impl::~Impl() {
 
 int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
   lock_guard<mutex> guard(lock_);
+#if TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+  desktop_realtime_rate_control_ = config.UseDesktopRealtimeRateControl();
+#endif
   max_fps_ = config.max_frame_rate;
   max_bitrate_ = config.max_bitrate;
   prioritize_encoding_speed_ =
@@ -194,7 +201,7 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
 }
 
 int VideoToolboxEncoder::Impl::CreateCompressionSession(
-    int width, int height, bool try_low_latency, VTCompressionSessionRef* session_out) {
+    int width, int height, bool try_realtime_options, VTCompressionSessionRef* session_out) {
   if (!session_out || width <= 0 || height <= 0 || width % 2 != 0 || height % 2 != 0) {
     LOG_ERROR("Invalid VideoToolbox encoder resolution [{}x{}]", width, height);
     return -1;
@@ -226,10 +233,10 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(
 
 #if TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED >= 110300
   if (@available(macOS 11.3, *)) {
-    if (try_low_latency) {
+    if (try_realtime_options) {
       CFDictionarySetValue(encoder_spec, kVTVideoEncoderSpecification_EnableLowLatencyRateControl,
                            kCFBooleanTrue);
-      if (TryCompressionSession(width, height, encoder_spec, true, session_out) == 0) {
+      if (TryCompressionSession(width, height, encoder_spec, true, true, session_out) == 0) {
         CFRelease(encoder_spec);
         return 0;
       }
@@ -238,14 +245,15 @@ int VideoToolboxEncoder::Impl::CreateCompressionSession(
     }
   }
 #endif
-  const int result = TryCompressionSession(width, height, encoder_spec, false, session_out);
+  const int result = TryCompressionSession(width, height, encoder_spec, false,
+                                           try_realtime_options, session_out);
   CFRelease(encoder_spec);
   return result;
 }
 
 int VideoToolboxEncoder::Impl::TryCompressionSession(
     int width, int height, CFDictionaryRef encoder_spec, bool low_latency,
-    VTCompressionSessionRef* session_out) {
+    [[maybe_unused]] bool try_spatial_aq, VTCompressionSessionRef* session_out) {
   VTCompressionSessionRef new_session = nullptr;
   const CMVideoCodecType codec = hevc_ ? kCMVideoCodecType_HEVC : kCMVideoCodecType_H264;
   OSStatus status = VTCompressionSessionCreate(nullptr, width, height, codec, encoder_spec,
@@ -299,11 +307,28 @@ int VideoToolboxEncoder::Impl::TryCompressionSession(
                        maxFrameDelayCountRef);
   CFRelease(maxFrameDelayCountRef);
 
+  bool applied_aq = false;
+#if TARGET_OS_OSX && __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000
+  if (@available(macOS 15.0, *)) {
+    if (try_spatial_aq && desktop_realtime_rate_control_) {
+      const int level = kVTQPModulationLevel_Disable;
+      CFNumberRef value = CFNumberCreate(nullptr, kCFNumberIntType, &level);
+      if (value) {
+        applied_aq = VTSessionSetProperty(
+            new_session, kVTCompressionPropertyKey_SpatialAdaptiveQPLevel, value) == noErr;
+        CFRelease(value);
+      }
+    }
+  }
+#endif
   status = VTCompressionSessionPrepareToEncodeFrames(new_session);
   if (status != noErr) {
     LOG_ERROR("Failed to prepare VideoToolbox encoder session [{}x{}]: {}", width, height, status);
     VTCompressionSessionInvalidate(new_session);
     CFRelease(new_session);
+    if (applied_aq) {
+      return TryCompressionSession(width, height, encoder_spec, low_latency, false, session_out);
+    }
     return -1;
   }
 

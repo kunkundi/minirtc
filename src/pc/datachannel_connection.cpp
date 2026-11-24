@@ -406,7 +406,7 @@ DataChannelConnection::CreateDataChannelConnection(
       clock, peer_connection, info_.user_id, remote_user_id, offer_peer_);
   dc_transport->SetVideoConfig(
       info_.video_quality, info_.video_frame_rate, info_.video_content_type,
-      info_.video_degradation_preference);
+      info_.video_degradation_preference, info_.desktop_realtime_rate_control);
 
   peer_connection->onLocalDescription([this, transmission_id, remote_user_id,
                                        wws](::rtc::Description description) {

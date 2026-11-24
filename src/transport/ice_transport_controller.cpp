@@ -41,6 +41,7 @@ constexpr int64_t kQueueDelayWindowMs = 1000;
 // new ones back. Two keeps the added delay to roughly two decode intervals
 // while still absorbing normal arrival jitter.
 constexpr int kMaxDecodeBacklog = 2;
+constexpr int64_t kVideoCodecRetryIntervalMs = 1000;
 constexpr int64_t kRelayPacerBurstIntervalMs = 5;
 // Limit regular keyframe bytes independently of the pacer's queue draining.
 constexpr int64_t kDesktopKeyFrameBudgetMs = 180;
@@ -69,7 +70,8 @@ IceTransportController::IceTransportController(
     MiniRtcVideoQuality video_quality, int video_frame_rate,
     MiniRtcVideoContentType video_content_type,
     MiniRtcVideoDegradationPreference video_degradation_preference,
-    StartingBitrates starting_bitrates, bool disable_receiver_padding_probing)
+    StartingBitrates starting_bitrates, bool disable_receiver_padding_probing,
+    bool desktop_realtime_rate_control)
     : clock_(clock),
       ice_agent_(ice_agent),
       enable_srtp_(enable_srtp),
@@ -77,7 +79,7 @@ IceTransportController::IceTransportController(
       ice_io_statistics_(ice_io_statistics),
       webrtc_clock_(webrtc::Clock::GetWebrtcClockShared(clock)),
       b_force_i_frame_(true),
-      video_codec_inited_(false),
+      video_codec_configured_(false),
       audio_codec_inited_(false),
       hardware_acceleration_(false),
       native_video_output_(false),
@@ -85,6 +87,7 @@ IceTransportController::IceTransportController(
       congestion_window_size_(DataSize::PlusInfinity()) {
   starting_bitrates_ = starting_bitrates;
   disable_receiver_padding_probing_ = disable_receiver_padding_probing;
+  media_config_.desktop_realtime_rate_control = desktop_realtime_rate_control;
   media_config_.max_frame_rate = video_frame_rate == 30 ? 30 : 60;
   media_config_.video_content_type = video_content_type;
   media_config_.video_degradation_preference =
@@ -114,7 +117,7 @@ IceTransportController::~IceTransportController() {
   }
 
   user_data_ = nullptr;
-  video_codec_inited_ = false;
+  video_codec_configured_ = false;
   audio_codec_inited_ = false;
 }
 
@@ -150,7 +153,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
   user_data_ = user_data;
   native_video_output_ = native_video_output;
 
-  if (video_fec_enabled_ && !video_codec_inited_) {
+  if (video_fec_enabled_ && !video_codec_configured_) {
     target_bitrate_ = media_config_.init_bitrate;
     FecProtectionConfig initial;
     initial.source_ratio = fec_mode_.load() == FecMode::kOff ? 0 :
@@ -159,7 +162,7 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
         AllocateFecBudget(initial, target_bitrate_, 0.94).media_bitrate_bps);
     video_transport_bitrate_bps_.store(media_config_.init_bitrate);
   }
-  CreateCodecs(clock_, video_codec_payload_type, hardware_acceleration);
+  CreateCodecs(video_codec_payload_type, hardware_acceleration);
 
   if (enable_srtp_) {
     SrtpEngine::GlobalInit();
@@ -770,9 +773,9 @@ uint32_t IceTransportController::AddDataReceiveChannel(
   return ssrc;
 }
 
-bool IceTransportController::CheckSteamContext(
+bool IceTransportController::CheckStreamContext(
     const std::string& channel_name,
-    const std::shared_ptr<StreamContext>& context) {
+    const std::shared_ptr<StreamContext>& context, StreamType expected) {
   if (!context) {
     LOG_ERROR("Stream context [{}] not found", channel_name);
     return false;
@@ -783,7 +786,11 @@ bool IceTransportController::CheckSteamContext(
     return false;
   }
 
-  if (context->type != StreamType::kData && !context->codec) {
+  if (context->type != expected) {
+    LOG_ERROR("Stream [{}] has the wrong media type", channel_name);
+    return false;
+  }
+  if (expected == StreamType::kAudio && !context->codec) {
     LOG_ERROR("Stream codec [{}] not found", channel_name);
     return false;
   }
@@ -820,7 +827,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     return -1;
   }
   auto& context = it->second;
-  if (!CheckSteamContext(channel_name, context)) {
+  if (!CheckStreamContext(channel_name, context, StreamType::kVideo)) {
     return -1;
   }
 
@@ -963,7 +970,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       const int64_t now_ms = clock_->CurrentTimeMs();
       for (const auto& [_, sender] : stream_senders_) {
         if (!sender) continue;
-        if (sender->type == StreamType::kVideo && sender->codec &&
+        if (sender->type == StreamType::kVideo &&
             (sender == context ||
              (sender->last_capture_time &&
               now_ms - *sender->last_capture_time < 100))) {
@@ -1042,17 +1049,24 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         return;
       }
 
-      if (!context->codec) {
+      if (!context->codec && !self->CreateVideoCodec(context, target_width, target_height)) {
+        if (force_i_frame) self->FullIntraRequest(channel_name);
         return;
       }
-      const bool needs_scaling =
+      bool needs_scaling =
           target_width > 0 && target_height > 0 &&
           (target_width < frame.Width() || target_height < frame.Height());
+      if (needs_scaling && frame.NativeFrame() &&
+          context->codec->SupportsNativeFrameInput(frame.NativeFrame()->type) &&
+          frame.TryScaleNativeFrame(target_width, target_height)) {
+        needs_scaling = false;
+      }
       if (const auto* native_frame = frame.NativeFrame();
           native_frame &&
           (needs_scaling ||
            !context->codec->SupportsNativeFrameInput(native_frame->type))) {
         if (!frame.MaterializeNativeFrame()) {
+          if (force_i_frame) self->FullIntraRequest(channel_name);
           LOG_ERROR("Failed to materialize native video frame for stream [{}]",
                     channel_name);
           return;
@@ -1064,6 +1078,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         scaled_frame.SetCapturedTimestamp(frame.CapturedTimestamp());
         if (self->resolution_adapter_->ResolutionDowngrade(
                 frame, target_width, target_height, scaled_frame) != 0) {
+          if (force_i_frame) self->FullIntraRequest(channel_name);
           LOG_ERROR("Failed to scale video frame from [{}x{}] to [{}x{}]",
                     frame.Width(), frame.Height(), target_width,
                     target_height);
@@ -1127,6 +1142,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
                 channel_name, context, static_cast<int>(queue_delay_ms),
                 measure_encode_delay, encoded_frame, settings_generation);
           });
+      if (encode_result < 0 && force_i_frame) self->FullIntraRequest(channel_name);
 #if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
       if (!sample_timings) return;
       // Attribute the synchronous encode cost. The health log is emitted from
@@ -2379,7 +2395,7 @@ int IceTransportController::SendAudio(const MiniRtcAudioFrame* audio_frame,
     return -1;
   }
   auto& context = it->second;
-  if (!CheckSteamContext(channel_name, context)) {
+  if (!CheckStreamContext(channel_name, context, StreamType::kAudio)) {
     return -1;
   }
 
@@ -2417,7 +2433,7 @@ int IceTransportController::SendData(const char* data, size_t size,
     return -1;
   }
   auto& context = it->second;
-  if (!CheckSteamContext(channel_name, context)) {
+  if (!CheckStreamContext(channel_name, context, StreamType::kData)) {
     return -1;
   }
 
@@ -2442,7 +2458,7 @@ int IceTransportController::SendReliableData(const char* data, size_t size,
     return -1;
   }
   auto& context = it->second;
-  if (!CheckSteamContext(channel_name, context)) {
+  if (!CheckStreamContext(channel_name, context, StreamType::kData)) {
     return -1;
   }
 
@@ -2747,7 +2763,7 @@ void IceTransportController::OnReceiveCompleteFrame(
       }
 
       auto& context = it->second;
-      if (!self->CheckSteamContext(channel_name, context)) {
+      if (!self->CheckStreamContext(channel_name, context, StreamType::kVideo)) {
         return;
       }
 
@@ -2768,10 +2784,14 @@ void IceTransportController::OnReceiveCompleteFrame(
             user_data) != 0 && transceiver) {
       transceiver->RequestKeyFrame();
     }
-    if (stream_context) {
-      stream_context->decode_inputs_without_output.fetch_add(
-          1, std::memory_order_relaxed);
+    if (!codec) {
+      const bool missed_frames = stream_context->next_codec_attempt_ms != 0;
+      codec = self->CreateVideoCodec(stream_context);
+      if (!codec) return;
+      if (missed_frames) transceiver->RequestKeyFrame();
     }
+    stream_context->decode_inputs_without_output.fetch_add(
+        1, std::memory_order_relaxed);
     if (reservation->previously_pending >= kMaxDecodeBacklog &&
         reservation->backlog->pending > kMaxDecodeBacklog) {
       codec->RecoverAtKeyFrame();
@@ -2844,7 +2864,7 @@ void IceTransportController::OnReceiveCompleteAudio(
     return;
   }
   auto& context = it->second;
-  if (!CheckSteamContext(channel_name, context)) {
+  if (!CheckStreamContext(channel_name, context, StreamType::kAudio)) {
     return;
   } else {
     auto decoder = std::static_pointer_cast<AudioDecoder>(context->codec);
@@ -3120,14 +3140,14 @@ int IceTransportController::UpdateVideoSettings(
       completion->set_value(0);
       return;
     }
-    auto config = self->media_config_;
-    config.max_frame_rate = frame_rate;
-    config.video_degradation_preference = preference;
-    ResolutionAdapter adapter(quality, frame_rate, config.video_content_type,
+    const auto& current_config = self->media_config_;
+    ResolutionAdapter adapter(quality, frame_rate, current_config.video_content_type,
                               preference);
     for (auto& [name, context] : self->stream_senders_) {
-      if (!context || context->type != StreamType::kVideo || !context->codec)
-        continue;
+      if (!context || context->type != StreamType::kVideo) continue;
+      auto config = current_config;
+      config.max_frame_rate = frame_rate;
+      config.video_degradation_preference = preference;
       config.init_width = context->target_width.value_or(config.init_width);
       config.init_height = context->target_height.value_or(config.init_height);
       config.init_bitrate =
@@ -3141,8 +3161,11 @@ int IceTransportController::UpdateVideoSettings(
     }
     lock.unlock();
     for (auto& prepared : encoders) {
+      // Apply settings and invalidate queued frames for every display, but
+      // only recreate an encoder if this display has already needed one.
+      if (!prepared.previous) continue;
       prepared.codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
-          self->clock_, prepared.config, self->video_encoder_hardware_,
+          self->clock_, prepared.config, self->video_codec_hardware_,
           self->video_codec_type_);
       if (!prepared.codec) {
         LOG_ERROR("Live video settings: encoder creation failed for [{}]",
@@ -3154,7 +3177,13 @@ int IceTransportController::UpdateVideoSettings(
           preference == MiniRtcVideoDegradationPreference::MaintainFrameRate &&
           prepared.codec->SupportsDynamicEncodingSpeedPriority() &&
           prepared.codec->SetPrioritizeEncodingSpeedOverQuality(true) == 0;
-      prepared.codec->GetResolution(&prepared.width, &prepared.height);
+      // NVENC and OpenH264 may only report dimensions after their first output.
+      // Publish the size accepted by Init so the next frame uses the new settings.
+      if (prepared.codec->GetResolution(&prepared.width, &prepared.height) != 0 ||
+          prepared.width <= 0 || prepared.height <= 0) {
+        prepared.width = prepared.config.init_width;
+        prepared.height = prepared.config.init_height;
+      }
     }
     lock.lock();
     if (!self->is_running_.load()) {
@@ -3177,8 +3206,10 @@ int IceTransportController::UpdateVideoSettings(
     for (auto& prepared : encoders) {
       const auto& name = prepared.name;
       auto& context = prepared.context;
-      retired_encoders.push_back(std::move(context->codec));
-      context->codec = std::move(prepared.codec);
+      if (prepared.previous) {
+        retired_encoders.push_back(std::move(context->codec));
+        context->codec = std::move(prepared.codec);
+      }
       ++context->video_settings_generation;
       context->video_rate_control.Reset();
       context->encoding_speed_priority_enabled =
@@ -3271,14 +3302,67 @@ void IceTransportController::PopulateVideoCodecStats(
                 names(decoders, false).c_str());
 }
 
-int IceTransportController::CreateStreamCodecs(
-    std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
-    VideoCodecType codec_type) {
+// Each media queue serializes creation for its direction. Negotiated displays
+// can receive control traffic without ever needing a local video codec.
+std::shared_ptr<MediaCodec> IceTransportController::CreateVideoCodec(
+    const std::shared_ptr<StreamContext>& context, int encode_width, int encode_height) {
+  if (!video_codec_configured_ ||
+      clock_->CurrentTimeMs() < context->next_codec_attempt_ms) {
+    return nullptr;
+  }
+
+  const bool sending = context->direction == StreamDirection::kSend;
+  std::shared_ptr<MediaCodec> codec;
+  bool speed_priority = false;
+  if (sending) {
+    MediaCodecConfig config;
+    {
+      std::shared_lock lock(stream_senders_mutex_);
+      config = media_config_;
+      if (context->desired_target_bitrate.value_or(0) > 0) {
+        config.init_bitrate = *context->desired_target_bitrate;
+        config.average_bitrate = config.init_bitrate;
+      }
+    }
+    if (encode_width > 0 && encode_height > 0) {
+      config.init_width = encode_width;
+      config.init_height = encode_height;
+    }
+    codec = VideoEncoderFactory::CreateInitializedVideoEncoder(
+        clock_, config, video_codec_hardware_, video_codec_type_);
+    speed_priority =
+        codec && config.video_degradation_preference ==
+                     MiniRtcVideoDegradationPreference::MaintainFrameRate &&
+        codec->SupportsDynamicEncodingSpeedPriority() &&
+        codec->SetPrioritizeEncodingSpeedOverQuality(true) == 0;
+  } else {
+    codec = VideoDecoderFactory::CreateInitializedVideoDecoder(
+        clock_, video_codec_hardware_, video_codec_type_, native_video_output_);
+  }
+  if (!codec) {
+    context->next_codec_attempt_ms =
+        clock_->CurrentTimeMs() + kVideoCodecRetryIntervalMs;
+    LOG_ERROR("Failed to initialize video {} for [{}]",
+              sending ? "encoder" : "decoder", context->name);
+    return nullptr;
+  }
+  LOG_INFO("Use video {} [{}] for [{}]", sending ? "encoder" : "decoder",
+           sending ? codec->GetEncoderName() : codec->GetDecoderName(),
+           context->name);
+  std::unique_lock lock(sending ? stream_senders_mutex_
+                                : stream_receivers_mutex_);
+  if (!is_running_.load()) return nullptr;
+  context->codec = codec;
+  context->encoding_speed_priority_enabled = speed_priority;
+  return codec;
+}
+
+int IceTransportController::ConfigureStreamCodecs(
+    bool hardware_acceleration, VideoCodecType codec_type) {
   video_codec_type_ = codec_type;
-  video_encoder_hardware_ = hardware_acceleration;
-  bool video_sender_init_first_time = true;
+  video_codec_hardware_ = hardware_acceleration;
+  video_codec_configured_ = true;
   bool audio_sender_init_first_time = true;
-  bool video_receiver_init_first_time = true;
   bool audio_receiver_init_first_time = true;
 
   {
@@ -3289,47 +3373,16 @@ int IceTransportController::CreateStreamCodecs(
         return -1;
       }
 
-      if (context->type == StreamType::kVideo) {
-        if (!context->codec) {
-          context->codec =
-              VideoEncoderFactory::CreateInitializedVideoEncoder(
-                  clock, media_config_, hardware_acceleration, codec_type);
-          if (!context->codec) {
-            LOG_ERROR("Create and initialize encoder for [{}] failed",
-                      channel_name);
-            return -1;
-          }
-          if (media_config_.video_degradation_preference ==
-                  MiniRtcVideoDegradationPreference::MaintainFrameRate &&
-              context->codec->SupportsDynamicEncodingSpeedPriority() &&
-              context->codec->SetPrioritizeEncodingSpeedOverQuality(true) ==
-                  0) {
-            context->encoding_speed_priority_enabled = true;
-          }
-          context->desired_target_bitrate.reset();
-          context->applied_target_bitrate.reset();
-          context->bitrate_update_queued = false;
-          if (video_sender_init_first_time) {
-            if (!stream_senders_.empty()) {
-              LOG_INFO("Use video encoder [{}]",
-                       context->codec->GetEncoderName());
-              video_sender_init_first_time = false;
-            }
-          }
-        }
-      } else if (context->type == StreamType::kAudio) {
-        if (!context->codec) {
-          context->codec = std::make_shared<AudioEncoder>(48000, 1, 480);
-          if (!context->codec || 0 != context->codec->Init(media_config_)) {
-            LOG_ERROR("Audio encoder [{}] init failed", channel_name);
-            return -1;
-          }
-          if (audio_sender_init_first_time) {
-            LOG_INFO("Use audio encoder [{}]",
-                     context->codec->GetEncoderName());
-            audio_sender_init_first_time = false;
-          }
-        }
+      if (context->type != StreamType::kAudio || context->codec) continue;
+      auto encoder = std::make_shared<AudioEncoder>(48000, 1, 480);
+      if (encoder->Init(media_config_) != 0) {
+        LOG_ERROR("Audio encoder [{}] init failed", channel_name);
+        return -1;
+      }
+      context->codec = std::move(encoder);
+      if (audio_sender_init_first_time) {
+        LOG_INFO("Use audio encoder [{}]", context->codec->GetEncoderName());
+        audio_sender_init_first_time = false;
       }
     }
   }
@@ -3341,31 +3394,17 @@ int IceTransportController::CreateStreamCodecs(
         LOG_ERROR("Failed to find stream receiver [{}]", channel_name);
         return -1;
       }
-      if (!context->codec) {
-        if (context->type == StreamType::kVideo) {
-          context->codec = VideoDecoderFactory::CreateInitializedVideoDecoder(
-              clock, hardware_acceleration, codec_type, native_video_output_);
-          if (!context->codec) {
-            LOG_ERROR("Decoder [{}] init failed", channel_name);
-            return -1;
-          }
-          if (video_receiver_init_first_time) {
-            LOG_INFO("Use video decoder [{}]",
-                     context->codec->GetDecoderName());
-            video_receiver_init_first_time = false;
-          }
-        } else if (context->type == StreamType::kAudio) {
-          context->codec = std::make_shared<AudioDecoder>(48000, 1, 480);
-          if (!context->codec || 0 != context->codec->Init()) {
-            LOG_ERROR("Audio decoder [{}] init failed", channel_name);
-            return -1;
-          }
-          if (audio_receiver_init_first_time) {
-            LOG_INFO("Create audio decoder [{}] finish",
-                     context->codec->GetDecoderName());
-            audio_receiver_init_first_time = false;
-          }
-        }
+      if (context->type != StreamType::kAudio || context->codec) continue;
+      auto decoder = std::make_shared<AudioDecoder>(48000, 1, 480);
+      if (decoder->Init() != 0) {
+        LOG_ERROR("Audio decoder [{}] init failed", channel_name);
+        return -1;
+      }
+      context->codec = std::move(decoder);
+      if (audio_receiver_init_first_time) {
+        LOG_INFO("Create audio decoder [{}] finish",
+                 context->codec->GetDecoderName());
+        audio_receiver_init_first_time = false;
       }
     }
   }
@@ -3373,10 +3412,9 @@ int IceTransportController::CreateStreamCodecs(
   return 0;
 }
 
-int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
-                                         rtp::PAYLOAD_TYPE video_pt,
+int IceTransportController::CreateCodecs(rtp::PAYLOAD_TYPE video_pt,
                                          bool hardware_acceleration) {
-  if (video_codec_inited_) {
+  if (video_codec_configured_ && audio_codec_inited_) {
     return 0;
   }
 
@@ -3386,31 +3424,29 @@ int IceTransportController::CreateCodecs(std::shared_ptr<SystemClock> clock,
 
   if (rtp::PAYLOAD_TYPE::AV1 == video_pt) {
 #if defined(__APPLE__) || defined(__ANDROID__) || defined(__OHOS__)
-    ret = CreateStreamCodecs(clock, hardware_acceleration_,
-                             VideoCodecType::AV1);
+    ret = ConfigureStreamCodecs(hardware_acceleration_, VideoCodecType::AV1);
 #else
     if (hardware_acceleration_) {
       hardware_acceleration_ = false;
       LOG_WARN("Only support software codec for AV1");
     }
-    ret = CreateStreamCodecs(clock, false, VideoCodecType::AV1);
+    ret = ConfigureStreamCodecs(false, VideoCodecType::AV1);
 #endif
   } else if (video_pt == rtp::H265) {
-    ret = CreateStreamCodecs(clock, hardware_acceleration_, VideoCodecType::H265);
+    ret = ConfigureStreamCodecs(hardware_acceleration_, VideoCodecType::H265);
   } else if (rtp::PAYLOAD_TYPE::H264 == video_pt) {
 #if defined(_WIN32) || defined(__APPLE__) || defined(__ANDROID__) || defined(__OHOS__)
-    ret = CreateStreamCodecs(clock, hardware_acceleration_,
-                             VideoCodecType::H264);
+    ret = ConfigureStreamCodecs(hardware_acceleration_, VideoCodecType::H264);
 #elif USE_CUDA && !defined(__aarch64__) && !defined(__arm__)
     // Each factory probes and initializes its own direction independently.
-    ret = CreateStreamCodecs(clock, hardware_acceleration_, VideoCodecType::H264);
+    ret = ConfigureStreamCodecs(hardware_acceleration_, VideoCodecType::H264);
 #else
-    ret = CreateStreamCodecs(clock, false, VideoCodecType::H264);
+    ret = ConfigureStreamCodecs(false, VideoCodecType::H264);
 #endif
   }
 
   if (ret == 0) {
-    video_codec_inited_ = true;
+    audio_codec_inited_ = true;
   }
 
   return ret;
@@ -4087,7 +4123,7 @@ void IceTransportController::UpdateFecProtection() {
       const auto &c = item.second;
       if (!active(c))
         continue;
-      if (c->type == StreamType::kVideo && c->codec)
+      if (c->type == StreamType::kVideo)
         ++videos;
       if (c->type == StreamType::kAudio)
         ++audio;
@@ -4307,7 +4343,7 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
       if (!is_active(context)) {
         continue;
       }
-      if (context->type == StreamType::kVideo && context->codec) {
+      if (context->type == StreamType::kVideo) {
         ++active_video_count;
       }
     }
@@ -4317,8 +4353,7 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
     }
 
     for (const auto& [channel_name, context] : stream_senders_) {
-      if (!is_active(context) || context->type != StreamType::kVideo ||
-          !context->codec) {
+      if (!is_active(context) || context->type != StreamType::kVideo) {
         continue;
       }
 
@@ -4327,7 +4362,7 @@ void IceTransportController::UpdateVideoBitrateAllocation() {
           media_config_.min_bitrate, cwnd_reduce_ratio_, now_ms);
       context->desired_target_bitrate = per_video_bitrate;
       // Admission pauses at zero; avoid passing unsupported zero to codecs.
-      if (per_video_bitrate <= 0) continue;
+      if (per_video_bitrate <= 0 || !context->codec) continue;
       if (context->bitrate_update_queued) {
         continue;
       }

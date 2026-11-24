@@ -68,13 +68,15 @@ DataChannelTransport::~DataChannelTransport() {
 void DataChannelTransport::SetVideoConfig(
     MiniRtcVideoQuality video_quality, int video_frame_rate,
     MiniRtcVideoContentType video_content_type,
-    MiniRtcVideoDegradationPreference video_degradation_preference) {
+    MiniRtcVideoDegradationPreference video_degradation_preference,
+    bool desktop_realtime_rate_control) {
   video_quality_ = video_quality;
   // Use a conservative fallback until the controller negotiates live settings.
   media_config_.max_frame_rate =
       video_frame_rate > 0 ? std::min(video_frame_rate, 30) : 30;
   video_frame_rate_limit_ = media_config_.max_frame_rate;
   media_config_.video_content_type = video_content_type;
+  media_config_.desktop_realtime_rate_control = desktop_realtime_rate_control;
   media_config_.video_degradation_preference = video_degradation_preference;
   media_config_.init_bitrate = media_config_.average_bitrate =
       media_handler_->Budget().video_bps;
@@ -409,14 +411,20 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       stream->source_height_ = raw_frame.Height();
       stream->last_resize_ms_ = now_ms;
     }
-    const bool scale =
+    bool scale =
         stream->adapted_width_ > 0 && stream->adapted_height_ > 0 &&
         (stream->adapted_width_ != static_cast<int>(raw_frame.Width()) ||
          stream->adapted_height_ != static_cast<int>(raw_frame.Height()));
+    if (scale && raw_frame.NativeFrame() &&
+        codec->SupportsNativeFrameInput(raw_frame.NativeFrame()->type) &&
+        raw_frame.TryScaleNativeFrame(stream->adapted_width_, stream->adapted_height_)) {
+      scale = false;
+    }
     if (const auto* native_frame = raw_frame.NativeFrame();
         native_frame &&
         (scale || !codec->SupportsNativeFrameInput(native_frame->type))) {
       if (!raw_frame.MaterializeNativeFrame()) {
+        if (should_force_i_frame) self->RequestVideoKeyFrame(stream_id);
         LOG_ERROR("[{}] Failed to materialize native video frame", stream_id);
         return -1;
       }
@@ -425,8 +433,10 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       RawFrame scaled;
       if (self->resolution_adapter_->ResolutionDowngrade(
               raw_frame, stream->adapted_width_, stream->adapted_height_,
-              scaled) != 0)
+              scaled) != 0) {
+        if (should_force_i_frame) self->RequestVideoKeyFrame(stream_id);
         return -1;
+      }
       scaled.SetCapturedTimestamp(raw_frame.CapturedTimestamp());
       raw_frame = std::move(scaled);
     }
@@ -434,11 +444,10 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     std::shared_ptr<::rtc::Track> track_shared = track_ptr;
 
     if (should_force_i_frame) {
-      codec->ForceIdr();
-      LOG_INFO("Force I frame");
+      if (codec->ForceIdr() != 0) self->RequestVideoKeyFrame(stream_id);
     }
 
-    codec->Encode(
+    const int encoded = codec->Encode(
         std::move(raw_frame),
         [weak_self, track_shared,
          stream_id](const EncodedFrame& encoded_frame) -> int {
@@ -464,7 +473,8 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
           }
           return 0;
         });
-    return 0;
+    if (encoded < 0 && should_force_i_frame) self->RequestVideoKeyFrame(stream_id);
+    return encoded;
   });
   return 0;
 }

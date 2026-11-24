@@ -13,6 +13,11 @@ using nlohmann::json;
 
 namespace {
 
+bool IsValidDesktopEncodingMode(MiniRtcDesktopEncodingMode mode) {
+  return mode == MiniRtcDesktopEncodingMode::LowLoad ||
+         mode == MiniRtcDesktopEncodingMode::EncoderDefault;
+}
+
 bool IsValidAudioFrameInput(const MiniRtcAudioFrame* audio_frame) {
   return audio_frame && audio_frame->data && audio_frame->size > 0;
 }
@@ -37,6 +42,9 @@ MiniRtcPeerPtr* MiniRtcCreatePeerWithVideoCodec(const MiniRtcParams* params,
     return nullptr;
   }
 
+  if (!params->use_cfg_file && !IsValidDesktopEncodingMode(params->desktop_encoding_mode))
+    return nullptr;
+
   const char* directory = log_directory ? log_directory : params->log_path;
   InitLogger(*directory ? directory : "logs");
 
@@ -58,6 +66,7 @@ MiniRtcPeerPtr* MiniRtcCreatePeerWithVideoCodec(const MiniRtcParams* params,
     peer_ptr->pc_params.turn_mode = params->turn_mode;
     peer_ptr->pc_params.enable_srtp = params->enable_srtp;
     peer_ptr->pc_params.video_content_type = params->video_content_type;
+    peer_ptr->pc_params.desktop_encoding_mode = params->desktop_encoding_mode;
     peer_ptr->pc_params.video_quality = params->video_quality;
     peer_ptr->pc_params.video_frame_rate = params->video_frame_rate;
     peer_ptr->pc_params.video_degradation_preference =
@@ -168,6 +177,14 @@ int MiniRtcUpdateConnectionSettingsWithCodec(MiniRtcPeerPtr* peer_ptr,
   }
   return peer_ptr->peer_connection->UpdateConnectionSettings(
       hardware_acceleration, codec, turn_mode);
+}
+
+int MiniRtcUpdateConnectionParams(MiniRtcPeerPtr* peer, const MiniRtcConnectionParams* params) {
+  if (!peer || !peer->peer_connection || !params ||
+      !IsValidDesktopEncodingMode(params->desktop_encoding_mode)) return -1;
+  return peer->peer_connection->UpdateConnectionSettings(
+      params->hardware_acceleration, params->video_codec, params->turn_mode,
+      params->desktop_encoding_mode == MiniRtcDesktopEncodingMode::LowLoad);
 }
 
 int MiniRtcLeaveConnection(MiniRtcPeerPtr* peer_ptr,

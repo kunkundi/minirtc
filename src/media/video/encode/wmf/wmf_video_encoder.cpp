@@ -324,7 +324,8 @@ class WmfVideoEncoder::Impl {
     }
   }
 
-  HRESULT Configure(IMFActivate* activation, bool configure_buffer = true) {
+  HRESULT Configure(IMFActivate* activation, bool configure_buffer = true,
+                    [[maybe_unused]] bool* applied_realtime = nullptr) {
     buffer_control_requested_ = configure_buffer && buffer_duration_ms_ > 0 &&
         config_.video_content_type == MiniRtcVideoContentType::ScreenContent;
     if (!buffer_control_requested_) burst_control_.Reset(0);
@@ -353,6 +354,16 @@ class WmfVideoEncoder::Impl {
     hr = SetUint(api_.Get(), CODECAPI_AVEncCommonRateControlMode,
                  eAVEncCommonRateControlMode_CBR);
     if (FAILED(hr)) return hr;
+#ifdef CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization
+    if (applied_realtime && config_.UseDesktopRealtimeRateControl() &&
+        api_->IsSupported(&CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization) == S_OK) {
+      VARIANT aq{};
+      aq.vt = VT_BOOL;
+      aq.boolVal = VARIANT_FALSE;
+      *applied_realtime = SUCCEEDED(api_->SetValue(
+          &CODECAPI_AVEncVideoEnableSpatialAdaptiveQuantization, &aq));
+    }
+#endif
     VARIANT low_latency{};
     low_latency.vt = VT_BOOL;
     low_latency.boolVal = VARIANT_TRUE;
@@ -430,7 +441,14 @@ class WmfVideoEncoder::Impl {
     hr = MF_E_TOPO_CODEC_NOT_FOUND;
     for (UINT32 i = 0; i < count; ++i) {
       if (!encoder_) {
-        hr = Configure(activations[i]);
+        bool applied_realtime = false;
+        hr = Configure(activations[i], true, &applied_realtime);
+        if (FAILED(hr) && applied_realtime) {
+          // Some MFTs accept a property but reject the combination at start.
+          Reset();
+          hr = activations[i]->ShutdownObject();
+          if (SUCCEEDED(hr)) hr = Configure(activations[i]);
+        }
         if (FAILED(hr) && buffer_initialization_write_attempted_) {
           // Even an accepted optional property can make subsequent media-type
           // negotiation or stream start fail. Reactivate this same MFT once

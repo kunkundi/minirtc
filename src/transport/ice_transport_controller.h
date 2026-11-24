@@ -70,7 +70,8 @@ class IceTransportController
                          MiniRtcVideoDegradationPreference
                              video_degradation_preference,
                          StartingBitrates starting_bitrates = {},
-                         bool disable_receiver_padding_probing = false);
+                         bool disable_receiver_padding_probing = false,
+                         bool desktop_realtime_rate_control = true);
   ~IceTransportController();
 
  public:
@@ -180,11 +181,8 @@ class IceTransportController
                            std::vector<uint8_t>& protected_packet);
   bool InstallSrtpSessions();
 
-  int CreateCodecs(std::shared_ptr<SystemClock> clock,
-                   rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
-  int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
-                         bool hardware_acceleration,
-                         VideoCodecType codec_type);
+  int CreateCodecs(rtp::PAYLOAD_TYPE video_pt, bool hardware_acceleration);
+  int ConfigureStreamCodecs(bool hardware_acceleration, VideoCodecType codec_type);
 
  private:
   struct PacketFeedbackRegistration {
@@ -530,6 +528,7 @@ class IceTransportController
     }
 
     std::shared_ptr<MediaChannel> transceiver;
+    int64_t next_codec_attempt_ms = 0;  // Accessed on this stream's codec queue.
     std::shared_ptr<MediaCodec> codec;
 
     bool reliable;
@@ -544,8 +543,12 @@ class IceTransportController
       const std::shared_ptr<StreamContext>& context,
       const std::shared_ptr<MediaCodec>& codec);
 
-  bool CheckSteamContext(const std::string& channel_name,
-                         const std::shared_ptr<StreamContext>& context);
+  std::shared_ptr<MediaCodec> CreateVideoCodec(
+      const std::shared_ptr<StreamContext>& context,
+      int encode_width = 0, int encode_height = 0);
+  bool CheckStreamContext(const std::string& channel_name,
+                          const std::shared_ptr<StreamContext>& context,
+                          StreamType expected);
   bool PrepareStartupKeyframe(const std::shared_ptr<StreamContext>& context,
                               int64_t frame_bitrate, bool* force_keyframe);
   void NoteKeyframeBudgetFailure(const std::shared_ptr<StreamContext>& context,
@@ -641,10 +644,10 @@ class IceTransportController
   std::atomic<bool> b_force_i_frame_;
   std::mutex force_i_frame_streams_mutex_;
   std::unordered_set<std::string> force_i_frame_streams_;
-  bool video_codec_inited_;
+  bool video_codec_configured_;
   bool hardware_acceleration_;
   VideoCodecType video_codec_type_ = VideoCodecType::H264;
-  bool video_encoder_hardware_ = false;
+  bool video_codec_hardware_ = false;
   // Guarded by stream_senders_mutex_, separately for each display.
   std::unordered_map<std::string, VideoFrameCadence> video_frame_cadences_;
   // Guarded by stream_senders_mutex_; each controller owns one peer's send state.

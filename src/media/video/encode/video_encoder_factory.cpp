@@ -142,10 +142,7 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
         }
       }
 #endif
-      if (auto encoder = TryInitEncoder(
-              std::make_unique<WmfVideoEncoder>(clock, codec_type), config)) {
-        return encoder;
-      }
+      return CreateWindowsFallbackEncoder(clock, config, codec_type);
     }
     if (codec_type == VideoCodecType::H265) return nullptr;
     return TryInitEncoder(std::make_unique<OpenH264Encoder>(clock), config);
@@ -173,6 +170,19 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
       CreateVideoEncoder(clock, false, VideoCodecType::H264), config);
 #endif
 }
+
+#ifdef _WIN32
+std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateWindowsFallbackEncoder(
+    std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
+    VideoCodecType codec_type) {
+  if (auto encoder = TryInitEncoder(
+          std::make_unique<WmfVideoEncoder>(clock, codec_type), config)) {
+    return encoder;
+  }
+  if (codec_type != VideoCodecType::H264) return nullptr;
+  return TryInitEncoder(std::make_unique<OpenH264Encoder>(clock), config);
+}
+#endif
 
 bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {

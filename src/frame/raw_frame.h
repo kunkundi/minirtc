@@ -49,6 +49,22 @@ class RawFrame : public VideoFrame {
     return native_frame_.Get();
   }
 
+  bool TryScaleNativeFrame(uint32_t width, uint32_t height) {
+    const auto* source = NativeFrame();
+    if (!source || source->type != MiniRtcNativeVideoFrameD3D11Nv12 ||
+        !source->payload.d3d11_nv12.scale) return false;
+    const auto* scaled = source->payload.d3d11_nv12.scale(source->owner, width, height);
+    if (!scaled || scaled->struct_size < sizeof(*scaled) || !scaled->owner ||
+        !scaled->release) return false;
+    RawFrame result(*scaled);
+    scaled->release(scaled->owner);
+    if (!result.NativeFrame() || result.Width() != width || result.Height() != height)
+      return false;
+    result.SetCapturedTimestamp(CapturedTimestamp());
+    *this = std::move(result);
+    return true;
+  }
+
   bool MaterializeNativeFrame() {
     const auto* native_frame = native_frame_.Get();
     if (!native_frame) {

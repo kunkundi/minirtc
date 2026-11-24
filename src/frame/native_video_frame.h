@@ -58,6 +58,9 @@ inline const MiniRtcNativeVideoFrame* GetNativeVideoFrame(
                      frame->payload.cuda_nv12.context
                  ? frame
                  : nullptr;
+    case MiniRtcNativeVideoFrameD3D11Nv12:
+      return frame->payload.d3d11_nv12.texture &&
+                     frame->payload.d3d11_nv12.shared_handle ? frame : nullptr;
     case MiniRtcNativeVideoFrameCVPixelBuffer:
       return frame->payload.cv_pixel_buffer ? frame : nullptr;
     case MiniRtcNativeVideoFrameNone:

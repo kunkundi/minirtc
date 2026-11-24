@@ -260,7 +260,7 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           info_.video_frame_rate, info_.video_degradation_preference,
           preferred_video_pt_,
           video_payload_types_, audio_payload_types_, info_.starting_bitrates,
-          info_.disable_receiver_padding_probing);
+          info_.disable_receiver_padding_probing, info_.desktop_realtime_rate_control);
 
       ice_transport_->SetOnReceiveFunc(callbacks_.on_receive_video_frame,
                                        callbacks_.on_receive_audio_buffer,
@@ -327,7 +327,7 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           info_.video_frame_rate, info_.video_degradation_preference,
           preferred_video_pt_,
           video_payload_types_, audio_payload_types_, info_.starting_bitrates,
-          info_.disable_receiver_padding_probing);
+          info_.disable_receiver_padding_probing, info_.desktop_realtime_rate_control);
 
       ice_transport_->SetOnReceiveFunc(callbacks_.on_receive_video_frame,
                                        callbacks_.on_receive_audio_buffer,

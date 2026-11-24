@@ -99,6 +99,8 @@ int SvtAv1Encoder::Reconfigure(uint32_t frame_width, uint32_t frame_height) {
               MiniRtcVideoDegradationPreference::MaintainFrameRate
           ? 10
           : 8;
+  // SVT-AV1 3.x rejects AQ=0 with CBR. Keep the library's supported AQ
+  // configuration for this single-pass, low-delay encoder under either policy.
   enc_config_.rate_control_mode = SVT_AV1_RC_MODE_CBR;
   enc_config_.pred_structure = SVT_AV1_PRED_LOW_DELAY_B;
   enc_config_.target_bit_rate = target_bitrate_;

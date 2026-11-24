@@ -77,7 +77,8 @@ class DataChannelTransport
   void SetVideoConfig(
       MiniRtcVideoQuality video_quality, int video_frame_rate,
       MiniRtcVideoContentType video_content_type,
-      MiniRtcVideoDegradationPreference video_degradation_preference);
+      MiniRtcVideoDegradationPreference video_degradation_preference,
+      bool desktop_realtime_rate_control);
   int UpdateVideoSettings(MiniRtcVideoQuality quality, int frame_rate,
                           MiniRtcVideoDegradationPreference preference);
   std::shared_ptr<WebMediaHandler> MediaHandler() const {

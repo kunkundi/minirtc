@@ -309,9 +309,11 @@ int IceTransport::SetLocalCapabilities(
     rtp::PAYLOAD_TYPE prefered_video_payload_type,
     std::vector<int>& video_payload_types,
     std::vector<int>& audio_payload_types,
-    StartingBitrates starting_bitrates, bool disable_receiver_padding_probing) {
+    StartingBitrates starting_bitrates, bool disable_receiver_padding_probing,
+    bool desktop_realtime_rate_control) {
   starting_bitrates_ = starting_bitrates;
   disable_receiver_padding_probing_ = disable_receiver_padding_probing;
+  desktop_realtime_rate_control_ = desktop_realtime_rate_control;
   hardware_acceleration_ = hardware_acceleration;
   native_video_output_ = native_video_output;
   use_trickle_ice_ = use_trickle_ice;
@@ -405,7 +407,7 @@ int IceTransport::InitIceTransmission(
   ice_transport_controller_ = std::make_shared<IceTransportController>(
       clock_, ice_agent_, ice_io_statistics_, enable_srtp_, video_quality_,
       video_frame_rate_, video_content_type_, video_degradation_preference_,
-      starting_bitrates_, disable_receiver_padding_probing_);
+      starting_bitrates_, disable_receiver_padding_probing_, desktop_realtime_rate_control_);
 
   return 0;
 }

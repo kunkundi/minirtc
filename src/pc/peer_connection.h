@@ -84,6 +84,7 @@ typedef struct {
   int direct_start_bitrate_bps;
   int relay_start_bitrate_bps;
   bool disable_receiver_padding_probing;
+  MiniRtcDesktopEncodingMode desktop_encoding_mode;
 } PeerConnectionParams;
 
 class PeerConnection {
@@ -100,7 +101,8 @@ class PeerConnection {
   int CloseDirect();
   void ReportDirectError(MiniRtcDirectError error);
   int UpdateConnectionSettings(bool hardware_acceleration, MiniRtcVideoCodec codec,
-                                MiniRtcTurnMode turn_mode);
+                               MiniRtcTurnMode turn_mode,
+                               std::optional<bool> desktop_realtime_rate_control = std::nullopt);
 
   int Join(const std::string& transmission_id);
 

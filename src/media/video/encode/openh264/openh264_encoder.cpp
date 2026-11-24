@@ -94,6 +94,8 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
   // unspecified and enforce the configured ceiling before SetTargetBitrate.
   encoder_params_.iMaxBitrate = UNSPECIFIED_BIT_RATE;
   encoder_params_.iRCMode = RC_BITRATE_MODE;
+  // OpenH264 also disables AQ during validation for SCREEN_CONTENT_REAL_TIME.
+  if (desktop_realtime_rate_control_) encoder_params_.bEnableAdaptiveQuant = false;
   encoder_params_.fMaxFrameRate = max_fps_;
   encoder_params_.iComplexityMode =
       video_degradation_preference_ ==
@@ -175,6 +177,7 @@ int OpenH264Encoder::Init(const MediaCodecConfig& config) {
       ClampEncoderTargetBitrate(config.init_bitrate, max_bitrate_);
   max_payload_size_ = config.max_payload_size;
   max_fps_ = config.max_frame_rate;
+  desktop_realtime_rate_control_ = config.UseDesktopRealtimeRateControl();
   video_content_type_ = config.video_content_type;
   video_degradation_preference_ = config.video_degradation_preference;
 

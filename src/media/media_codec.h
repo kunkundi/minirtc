@@ -67,6 +67,12 @@ class MediaCodecConfig {
             MiniRtcVideoDegradationPreference::MaintainResolution) {}
   ~MediaCodecConfig() {}
 
+  bool UseDesktopRealtimeRateControl() const {
+    return desktop_realtime_rate_control &&
+           video_content_type == MiniRtcVideoContentType::ScreenContent;
+  }
+
+  bool desktop_realtime_rate_control = true;
   bool audio_fec_enabled = false;
   int init_width;
   int init_height;

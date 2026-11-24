@@ -392,6 +392,7 @@ target("minirtc")
 
     if is_os("windows") then
         if is_config("USE_CUDA", true) then
+            add_syslinks("d3d11", "dxgi", {public = true})
             add_linkdirs("thirdparty/nvcodec/lib/x64")
             add_linkdirs(path.join(get_cuda_dir(), "lib/x64"))
         end
