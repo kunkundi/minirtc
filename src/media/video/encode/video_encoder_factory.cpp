@@ -8,7 +8,7 @@
 #endif
 
 #if defined(_WIN32) || defined(_WIN64)
-#include "wmf/wmf_h264_encoder.h"
+#include "wmf/wmf_video_encoder.h"
 #elif defined(__APPLE__)
 #include "video_toolbox/video_toolbox_encoder.h"
 #endif
@@ -59,15 +59,19 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
   }
 #endif
   if (codec_type == VideoCodecType::H265) {
-    if (!hardware_acceleration || !CheckIsHardwareAccelerationSupported(codec_type))
-      return nullptr;
+    if (!hardware_acceleration) return nullptr;
 #if MINIRTC_HAS_CUDA_ENCODER
-    return std::make_unique<NvidiaVideoEncoder>(clock, codec_type);
-#elif defined(__APPLE__) && TARGET_OS_OSX
-    return std::make_unique<VideoToolboxEncoder>(clock, codec_type);
-#else
-    return nullptr;
+    if (CheckIsCudaHevcEncodeSupported())
+      return std::make_unique<NvidiaVideoEncoder>(clock, codec_type);
 #endif
+#if defined(_WIN32) || defined(_WIN64)
+    if (WmfVideoEncoder::IsSupported(codec_type))
+      return std::make_unique<WmfVideoEncoder>(clock, codec_type);
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    if (CheckIsHardwareAccelerationSupported(codec_type))
+      return std::make_unique<VideoToolboxEncoder>(clock, codec_type);
+#endif
+    return nullptr;
   }
   if (codec_type == VideoCodecType::AV1) {
     LOG_INFO("Using the SVT-AV1 software encoder");
@@ -87,7 +91,7 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
       return std::make_unique<NvidiaVideoEncoder>(clock);
     }
 #endif
-    return std::make_unique<WmfH264Encoder>(clock);
+    return std::make_unique<WmfVideoEncoder>(clock, codec_type);
   }
   return std::make_unique<OpenH264Encoder>(clock);
 #elif defined(MINIRTC_IOS)
@@ -125,21 +129,25 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
     std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
     bool hardware_acceleration, VideoCodecType codec_type) {
 #if defined(_WIN32) || defined(_WIN64)
-  if (codec_type == VideoCodecType::H264) {
+  if (codec_type == VideoCodecType::H264 ||
+      codec_type == VideoCodecType::H265) {
     if (hardware_acceleration) {
-#if USE_CUDA
-      if (CheckIsCudaEncodeSupported()) {
+#if MINIRTC_HAS_CUDA_ENCODER
+      if (codec_type == VideoCodecType::H265 ? CheckIsCudaHevcEncodeSupported()
+                                             : CheckIsCudaEncodeSupported()) {
         if (auto encoder = TryInitEncoder(
-                std::make_unique<NvidiaVideoEncoder>(clock), config)) {
+                std::make_unique<NvidiaVideoEncoder>(clock, codec_type),
+                config)) {
           return encoder;
         }
       }
 #endif
       if (auto encoder = TryInitEncoder(
-              std::make_unique<WmfH264Encoder>(clock), config)) {
+              std::make_unique<WmfVideoEncoder>(clock, codec_type), config)) {
         return encoder;
       }
     }
+    if (codec_type == VideoCodecType::H265) return nullptr;
     return TryInitEncoder(std::make_unique<OpenH264Encoder>(clock), config);
   }
 #endif
@@ -170,7 +178,10 @@ bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
   if (codec_type == VideoCodecType::H265) {
 #if MINIRTC_HAS_CUDA_ENCODER
-    return CheckIsCudaHevcEncodeSupported();
+    if (CheckIsCudaHevcEncodeSupported()) return true;
+#endif
+#if defined(_WIN32) || defined(_WIN64)
+    return WmfVideoEncoder::IsSupported(codec_type);
 #elif defined(__APPLE__) && TARGET_OS_OSX
     return VideoToolboxEncoder::IsHardwareHevcSupported();
 #else
@@ -187,7 +198,7 @@ bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
 #if USE_CUDA
   if (CheckIsCudaEncodeSupported()) return true;
 #endif
-  return WmfH264Encoder::IsSupported();
+  return WmfVideoEncoder::IsSupported(codec_type);
 #elif defined(__APPLE__)
   return true;
 #elif defined(__linux__) && (defined(__x86_64__) || defined(__amd64__)) && \

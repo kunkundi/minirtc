@@ -4,7 +4,7 @@
 
 #include "dav1d/dav1d_av1_decoder.h"
 #if defined(_WIN32) || defined(_WIN64)
-#include "wmf/d3d11_h264_decoder.h"
+#include "wmf/d3d11_video_decoder.h"
 #endif
 #if !defined(MINIRTC_IOS)
 #include "openh264/openh264_decoder.h"
@@ -75,15 +75,22 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
   }
 #endif
   if (codec_type == VideoCodecType::H265) {
-    if (!hardware_acceleration || !CheckIsHardwareAccelerationSupported(codec_type))
-      return nullptr;
+    if (!hardware_acceleration) return nullptr;
 #if MINIRTC_HAS_CUDA_DECODER
-    return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output, codec_type);
-#elif defined(__APPLE__) && TARGET_OS_OSX
-    return std::make_unique<VideoToolboxDecoder>(clock, native_video_output, codec_type);
-#else
-    return nullptr;
+    if (CheckIsCudaDecodeSupported(cudaVideoCodec_HEVC))
+      return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output,
+                                                  codec_type);
 #endif
+#if defined(_WIN32) || defined(_WIN64)
+    if (D3D11VideoDecoder::IsSupported(codec_type))
+      return std::make_unique<D3D11VideoDecoder>(clock, native_video_output,
+                                                 codec_type);
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    if (CheckIsHardwareAccelerationSupported(codec_type))
+      return std::make_unique<VideoToolboxDecoder>(clock, native_video_output,
+                                                   codec_type);
+#endif
+    return nullptr;
   }
   if (codec_type == VideoCodecType::AV1) {
     if (hardware_acceleration) {
@@ -125,7 +132,8 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
     if (CheckIsCudaDecodeSupported())
       return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output);
 #endif
-    return std::make_unique<D3D11H264Decoder>(clock, native_video_output);
+    return std::make_unique<D3D11VideoDecoder>(clock, native_video_output,
+                                               codec_type);
   }
 #elif MINIRTC_HAS_CUDA_DECODER
   if (hardware_acceleration &&
@@ -141,22 +149,25 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateInitializedVideoDecoder(
     std::shared_ptr<SystemClock> clock, bool hardware_acceleration,
     VideoCodecType codec_type, bool native_video_output) {
 #if defined(_WIN32) || defined(_WIN64)
-  if (codec_type == VideoCodecType::H264) {
+  if (codec_type == VideoCodecType::H264 ||
+      codec_type == VideoCodecType::H265) {
     if (hardware_acceleration) {
 #if MINIRTC_HAS_CUDA_DECODER
-      if (CheckIsCudaDecodeSupported()) {
-        if (auto decoder =
-                TryInitDecoder(std::make_unique<NvidiaVideoDecoder>(
-                    clock, native_video_output))) {
+      if (codec_type == VideoCodecType::H265
+              ? CheckIsCudaDecodeSupported(cudaVideoCodec_HEVC)
+              : CheckIsCudaDecodeSupported()) {
+        if (auto decoder = TryInitDecoder(std::make_unique<NvidiaVideoDecoder>(
+                clock, native_video_output, codec_type))) {
           return decoder;
         }
       }
 #endif
-      if (auto decoder = TryInitDecoder(
-              std::make_unique<D3D11H264Decoder>(clock, native_video_output))) {
+      if (auto decoder = TryInitDecoder(std::make_unique<D3D11VideoDecoder>(
+              clock, native_video_output, codec_type))) {
         return decoder;
       }
     }
+    if (codec_type == VideoCodecType::H265) return nullptr;
     return TryInitDecoder(
         std::make_unique<OpenH264Decoder>(clock, native_video_output));
   }
@@ -177,7 +188,10 @@ bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
   if (codec_type == VideoCodecType::H265) {
 #if MINIRTC_HAS_CUDA_DECODER
-    return CheckIsCudaDecodeSupported(cudaVideoCodec_HEVC);
+    if (CheckIsCudaDecodeSupported(cudaVideoCodec_HEVC)) return true;
+#endif
+#if defined(_WIN32) || defined(_WIN64)
+    return D3D11VideoDecoder::IsSupported(codec_type);
 #elif defined(__APPLE__) && TARGET_OS_OSX
     return VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC);
 #else
@@ -197,7 +211,7 @@ bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
 #if MINIRTC_HAS_CUDA_DECODER
   if (CheckIsCudaDecodeSupported()) return true;
 #endif
-  return D3D11H264Decoder::IsSupported();
+  return D3D11VideoDecoder::IsSupported(codec_type);
 #elif defined(__APPLE__)
   return VTIsHardwareDecodeSupported(kCMVideoCodecType_H264);
 #elif MINIRTC_HAS_CUDA_DECODER

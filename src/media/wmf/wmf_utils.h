@@ -71,9 +71,11 @@ struct Nalu {
   size_t offset;
   size_t size;
   uint8_t type;
+  bool IsKeySlice(bool hevc) const {
+    return hevc ? type >= 16 && type <= 21 : type == 5;
+  }
 };
-std::vector<Nalu> AnnexBNalus(const uint8_t* data, size_t size);
-bool HasNalu(const uint8_t* data, size_t size, uint8_t type);
+std::vector<Nalu> AnnexBNalus(const uint8_t* data, size_t size, bool hevc);
 
 }  // namespace minirtc::wmf
 #endif

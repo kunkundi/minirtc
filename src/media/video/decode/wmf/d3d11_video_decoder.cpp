@@ -1,4 +1,4 @@
-#include "d3d11_h264_decoder.h"
+#include "d3d11_video_decoder.h"
 #include "sdr_color.h"
 
 #include <codecapi.h>
@@ -7,6 +7,7 @@
 #include <dxgi1_2.h>
 #include <wmcodecdsp.h>
 
+#include <algorithm>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -19,7 +20,7 @@ namespace minirtc {
 namespace {
 using wmf::ComPtr;
 
-HRESULT CreateVideoDevice(ComPtr<ID3D11Device>& device,
+HRESULT CreateVideoDevice(const GUID& profile, ComPtr<ID3D11Device>& device,
                           ComPtr<ID3D11DeviceContext>& context) {
   ComPtr<IDXGIFactory1> factory;
   HRESULT hr = CreateDXGIFactory1(IID_PPV_ARGS(&factory));
@@ -43,11 +44,10 @@ HRESULT CreateVideoDevice(ComPtr<ID3D11Device>& device,
     ComPtr<ID3D11VideoDevice> video;
     if (FAILED(candidate.As(&video))) continue;
     BOOL supported = FALSE;
-    hr = video->CheckVideoDecoderFormat(&D3D11_DECODER_PROFILE_H264_VLD_NOFGT,
-                                        DXGI_FORMAT_NV12, &supported);
+    hr = video->CheckVideoDecoderFormat(&profile, DXGI_FORMAT_NV12, &supported);
     if (FAILED(hr) || !supported) continue;
     D3D11_VIDEO_DECODER_DESC desc{};
-    desc.Guid = D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
+    desc.Guid = profile;
     desc.SampleWidth = 1920;
     desc.SampleHeight = 1080;
     desc.OutputFormat = DXGI_FORMAT_NV12;
@@ -69,13 +69,22 @@ struct FrameOutput {
   // Retains pooled pixels until the caller has finished its callback.
   NativeVideoFrameRef native;
 };
+
+bool HasKeySlice(const ReceivedFrame& frame, bool hevc) {
+  const auto nalus = wmf::AnnexBNalus(frame.Buffer(), frame.Size(), hevc);
+  return std::any_of(nalus.begin(), nalus.end(), [hevc](const auto& nalu) {
+    return nalu.IsKeySlice(hevc);
+  });
+}
 }  // namespace
 
-class D3D11H264Decoder::Impl {
+class D3D11VideoDecoder::Impl {
  public:
-  Impl(std::shared_ptr<SystemClock> clock, bool native_output)
+  Impl(std::shared_ptr<SystemClock> clock, bool native_output,
+       VideoCodecType codec)
       : clock_(std::move(clock)),
         native_output_(native_output),
+        hevc_(codec == VideoCodecType::H265),
         pool_(NativeNv12FramePool::Create()) {}
   ~Impl() {
     worker_.Call([this] {
@@ -139,18 +148,52 @@ class D3D11H264Decoder::Impl {
   HRESULT Initialize() {
     Reset();
     if (FAILED(worker_.Status())) return worker_.Status();
-    HRESULT hr = CreateVideoDevice(device_, context_);
+    const GUID& profile = hevc_ ? D3D11_DECODER_PROFILE_HEVC_VLD_MAIN
+                                : D3D11_DECODER_PROFILE_H264_VLD_NOFGT;
+    HRESULT hr = CreateVideoDevice(profile, device_, context_);
     if (FAILED(hr)) return hr;
     UINT token = 0;
     hr = MFCreateDXGIDeviceManager(&token, &manager_);
     if (FAILED(hr)) return hr;
     hr = manager_->ResetDevice(device_.Get(), token);
     if (FAILED(hr)) return hr;
-    hr = CoCreateInstance(CLSID_CMSH264DecoderMFT, nullptr,
-                          CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&decoder_));
+    if (!hevc_) {
+      hr = CoCreateInstance(CLSID_CMSH264DecoderMFT, nullptr,
+                            CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&decoder_));
+      return FAILED(hr) ? hr : Configure();
+    }
+
+    // The HEVC Video Extension registers a synchronous, DXVA-aware MFT.
+    // Activate the registered decoder (including Store-packaged codecs).
+    MFT_REGISTER_TYPE_INFO input{MFMediaType_Video, MFVideoFormat_HEVC};
+    MFT_REGISTER_TYPE_INFO output{MFMediaType_Video, MFVideoFormat_NV12};
+    IMFActivate** activations = nullptr;
+    UINT32 count = 0;
+    hr = MFTEnumEx(MFT_CATEGORY_VIDEO_DECODER,
+                   MFT_ENUM_FLAG_SYNCMFT | MFT_ENUM_FLAG_SORTANDFILTER, &input,
+                   &output, &activations, &count);
     if (FAILED(hr)) return hr;
+    hr = MF_E_TOPO_CODEC_NOT_FOUND;
+    for (UINT32 i = 0; i < count; ++i) {
+      if (FAILED(hr)) {
+        hr = activations[i]->ActivateObject(IID_PPV_ARGS(&decoder_));
+        if (SUCCEEDED(hr)) hr = Configure();
+        if (SUCCEEDED(hr)) {
+          activations[i]->DetachObject();
+        } else {
+          wmf::ShutdownTransform(decoder_);
+          activations[i]->ShutdownObject();
+        }
+      }
+      activations[i]->Release();
+    }
+    CoTaskMemFree(activations);
+    return hr;
+  }
+
+  HRESULT Configure() {
     ComPtr<IMFAttributes> attributes;
-    hr = decoder_->GetAttributes(&attributes);
+    HRESULT hr = decoder_->GetAttributes(&attributes);
     if (FAILED(hr)) return hr;
     if (!MFGetAttributeUINT32(attributes.Get(), MF_SA_D3D11_AWARE, FALSE))
       return MF_E_UNSUPPORTED_D3D_TYPE;
@@ -162,9 +205,16 @@ class D3D11H264Decoder::Impl {
     hr = MFCreateMediaType(&input);
     if (FAILED(hr)) return hr;
     input->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    input->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
-    // The SPS determines dimensions. The initial output type is a placeholder;
-    // ProcessOutput signals a stream change when the real format is known.
+    input->SetGUID(MF_MT_SUBTYPE,
+                   hevc_ ? MFVideoFormat_HEVC : MFVideoFormat_H264);
+    if (hevc_) {
+      input->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH265VProfile_Main_420_8);
+      // The HEVC extension needs an initial frame size to accept the NV12
+      // output type. ProcessOutput signals a format change on the first SPS.
+      hr = MFSetAttributeSize(input.Get(), MF_MT_FRAME_SIZE, MINIRTC_INIT_WIDTH,
+                              MINIRTC_INIT_HEIGHT);
+      if (FAILED(hr)) return hr;
+    }
     hr = decoder_->SetInputType(0, input.Get(), 0);
     if (FAILED(hr)) return hr;
     hr = SetOutputType();
@@ -315,6 +365,7 @@ class D3D11H264Decoder::Impl {
   wmf::CodecThread worker_;
   std::shared_ptr<SystemClock> clock_;
   bool native_output_;
+  const bool hevc_;
   bool initialized_ = false;
   std::shared_ptr<NativeNv12FramePool> pool_;
   ComPtr<ID3D11Device> device_;
@@ -329,23 +380,33 @@ class D3D11H264Decoder::Impl {
   std::unique_ptr<OpenH264Decoder> fallback_;
 };
 
-D3D11H264Decoder::D3D11H264Decoder(std::shared_ptr<SystemClock> clock,
-                                   bool native_video_output)
-    : impl_(std::make_unique<Impl>(std::move(clock), native_video_output)) {}
-D3D11H264Decoder::~D3D11H264Decoder() = default;
+D3D11VideoDecoder::D3D11VideoDecoder(std::shared_ptr<SystemClock> clock,
+                                     bool native_video_output,
+                                     VideoCodecType codec)
+    : impl_(std::make_unique<Impl>(std::move(clock), native_video_output,
+                                   codec)) {}
+D3D11VideoDecoder::~D3D11VideoDecoder() = default;
 
-bool D3D11H264Decoder::IsSupported() {
-  Impl probe(std::make_shared<SystemClock>(), false);
+bool D3D11VideoDecoder::IsSupported(VideoCodecType codec) {
+  if (codec != VideoCodecType::H264 && codec != VideoCodecType::H265)
+    return false;
+  Impl probe(std::make_shared<SystemClock>(), false, codec);
   return probe.worker_.Call([&] { return SUCCEEDED(probe.Initialize()); });
 }
 
-int D3D11H264Decoder::Init() {
+int D3D11VideoDecoder::Init() {
   return impl_->worker_.Call([&] {
     impl_->fallback_.reset();
     const HRESULT hr = impl_->Initialize();
     if (SUCCEEDED(hr)) {
       impl_->initialized_ = true;
       return 0;
+    }
+    if (impl_->hevc_) {
+      LOG_WARN("D3D11VA HEVC initialization failed (0x{:08x})",
+               static_cast<uint32_t>(hr));
+      impl_->initialized_ = false;
+      return -1;
     }
     LOG_WARN("D3D11VA initialization failed (0x{:08x}); using OpenH264",
              static_cast<uint32_t>(hr));
@@ -354,7 +415,7 @@ int D3D11H264Decoder::Init() {
   });
 }
 
-int D3D11H264Decoder::Decode(
+int D3D11VideoDecoder::Decode(
     std::unique_ptr<ReceivedFrame> frame,
     std::function<void(const DecodedFrame*)> callback) {
   if (!frame || !frame->Buffer() || !frame->Size() ||
@@ -364,15 +425,24 @@ int D3D11H264Decoder::Decode(
   const int result = impl_->worker_.Call([&] {
     if (!impl_->initialized_) return -1;
     if (!impl_->fallback_) {
+      if (impl_->hevc_ && !impl_->decoder_ &&
+          (!HasKeySlice(*frame, true) || FAILED(impl_->Initialize())))
+        return -1;
       const HRESULT hr = impl_->DecodeHardware(*frame, output);
       if (SUCCEEDED(hr)) return 0;
+      if (impl_->hevc_) {
+        LOG_WARN("D3D11VA HEVC decoding failed (0x{:08x})",
+                 static_cast<uint32_t>(hr));
+        impl_->Reset();
+        return -1;
+      }
       LOG_WARN("D3D11VA decoding failed (0x{:08x}); using OpenH264",
                static_cast<uint32_t>(hr));
       if (impl_->StartFallback() != 0) return -1;
       // A fresh decoder cannot recover reference frames. Request a key frame
       // through the existing negative Decode() result when switching on a P
       // frame.
-      if (!wmf::HasNalu(frame->Buffer(), frame->Size(), 5)) return -1;
+      if (!HasKeySlice(*frame, false)) return -1;
     }
     return impl_->fallback_->Decode(
         std::move(frame), [&](const DecodedFrame* decoded) {
@@ -389,10 +459,10 @@ int D3D11H264Decoder::Decode(
   return result;
 }
 
-std::string D3D11H264Decoder::GetDecoderName() const {
+std::string D3D11VideoDecoder::GetDecoderName() const {
   return impl_->worker_.Call([&]() -> std::string {
-    return impl_->fallback_ ? impl_->fallback_->GetDecoderName()
-                            : "D3D11VA (H.264)";
+    if (impl_->fallback_) return impl_->fallback_->GetDecoderName();
+    return impl_->hevc_ ? "D3D11VA (H.265)" : "D3D11VA (H.264)";
   });
 }
 }  // namespace minirtc

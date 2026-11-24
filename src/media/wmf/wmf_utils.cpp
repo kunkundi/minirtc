@@ -117,10 +117,19 @@ void ShutdownTransform(ComPtr<IMFTransform>& transform) {
   transform.Reset();
 }
 
-std::vector<Nalu> AnnexBNalus(const uint8_t* data, size_t size) {
+std::vector<Nalu> AnnexBNalus(const uint8_t* data, size_t size, bool hevc) {
   std::vector<Nalu> result;
   if (!data) return result;
   size_t payload = size;
+  auto append = [&](size_t end) {
+    if (payload >= end) return true;
+    if (hevc && (end - payload < 3 || (data[payload] & 0x80) ||
+                 !(data[payload + 1] & 7)))
+      return false;
+    const auto type = hevc ? (data[payload] >> 1) & 63 : data[payload] & 31;
+    result.push_back({payload, end - payload, static_cast<uint8_t>(type)});
+    return true;
+  };
   for (size_t i = 0; i + 2 < size;) {
     size_t prefix = 0;
     if (data[i] == 0 && data[i + 1] == 0) {
@@ -133,21 +142,11 @@ std::vector<Nalu> AnnexBNalus(const uint8_t* data, size_t size) {
       ++i;
       continue;
     }
-    if (payload < i)
-      result.push_back(
-          {payload, i - payload, static_cast<uint8_t>(data[payload] & 0x1f)});
+    if (!append(i)) return {};
     payload = i + prefix;
     i = payload;
   }
-  if (payload < size)
-    result.push_back(
-        {payload, size - payload, static_cast<uint8_t>(data[payload] & 0x1f)});
+  if (!append(size)) return {};
   return result;
-}
-
-bool HasNalu(const uint8_t* data, size_t size, uint8_t type) {
-  for (const auto& nalu : AnnexBNalus(data, size))
-    if (nalu.type == type) return true;
-  return false;
 }
 }  // namespace minirtc::wmf

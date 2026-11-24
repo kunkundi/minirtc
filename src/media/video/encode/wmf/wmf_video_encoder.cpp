@@ -1,10 +1,11 @@
-#include "wmf_h264_encoder.h"
+#include "wmf_video_encoder.h"
 
 #include <codecapi.h>
 #include <strmif.h>
 #include <wrl/implements.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <condition_variable>
 #include <cstring>
@@ -83,9 +84,10 @@ HRESULT SetUint(ICodecAPI* api, const GUID& key, ULONG value) {
   return api->SetValue(&key, &variant);
 }
 
-HRESULT EnumerateEncoders(IMFActivate*** activates, UINT32* count) {
+HRESULT EnumerateEncoders(bool hevc, IMFActivate*** activates, UINT32* count) {
   MFT_REGISTER_TYPE_INFO input{MFMediaType_Video, MFVideoFormat_NV12};
-  MFT_REGISTER_TYPE_INFO output{MFMediaType_Video, MFVideoFormat_H264};
+  MFT_REGISTER_TYPE_INFO output{MFMediaType_Video,
+                                hevc ? MFVideoFormat_HEVC : MFVideoFormat_H264};
   return MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER,
                    MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER, &input,
                    &output, activates, count);
@@ -102,10 +104,10 @@ bool ValidConfig(const MediaCodecConfig& config) {
 }
 }  // namespace
 
-class WmfH264Encoder::Impl {
+class WmfVideoEncoder::Impl {
  public:
-  explicit Impl(std::shared_ptr<SystemClock> clock)
-      : clock_(std::move(clock)) {}
+  Impl(std::shared_ptr<SystemClock> clock, VideoCodecType codec)
+      : clock_(std::move(clock)), hevc_(codec == VideoCodecType::H265) {}
   ~Impl() {
     worker_.Call([this] {
       Reset();
@@ -118,8 +120,7 @@ class WmfH264Encoder::Impl {
     api_.Reset();
     wmf::ShutdownTransform(encoder_);
     input_credit_ = 0;
-    sps_.clear();
-    pps_.clear();
+    for (auto& header : parameter_sets_) header.clear();
     parser_.Reset();
     sequence_ = 0;
     burst_control_.Reset(buffer_duration_ms_);
@@ -371,12 +372,15 @@ class WmfH264Encoder::Impl {
     hr = MFCreateMediaType(&output);
     if (FAILED(hr)) return hr;
     output->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    output->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    output->SetGUID(MF_MT_SUBTYPE,
+                    hevc_ ? MFVideoFormat_HEVC : MFVideoFormat_H264);
     output->SetUINT32(MF_MT_AVG_BITRATE, config_.init_bitrate);
     output->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-    // Baseline forbids B pictures even on drivers that ignore the optional
-    // B-picture property. The desktop pipeline requires one-frame latency.
-    output->SetUINT32(MF_MT_MPEG2_PROFILE, eAVEncH264VProfile_Base);
+    // AVC Baseline also forbids B pictures if the driver ignores the
+    // B-picture property. HEVC Main is the negotiated 8-bit 4:2:0 profile.
+    const UINT32 profile = hevc_ ? UINT32(eAVEncH265VProfile_Main_420_8)
+                                 : UINT32(eAVEncH264VProfile_Base);
+    output->SetUINT32(MF_MT_MPEG2_PROFILE, profile);
     MFSetAttributeSize(output.Get(), MF_MT_FRAME_SIZE, config_.init_width,
                        config_.init_height);
     MFSetAttributeRatio(output.Get(), MF_MT_FRAME_RATE, config_.max_frame_rate,
@@ -421,7 +425,7 @@ class WmfH264Encoder::Impl {
     if (FAILED(worker_.Status())) return worker_.Status();
     IMFActivate** activations = nullptr;
     UINT32 count = 0;
-    HRESULT hr = EnumerateEncoders(&activations, &count);
+    HRESULT hr = EnumerateEncoders(hevc_, &activations, &count);
     if (FAILED(hr)) return hr;
     hr = MF_E_TOPO_CODEC_NOT_FOUND;
     for (UINT32 i = 0; i < count; ++i) {
@@ -441,8 +445,8 @@ class WmfH264Encoder::Impl {
                                    : Configure(activations[i], false);
         }
         if (FAILED(hr)) {
-          LOG_DEBUG("Hardware H.264 MFT initialization failed: 0x{:08x}",
-                    static_cast<uint32_t>(hr));
+          LOG_DEBUG("Hardware {} MFT initialization failed: 0x{:08x}",
+                    hevc_ ? "H.265" : "H.264", static_cast<uint32_t>(hr));
           Reset();
           activations[i]->ShutdownObject();
         } else {
@@ -452,7 +456,8 @@ class WmfH264Encoder::Impl {
           char utf8[1024]{};
           WideCharToMultiByte(CP_UTF8, 0, name, -1, utf8, sizeof(utf8), nullptr,
                               nullptr);
-          LOG_INFO("Media Foundation hardware H.264 encoder: {}", utf8);
+          LOG_INFO("Media Foundation hardware {} encoder: {}",
+                   hevc_ ? "H.265" : "H.264", utf8);
           // The transform's lifetime is now owned by this codec.
           activations[i]->DetachObject();
         }
@@ -464,14 +469,22 @@ class WmfH264Encoder::Impl {
     return encoder_ ? S_OK : hr;
   }
 
-  void CacheHeaders(const uint8_t* data, size_t size) {
-    for (const auto& nalu : wmf::AnnexBNalus(data, size)) {
-      if (nalu.type != 7 && nalu.type != 8) continue;
-      auto& header = nalu.type == 7 ? sps_ : pps_;
+  unsigned CacheHeaders(const uint8_t* data,
+                        const std::vector<wmf::Nalu>& nalus,
+                        unsigned already_present = 0) {
+    // HEVC uses consecutive VPS/SPS/PPS types 32..34, AVC uses SPS/PPS 7..8.
+    unsigned present = 0;
+    for (const auto& nalu : nalus) {
+      const int index = nalu.type - (hevc_ ? 32 : 7);
+      if (index < 0 || index >= (hevc_ ? 3 : 2)) continue;
+      if (already_present & (1u << index)) continue;
+      present |= 1u << index;
+      auto& header = parameter_sets_[index];
       header = {0, 0, 0, 1};
       header.insert(header.end(), data + nalu.offset,
                     data + nalu.offset + nalu.size);
     }
+    return present;
   }
 
   HRESULT ReadFrame(IMFSample* sample, const RawFrame& raw,
@@ -479,31 +492,35 @@ class WmfH264Encoder::Impl {
     std::vector<uint8_t> bytes;
     HRESULT hr = wmf::ReadBytes(sample, bytes);
     if (FAILED(hr)) return hr;
-    if (wmf::AnnexBNalus(bytes.data(), bytes.size()).empty())
-      return MF_E_INVALID_STREAM_DATA;
-    const bool key = wmf::HasNalu(bytes.data(), bytes.size(), 5);
-    CacheHeaders(bytes.data(), bytes.size());
-    if (key && (sps_.empty() || pps_.empty())) {
+    const auto nalus = wmf::AnnexBNalus(bytes.data(), bytes.size(), hevc_);
+    if (nalus.empty()) return MF_E_INVALID_STREAM_DATA;
+    const bool key =
+        std::any_of(nalus.begin(), nalus.end(),
+                    [&](const auto& nalu) { return nalu.IsKeySlice(hevc_); });
+    const unsigned present = CacheHeaders(bytes.data(), nalus);
+    if (hevc_ && std::none_of(nalus.begin(), nalus.end(),
+                              [](const auto& nalu) { return nalu.type <= 31; }))
+      return S_FALSE;  // Parameter sets can precede the coded picture.
+    if (force_idr_ && !key) return MF_E_INVALID_STREAM_DATA;
+    const int count = hevc_ ? 3 : 2;
+    if (key && present != (1u << count) - 1) {
       ComPtr<IMFMediaType> type;
       UINT32 size = 0;
-      if (SUCCEEDED(encoder_->GetOutputCurrentType(output_id_, &type)) &&
+      if (std::any_of(parameter_sets_.begin(), parameter_sets_.begin() + count,
+                      [](const auto& header) { return header.empty(); }) &&
+          SUCCEEDED(encoder_->GetOutputCurrentType(output_id_, &type)) &&
           SUCCEEDED(type->GetBlobSize(MF_MT_MPEG_SEQUENCE_HEADER, &size))) {
         std::vector<uint8_t> header(size);
         if (SUCCEEDED(type->GetBlob(MF_MT_MPEG_SEQUENCE_HEADER, header.data(),
                                     size, nullptr)))
-          CacheHeaders(header.data(), header.size());
+          CacheHeaders(header.data(),
+                       wmf::AnnexBNalus(header.data(), size, hevc_), present);
       }
-    }
-    if (force_idr_ && !key) return MF_E_INVALID_STREAM_DATA;
-    if (key) {
-      if (sps_.empty() || pps_.empty()) return MF_E_INVALID_STREAM_DATA;
       std::vector<uint8_t> headers;
-      if (!wmf::HasNalu(bytes.data(), bytes.size(), 7) ||
-          !wmf::HasNalu(bytes.data(), bytes.size(), 8)) {
-        // Always prepend a complete ordered pair, including when the MFT
-        // emitted only one of the two parameter sets in this sample.
-        headers.insert(headers.end(), sps_.begin(), sps_.end());
-        headers.insert(headers.end(), pps_.begin(), pps_.end());
+      for (int i = 0; i < count; ++i) {
+        const auto& header = parameter_sets_[i];
+        if (header.empty()) return MF_E_INVALID_STREAM_DATA;
+        headers.insert(headers.end(), header.begin(), header.end());
       }
       bytes.insert(bytes.begin(), headers.begin(), headers.end());
     }
@@ -513,9 +530,11 @@ class WmfH264Encoder::Impl {
     frame.SetFrameType(key ? kVideoFrameKey : kVideoFrameDelta);
     frame.SetCapturedTimestamp(raw.CapturedTimestamp());
     frame.SetEncodedTimestamp(clock_->CurrentTime());
-    parser_.ParseBitstream(bytes.data(), bytes.size());
-    if (const auto qp = parser_.GetLastSliceQp())
-      frame.SetQp(*qp, 0, 51, false);
+    if (!hevc_) {
+      parser_.ParseBitstream(bytes.data(), bytes.size());
+      if (const auto qp = parser_.GetLastSliceQp())
+        frame.SetQp(*qp, 0, 51, false);
+    }
     frames.push_back(std::move(frame));
     if (buffer_control_requested_)
       ObserveBufferSize(config_.init_bitrate, key);
@@ -580,11 +599,17 @@ class WmfH264Encoder::Impl {
       ComPtr<IMFSample> output;
       hr = wmf::ReadOutput(encoder_.Get(), output_id_, output);
       if (hr == MF_E_TRANSFORM_STREAM_CHANGE) {
-        ComPtr<IMFMediaType> type;
-        hr = encoder_->GetOutputAvailableType(output_id_, 0, &type);
-        if (FAILED(hr)) return hr;
-        hr = encoder_->SetOutputType(output_id_, type.Get(), 0);
-        if (FAILED(hr)) return hr;
+        const GUID& codec = hevc_ ? MFVideoFormat_HEVC : MFVideoFormat_H264;
+        for (DWORD i = 0;; ++i) {
+          ComPtr<IMFMediaType> type;
+          hr = encoder_->GetOutputAvailableType(output_id_, i, &type);
+          if (FAILED(hr)) return hr;
+          GUID subtype{};
+          if (SUCCEEDED(type->GetGUID(MF_MT_SUBTYPE, &subtype)) &&
+              subtype == codec &&
+              SUCCEEDED(encoder_->SetOutputType(output_id_, type.Get(), 0)))
+            break;
+        }
         // An asynchronous MFT consumes the HaveOutput notification even
         // when it reports a format change. Wait for the next notification;
         // another ProcessOutput here fails with E_UNEXPECTED on Intel MFTs.
@@ -595,6 +620,7 @@ class WmfH264Encoder::Impl {
       if (SUCCEEDED(hr) && output) {
         hr = ReadFrame(output.Get(), raw, frames);
         if (FAILED(hr)) return hr;
+        if (hr == S_FALSE) continue;
         ++sequence_;
         return S_OK;
       }
@@ -606,6 +632,7 @@ class WmfH264Encoder::Impl {
 
   wmf::CodecThread worker_;
   std::shared_ptr<SystemClock> clock_;
+  const bool hevc_;
   MediaCodecConfig config_;
   ComPtr<IMFTransform> encoder_;
   ComPtr<MftEventReader> event_reader_;
@@ -627,29 +654,37 @@ class WmfH264Encoder::Impl {
   uint64_t sequence_ = 0;
   int input_frame_rate_ = 60;
   EncoderSampleClock sample_clock_;
-  std::vector<uint8_t> sps_, pps_;
+  std::array<std::vector<uint8_t>, 3> parameter_sets_;
   H264BitstreamParser parser_;
   std::unique_ptr<OpenH264Encoder> fallback_;
 };
 
-WmfH264Encoder::WmfH264Encoder(std::shared_ptr<SystemClock> clock)
-    : impl_(std::make_unique<Impl>(std::move(clock))) {}
-WmfH264Encoder::~WmfH264Encoder() = default;
+WmfVideoEncoder::WmfVideoEncoder(std::shared_ptr<SystemClock> clock,
+                                 VideoCodecType codec)
+    : impl_(std::make_unique<Impl>(std::move(clock), codec)) {}
+WmfVideoEncoder::~WmfVideoEncoder() = default;
 
-bool WmfH264Encoder::IsSupported() {
+bool WmfVideoEncoder::IsSupported(VideoCodecType codec) {
+  if (codec == VideoCodecType::H265) {
+    // A registered encoder may reject NV12 / Main or fail to start. Probe
+    // with the same initial configuration used by native sessions.
+    WmfVideoEncoder probe(std::make_shared<SystemClock>(), codec);
+    return probe.Init(MediaCodecConfig{}) == 0;
+  }
+  if (codec != VideoCodecType::H264) return false;
   wmf::CodecThread worker;
   if (FAILED(worker.Status())) return false;
   return worker.Call([] {
     IMFActivate** activations = nullptr;
     UINT32 count = 0;
-    const HRESULT hr = EnumerateEncoders(&activations, &count);
+    const HRESULT hr = EnumerateEncoders(false, &activations, &count);
     for (UINT32 i = 0; i < count; ++i) activations[i]->Release();
     CoTaskMemFree(activations);
     return SUCCEEDED(hr) && count > 0;
   });
 }
 
-int WmfH264Encoder::Init(const MediaCodecConfig& config) {
+int WmfVideoEncoder::Init(const MediaCodecConfig& config) {
   if (!ValidConfig(config)) return -1;
   return impl_->worker_.Call([&] {
     impl_->fallback_.reset();
@@ -662,7 +697,7 @@ int WmfH264Encoder::Init(const MediaCodecConfig& config) {
   });
 }
 
-int WmfH264Encoder::Encode(const RawFrame& raw,
+int WmfVideoEncoder::Encode(const RawFrame& raw,
                            std::function<int(const EncodedFrame&)> callback) {
   size_t size = 0;
   if (!raw.Buffer() || raw.Width() > 8192 || raw.Height() > 8192 ||
@@ -674,6 +709,13 @@ int WmfH264Encoder::Encode(const RawFrame& raw,
     if (!impl_->fallback_) {
       const HRESULT hr = impl_->EncodeHardware(raw, frames);
       if (SUCCEEDED(hr)) return 0;
+      if (impl_->hevc_) {
+        LOG_WARN("Media Foundation HEVC encoding failed (0x{:08x})",
+                 static_cast<uint32_t>(hr));
+        impl_->Reset();
+        impl_->reconfigure_ = true;
+        return -1;
+      }
       LOG_WARN(
           "Media Foundation hardware encoding failed (0x{:08x}); using "
           "OpenH264",
@@ -696,14 +738,14 @@ int WmfH264Encoder::Encode(const RawFrame& raw,
   return result;
 }
 
-int WmfH264Encoder::ForceIdr() {
+int WmfVideoEncoder::ForceIdr() {
   return impl_->worker_.Call([&] {
     impl_->force_idr_ = true;
     return impl_->fallback_ ? impl_->fallback_->ForceIdr() : 0;
   });
 }
 
-int WmfH264Encoder::SetTargetBitrate(int bitrate) {
+int WmfVideoEncoder::SetTargetBitrate(int bitrate) {
   if (bitrate <= 0) return -1;
   return impl_->worker_.Call([&] {
     bitrate = ClampEncoderTargetBitrate(bitrate, impl_->config_.max_bitrate);
@@ -722,7 +764,7 @@ int WmfH264Encoder::SetTargetBitrate(int bitrate) {
   });
 }
 
-int WmfH264Encoder::SetTargetFrameRate(int frame_rate) {
+int WmfVideoEncoder::SetTargetFrameRate(int frame_rate) {
   if (frame_rate <= 0 || frame_rate > 240) return -1;
   return impl_->worker_.Call([&] {
     if (impl_->fallback_) {
@@ -741,7 +783,7 @@ int WmfH264Encoder::SetTargetFrameRate(int frame_rate) {
   });
 }
 
-int WmfH264Encoder::SetInputFrameRate(int frame_rate) {
+int WmfVideoEncoder::SetInputFrameRate(int frame_rate) {
   if (frame_rate <= 0 || frame_rate > 240) return -1;
   return impl_->worker_.Call([&] {
     if (!impl_->initialized_) return -1;
@@ -757,7 +799,7 @@ int WmfH264Encoder::SetInputFrameRate(int frame_rate) {
   });
 }
 
-int WmfH264Encoder::GetResolution(int* width, int* height) const {
+int WmfVideoEncoder::GetResolution(int* width, int* height) const {
   if (!width || !height) return -1;
   return impl_->worker_.Call([&] {
     if (impl_->fallback_) return impl_->fallback_->GetResolution(width, height);
@@ -768,10 +810,11 @@ int WmfH264Encoder::GetResolution(int* width, int* height) const {
   });
 }
 
-std::string WmfH264Encoder::GetEncoderName() const {
+std::string WmfVideoEncoder::GetEncoderName() const {
   return impl_->worker_.Call([&]() -> std::string {
-    return impl_->fallback_ ? impl_->fallback_->GetEncoderName()
-                            : "Media Foundation (H.264, HW)";
+    if (impl_->fallback_) return impl_->fallback_->GetEncoderName();
+    return impl_->hevc_ ? "Media Foundation (H.265, HW)"
+                        : "Media Foundation (H.264, HW)";
   });
 }
 }  // namespace minirtc
