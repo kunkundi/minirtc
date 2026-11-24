@@ -140,8 +140,8 @@ class NvidiaNativeNv12Frame final {
 }  // namespace
 
 NvidiaVideoDecoder::NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock,
-                                       bool native_video_output)
-    : clock_(std::move(clock)),
+                                       bool native_video_output, VideoCodecType codec)
+    : clock_(std::move(clock)), codec_(codec),
       native_video_output_(native_video_output) {}
 NvidiaVideoDecoder::~NvidiaVideoDecoder() {
 #ifdef SAVE_DECODED_NV12_STREAM
@@ -186,7 +186,8 @@ int NvidiaVideoDecoder::Init() {
   }
 
   state_->decoder = std::make_unique<NvDecoder>(
-      state_->cuda_context, native_video_output_, cudaVideoCodec_H264, true,
+      state_->cuda_context, native_video_output_,
+      codec_ == VideoCodecType::H265 ? cudaVideoCodec_HEVC : cudaVideoCodec_H264, true,
       false, nullptr, nullptr, 4096, 4096, 1000, false);
 
   if (!decoded_frame_ && !native_video_output_) {
@@ -247,6 +248,7 @@ int NvidiaVideoDecoder::Decode(
   } catch (const NVDECException& error) {
     LOG_WARN("NVDEC runtime failure, code={}: {}",
              static_cast<int>(error.getErrorCode()), error.what());
+    if (codec_ != VideoCodecType::H264) return -1;
     auto software = std::make_unique<OpenH264Decoder>(clock_, native_video_output_);
     if (software->Init() != 0) {
       LOG_ERROR("OpenH264 runtime fallback initialization failed");
@@ -264,6 +266,10 @@ int NvidiaVideoDecoder::Decode(
   }
   for (size_t i = 0; i < num_frame_returned; ++i) {
     cudaVideoSurfaceFormat format = state_->decoder->GetOutputFormat();
+    if (codec_ == VideoCodecType::H265 && format != cudaVideoSurfaceFormat_NV12) {
+      LOG_ERROR("NVDEC H.265 stream does not use 8-bit NV12");
+      return -1;
+    }
     if (format == cudaVideoSurfaceFormat_NV12) {
       NvDecoder::FrameTiming timing;
       uint8_t* decoded_frame_buffer =

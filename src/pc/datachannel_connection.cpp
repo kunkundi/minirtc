@@ -29,7 +29,7 @@ DataChannelConnection::DataChannelConnection(
       media_stream_ids_(media_stream_ids),
       callbacks_(callbacks) {
   // disable av1 encoding
-  info_.av1_encoding = false;
+  info_.video_codec = MiniRtcVideoCodec::H264;
   InitLogger(SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG ? ::rtc::LogLevel::Debug
                                                     : ::rtc::LogLevel::Info,
              [](::rtc::LogLevel level, std::string message) {

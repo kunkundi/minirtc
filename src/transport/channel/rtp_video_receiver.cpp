@@ -112,6 +112,7 @@ RtpVideoReceiver::~RtpVideoReceiver() {
 
   incomplete_h264_frame_list_.clear();
   incomplete_av1_frame_list_.clear();
+  incomplete_h265_packets_.clear();
   incomplete_frame_list_.clear();
 
   {
@@ -131,7 +132,7 @@ RtpVideoReceiver::~RtpVideoReceiver() {
 bool RtpVideoReceiver::RestoreMediaPacketFromRtx(RtpPacket& rtx_packet,
                                                  RtpPacket* media_packet) {
   const uint32_t media_ssrc = remote_ssrc_.load();
-  if (!media_packet || rtx_packet.PayloadType() != rtp::PAYLOAD_TYPE::RTX ||
+  if (!media_packet || rtx_packet.PayloadType() != rtp::VideoRtxPayloadType(media_payload_type_) ||
       rtx_packet.PayloadSize() < 2 || rtx_packet.HeaderSize() < kFixedHeaderSize ||
       media_ssrc == 0 || media_payload_type_ == rtp::PAYLOAD_TYPE::UNDEFINED ||
       media_payload_type_ == rtp::PAYLOAD_TYPE::RTX) {
@@ -295,7 +296,7 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& packet) {
   // FEC, RTX and padding share the auxiliary sequence space. Report actual
   // arrivals, including late repairs, so successful RTX is not misreported as
   // loss between two repair packets. Reconstructed media is never fed to BWE.
-  const bool actual_rtx = packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX &&
+  const bool actual_rtx = packet.PayloadType() == rtp::VideoRtxPayloadType(media_payload_type_) &&
                           rtx_ssrc_.load() != 0 && packet.Ssrc() == rtx_ssrc_.load();
   if (repair || actual_rtx) {
     webrtc::RtpPacketReceived received;
@@ -319,7 +320,7 @@ void RtpVideoReceiver::InsertRtpPacket(RtpPacket& packet) {
 
 void RtpVideoReceiver::InsertMediaPacket(RtpPacket& rtp_packet,
                                          bool fec_recovered) {
-  const bool is_rtx = rtp_packet.PayloadType() == rtp::PAYLOAD_TYPE::RTX;
+  const bool is_rtx = rtp_packet.PayloadType() == rtp::VideoRtxPayloadType(media_payload_type_);
   const bool is_recovered = fec_recovered || is_rtx;
   const uint32_t negotiated_rtx_ssrc = rtx_ssrc_.load();
   if (is_rtx &&
@@ -486,7 +487,10 @@ void RtpVideoReceiver::InsertMediaPacket(RtpPacket& rtp_packet,
     return;
   }
 
-  if (payload_type == rtp::PAYLOAD_TYPE::AV1) {
+  if (payload_type == rtp::H265) {
+    std::lock_guard<std::mutex> lock(frame_assembly_mtx_);
+    ProcessH265RtpPacket(*media_packet);
+  } else if (payload_type == rtp::PAYLOAD_TYPE::AV1) {
     RtpPacketAv1 rtp_packet_av1;
     if (!rtp_packet_av1.Build(media_packet->Buffer().data(),
                               media_packet->Size()) ||
@@ -523,6 +527,67 @@ void RtpVideoReceiver::InsertMediaPacket(RtpPacket& rtp_packet,
       ProcessH264RtpPacket(rtp_packet_h264);
     }
   }
+}
+
+void RtpVideoReceiver::ProcessH265RtpPacket(RtpPacket& packet) {
+  const uint8_t* payload = packet.Payload();
+  const size_t size = packet.PayloadSize();
+  if (size < 3 || (payload[0] & 0x80) || !(payload[1] & 7)) return;
+  const uint8_t type = (payload[0] >> 1) & 63;
+  const bool fu = type == 49;
+  if (type >= 48 && !fu) return;
+  if (fu &&
+      (size < 4 || (payload[2] & 63) >= 48 || (payload[2] & 0xc0) == 0xc0))
+    return;
+  const uint32_t ts = packet.Timestamp();
+  const uint16_t seq = packet.SequenceNumber();
+  const uint8_t nal_type = fu ? payload[2] & 63 : type;
+  TrackPendingFramePacket(ts, seq, nal_type >= 16 && nal_type <= 21);
+  incomplete_h265_packets_[seq] = packet;
+  if (type == 35) fua_start_sequence_numbers_[ts] = seq;
+  if (packet.Marker()) fua_end_sequence_numbers_[ts] = seq;
+
+  uint16_t start, end;
+  uint32_t count;
+  if (!GetFrameSequenceRange(ts, "H265", &start, &end, &count)) return;
+  size_t capacity = 0;
+  for (uint32_t i = 0; i < count; ++i) {
+    auto it = incomplete_h265_packets_.find(SequenceNumberAt(start, i));
+    if (it == incomplete_h265_packets_.end() || it->second.Timestamp() != ts)
+      return;
+    capacity += it->second.PayloadSize() + 4;
+  }
+
+  std::vector<uint8_t> frame;
+  frame.reserve(capacity);
+  bool keyframe = false;
+  std::optional<uint16_t> open_fu;
+  for (uint32_t i = 0; i < count; ++i) {
+    auto& part = incomplete_h265_packets_.at(SequenceNumberAt(start, i));
+    const auto* data = part.Payload();
+    size_t length = part.PayloadSize();
+    const bool fragment = ((data[0] >> 1) & 63) == 49;
+    const uint8_t nal = fragment ? data[2] & 63 : (data[0] >> 1) & 63;
+    const bool starts_nal = !fragment || (data[2] & 0x80);
+    const uint8_t header = (data[0] & 0x81) | (nal << 1);
+    const uint16_t identity = (header << 8) | data[1];
+    if (starts_nal) {
+      if (open_fu) return;
+      frame.insert(frame.end(), {0, 0, 0, 1, header, data[1]});
+      keyframe |= nal >= 16 && nal <= 21;
+      if (fragment) open_fu = identity;
+    } else if (open_fu != identity) {
+      return;
+    }
+    if (fragment && (data[2] & 0x40)) open_fu.reset();
+    frame.insert(frame.end(), data + (fragment ? 3 : 2), data + length);
+  }
+  if (open_fu) return;
+  for (uint32_t i = 0; i < count; ++i)
+    incomplete_h265_packets_.erase(SequenceNumberAt(start, i));
+  ClearFrameMarkers(ts);
+  CommitPendingFrame(ts, CreateReceivedFrame(frame.data(), frame.size(), ts),
+                     keyframe, end, true);
 }
 
 void RtpVideoReceiver::ProcessH264RtpPacket(RtpPacketH264& rtp_packet_h264) {
@@ -1055,6 +1120,10 @@ void RtpVideoReceiver::DropFrameAssembly(uint32_t timestamp) {
     } else {
       ++it;
     }
+  }
+  for (auto it = incomplete_h265_packets_.begin(); it != incomplete_h265_packets_.end();) {
+    if (it->second.Timestamp() == timestamp) it = incomplete_h265_packets_.erase(it);
+    else ++it;
   }
   for (auto it = incomplete_av1_frame_list_.begin();
        it != incomplete_av1_frame_list_.end();) {

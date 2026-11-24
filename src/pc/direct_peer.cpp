@@ -67,7 +67,7 @@ int PeerConnection::InitDirect(PeerConnectionParams params,
   connection_info_.turn_mode = MiniRtcTurnMode::MiniRtcTurnDisabled;
   connection_info_.enable_srtp = true;
   connection_info_.video_content_type = params.video_content_type;
-  connection_info_.av1_encoding = params.av1_encoding;
+  connection_info_.video_codec = params.video_codec;
   connection_info_.video_quality = params.video_quality;
   connection_info_.video_frame_rate = params.video_frame_rate == 30 ? 30 : 60;
   connection_info_.video_degradation_preference =

@@ -99,6 +99,7 @@ class RtpVideoReceiver : public ThreadBase {
 
  private:
   void InsertMediaPacket(RtpPacket& packet, bool fec_recovered = false);
+  void ProcessH265RtpPacket(RtpPacket& packet);
   void ProcessAv1RtpPacket(RtpPacketAv1& rtp_packet_av1);
   bool CheckIsAv1FrameCompleted(RtpPacketAv1& rtp_packet_av1);
 
@@ -173,6 +174,7 @@ class RtpVideoReceiver : public ThreadBase {
 
  private:
   std::map<uint16_t, RtpPacketH264> incomplete_h264_frame_list_;
+  std::map<uint16_t, RtpPacket> incomplete_h265_packets_;
   std::map<uint16_t, RtpPacketAv1> incomplete_av1_frame_list_;
   std::map<uint16_t, RtpPacket> incomplete_frame_list_;
   uint8_t* nv12_data_ = nullptr;

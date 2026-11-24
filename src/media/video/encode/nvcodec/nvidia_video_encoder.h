@@ -14,7 +14,8 @@ namespace minirtc {
 
 class NvidiaVideoEncoder : public MediaCodec {
  public:
-  NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock);
+  NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock,
+                     VideoCodecType codec = VideoCodecType::H264);
   virtual ~NvidiaVideoEncoder();
 
   int Init(const MediaCodecConfig& config) override;
@@ -56,7 +57,10 @@ class NvidiaVideoEncoder : public MediaCodec {
     return 0;
   }
 
-  std::string GetEncoderName() const override { return "NVENC (H.264)"; }
+  std::string GetEncoderName() const override {
+    return codec_guid_ == NV_ENC_CODEC_HEVC_GUID ? "NVENC (H.265)"
+                                                 : "NVENC (H.264)";
+  }
 
  private:
   void ReleaseEncoderResources();
@@ -73,7 +77,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   std::atomic<int64_t> last_submit_us_{0};
 #endif
 
-  GUID codec_guid_ = NV_ENC_CODEC_H264_GUID;
+  const GUID codec_guid_;
   GUID preset_guid_ = NV_ENC_PRESET_P7_GUID;
   NV_ENC_TUNING_INFO tuning_info_ =
       NV_ENC_TUNING_INFO::NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;

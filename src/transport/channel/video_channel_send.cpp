@@ -185,7 +185,7 @@ void VideoChannelSend::OnSentRtpPacket(
     if (packet->retransmitted_sequence_number()) {
       rtp_packet_history_.MarkPacketAsSent(
           packet->retransmitted_sequence_number().value());
-    } else if (packet->PayloadType() != rtp::PAYLOAD_TYPE::H264 - 1) {
+    } else if (packet->packet_type() == webrtc::RtpPacketMediaType::kVideo) {
       rtp_packet_history_.PutRtpPacket(std::move(packet),
                                        clock_->CurrentTime());
     }
@@ -435,7 +435,7 @@ int32_t VideoChannelSend::ReSendPacket(uint16_t packet_id) {
             const uint16_t original_sequence_number =
                 stored_packet.SequenceNumber();
             retransmit_packet->SetSsrc(rtx_ssrc_);
-            retransmit_packet->SetPayloadType(rtp::PAYLOAD_TYPE::RTX);
+            retransmit_packet->SetPayloadType(rtp::VideoRtxPayloadType(stored_packet.PayloadType()));
             retransmit_packet->set_retransmitted_sequence_number(
                 original_sequence_number);
             retransmit_packet->set_original_ssrc(stored_packet.Ssrc());

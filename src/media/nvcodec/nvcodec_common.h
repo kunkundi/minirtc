@@ -48,7 +48,9 @@ void ParseCommandLine(int argc, char *argv[], char *szInputFileName,
 
 bool CheckIsCudaEncodeSupported();
 
-bool CheckIsCudaDecodeSupported();
+bool CheckIsCudaHevcEncodeSupported();
+
+bool CheckIsCudaDecodeSupported(cudaVideoCodec codec = cudaVideoCodec_H264);
 
 }  // namespace minirtc
 #endif

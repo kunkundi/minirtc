@@ -14,7 +14,7 @@
 
 ## 核心能力
 
-- **媒体传输：** H.264 / AV1 视频、Opus 音频、多媒体流和面向指定 Peer 的发送接口。
+- **媒体传输：** H.264、H.265 和 AV1 视频、Opus 音频、多媒体流和面向指定 Peer 的发送接口。
 - **连接与穿透：** WSS 信令、ICE / STUN、TURN UDP / TCP、动态 TURN 凭据，以及可用网关上的 UPnP 映射。
 - **网络自适应：** SRTP、RTP / RTCP、NACK 重传、带宽估计、拥塞控制，以及帧率 / 分辨率降级策略。
 - **数据传输：** 可靠与非可靠数据流；键鼠、剪贴板、文件等数据的序列化与业务处理由应用实现。
@@ -28,12 +28,14 @@
 
 | 平台 | 编码 | 解码 |
 | --- | --- | --- |
-| Windows x64 / Linux x86-64 | H.264：CUDA NVENC 或 OpenH264；AV1：SVT-AV1 | H.264：CUDA NVDEC 或 OpenH264；AV1：dav1d |
+| Windows x64 / Linux x86-64 | H.264：CUDA NVENC 或 OpenH264；H.265：NVENC；AV1：SVT-AV1 | H.264：CUDA NVDEC 或 OpenH264；H.265：NVDEC；AV1：dav1d |
 | Linux arm64 | H.264：OpenH264；AV1：SVT-AV1 | H.264：OpenH264；AV1：dav1d |
 | macOS | H.264：VideoToolbox 或 OpenH264；AV1：SVT-AV1 | H.264：VideoToolbox 或 OpenH264；AV1：dav1d |
 | iOS | H.264：VideoToolbox；AV1：SVT-AV1 | H.264：VideoToolbox；AV1：dav1d |
 | Android arm64 | H.264 / AV1：MediaCodec，失败回退 OpenH264 / SVT-AV1 | H.264 / AV1：MediaCodec，失败回退 OpenH264 / dav1d |
 | HarmonyOS arm64（开发版） | H.264：OpenH264；AV1：SVT-AV1 | H.264 / AV1 原生解码，失败回退 OpenH264 / dav1d |
+
+原生连接可通过 `MiniRtcCreatePeerWithVideoCodec` 或 `MiniRtcUpdateConnectionSettingsWithCodec` 传入 `MiniRtcVideoCodec::H265`，优先使用 HEVC Main（8 位 4:2:0）。双方均需启用 CUDA 构建且显卡同时支持 HEVC 编码和解码。默认使用 H.264，与旧版对端协商时也可回退到 H.264。
 
 硬件路径要求 `hardware_acceleration=true`，并受构建配置和设备能力影响。iOS 不构建 OpenH264，真机 H.264 依赖 VideoToolbox；模拟器解码路径可使用 VideoToolbox 软件实现，但不代表所有模拟器配置都已验证。Apple 平台 AV1 仍使用软件路径；可选 libaom 后端不替代默认 AV1 工厂。
 

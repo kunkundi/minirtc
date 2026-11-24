@@ -9,21 +9,15 @@
 
 #if defined(_WIN32) || defined(_WIN64)
 #include "wmf/wmf_h264_encoder.h"
-#if USE_CUDA
-#include "nvcodec/nvidia_video_encoder.h"
-#endif
 #elif defined(__APPLE__)
 #include "video_toolbox/video_toolbox_encoder.h"
-#elif defined(__linux__)
-#if (defined(__x86_64__) || defined(__amd64__)) && USE_CUDA
-#include "nvcodec/nvidia_video_encoder.h"
-#elif defined(__aarch64__) || defined(__arm64__)
-// use software encoder
-#else
-// use software encoder
 #endif
+
+#if USE_CUDA && (defined(_WIN32) || (defined(__linux__) && defined(__x86_64__)))
+#define MINIRTC_HAS_CUDA_ENCODER 1
+#include "nvcodec/nvidia_video_encoder.h"
 #else
-// use software encoder
+#define MINIRTC_HAS_CUDA_ENCODER 0
 #endif
 
 #if defined(__ANDROID__)
@@ -64,6 +58,13 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
     return std::make_unique<AndroidVideoEncoder>(clock, codec_type);
   }
 #endif
+  if (codec_type == VideoCodecType::H265) {
+#if MINIRTC_HAS_CUDA_ENCODER
+    if (hardware_acceleration && CheckIsHardwareAccelerationSupported(codec_type))
+      return std::make_unique<NvidiaVideoEncoder>(clock, codec_type);
+#endif
+    return nullptr;
+  }
   if (codec_type == VideoCodecType::AV1) {
     LOG_INFO("Using the SVT-AV1 software encoder");
     return std::make_unique<SvtAv1Encoder>(clock);
@@ -103,7 +104,7 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
 #if USE_CUDA
   if (hardware_acceleration) {
     if (CheckIsHardwareAccelerationSupported(VideoCodecType::H264)) {
-      return std::make_unique<NvidiaVideoEncoder>(NvidiaVideoEncoder(clock));
+      return std::make_unique<NvidiaVideoEncoder>(clock);
     } else {
       return nullptr;
     }
@@ -163,6 +164,13 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
 
 bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
+  if (codec_type == VideoCodecType::H265) {
+#if MINIRTC_HAS_CUDA_ENCODER
+    return CheckIsCudaHevcEncodeSupported();
+#else
+    return false;
+#endif
+  }
 #if defined(__ANDROID__)
   return !FindAndroidCodecs(codec_type, true).empty();
 #else

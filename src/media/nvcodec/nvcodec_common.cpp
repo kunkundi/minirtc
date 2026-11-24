@@ -138,8 +138,34 @@ bool CheckIsCudaEncodeSupported() {
   return true;
 }
 
-bool CheckIsCudaDecodeSupported() {
-  static std::optional<bool> cached_result;
+bool CheckIsCudaHevcEncodeSupported() {
+  static const bool supported = [] {
+    if (!CheckIsCudaEncodeSupported()) return false;
+    CUdevice device;
+    CUcontext context;
+    if (cuDeviceGet_ld(&device, 0) != CUDA_SUCCESS ||
+        cuCtxCreate_ld(&context, 0, device) != CUDA_SUCCESS)
+      return false;
+    bool available = false;
+    try {
+      NvEncoderCuda encoder(context, 1920, 1080, NV_ENC_BUFFER_FORMAT_NV12, 0);
+      available = encoder.GetCapabilityValue(NV_ENC_CODEC_HEVC_GUID,
+                                             NV_ENC_CAPS_WIDTH_MAX) >= 1920 &&
+                  encoder.GetCapabilityValue(NV_ENC_CODEC_HEVC_GUID,
+                                             NV_ENC_CAPS_HEIGHT_MAX) >= 1080;
+    } catch (const std::exception& error) {
+      LOG_WARN("HEVC encode capability query failed: {}", error.what());
+    }
+    cuCtxDestroy_ld(context);
+    return available;
+  }();
+  return supported;
+}
+
+bool CheckIsCudaDecodeSupported(cudaVideoCodec codec) {
+  if (codec != cudaVideoCodec_H264 && codec != cudaVideoCodec_HEVC) return false;
+  static std::optional<bool> h264, hevc;
+  auto& cached_result = codec == cudaVideoCodec_HEVC ? hevc : h264;
   static std::mutex mtx_decoder;
 
   std::lock_guard<std::mutex> lock(mtx_decoder);
@@ -181,7 +207,7 @@ bool CheckIsCudaDecodeSupported() {
   }
 
   CUVIDDECODECAPS caps{};
-  caps.eCodecType = cudaVideoCodec_H264;
+  caps.eCodecType = codec;
   caps.eChromaFormat = cudaVideoChromaFormat_420;
   caps.nBitDepthMinus8 = 0;
   const CUresult capability_result = cuvidGetDecoderCaps_ld(&caps);

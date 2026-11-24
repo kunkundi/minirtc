@@ -837,9 +837,10 @@ int NvEncoder::GetCapabilityValue(GUID guidCodec, NV_ENC_CAPS capsToQuery) {
   }
   NV_ENC_CAPS_PARAM capsParam = {NV_ENC_CAPS_PARAM_VER};
   capsParam.capsToQuery = capsToQuery;
-  int v;
-  m_nvenc.nvEncGetEncodeCaps(m_hEncoder, guidCodec, &capsParam, &v);
-  return v;
+  int value = 0;
+  NVENCSTATUS status = m_nvenc.nvEncGetEncodeCaps(m_hEncoder, guidCodec,
+                                                  &capsParam, &value);
+  return status == NV_ENC_SUCCESS ? value : 0;
 }
 
 int NvEncoder::GetFrameSize() const {

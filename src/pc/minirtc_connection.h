@@ -72,6 +72,7 @@ class MiniRtcConnection : public ConnectionInterface {
   bool try_rejoin_with_turn_ = false;
   int reconnect_count_ = 0;
 
+  rtp::PAYLOAD_TYPE preferred_video_pt_ = rtp::H264;
   std::vector<int> video_payload_types_ = {rtp::PAYLOAD_TYPE::H264,
                                            rtp::PAYLOAD_TYPE::AV1};
   std::vector<int> audio_payload_types_ = {rtp::PAYLOAD_TYPE::OPUS};

@@ -47,10 +47,7 @@ using EncodedAudioCallback =
     std::function<int(char* encoded_audio_buffer, size_t size,
                       uint32_t samples_per_channel)>;
 
-enum class VideoCodecType : uint8_t {
-  H264 = 0,
-  AV1 = 1,
-};
+using VideoCodecType = MiniRtcVideoCodec;
 
 class MediaCodecConfig {
  public:

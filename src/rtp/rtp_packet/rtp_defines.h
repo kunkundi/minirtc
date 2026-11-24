@@ -22,12 +22,18 @@ typedef enum {
   H264_FEC_SOURCE = 97,
   H264_FEC_REPAIR = 98,
   AV1 = 99,
+  H265 = 101,  // 100 is reserved for H.265 padding probes.
+  H265_RTX = 126,
   OPUS = 111,
   RS_FEC = 122,
   RTX = 127,
   DATA = 120,
   KCP = 121
 } PAYLOAD_TYPE;
+
+inline PAYLOAD_TYPE VideoRtxPayloadType(int media_pt) {
+  return media_pt == H265 ? H265_RTX : RTX;
+}
 
 typedef struct {
   uint8_t forbidden_bit : 1;

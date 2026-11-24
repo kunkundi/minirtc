@@ -9,8 +9,11 @@
 
 namespace minirtc {
 
-NvidiaVideoEncoder::NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock)
-    : clock_(clock) {}
+NvidiaVideoEncoder::NvidiaVideoEncoder(std::shared_ptr<SystemClock> clock,
+                                     VideoCodecType codec)
+    : clock_(std::move(clock)),
+      codec_guid_(codec == VideoCodecType::H265 ? NV_ENC_CODEC_HEVC_GUID
+                                                : NV_ENC_CODEC_H264_GUID) {}
 NvidiaVideoEncoder::~NvidiaVideoEncoder() {
 #ifdef SAVE_RECEIVED_NV12_STREAM
   if (file_nv12_) {
@@ -72,18 +75,17 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
   try {
     if (LoadNvEncodeApi() != 0 || !CudaInitializer::Init()) return -1;
     int num_of_gpu = 0;
-    ck(cuDeviceGetCount_ld(&num_of_gpu));
+    if (cuDeviceGetCount_ld(&num_of_gpu) != CUDA_SUCCESS) return -1;
     if (index_of_gpu_ < 0 || index_of_gpu_ >= num_of_gpu) {
-      LOG_ERROR("GPU ordinal out of range. Should be within [0-{}]");
+      LOG_ERROR("CUDA device {} unavailable ({} devices)", index_of_gpu_, num_of_gpu);
       return -1;
     }
 
-    ck(cuDeviceGet_ld(&cuda_device_, index_of_gpu_));
-    char device_name[80];
-    ck(cuDeviceGetName_ld(device_name, sizeof(device_name), cuda_device_));
-    LOG_INFO("H.264 encoder using [{}]", device_name);
-    LOG_INFO("H.264 encoder preset [P1] tuning [ULTRA_LOW_LATENCY]");
-    ck(cuCtxCreate_ld(&cuda_context_, 0, cuda_device_));
+    if (cuDeviceGet_ld(&cuda_device_, index_of_gpu_) != CUDA_SUCCESS) return -1;
+    char device_name[80]{};
+    cuDeviceGetName_ld(device_name, sizeof(device_name), cuda_device_);
+    LOG_INFO("{} using [{}], preset P1, ultra-low latency", GetEncoderName(), device_name);
+    if (cuCtxCreate_ld(&cuda_context_, 0, cuda_device_) != CUDA_SUCCESS) return -1;
 
     encoder_ = new NvEncoderCuda(cuda_context_, frame_width_, frame_height_,
                                  buffer_format_, 0, false, false);
@@ -94,22 +96,22 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
     encoder_->CreateDefaultEncoderParams(&init_params, codec_guid_,
                                          preset_guid_, tuning_info_);
 
-    frame_width_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    frame_width_max_ = encoder_->GetCapabilityValue(codec_guid_,
                                                     NV_ENC_CAPS_WIDTH_MAX);
-    frame_height_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    frame_height_max_ = encoder_->GetCapabilityValue(codec_guid_,
                                                      NV_ENC_CAPS_HEIGHT_MAX);
-    // frame_width_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    // frame_width_min_ = encoder_->GetCapabilityValue(codec_guid_,
     //                                                 NV_ENC_CAPS_WIDTH_MIN);
-    // frame_height_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    // frame_height_min_ = encoder_->GetCapabilityValue(codec_guid_,
     //                                                  NV_ENC_CAPS_HEIGHT_MIN);
-    encode_level_max_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    encode_level_max_ = encoder_->GetCapabilityValue(codec_guid_,
                                                      NV_ENC_CAPS_LEVEL_MAX);
-    encode_level_min_ = encoder_->GetCapabilityValue(NV_ENC_CODEC_H264_GUID,
+    encode_level_min_ = encoder_->GetCapabilityValue(codec_guid_,
                                                      NV_ENC_CAPS_LEVEL_MIN);
     support_dynamic_resolution_ = encoder_->GetCapabilityValue(
-        NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_DYN_RES_CHANGE);
+        codec_guid_, NV_ENC_CAPS_SUPPORT_DYN_RES_CHANGE);
     support_dynamic_bitrate_ = encoder_->GetCapabilityValue(
-        NV_ENC_CODEC_H264_GUID, NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
+        codec_guid_, NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
 
     init_params.encodeWidth = frame_width_;
     init_params.encodeHeight = frame_height_;
@@ -124,14 +126,14 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
 
     encodeConfig.gopLength = key_frame_interval_;
     encodeConfig.frameIntervalP = 1;
-    encodeConfig.encodeCodecConfig.h264Config.idrPeriod = key_frame_interval_;
     encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
     // encodeConfig.rcParams.constQP.qpIntra = 20;
     // encodeConfig.rcParams.constQP.qpInterP = 23;
     // encodeConfig.rcParams.constQP.qpInterB = 25;
     encodeConfig.rcParams.enableAQ = 1;          // enable AQ
     encodeConfig.rcParams.aqStrength = 8;        // 4~8
-    encodeConfig.rcParams.enableTemporalAQ = 1;  // good for static area
+    encodeConfig.rcParams.enableTemporalAQ = encoder_->GetCapabilityValue(
+        codec_guid_, NV_ENC_CAPS_SUPPORT_TEMPORAL_AQ) != 0;
     encodeConfig.rcParams.enableMinQP = 1;
     encodeConfig.rcParams.enableMaxQP = 1;
     encodeConfig.rcParams.minQP.qpIntra = 18;
@@ -150,24 +152,35 @@ int NvidiaVideoEncoder::Init(const MediaCodecConfig& config) {
     // enable adaptive quantization (Spatial)
     // encodeConfig.rcParams.enableAQ = false;
     encodeConfig.rcParams.enableLookahead = 0;
-    encodeConfig.encodeCodecConfig.h264Config.idrPeriod =
-        encodeConfig.gopLength;
-    encodeConfig.encodeCodecConfig.h264Config.level = NV_ENC_LEVEL_H264_52;
-    encodeConfig.encodeCodecConfig.h264Config.disableSPSPPS = 0;
-    encodeConfig.encodeCodecConfig.h264Config.repeatSPSPPS = 1;
+    if (codec_guid_ == NV_ENC_CODEC_HEVC_GUID) {
+      auto& hevc = encodeConfig.encodeCodecConfig.hevcConfig;
+      encodeConfig.profileGUID = NV_ENC_HEVC_PROFILE_MAIN_GUID;
+      hevc.chromaFormatIDC = 1;
+      hevc.pixelBitDepthMinus8 = 0;
+      hevc.idrPeriod = encodeConfig.gopLength;
+      hevc.disableSPSPPS = 0;
+      hevc.repeatSPSPPS = 1;
+      hevc.outputAUD = 1;
+    } else {
+      auto& h264 = encodeConfig.encodeCodecConfig.h264Config;
+      h264.idrPeriod = encodeConfig.gopLength;
+      h264.level = NV_ENC_LEVEL_H264_52;
+      h264.disableSPSPPS = 0;
+      h264.repeatSPSPPS = 1;
+    }
 
     encoder_->CreateEncoder(&init_params);
   } catch (const NVENCException& exception) {
-    LOG_ERROR("NVENC H.264 encoder init failed, status=[{}]: {}",
+    LOG_ERROR("NVENC encoder init failed, status=[{}]: {}",
               static_cast<int>(exception.getErrorCode()), exception.what());
     ReleaseEncoderResources();
     return -1;
   } catch (const std::exception& exception) {
-    LOG_ERROR("NVENC H.264 encoder init failed: {}", exception.what());
+    LOG_ERROR("NVENC encoder init failed: {}", exception.what());
     ReleaseEncoderResources();
     return -1;
   } catch (...) {
-    LOG_ERROR("NVENC H.264 encoder init failed with an unknown exception");
+    LOG_ERROR("NVENC encoder init failed with an unknown exception");
     ReleaseEncoderResources();
     return -1;
   }
@@ -220,10 +233,9 @@ int NvidiaVideoEncoder::Encode(
 
   if (raw_frame.Width() != frame_width_ ||
       raw_frame.Height() != frame_height_) {
-    if (support_dynamic_resolution_) {
-      if (0 != ResetEncodeResolution(raw_frame.Width(), raw_frame.Height())) {
-        return -1;
-      }
+    if (!support_dynamic_resolution_ ||
+        ResetEncodeResolution(raw_frame.Width(), raw_frame.Height()) != 0) {
+      return -1;
     }
   }
 
@@ -389,9 +401,6 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
     return -1;
   }
 
-  frame_width_ = width;
-  frame_height_ = height;
-
   NV_ENC_RECONFIGURE_PARAMS reconfig_params;
   memset(&reconfig_params, 0, sizeof(reconfig_params));
   reconfig_params.version = NV_ENC_RECONFIGURE_PARAMS_VER;
@@ -401,8 +410,8 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
   encoder_->GetInitializeParams(&init_params);
 
   reconfig_params.reInitEncodeParams = init_params;
-  reconfig_params.reInitEncodeParams.encodeWidth = frame_width_;
-  reconfig_params.reInitEncodeParams.encodeHeight = frame_height_;
+  reconfig_params.reInitEncodeParams.encodeWidth = width;
+  reconfig_params.reInitEncodeParams.encodeHeight = height;
   // reconfig_params.reInitEncodeParams.darWidth =
   //     reconfig_params.reInitEncodeParams.encodeWidth;
   // reconfig_params.reInitEncodeParams.darHeight =
@@ -414,6 +423,8 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
     return -1;
   }
 
+  frame_width_ = width;
+  frame_height_ = height;
   // The resolution reconfigure itself requests an IDR. Record that guarantee
   // so the first packet at the new dimensions is labelled as a key frame.
   next_frame_is_key_ = true;

@@ -74,6 +74,13 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
                                                  native_video_output);
   }
 #endif
+  if (codec_type == VideoCodecType::H265) {
+#if MINIRTC_HAS_CUDA_DECODER
+    if (hardware_acceleration && CheckIsHardwareAccelerationSupported(codec_type))
+      return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output, codec_type);
+#endif
+    return nullptr;
+  }
   if (codec_type == VideoCodecType::AV1) {
     if (hardware_acceleration) {
       LOG_INFO(
@@ -164,6 +171,13 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateInitializedVideoDecoder(
 
 bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
     VideoCodecType codec_type) {
+  if (codec_type == VideoCodecType::H265) {
+#if MINIRTC_HAS_CUDA_DECODER
+    return CheckIsCudaDecodeSupported(cudaVideoCodec_HEVC);
+#else
+    return false;
+#endif
+  }
 #if defined(__OHOS__)
   return HarmonyVideoDecoder::Supported(codec_type);
 #endif

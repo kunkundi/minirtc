@@ -25,6 +25,13 @@ MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params) {
 
 MiniRtcPeerPtr* MiniRtcCreatePeerWithLogDirectory(const MiniRtcParams* params,
                                                  const char* log_directory) {
+  return MiniRtcCreatePeerWithVideoCodec(params, log_directory,
+      params && params->av1_encoding ? MiniRtcVideoCodec::AV1 : MiniRtcVideoCodec::H264);
+}
+
+MiniRtcPeerPtr* MiniRtcCreatePeerWithVideoCodec(const MiniRtcParams* params,
+    const char* log_directory, MiniRtcVideoCodec codec) {
+  if (codec > MiniRtcVideoCodec::H265) return nullptr;
   if (!params) {
     std::cerr << "Params is null" << std::endl;
     return nullptr;
@@ -47,7 +54,7 @@ MiniRtcPeerPtr* MiniRtcCreatePeerWithLogDirectory(const MiniRtcParams* params,
     peer_ptr->pc_params.signal_server_port = params->signal_server_port;
     peer_ptr->pc_params.hardware_acceleration = params->hardware_acceleration;
     peer_ptr->pc_params.native_video_output = params->native_video_output;
-    peer_ptr->pc_params.av1_encoding = params->av1_encoding;
+    peer_ptr->pc_params.video_codec = codec;
     peer_ptr->pc_params.turn_mode = params->turn_mode;
     peer_ptr->pc_params.enable_srtp = params->enable_srtp;
     peer_ptr->pc_params.video_content_type = params->video_content_type;
@@ -150,11 +157,17 @@ int MiniRtcUpdateConnectionSettings(MiniRtcPeerPtr* peer_ptr,
                                     bool hardware_acceleration,
                                     bool av1_encoding,
                                     MiniRtcTurnMode turn_mode) {
+  return MiniRtcUpdateConnectionSettingsWithCodec(peer_ptr, hardware_acceleration,
+      av1_encoding ? MiniRtcVideoCodec::AV1 : MiniRtcVideoCodec::H264, turn_mode);
+}
+
+int MiniRtcUpdateConnectionSettingsWithCodec(MiniRtcPeerPtr* peer_ptr,
+    bool hardware_acceleration, MiniRtcVideoCodec codec, MiniRtcTurnMode turn_mode) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     return -1;
   }
   return peer_ptr->peer_connection->UpdateConnectionSettings(
-      hardware_acceleration, av1_encoding, turn_mode);
+      hardware_acceleration, codec, turn_mode);
 }
 
 int MiniRtcLeaveConnection(MiniRtcPeerPtr* peer_ptr,

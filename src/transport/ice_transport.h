@@ -303,7 +303,6 @@ class IceTransport {
  private:
   rtp::PAYLOAD_TYPE prefered_video_payload_type_;
   bool remote_capabilities_got_ = false;
-  rtp::PAYLOAD_TYPE remote_prefered_video_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE remote_prefered_audio_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE remote_prefered_data_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;
   rtp::PAYLOAD_TYPE negotiated_video_pt_ = rtp::PAYLOAD_TYPE::UNDEFINED;

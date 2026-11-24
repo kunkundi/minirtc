@@ -3,6 +3,7 @@
 #include "rtp_packetizer_av1.h"
 #include "rtp_packetizer_generic.h"
 #include "rtp_packetizer_h264.h"
+#include "rtp_packetizer_h265.h"
 #include "rtp_header_extension.h"
 
 namespace minirtc {
@@ -12,6 +13,8 @@ std::unique_ptr<RtpPacketizer> RtpPacketizer::Create(uint32_t payload_type,
   switch (payload_type) {
     case rtp::PAYLOAD_TYPE::H264:
       return std::make_unique<RtpPacketizerH264>(ssrc);
+    case rtp::H265:
+      return std::make_unique<RtpPacketizerH265>(ssrc);
     case rtp::PAYLOAD_TYPE::AV1:
       return std::make_unique<RtpPacketizerAv1>(ssrc);
     default:

@@ -43,7 +43,7 @@ struct ConnectionInfo {
   MiniRtcTurnMode turn_mode;
   bool enable_srtp;
   MiniRtcVideoContentType video_content_type;
-  bool av1_encoding;
+  MiniRtcVideoCodec video_codec = MiniRtcVideoCodec::H264;
   MiniRtcVideoQuality video_quality;
   int video_frame_rate;
   MiniRtcVideoDegradationPreference video_degradation_preference;

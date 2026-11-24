@@ -152,6 +152,9 @@ enum MiniRtcVideoQuality {
   MiniRtcVideoQualityHigh
 };
 
+/// Preferred native video codec. H.265 requires NVIDIA HEVC Main support.
+enum class MiniRtcVideoCodec : uint8_t { H264 = 0, AV1 = 1, H265 = 2 };
+
 /// Content hint supplied to video encoding and adaptation logic.
 enum class MiniRtcVideoContentType : uint8_t {
   /// Camera/video content.
@@ -673,6 +676,10 @@ MINIRTC_API MiniRtcPeerPtr* MiniRtcCreatePeer(const MiniRtcParams* params);
 MINIRTC_API MiniRtcPeerPtr* MiniRtcCreatePeerWithLogDirectory(
     const MiniRtcParams* params, const char* log_directory);
 
+/// Create with an explicit video preference in direct settings mode.
+MINIRTC_API MiniRtcPeerPtr* MiniRtcCreatePeerWithVideoCodec(
+    const MiniRtcParams* params, const char* log_directory, MiniRtcVideoCodec codec);
+
 /**
  * @brief Read configuration and start asynchronous signaling/login.
  * @return -1 for an invalid peer; otherwise 0 in the current wrapper, which
@@ -694,6 +701,10 @@ MINIRTC_API int MiniRtcInit(MiniRtcPeerPtr* peer_ptr);
  */
 MINIRTC_API int MiniRtcUpdateConnectionSettings(MiniRtcPeerPtr* peer_ptr,
     bool hardware_acceleration, bool av1_encoding, MiniRtcTurnMode turn_mode);
+
+/// Update the codec and ICE defaults for subsequent connections.
+MINIRTC_API int MiniRtcUpdateConnectionSettingsWithCodec(MiniRtcPeerPtr* peer_ptr,
+    bool hardware_acceleration, MiniRtcVideoCodec codec, MiniRtcTurnMode turn_mode);
 
 /**
  * @brief Stop the peer, release its resources, and set the caller's handle null.

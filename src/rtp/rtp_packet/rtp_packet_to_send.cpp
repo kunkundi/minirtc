@@ -57,8 +57,6 @@ bool RtpPacketToSend::BuildRtxPacket() {
   if (!csrc_count) {
   }
 
-  SetPayloadType(rtp::PAYLOAD_TYPE::RTX);
-
   rtp_packet_frame_.clear();
   rtp_packet_frame_.push_back((version << 6) | (has_padding << 5) |
                               (has_extension << 4) | csrc_count);

@@ -57,7 +57,7 @@ typedef struct {
   int signal_server_port;
   bool hardware_acceleration;
   bool native_video_output;
-  bool av1_encoding;
+  MiniRtcVideoCodec video_codec;
   MiniRtcTurnMode turn_mode;
   bool enable_srtp;
   MiniRtcVideoContentType video_content_type;
@@ -99,7 +99,7 @@ class PeerConnection {
   int ReceiveDirect(const char* message, size_t size);
   int CloseDirect();
   void ReportDirectError(MiniRtcDirectError error);
-  int UpdateConnectionSettings(bool hardware_acceleration, bool av1_encoding,
+  int UpdateConnectionSettings(bool hardware_acceleration, MiniRtcVideoCodec codec,
                                 MiniRtcTurnMode turn_mode);
 
   int Join(const std::string& transmission_id);
@@ -210,7 +210,7 @@ class PeerConnection {
   int signal_server_port_ = 0;
   bool hardware_acceleration_ = false;
   bool native_video_output_ = false;
-  bool av1_encoding_ = false;
+  MiniRtcVideoCodec video_codec_ = MiniRtcVideoCodec::H264;
   MiniRtcTurnMode turn_mode_ = MiniRtcTurnMode::MiniRtcTurnDisabled;
   bool enable_srtp_ = true;
   MiniRtcVideoContentType video_content_type_ = MiniRtcVideoContentType::ScreenContent;

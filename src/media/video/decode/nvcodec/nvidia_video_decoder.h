@@ -23,7 +23,8 @@ struct NvidiaVideoDecoderState;
 class NvidiaVideoDecoder : public MediaCodec {
  public:
   NvidiaVideoDecoder(std::shared_ptr<SystemClock> clock,
-                     bool native_video_output = false);
+                     bool native_video_output = false,
+                     VideoCodecType codec = VideoCodecType::H264);
   virtual ~NvidiaVideoDecoder();
 
  public:
@@ -34,6 +35,7 @@ class NvidiaVideoDecoder : public MediaCodec {
       override;
 
   std::string GetDecoderName() const override {
+    if (codec_ == VideoCodecType::H265) return "NVDEC (H.265)";
     return using_software_decoder_.load(std::memory_order_acquire)
                ? "OpenH264 (H.264)"
                : "NVDEC (H.264)";
@@ -41,6 +43,7 @@ class NvidiaVideoDecoder : public MediaCodec {
 
  private:
   std::shared_ptr<SystemClock> clock_ = nullptr;
+  VideoCodecType codec_;
   bool native_video_output_ = false;
   std::shared_ptr<NvidiaVideoDecoderState> state_;
   std::unique_ptr<MediaCodec> software_decoder_;

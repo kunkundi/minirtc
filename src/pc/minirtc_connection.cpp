@@ -3,6 +3,8 @@
 #include <utility>
 
 #include "log.h"
+#include "video_encoder_factory.h"
+#include "video_decoder_factory.h"
 #include "nlohmann/json.hpp"
 
 namespace minirtc {
@@ -18,7 +20,16 @@ MiniRtcConnection::MiniRtcConnection(std::shared_ptr<SystemClock> clock,
       ws_(ws),
       info_(info),
       media_stream_ids_(media_stream_ids),
-      callbacks_(callbacks) {}
+      callbacks_(callbacks) {
+  // The encoded-frame callback promises H.264 Annex B to its consumer.
+  if (!callbacks_.on_receive_encoded_video && info_.hardware_acceleration &&
+      VideoEncoderFactory::CheckIsHardwareAccelerationSupported(VideoCodecType::H265) &&
+      VideoDecoderFactory::CheckIsHardwareAccelerationSupported(VideoCodecType::H265)) {
+    video_payload_types_.push_back(rtp::H265);
+    if (info_.video_codec == MiniRtcVideoCodec::H265) preferred_video_pt_ = rtp::H265;
+  }
+  if (info_.video_codec == MiniRtcVideoCodec::AV1) preferred_video_pt_ = rtp::AV1;
+}
 
 MiniRtcConnection::~MiniRtcConnection() {}
 
@@ -247,7 +258,7 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           info_.enable_srtp,
           info_.video_content_type, info_.video_quality,
           info_.video_frame_rate, info_.video_degradation_preference,
-          info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+          preferred_video_pt_,
           video_payload_types_, audio_payload_types_, info_.starting_bitrates,
           info_.disable_receiver_padding_probing);
 
@@ -314,7 +325,7 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
           info_.enable_srtp,
           info_.video_content_type, info_.video_quality,
           info_.video_frame_rate, info_.video_degradation_preference,
-          info_.av1_encoding ? rtp::PAYLOAD_TYPE::AV1 : rtp::PAYLOAD_TYPE::H264,
+          preferred_video_pt_,
           video_payload_types_, audio_payload_types_, info_.starting_bitrates,
           info_.disable_receiver_padding_probing);
 
