@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2025-05-28
- * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _VIDEO_TOOLBOX_DECODER_H_
@@ -16,7 +16,8 @@ namespace minirtc {
 class VideoToolboxDecoder : public MediaCodec {
  public:
   explicit VideoToolboxDecoder(std::shared_ptr<SystemClock> clock,
-                               bool native_video_output = false);
+                               bool native_video_output = false,
+                               VideoCodecType codec = VideoCodecType::H264);
   ~VideoToolboxDecoder();
 
   int Init() override;

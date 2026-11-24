@@ -3,6 +3,7 @@
 #include <TargetConditionals.h>
 #include <VideoToolbox/VideoToolbox.h>
 #include <arpa/inet.h>
+#include <algorithm>
 #include <atomic>
 #include <climits>
 #include <cstring>
@@ -87,106 +88,42 @@ int CopyPixelBufferToNv12(void* owner, uint8_t* destination,
   return result;
 }
 
-}  // namespace
-
 struct NaluUnit {
   const uint8_t* data;
   size_t size;
-  uint8_t type;
 };
 
 std::vector<NaluUnit> ExtractNalUnits(const uint8_t* buffer, size_t size) {
   std::vector<NaluUnit> nalus;
 
-  size_t i = 0;
-  while (i + 3 <= size) {  // need at least a 3-byte start code
-    size_t start_code_len = 0;
-    if (buffer[i] == 0x00 && buffer[i + 1] == 0x00) {
-      if (i + 3 <= size && buffer[i + 2] == 0x01) {
-        start_code_len = 3;
-      } else if (i + 4 <= size && buffer[i + 2] == 0x00 && buffer[i + 3] == 0x01) {
-        start_code_len = 4;
-      }
-    }
-
-    if (start_code_len == 0) {
+  size_t payload = size;
+  for (size_t i = 0; i + 2 < size;) {
+    if (buffer[i] || buffer[i + 1]) {
       ++i;
       continue;
     }
-
-    size_t nalu_start = i + start_code_len;
-    if (nalu_start >= size) {
-      break;  // no more data
+    size_t prefix = 0;
+    if (buffer[i + 2] == 1) {
+      prefix = 3;
+    } else if (buffer[i + 2] == 0 && i + 3 < size && buffer[i + 3] == 1) {
+      prefix = 4;
+    } else {
+      ++i;
+      continue;
     }
-
-    // find the next start code
-    size_t next_start = nalu_start + 1;  // start searching after the NALU data
-    while (next_start + 2 < size) {
-      if (buffer[next_start] == 0x00 && buffer[next_start + 1] == 0x00 &&
-          (buffer[next_start + 2] == 0x01 ||
-           (next_start + 3 < size && buffer[next_start + 2] == 0x00 && buffer[next_start + 3] == 0x01))) {
-        break;
-      }
-      ++next_start;
-    }
-    
-    // if no next start code found, this is the last NALU; take until buffer end
-    if (next_start + 2 >= size) {
-      next_start = size;
-    }
-
-    size_t nalu_size = next_start - nalu_start;
-    if (nalu_size > 0) {
-      uint8_t type = buffer[nalu_start] & 0x1F;
-      nalus.push_back(NaluUnit{buffer + nalu_start, nalu_size, type});
-    }
-
-    i = next_start;
+    if (i > payload) nalus.push_back({buffer + payload, i - payload});
+    i += prefix;
+    payload = i;
   }
-
+  if (payload < size) nalus.push_back({buffer + payload, size - payload});
   return nalus;
 }
 
-bool ExtractSpsPps(const uint8_t* buffer, size_t size, std::vector<uint8_t>& sps,
-                   std::vector<uint8_t>& pps) {
-  auto nalus = ExtractNalUnits(buffer, size);
-  for (const auto& nalu : nalus) {
-    if (nalu.type == 7) {
-      sps.assign(nalu.data, nalu.data + nalu.size);
-    } else if (nalu.type == 8) {
-      pps.assign(nalu.data, nalu.data + nalu.size);
-    }
-  }
-
-  return !sps.empty() && !pps.empty();
-}
-
-std::vector<NaluUnit> ExtractVideoNalUnits(const uint8_t* buffer, size_t size) {
-  auto all_nalus = ExtractNalUnits(buffer, size);
-  std::vector<NaluUnit> filtered;
-  for (const auto& nalu : all_nalus) {
-    if (nalu.type != 7 && nalu.type != 8) {
-      filtered.push_back(nalu);
-    }
-  }
-  return filtered;
-}
-
-std::vector<uint8_t> ConvertAnnexBToAVCCFiltered(const uint8_t* data, size_t size) {
-  std::vector<uint8_t> avcc_data;
-  auto nalus = ExtractVideoNalUnits(data, size);
-  for (const auto& nalu : nalus) {
-    uint32_t len = htonl(static_cast<uint32_t>(nalu.size));
-    avcc_data.insert(avcc_data.end(), reinterpret_cast<uint8_t*>(&len),
-                     reinterpret_cast<uint8_t*>(&len) + 4);
-    avcc_data.insert(avcc_data.end(), nalu.data, nalu.data + nalu.size);
-  }
-  return avcc_data;
-}
+}  // namespace
 
 class VideoToolboxDecoder::Impl {
  public:
-  Impl(std::shared_ptr<SystemClock> clock, bool native_video_output);
+  Impl(std::shared_ptr<SystemClock> clock, bool native_video_output, VideoCodecType codec);
   ~Impl();
 
   void RecoverAtKeyFrame() { session_needs_recovery_.store(true); }
@@ -196,7 +133,7 @@ class VideoToolboxDecoder::Impl {
   std::string GetDecoderName() const;
 
  private:
-  bool CreateSession(const std::vector<uint8_t>& sps, const std::vector<uint8_t>& pps);
+  bool CreateSession();
   static void DecodeCallback(void* decompression_output_ref_con, void* source_frame_ref_con,
                              OSStatus status, VTDecodeInfoFlags info_flags,
                              CVImageBufferRef image_buffer, CMTime pts, CMTime duration);
@@ -204,6 +141,7 @@ class VideoToolboxDecoder::Impl {
  private:
   std::shared_ptr<SystemClock> clock_;
   const bool native_video_output_;
+  const bool hevc_;
   std::atomic<uint64_t> submitted_frame_count_{0};
   std::atomic<uint64_t> decoded_frame_count_{0};
   std::atomic<bool> session_needs_recovery_{false};
@@ -218,6 +156,7 @@ class VideoToolboxDecoder::Impl {
 
   VTDecompressionSessionRef decompression_session_;
   CMVideoFormatDescriptionRef format_desc_;
+  std::vector<uint8_t> last_vps_;
   std::vector<uint8_t> last_sps_;
   std::vector<uint8_t> last_pps_;
 
@@ -228,9 +167,10 @@ class VideoToolboxDecoder::Impl {
 };
 
 VideoToolboxDecoder::Impl::Impl(std::shared_ptr<SystemClock> clock,
-                               bool native_video_output)
+                               bool native_video_output, VideoCodecType codec)
     : clock_(std::move(clock)),
       native_video_output_(native_video_output),
+      hevc_(codec == VideoCodecType::H265),
       decompression_session_(nullptr),
       format_desc_(nullptr) {}
 
@@ -243,8 +183,6 @@ VideoToolboxDecoder::Impl::~Impl() {
   if (format_desc_) {
     CFRelease(format_desc_);
   }
-  last_sps_.clear();
-  last_pps_.clear();
 
 #ifdef SAVE_DECODED_NV12_STREAM
   if (file_nv12_) {
@@ -283,11 +221,13 @@ int VideoToolboxDecoder::Impl::Init() {
 #endif
 
 #ifdef SAVE_RECEIVED_H264_STREAM
-  h264_file_name_ =
-      log_dir + "received_h264_stream_" + std::to_string(reinterpret_cast<uintptr_t>(this)) + ".h264";
-  file_h264_ = fopen(h264_file_name_.c_str(), "w+b");
-  if (!file_h264_) {
-    LOG_WARN("Fail to open {}", h264_file_name_.c_str());
+  if (!hevc_) {
+    h264_file_name_ =
+        log_dir + "received_h264_stream_" + std::to_string(reinterpret_cast<uintptr_t>(this)) + ".h264";
+    file_h264_ = fopen(h264_file_name_.c_str(), "w+b");
+    if (!file_h264_) {
+      LOG_WARN("Fail to open {}", h264_file_name_.c_str());
+    }
   }
 #endif
   return 0;
@@ -310,69 +250,66 @@ int VideoToolboxDecoder::Impl::Decode(
   }
 #endif
 
-  // check if frame contains SPS (NAL type 7) using a more robust method
-  // no longer assume start code is 4 bytes, parse directly with ExtractNalUnits
-  bool has_sps = false;
+  if (!data || !size) return -1;
   bool is_keyframe = false;
-  auto all_nalus = ExtractNalUnits(data, size);
-  for (const auto& nalu : all_nalus) {
-    if (nalu.type == 7) {  // SPS
-      has_sps = true;
-    } else if (nalu.type == 5) {  // IDR
-      is_keyframe = true;
-    }
-  }
-
-  if (has_sps) {
-    std::vector<uint8_t> sps, pps;
-    if (!ExtractSpsPps(data, size, sps, pps)) {
-      LOG_ERROR("Failed to extract SPS/PPS from frame data");
+  bool has_picture = false;
+  std::vector<uint8_t> sample_data;
+  sample_data.reserve(size);
+  for (const auto& nalu : ExtractNalUnits(data, size)) {
+    if (nalu.size > UINT32_MAX ||
+        (hevc_ && (nalu.size < 2 || (nalu.data[0] & 0x80) || !(nalu.data[1] & 7)))) {
       return -1;
     }
-
-    if (sps != last_sps_ || pps != last_pps_) {
-      last_sps_ = std::move(sps);
-      last_pps_ = std::move(pps);
-      session_needs_recovery_.store(true);
+    const unsigned type = hevc_ ? (nalu.data[0] >> 1) & 0x3f : nalu.data[0] & 0x1f;
+    std::vector<uint8_t>* parameter_set = nullptr;
+    if (hevc_ && type == 32) {
+      parameter_set = &last_vps_;
+    } else if (type == (hevc_ ? 33 : 7)) {
+      parameter_set = &last_sps_;
+    } else if (type == (hevc_ ? 34 : 8)) {
+      parameter_set = &last_pps_;
     }
+    if (parameter_set) {
+      if (!std::equal(nalu.data, nalu.data + nalu.size,
+                      parameter_set->begin(), parameter_set->end())) {
+        parameter_set->assign(nalu.data, nalu.data + nalu.size);
+        session_needs_recovery_.store(true);
+      }
+      continue;
+    }
+
+    // HEVC random access pictures include BLA, IDR and CRA.
+    is_keyframe |= hevc_ ? (type >= 16 && type <= 21) : type == 5;
+    has_picture |= hevc_ ? type <= 31 : (type >= 1 && type <= 5);
+    const uint32_t length = htonl(static_cast<uint32_t>(nalu.size));
+    const auto* field = reinterpret_cast<const uint8_t*>(&length);
+    sample_data.insert(sample_data.end(), field, field + sizeof(length));
+    sample_data.insert(sample_data.end(), nalu.data, nalu.data + nalu.size);
   }
+  if (!has_picture) return -1;
 
   if (!decompression_session_ || session_needs_recovery_.load()) {
-    // A decoder invalidated by iOS backgrounding must be recreated even when
-    // the stream's SPS/PPS are unchanged. Resume at an IDR so references from
-    // the old session are never used by the replacement session. Returning an
-    // error while waiting also makes the receiver request a key frame.
-    if (!is_keyframe || last_sps_.empty() || last_pps_.empty()) return -1;
-    LOG_INFO("Creating/recovering VideoToolbox decompression session at IDR");
-    if (!CreateSession(last_sps_, last_pps_)) {
-      LOG_ERROR("Failed to create decompression session");
+    // A replacement session cannot use pictures referenced by the old one.
+    if (!is_keyframe || (hevc_ && last_vps_.empty()) ||
+        last_sps_.empty() || last_pps_.empty()) {
       return -1;
     }
-  }
-
-  auto avcc_data = ConvertAnnexBToAVCCFiltered(data, size);
-  if (avcc_data.empty()) {
-    LOG_ERROR("Failed to convert Annex B to AVCC format");
-    return -1;
-  }
-
-  if (!decompression_session_) {
-    LOG_ERROR("Decompression session is not initialized");
-    return -1;
+    LOG_INFO("Creating/recovering {} decompression session at keyframe", GetDecoderName());
+    if (!CreateSession()) return -1;
   }
 
   CMBlockBufferRef block_buffer = nullptr;
   OSStatus status = CMBlockBufferCreateWithMemoryBlock(
-      kCFAllocatorDefault, nullptr, avcc_data.size(), kCFAllocatorDefault,
-      nullptr, 0, avcc_data.size(), 0, &block_buffer);
+      kCFAllocatorDefault, nullptr, sample_data.size(), kCFAllocatorDefault,
+      nullptr, 0, sample_data.size(), 0, &block_buffer);
   if (status != kCMBlockBufferNoErr) {
     LOG_ERROR("Failed to create block buffer, status: {}", status);
     return -1;
   }
-  status = CMBlockBufferReplaceDataBytes(avcc_data.data(), block_buffer, 0,
-                                         avcc_data.size());
+  status = CMBlockBufferReplaceDataBytes(sample_data.data(), block_buffer, 0,
+                                         sample_data.size());
   if (status != kCMBlockBufferNoErr) {
-    LOG_ERROR("Failed to copy AVCC data into block buffer, status: {}", status);
+    LOG_ERROR("Failed to copy sample data into block buffer, status: {}", status);
     CFRelease(block_buffer);
     return -1;
   }
@@ -385,7 +322,7 @@ int VideoToolboxDecoder::Impl::Decode(
   // A compressed video access unit is one sample. Supplying zero sample-size
   // entries creates a formally valid CMSampleBuffer whose sample size can be
   // reported as zero, which VideoToolbox accepts without producing output.
-  const size_t sample_size = avcc_data.size();
+  const size_t sample_size = sample_data.size();
   status = CMSampleBufferCreateReady(nullptr, block_buffer, format_desc_, 1, 1,
                                      &timing, 1, &sample_size, &sample_buffer);
   CFRelease(block_buffer);
@@ -435,10 +372,11 @@ int VideoToolboxDecoder::Impl::Decode(
   return (status == noErr) ? 0 : -1;
 }
 
-std::string VideoToolboxDecoder::Impl::GetDecoderName() const { return "VideoToolbox (H.264)"; }
+std::string VideoToolboxDecoder::Impl::GetDecoderName() const {
+  return hevc_ ? "VideoToolbox (H.265)" : "VideoToolbox (H.264)";
+}
 
-bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
-                                              const std::vector<uint8_t>& pps) {
+bool VideoToolboxDecoder::Impl::CreateSession() {
   if (decompression_session_) {
     VTDecompressionSessionWaitForAsynchronousFrames(decompression_session_);
     VTDecompressionSessionInvalidate(decompression_session_);
@@ -456,14 +394,15 @@ bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
   // WaitForAsynchronousFrames above can deliver errors from the old session.
   // Clear them only after it has drained; callbacks never recreate a session.
   session_needs_recovery_.store(false);
-  const uint8_t* sets[] = {sps.data(), pps.data()};
-  const size_t sizes[] = {sps.size(), pps.size()};
-  size_t param_set_cnt = 2;  // at least 2 (SPS and PPS)
-  size_t nalu_head_len = 4;  // 1, 2, 4 bytes are common, but 4 is safest for H.264
-  OSStatus status = CMVideoFormatDescriptionCreateFromH264ParameterSets(
-      nullptr, param_set_cnt, sets, sizes, nalu_head_len, &format_desc_);
+  const uint8_t* sets[] = {last_vps_.data(), last_sps_.data(), last_pps_.data()};
+  const size_t sizes[] = {last_vps_.size(), last_sps_.size(), last_pps_.size()};
+  OSStatus status = hevc_
+      ? CMVideoFormatDescriptionCreateFromHEVCParameterSets(
+            nullptr, 3, sets, sizes, 4, nullptr, &format_desc_)
+      : CMVideoFormatDescriptionCreateFromH264ParameterSets(
+            nullptr, 2, sets + 1, sizes + 1, 4, &format_desc_);
   if (status != noErr) {
-    LOG_ERROR("Failed to create format description from SPS/PPS");
+    LOG_ERROR("Failed to create {} format description: {}", GetDecoderName(), status);
     return false;
   }
 
@@ -483,8 +422,8 @@ bool VideoToolboxDecoder::Impl::CreateSession(const std::vector<uint8_t>& sps,
   }
 #elif !TARGET_OS_IOS
   CFDictionarySetValue(
-      decoder_spec,
-      kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
+      decoder_spec, hevc_ ? kVTVideoDecoderSpecification_RequireHardwareAcceleratedVideoDecoder
+                          : kVTVideoDecoderSpecification_EnableHardwareAcceleratedVideoDecoder,
       kCFBooleanTrue);
 #endif
 
@@ -619,8 +558,8 @@ void VideoToolboxDecoder::Impl::DecodeCallback(void* decompression_output_ref_co
 //
 
 VideoToolboxDecoder::VideoToolboxDecoder(std::shared_ptr<SystemClock> clock,
-                                         bool native_video_output)
-    : impl_(std::make_shared<Impl>(std::move(clock), native_video_output)) {}
+                                         bool native_video_output, VideoCodecType codec)
+    : impl_(std::make_shared<Impl>(std::move(clock), native_video_output, codec)) {}
 
 VideoToolboxDecoder::~VideoToolboxDecoder() = default;
 

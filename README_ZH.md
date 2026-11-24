@@ -30,12 +30,12 @@
 | --- | --- | --- |
 | Windows x64 / Linux x86-64 | H.264：CUDA NVENC 或 OpenH264；H.265：NVENC；AV1：SVT-AV1 | H.264：CUDA NVDEC 或 OpenH264；H.265：NVDEC；AV1：dav1d |
 | Linux arm64 | H.264：OpenH264；AV1：SVT-AV1 | H.264：OpenH264；AV1：dav1d |
-| macOS | H.264：VideoToolbox 或 OpenH264；AV1：SVT-AV1 | H.264：VideoToolbox 或 OpenH264；AV1：dav1d |
+| macOS | H.264：VideoToolbox 或 OpenH264；H.265：VideoToolbox；AV1：SVT-AV1 | H.264：VideoToolbox 或 OpenH264；H.265：VideoToolbox；AV1：dav1d |
 | iOS | H.264：VideoToolbox；AV1：SVT-AV1 | H.264：VideoToolbox；AV1：dav1d |
 | Android arm64 | H.264 / AV1：MediaCodec，失败回退 OpenH264 / SVT-AV1 | H.264 / AV1：MediaCodec，失败回退 OpenH264 / dav1d |
 | HarmonyOS arm64（开发版） | H.264：OpenH264；AV1：SVT-AV1 | H.264 / AV1 原生解码，失败回退 OpenH264 / dav1d |
 
-原生连接可通过 `MiniRtcCreatePeerWithVideoCodec` 或 `MiniRtcUpdateConnectionSettingsWithCodec` 传入 `MiniRtcVideoCodec::H265`，优先使用 HEVC Main（8 位 4:2:0）。双方均需启用 CUDA 构建且显卡同时支持 HEVC 编码和解码。默认使用 H.264，与旧版对端协商时也可回退到 H.264。
+原生连接可通过 `MiniRtcCreatePeerWithVideoCodec` 或 `MiniRtcUpdateConnectionSettingsWithCodec` 传入 `MiniRtcVideoCodec::H265`，优先使用 HEVC Main（8 位 4:2:0）。双方设备都需支持 HEVC 硬件编码和解码。macOS 使用系统 VideoToolbox，Windows 和 Linux 需要启用 CUDA 构建。默认使用 H.264，与旧版对端协商时也可回退到 H.264。
 
 硬件路径要求 `hardware_acceleration=true`，并受构建配置和设备能力影响。iOS 不构建 OpenH264，真机 H.264 依赖 VideoToolbox；模拟器解码路径可使用 VideoToolbox 软件实现，但不代表所有模拟器配置都已验证。Apple 平台 AV1 仍使用软件路径；可选 libaom 后端不替代默认 AV1 工厂。
 

@@ -152,7 +152,7 @@ enum MiniRtcVideoQuality {
   MiniRtcVideoQualityHigh
 };
 
-/// Preferred native video codec. H.265 requires NVIDIA HEVC Main support.
+/// Preferred native video codec. H.265 requires hardware HEVC Main encoding and decoding.
 enum class MiniRtcVideoCodec : uint8_t { H264 = 0, AV1 = 1, H265 = 2 };
 
 /// Content hint supplied to video encoding and adaptation logic.
@@ -508,7 +508,7 @@ typedef struct {
   int signal_server_port;
   /// Logger directory for MiniRtcCreatePeer; an empty value uses "logs".
   char log_path[256];
-  /// Request available hardware H.264 codecs; build/device support still applies.
+  /// Request available hardware video codecs for the negotiated format.
   bool hardware_acceleration;
   /// Prefer MiniRtcVideoFrame::native_frame instead of copying decoded pixels into
   /// MiniRtcVideoFrame::data. Decoders that cannot expose a descriptor ignore this

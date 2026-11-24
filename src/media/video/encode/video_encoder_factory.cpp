@@ -59,11 +59,15 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateVideoEncoder(
   }
 #endif
   if (codec_type == VideoCodecType::H265) {
+    if (!hardware_acceleration || !CheckIsHardwareAccelerationSupported(codec_type))
+      return nullptr;
 #if MINIRTC_HAS_CUDA_ENCODER
-    if (hardware_acceleration && CheckIsHardwareAccelerationSupported(codec_type))
-      return std::make_unique<NvidiaVideoEncoder>(clock, codec_type);
-#endif
+    return std::make_unique<NvidiaVideoEncoder>(clock, codec_type);
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    return std::make_unique<VideoToolboxEncoder>(clock, codec_type);
+#else
     return nullptr;
+#endif
   }
   if (codec_type == VideoCodecType::AV1) {
     LOG_INFO("Using the SVT-AV1 software encoder");
@@ -167,6 +171,8 @@ bool VideoEncoderFactory::CheckIsHardwareAccelerationSupported(
   if (codec_type == VideoCodecType::H265) {
 #if MINIRTC_HAS_CUDA_ENCODER
     return CheckIsCudaHevcEncodeSupported();
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    return VideoToolboxEncoder::IsHardwareHevcSupported();
 #else
     return false;
 #endif

@@ -1,7 +1,7 @@
 /*
  * @Author: DI JUNKUN
  * @Date: 2025-05-20
- * Copyright (c) 2025 by DI JUNKUN, All Rights Reserved.
+ * Copyright (c) 2026 by DI JUNKUN, All Rights Reserved.
  */
 
 #ifndef _VIDEO_TOOLBOX_ENCODER_H_
@@ -21,8 +21,13 @@ namespace minirtc {
 
 class VideoToolboxEncoder : public MediaCodec {
  public:
-  explicit VideoToolboxEncoder(std::shared_ptr<SystemClock> clock);
+  explicit VideoToolboxEncoder(std::shared_ptr<SystemClock> clock,
+                               VideoCodecType codec = VideoCodecType::H264);
   virtual ~VideoToolboxEncoder();
+
+#if TARGET_OS_OSX
+  static bool IsHardwareHevcSupported();
+#endif
 
   int Init(const MediaCodecConfig& config) override;
 

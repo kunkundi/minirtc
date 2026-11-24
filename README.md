@@ -30,12 +30,12 @@ The build produces a **C++17 static library** with `extern "C"` function linkage
 | --- | --- | --- |
 | Windows x64 / Linux x86-64 | H.264: NVENC with CUDA, or OpenH264; H.265: NVENC; AV1: SVT-AV1 | H.264: NVDEC with CUDA, or OpenH264; H.265: NVDEC; AV1: dav1d |
 | Linux arm64 | H.264: OpenH264; AV1: SVT-AV1 | H.264: OpenH264; AV1: dav1d |
-| macOS | H.264: VideoToolbox or OpenH264; AV1: SVT-AV1 | H.264: VideoToolbox or OpenH264; AV1: dav1d |
+| macOS | H.264: VideoToolbox or OpenH264; H.265: VideoToolbox; AV1: SVT-AV1 | H.264: VideoToolbox or OpenH264; H.265: VideoToolbox; AV1: dav1d |
 | iOS | H.264: VideoToolbox; AV1: SVT-AV1 | H.264: VideoToolbox; AV1: dav1d |
 | Android arm64 | H.264 / AV1: MediaCodec with OpenH264 / SVT-AV1 fallback | H.264 / AV1: MediaCodec with OpenH264 / dav1d fallback |
 | HarmonyOS arm64 (development) | H.264: OpenH264; AV1: SVT-AV1 | Native H.264 / AV1 decoding with OpenH264 / dav1d fallback |
 
-For native connections, pass `MiniRtcVideoCodec::H265` to `MiniRtcCreatePeerWithVideoCodec` or `MiniRtcUpdateConnectionSettingsWithCodec` to prefer HEVC Main (8-bit 4:2:0). Both peers need a CUDA-enabled build and HEVC encode and decode support. H.264 remains the default and the fallback for legacy peers.
+For native connections, pass `MiniRtcVideoCodec::H265` to `MiniRtcCreatePeerWithVideoCodec` or `MiniRtcUpdateConnectionSettingsWithCodec` to prefer HEVC Main (8-bit 4:2:0). Each peer needs hardware HEVC encoding and decoding through VideoToolbox on macOS or a CUDA-enabled build on Windows and Linux. H.264 remains the default and the fallback for legacy peers.
 
 Hardware paths require `hardware_acceleration=true`, a matching build, and device support. iOS does not build OpenH264: physical-device H.264 requires VideoToolbox; its simulator decode path can use VideoToolbox software decoding, without implying support for every simulator configuration. Apple AV1 remains software-based. libaom is optional and does not replace the default AV1 factories.
 

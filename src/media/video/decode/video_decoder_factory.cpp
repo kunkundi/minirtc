@@ -75,11 +75,15 @@ std::unique_ptr<MediaCodec> VideoDecoderFactory::CreateVideoDecoder(
   }
 #endif
   if (codec_type == VideoCodecType::H265) {
+    if (!hardware_acceleration || !CheckIsHardwareAccelerationSupported(codec_type))
+      return nullptr;
 #if MINIRTC_HAS_CUDA_DECODER
-    if (hardware_acceleration && CheckIsHardwareAccelerationSupported(codec_type))
-      return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output, codec_type);
-#endif
+    return std::make_unique<NvidiaVideoDecoder>(clock, native_video_output, codec_type);
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    return std::make_unique<VideoToolboxDecoder>(clock, native_video_output, codec_type);
+#else
     return nullptr;
+#endif
   }
   if (codec_type == VideoCodecType::AV1) {
     if (hardware_acceleration) {
@@ -174,6 +178,8 @@ bool VideoDecoderFactory::CheckIsHardwareAccelerationSupported(
   if (codec_type == VideoCodecType::H265) {
 #if MINIRTC_HAS_CUDA_DECODER
     return CheckIsCudaDecodeSupported(cudaVideoCodec_HEVC);
+#elif defined(__APPLE__) && TARGET_OS_OSX
+    return VTIsHardwareDecodeSupported(kCMVideoCodecType_HEVC);
 #else
     return false;
 #endif
