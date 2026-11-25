@@ -22,7 +22,7 @@ class PunchRuntime {
   PunchRuntime(NiceAgent*, guint stream, bool offer, uint64_t epoch,
                const PunchConfig&, const punch::Keys&, punch::Id,
                PunchMappingSnapshot snapshot, int64_t deadline_ms,
-               bool retry_enabled = false);
+               uint64_t log_id, bool retry_enabled = false);
   ~PunchRuntime();
   bool Begin(int64_t now_ms);
   bool Tick(int64_t now_ms);
@@ -66,6 +66,10 @@ class PunchRuntime {
   const bool retry_enabled_;
   uint32_t attempt_ = 0;
   uint64_t epoch_;
+  const uint64_t log_id_;
+  uint32_t control_tx_ = 0, control_rx_ = 0, control_tx_errors_ = 0;
+  uint32_t probes_tx_ = 0, probes_rx_ = 0, acks_tx_ = 0, acks_matched_ = 0;
+  uint32_t direct_rx_ = 0, send_errors_ = 0, promotion_failures_ = 0;
   const PunchConfig local_config_;
   PunchConfig agreed_;
   punch::Keys keys_;

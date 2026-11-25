@@ -174,6 +174,8 @@ int IceAgent::CreateIceAgent(nice_cb_state_changed_t on_state_changed,
   send_disabled_.store(false);
   p2p_enhancement_enabled_.store(false);
   relay_selected_ms_ = 0;
+  punch_log_id_ = 0;
+  punch_early_control_seen_ = false;
   punch_remote_supported_ = false;
   punch_retry_supported_ = false;
   punch_negotiated_once_ = false;
@@ -744,17 +746,30 @@ int IceAgent::SetRemoteSdp(const std::string& remote_sdp) {
     g_object_set(agent_.load(), "relay-upgrade-timeout", upgrade ? 30000u : 0u,
                  nullptr);
   }
-  LOG_DEBUG("ICE relay upgrade peer_support={} forced_relay={} reliable={} window_ms={}",
-           SupportsRelayUpgrade(remote_sdp), IsTurnForced(turn_mode_),
-           use_reliable_ice_, upgrade ? 30000 : 0);
+  // Hash the ordered ICE generation so both peers can correlate diagnostics.
+  const auto generation =
+      punch::GenerationId(PunchGenerationContext(remote_ufrag));
+  uint64_t log_id = 0;
+  for (size_t i = 0; i < sizeof(log_id); ++i)
+    log_id = (log_id << 8) | generation[i];
+  punch_log_id_ = log_id;
+  const bool local_punch = CanAdvertiseUdpPunch();
+  const bool peer_punch = SupportsUdpPunch(remote_sdp);
   // Parsing candidates can make ICE READY on its context immediately. Publish
   // the independent DTLS requirement before that callback can run.
   punch_remote_supported_ =
-      upgrade && CanAdvertiseUdpPunch() && SupportsUdpPunch(remote_sdp) &&
-      !remote_fingerprint_.empty() &&
+      upgrade && local_punch && peer_punch && !remote_fingerprint_.empty() &&
       (enable_srtp_ || !fingerprints->punch_fingerprint.empty());
   punch_retry_supported_ =
       punch_remote_supported_ && SupportsUdpPunchRetry(remote_sdp);
+  LOG_DEBUG(
+      "ICE punch session={:016x} event=negotiated sdp_role={} "
+      "upgrade_window_ms={} peer_upgrade={} forced_relay={} reliable={} "
+      "local_support={} peer_support={} enabled={} retry={}",
+      log_id, punch_offer_peer_ ? "offer" : "answer", upgrade ? 30000 : 0,
+      SupportsRelayUpgrade(remote_sdp), IsTurnForced(turn_mode_),
+      use_reliable_ice_, local_punch, peer_punch,
+      punch_remote_supported_.load(), punch_retry_supported_.load());
   int ret = nice_agent_parse_remote_sdp(agent_, fingerprints->sdp.c_str());
   if (ret >= 0) {
     if (punch_remote_ufrag_.empty()) punch_remote_ufrag_ = remote_ufrag;
@@ -877,8 +892,9 @@ void IceAgent::OnStunMappingStatic(NiceAgent*, NiceCandidate* sample,
       "port_pattern={} step={}",
       sequence, analysis.samples, analysis.mapping, analysis.port_pattern,
       analysis.port_step);
-  LOG_DEBUG("ICE STUN sample base={} server={}:{} mapped={}:{}", key, server_ip,
-            server_port, mapped, nice_address_get_port(&sample->addr));
+  LOG_DEBUG("ICE STUN sample session={:016x} base={} server={}:{} mapped={}:{}",
+            self->punch_log_id_.load(), key, server_ip, server_port, mapped,
+            nice_address_get_port(&sample->addr));
 }
 
 void IceAgent::ProbePredictedRemoteCandidates() {
@@ -1414,9 +1430,14 @@ void IceAgent::OnNiceRecv(NiceAgent* agent, guint stream_id, guint component_id,
   if (punch_remote_supported_ && dtls_peer_verified_) MaybeStartPunch();
   if (punch_negotiated_once_ &&
       punch::IsMagic(reinterpret_cast<uint8_t*>(buffer), size)) {
-    if (punch_runtime_ && !send_disabled_)
+    if (punch_runtime_ && !send_disabled_) {
       punch_runtime_->Control(reinterpret_cast<uint8_t*>(buffer), size,
                               g_get_monotonic_time() / 1000);
+    } else if (!punch_runtime_ && !punch_early_control_seen_) {
+      punch_early_control_seen_ = true;
+      LOG_DEBUG("ICE punch session={:016x} event=packet-before-runtime",
+               punch_log_id_.load());
+    }
     return;  // Includes relay-carried PROBE: never forward to
              // DTLS/SRTP/business.
   }
@@ -1513,11 +1534,16 @@ void IceAgent::OnIceCheckStatusStatic(NiceAgent*, guint stream_id,
   if (!self || !status) return;
   // The libnice signal is queued outside its lock. Copy the text before
   // dispatching because the signal only owns it for the duration of this call.
-  self->DispatchIceCallback(
-      [stream_id, component_id, status = std::string(status)] {
-        LOG_INFO("ICE readiness stream={} component={}: {}", stream_id,
-                 component_id, status);
-      });
+  self->DispatchIceCallback([id = self->punch_log_id_.load(), stream_id,
+                             component_id, status = std::string(status)] {
+    if (g_str_has_prefix(status.c_str(), "relay-upgrade ")) {
+      LOG_DEBUG("ICE readiness stream={} component={} session={:016x}: {}",
+                stream_id, component_id, id, status);
+    } else {
+      LOG_INFO("ICE readiness stream={} component={}: {}", stream_id,
+               component_id, status);
+    }
+  });
 }
 
 void IceAgent::OnNiceStateChangedStatic(NiceAgent* agent, guint stream_id,
@@ -1641,6 +1667,9 @@ void IceAgent::MaybeStartPunch() {
     return;
   if (punch_original_deadline_ms_ &&
       g_get_monotonic_time() / 1000 >= punch_original_deadline_ms_) {
+    LOG_DEBUG(
+        "ICE punch session={:016x} event=skipped reason=upgrade-window-expired",
+        punch_log_id_.load());
     punch_attempted_ = true;
     return;
   }
@@ -1651,6 +1680,8 @@ void IceAgent::MaybeStartPunch() {
        remote->type != NICE_CANDIDATE_TYPE_RELAYED)) {
     return;
   }
+  LOG_DEBUG("ICE punch session={:016x} event=armed trigger_delay_ms={}",
+           punch_log_id_.load(), punch_config_.trigger_delay_ms);
   punch_packet_handler_ = g_signal_connect(
       agent_, "punch-packet", G_CALLBACK(OnPunchPacketStatic), this);
   punch_source_ = g_timeout_source_new(10);
@@ -1658,6 +1689,14 @@ void IceAgent::MaybeStartPunch() {
   g_source_attach(punch_source_, gcontext_);
 }
 void IceAgent::StopPunch() {
+  if (relay_selected_ms_ && !punch_runtime_) {
+    LOG_DEBUG(
+        "ICE punch session={:016x} event=closed-before-start enabled={} "
+        "mapping_updated={} ice_ready={} dtls_verified={} attempted={}",
+        punch_log_id_.load(), punch_remote_supported_.load(),
+        punch_mapping_updated_, punch_relay_ready_ms_.load() != 0,
+        dtls_peer_verified_.load(), punch_attempted_);
+  }
   punch_attempted_ = true;
   if (punch_source_) {
     g_source_destroy(punch_source_);
@@ -1733,8 +1772,18 @@ gboolean IceAgent::PunchTickStatic(gpointer data) {
         self->punch_runtime_ = std::make_unique<PunchRuntime>(
             self->agent_, self->stream_id_, self->punch_offer_peer_,
             self->punch_epoch_, self->punch_config_, keys, generation,
-            std::move(*chosen), deadline, self->punch_retry_supported_.load());
+            std::move(*chosen), deadline, self->punch_log_id_.load(),
+            self->punch_retry_supported_.load());
         keep = self->punch_runtime_->Begin(now);
+      } else {
+        const char* reason = deadline <= now ? "upgrade-window-unavailable"
+                             : !chosen       ? "no-eligible-mapping"
+                                             : "key-export-failed";
+        LOG_DEBUG(
+            "ICE punch session={:016x} event=skipped reason={} "
+            "selected_base={}:{} snapshots={} remaining_ms={}",
+            self->punch_log_id_.load(), reason, selected_ip, selected_port,
+            snapshots.size(), std::max<int64_t>(0, deadline - now));
       }
     }
   }
@@ -1767,10 +1816,10 @@ void IceAgent::OnPunchPacketStatic(NiceAgent*, guint stream, guint component,
                                g_get_monotonic_time() / 1000);
 }
 
-punch::Bytes IceAgent::PunchGenerationContext() const {
+punch::Bytes IceAgent::PunchGenerationContext(
+    const std::string& remote_ufrag) const {
   auto* agent = agent_.load();
-  if (!agent || destroyed_ || !stream_id_ || punch_remote_ufrag_.empty())
-    return {};
+  if (!agent || destroyed_ || !stream_id_ || remote_ufrag.empty()) return {};
   // The backend owns credentials from add_stream onward, including before an
   // answerer generates SDP. Read the current scope for the exporter;
   // never rely on an uninitialized or previous-generation credential cache.
@@ -1780,9 +1829,8 @@ punch::Bytes IceAgent::PunchGenerationContext() const {
   const std::string local = found && local_ufrag ? local_ufrag : "";
   g_free(local_ufrag);
   g_free(password);
-  return punch::GenerationContext(
-      punch_offer_peer_ ? local : punch_remote_ufrag_,
-      punch_offer_peer_ ? punch_remote_ufrag_ : local);
+  return punch::GenerationContext(punch_offer_peer_ ? local : remote_ufrag,
+                                  punch_offer_peer_ ? remote_ufrag : local);
 }
 
 bool IceAgent::ExportPunchKeys(punch::Keys& keys, punch::Id& generation) const {
@@ -1792,7 +1840,7 @@ bool IceAgent::ExportPunchKeys(punch::Keys& keys, punch::Id& generation) const {
   if (!context || !g_main_context_is_owner(context) || !agent_ || destroyed_ ||
       send_disabled_ || !punch_remote_supported_ || !dtls_peer_verified_ || !ssl_)
     return false;
-  const auto scope = PunchGenerationContext();
+  const auto scope = PunchGenerationContext(punch_remote_ufrag_);
   if (scope.empty()) return false;
   std::array<uint8_t, 128> material{};
   constexpr char label[] = "EXPORTER-MiniRTC-UDP-Punch-v1";

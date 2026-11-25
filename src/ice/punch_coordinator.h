@@ -40,6 +40,7 @@ class PunchNegotiation {
     std::function<void(const punch::Id&, const punch::Json&, int64_t)> start;
     std::function<void(const std::string&)> stop;
     std::function<bool(punch::Id&)> random_round;
+    std::function<void(const char*)> stage_changed;
   };
   PunchNegotiation(bool offer, punch::Id generation, const punch::Keys& keys,
                    Hooks hooks);
@@ -52,6 +53,7 @@ class PunchNegotiation {
   void Stop(const std::string& reason, bool notify = true);
   const punch::Id& round() const { return round_; }
  private:
+  void SetState(State next);
   bool Emit(const punch::Bytes& bytes);
   punch::Bytes Make(punch::Kind kind, const punch::Json& value);
   void Pending(punch::Kind kind, const punch::Bytes& bytes, int64_t now_ms);

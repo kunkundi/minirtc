@@ -1,0 +1,144 @@
+diff --git a/agent/conncheck.c b/agent/conncheck.c
+index 024b351..fe5b97e 100644
+--- a/agent/conncheck.c
++++ b/agent/conncheck.c
+@@ -814,6 +814,41 @@ priv_is_direct_upgrade (NiceComponent *component, CandidateCheckPair *pair)
+       pair->remote->type != NICE_CANDIDATE_TYPE_RELAYED;
+ }
+ 
++static void priv_append_ready_candidate (GString *, const gchar *, const NiceCandidate *);
++
++typedef enum {
++  UPGRADE_CHECK_VALID,
++  UPGRADE_NOMINATION_QUEUED,
++  UPGRADE_NOMINATION_SENT,
++  UPGRADE_NOMINATION_SEND_FAILED,
++  UPGRADE_NOMINATION_RECEIVED
++} UpgradeEvent;
++
++static void
++priv_report_upgrade_pair (NiceAgent *agent, NiceComponent *component,
++    CandidateCheckPair *pair, UpgradeEvent event)
++{
++  static const gchar *names[] = { "check-valid", "nomination-queued",
++    "nomination-sent", "nomination-send-failed", "nomination-received" };
++  const guint bit = 1u << event;
++  GString *text;
++
++  if ((pair->upgrade_events & bit) ||
++      !priv_relay_upgrade_active (agent, component) ||
++      !priv_is_direct_upgrade (component, pair))
++    return;
++  pair->upgrade_events |= bit;
++  text = g_string_new (NULL);
++  g_string_append_printf (text, "relay-upgrade event=%s ice_role=%s valid=%d"
++      " nominated=%d priority=%" G_GUINT64_FORMAT, names[event],
++      agent->controlling_mode ? "controlling" : "controlled",
++      pair->valid, pair->nominated, pair->priority);
++  priv_append_ready_candidate (text, "local", pair->local);
++  priv_append_ready_candidate (text, "remote", pair->remote);
++  agent_signal_ice_check_status (agent, pair->stream_id, component->id, text->str);
++  g_string_free (text, TRUE);
++}
++
+ static gboolean
+ priv_conn_check_tick_relay_upgrade (NiceAgent *agent, NiceStream *stream)
+ {
+@@ -823,6 +858,7 @@ priv_conn_check_tick_relay_upgrade (NiceAgent *agent, NiceStream *stream)
+ 
+   for (i = stream->components; i; i = i->next) {
+     NiceComponent *component = i->data;
++    guint direct = 0, valid_direct = 0, failed_direct = 0;
+     gboolean nominate_pending = FALSE;
+     gboolean retry;
+     if (!priv_relay_upgrade_active (agent, component)) {
+@@ -847,6 +883,11 @@ priv_conn_check_tick_relay_upgrade (NiceAgent *agent, NiceStream *stream)
+       CandidateCheckPair *check;
+       if (!priv_is_direct_upgrade (component, p))
+         continue;
++      if (retry) {
++        ++direct;
++        if (p->valid) ++valid_direct;
++        if (p->state == NICE_CHECK_FAILED) ++failed_direct;
++      }
+       if (agent->controlling_mode && !nominate_pending && p->valid &&
+           !p->nominated && (p->state == NICE_CHECK_SUCCEEDED ||
+                            p->state == NICE_CHECK_DISCOVERED)) {
+@@ -856,6 +897,7 @@ priv_conn_check_tick_relay_upgrade (NiceAgent *agent, NiceStream *stream)
+           check->use_candidate_on_next_check = TRUE;
+           priv_add_pair_to_triggered_check_queue (agent, check);
+           nominate_pending = TRUE;
++          priv_report_upgrade_pair (agent, component, p, UPGRADE_NOMINATION_QUEUED);
+           nice_debug ("Agent %p : relay upgrade: nominate direct pair %p",
+               agent, p);
+         }
+@@ -876,6 +918,16 @@ priv_conn_check_tick_relay_upgrade (NiceAgent *agent, NiceStream *stream)
+         nice_debug ("Agent %p : relay upgrade: retry direct pair %p", agent, p);
+       }
+     }
++    if (retry) {
++      gchar *status = g_strdup_printf ("relay-upgrade event=checklist ice_role=%s"
++          " remaining_ms=%" G_GINT64_FORMAT " direct=%u valid_direct=%u"
++          " failed_before_retry=%u nomination_pending=%d",
++          agent->controlling_mode ? "controlling" : "controlled",
++          (component->relay_upgrade_deadline - now) / 1000,
++          direct, valid_direct, failed_direct, nominate_pending);
++      agent_signal_ice_check_status (agent, stream->id, component->id, status);
++      g_free (status);
++    }
+   }
+   return keep_timer_going;
+ }
+@@ -1176,6 +1228,8 @@ priv_conn_check_tick_stream_nominate (NiceAgent *agent, NiceStream *stream)
+               nice_candidate_transport_to_string (
+                   this_component_pair->remote->transport),
+               this_component_pair, stream->id, component->id);
++          priv_report_upgrade_pair (agent, component, this_component_pair,
++              UPGRADE_NOMINATION_QUEUED);
+           this_component_pair->use_candidate_on_next_check = TRUE;
+           priv_add_pair_to_triggered_check_queue (agent, this_component_pair);
+           keep_timer_going = TRUE;
+@@ -2516,6 +2570,7 @@ static gboolean priv_mark_pair_nominated (NiceAgent *agent, NiceStream *stream,
+         pair->nominated = TRUE;
+       }
+ 
++      priv_report_upgrade_pair (agent, component, pair, UPGRADE_NOMINATION_RECEIVED);
+       if (pair->valid) {
+         /* Do not step down to CONNECTED if we're already at state READY*/
+         if (component->state == NICE_COMPONENT_STATE_FAILED)
+@@ -3232,10 +3287,14 @@ int conn_check_send (NiceAgent *agent, CandidateCheckPair *pair)
+   /* send the conncheck */
+   if (agent_socket_send (pair->sockptr, &pair->remote->addr,
+       buffer_len, (gchar *)stun->buffer) < 0) {
++    if (cand_use)
++      priv_report_upgrade_pair (agent, component, pair, UPGRADE_NOMINATION_SEND_FAILED);
+     priv_remove_stun_transaction (pair, stun, component);
+     return -1;
+   }
+ 
++  if (cand_use)
++    priv_report_upgrade_pair (agent, component, pair, UPGRADE_NOMINATION_SENT);
+   if (agent->compatibility == NICE_COMPATIBILITY_OC2007R2)
+     ms_ice2_legacy_conncheck_send (&stun->message, pair->sockptr,
+         &pair->remote->addr);
+@@ -3949,6 +4008,8 @@ static gboolean priv_map_reply_to_conn_check_request (NiceAgent *agent, NiceStre
+ 	  }
+ 	}
+ 
++        if (ok_pair->valid)
++          priv_report_upgrade_pair (agent, component, ok_pair, UPGRADE_CHECK_VALID);
+ 	if (ok_pair->nominated == TRUE) {
+           conn_check_update_selected_pair (agent, component, ok_pair);
+ 	  priv_print_conn_check_lists (agent, G_STRFUNC,
+diff --git a/agent/conncheck.h b/agent/conncheck.h
+index 7525df7..fca25eb 100644
+--- a/agent/conncheck.h
++++ b/agent/conncheck.h
+@@ -97,6 +97,7 @@ struct _CandidateCheckPair
+   NiceCheckState state;
+   gboolean nominated;
+   gboolean valid;
++  guint upgrade_events; /* diagnostics already reported for this pair */
+   gboolean use_candidate_on_next_check;
+   gboolean mark_nominated_on_response_arrival;
+   gboolean retransmit;  /* if the first stun request must be retransmitted */

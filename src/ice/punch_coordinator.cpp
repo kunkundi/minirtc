@@ -17,6 +17,14 @@ PunchNegotiation::~PunchNegotiation() {
   OPENSSL_cleanse(tx_.data(), tx_.size());
   OPENSSL_cleanse(rx_.data(), rx_.size());
 }
+void PunchNegotiation::SetState(State next) {
+  static constexpr const char* names[] = {
+      "idle",        "hello",   "allocating", "await-ready",
+      "await-start", "probing", "stopped"};
+  state_ = next;
+  if (hooks_.stage_changed)
+    hooks_.stage_changed(names[static_cast<size_t>(next)]);
+}
 bool PunchNegotiation::Emit(const Bytes& bytes) {
   if (bytes.empty() || state_ == State::Stopped) return false;
   if (attempts_ >= limit_) {
@@ -46,7 +54,7 @@ bool PunchNegotiation::Begin(const Json& hello, int64_t now, int64_t deadline) {
       !hooks_.plan || !hooks_.prepare || !hooks_.random_round ||
       ControlPayload(Kind::Hello, hello).empty())
     return false;
-  state_ = State::Hello;
+  SetState(State::Hello);
   deadline_ = deadline;
   local_hello_ = hello;
   limit_ = hello["budget"]["control_packet_budget"].get<uint32_t>();
@@ -58,7 +66,7 @@ void PunchNegotiation::Stop(const std::string& reason, bool notify) {
   if (state_ == State::Stopped) return;
   if (notify && !IsZero(round_) && attempts_ < limit_)
     Emit(Make(Kind::Cancel, {{"reason", reason}}));
-  state_ = State::Stopped;
+  SetState(State::Stopped);
   pending_.clear();
   OPENSSL_cleanse(tx_.data(), tx_.size());
   OPENSSL_cleanse(rx_.data(), rx_.size());
@@ -100,11 +108,11 @@ void PunchNegotiation::Tick(int64_t now) {
 }
 void PunchNegotiation::Start(int64_t now) {
   if (state_ == State::Probing || state_ == State::Stopped) return;
-  state_ = State::Probing;
+  SetState(State::Probing);
   if (hooks_.start) hooks_.start(round_, plan_, now);
 }
 void PunchNegotiation::BeginPreparation(int64_t now) {
-  state_ = State::Allocating;
+  SetState(State::Allocating);
   pending_.clear();
   if (!hooks_.prepare(plan_)) {
     Stop("resources");
@@ -117,13 +125,13 @@ void PunchNegotiation::FinishPreparation(int64_t now) {
   digest_ = Digest(ControlPayload(Kind::Prepare, plan_));
   if (offer_) {
     prepare_ = Make(Kind::Prepare, plan_);
-    state_ = State::Preparing;
+    SetState(State::Preparing);
     Emit(hello_);
     Pending(Kind::Prepare, prepare_, now);
   } else {
     ready_ =
         Make(Kind::Ready, {{"digest", digest_}, {"budget", plan_["budget"]}});
-    state_ = State::Ready;
+    SetState(State::Ready);
     Pending(Kind::Ready, ready_, now);
   }
 }

@@ -222,12 +222,14 @@ class IceAgent {
   int64_t punch_original_deadline_ms_ = 0;
   bool punch_mapping_updated_ = false;
   bool punch_attempted_ = false;
+  std::atomic<uint64_t> punch_log_id_{0};
+  bool punch_early_control_seen_ = false;
   // Only the owning Nice/DTLS context can export. No keys before fingerprint
   // verification; output is cleared even on failure.
   bool ExportPunchKeys(punch::Keys& keys, punch::Id& generation) const;
   bool CanAdvertiseUdpPunch() const;
 
-  punch::Bytes PunchGenerationContext() const;
+  punch::Bytes PunchGenerationContext(const std::string& remote_ufrag) const;
   void MaybeStartPunch();
   void MaybeStartDtls();
   void StopPunch();

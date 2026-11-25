@@ -4,6 +4,7 @@
 
 #include <algorithm>
 
+#include "log.h"
 #include "nice/interfaces.h"
 #include "nice/punch.h"
 
@@ -33,12 +34,13 @@ PunchRuntime::PunchRuntime(NiceAgent* a, guint stream, bool offer,
                            uint64_t epoch, const PunchConfig& config,
                            const Keys& keys, Id generation,
                            PunchMappingSnapshot snapshot, int64_t deadline,
-                           bool retry_enabled)
+                           uint64_t log_id, bool retry_enabled)
     : agent_(a),
       stream_(stream),
       offer_(offer),
       retry_enabled_(retry_enabled),
       epoch_(epoch),
+      log_id_(log_id),
       local_config_(config),
       agreed_(config),
       keys_(keys),
@@ -50,10 +52,14 @@ PunchRuntime::PunchRuntime(NiceAgent* a, guint stream, bool offer,
   base_interface_alive_ = base_interface_ != 0;
   PunchNegotiation::Hooks hooks;
   hooks.send = [this](const Bytes& b) {
-    nice_agent_send(agent_, stream_, 1, static_cast<guint>(b.size()),
-                    reinterpret_cast<const gchar*>(b.data()));
+    ++control_tx_;
+    const int sent =
+        nice_agent_send(agent_, stream_, 1, static_cast<guint>(b.size()),
+                        reinterpret_cast<const gchar*>(b.data()));
+    if (sent != static_cast<int>(b.size())) ++control_tx_errors_;
   };
   hooks.remote_hello = [this](const Json& hello, int64_t now) {
+    LOG_DEBUG("ICE punch session={:016x} event=peer-hello", log_id_);
     int64_t age = 0;
     for (const auto& sample : hello["samples"])
       age = std::max(age, sample["age_ms"].get<int64_t>());
@@ -66,6 +72,9 @@ PunchRuntime::PunchRuntime(NiceAgent* a, guint stream, bool offer,
   hooks.prepare = [this](const Json& p) { return Prepare(p); };
   hooks.poll_prepare = [this]() { return PrepareBatch(); };
   hooks.start = [this](const Id& id, const Json&, int64_t t) { Start(id, t); };
+  hooks.stage_changed = [this](const char* stage) {
+    LOG_DEBUG("ICE punch session={:016x} event=stage stage={}", log_id_, stage);
+  };
   hooks.stop = [this](const std::string& reason) { Stop(reason, false); };
   hooks.random_round = [](Id& r) {
     return RAND_bytes(r.data(), static_cast<int>(r.size())) == 1;
@@ -75,6 +84,12 @@ PunchRuntime::PunchRuntime(NiceAgent* a, guint stream, bool offer,
 }
 PunchRuntime::~PunchRuntime() { Stop("disconnect", false); }
 bool PunchRuntime::Begin(int64_t now) {
+  LOG_DEBUG(
+      "ICE punch session={:016x} event=begin sdp_role={} base={}:{} "
+      "samples={} remaining_ms={} retry={}",
+      log_id_, offer_ ? "offer" : "answer", snapshot_.local_ip,
+      snapshot_.local_port, snapshot_.samples.size(), original_deadline_ - now,
+      retry_enabled_);
   auto hello = PunchHello(snapshot_, local_config_, epoch_, now,
                           original_deadline_ - now, retry_enabled_);
   if (!hello) {
@@ -120,10 +135,16 @@ bool PunchRuntime::Prepare(const Json& p) {
       ClassifyPunchMapping(snapshot_, epoch_, now,
                            local_config_.mapping_sample_max_age_ms) !=
       PunchMapping::Unknown;
-  if (stopped_ || prepare_socket_count_ || !endpoints_.empty()) return false;
-  if (!BaseAlive(true)) return false;
-  if (!observation_valid) return false;
-  if (now >= remote_snapshot_deadline_) return false;
+  const auto reject = [this](const char* reason) {
+    LOG_DEBUG("ICE punch session={:016x} event=prepare-failed reason={}",
+             log_id_, reason);
+    return false;
+  };
+  if (stopped_ || prepare_socket_count_ || !endpoints_.empty())
+    return reject("already-prepared");
+  if (!BaseAlive(true)) return reject("base-unavailable");
+  if (!observation_valid) return reject("local-mapping-unusable");
+  if (now >= remote_snapshot_deadline_) return reject("peer-mapping-expired");
   pool_ = (p["anchor"] == "offer") != offer_;
   anchor_ = Address(p["anchor_endpoint"]["ip"], p["anchor_endpoint"]["port"]);
   peer_ip_ = pool_ ? Ip(anchor_) : p["peer_ip"].get<std::string>();
@@ -144,7 +165,8 @@ bool PunchRuntime::Prepare(const Json& p) {
   }
   g_slist_free_full(remote,
                     reinterpret_cast<GDestroyNotify>(nice_candidate_free));
-  if (!known_ip || !known_anchor) return false;
+  if (!known_ip) return reject("peer-ip-missing");
+  if (!known_anchor) return reject("anchor-candidate-missing");
   round_ = negotiation_->round();
   const auto& b = p["budget"];
   agreed_.pool_size = b["pool_size"];
@@ -161,9 +183,9 @@ bool PunchRuntime::Prepare(const Json& p) {
       !MakePunchDeadlines(now, original_deadline_, agreed_.round_duration_ms,
                           agreed_.ice_finish_reserve_ms)
            .probe)
-    return false;
+    return reject("budget-or-window");
   lease_ = std::make_unique<PunchRoundLease>(PunchProcessBudget::Shared());
-  if (!lease_->id()) return false;
+  if (!lease_->id()) return reject("process-budget");
   if (!pool_) {
     // Sample only what the PROBE allowance can send, before sorting. Cutting
     // a sorted larger sample would systematically omit high-numbered ports.
@@ -171,10 +193,15 @@ bool PunchRuntime::Prepare(const Json& p) {
         std::min(agreed_.target_port_count,
                  PunchProbeBudget::ProbeLimit(agreed_, kAckReserve));
     ports_ = SamplePunchPorts(count, excluded_ports_, SecurePunchRandom);
-    if (ports_.size() != count) return false;
+    if (ports_.size() != count) return reject("port-sampling");
     excluded_ports_.insert(ports_.begin(), ports_.end());
   }
   prepare_socket_count_ = pool_ ? agreed_.sockets() : 1;
+  LOG_DEBUG(
+      "ICE punch session={:016x} event=prepare role={} anchor={}:{} "
+      "socket_target={} sampled_ports={}",
+      log_id_, pool_ ? "pool" : "anchor", Ip(anchor_),
+      nice_address_get_port(&anchor_), prepare_socket_count_, ports_.size());
   return true;
 }
 PunchNegotiation::Preparation PunchRuntime::PrepareBatch() {
@@ -191,8 +218,14 @@ PunchNegotiation::Preparation PunchRuntime::PrepareBatch() {
       PunchMapping::Unknown;
   if (stopped_) return Result::Failed;
   if (now >= original_deadline_ || now >= remote_snapshot_deadline_ ||
-      !observation_valid)
+      !observation_valid) {
+    LOG_DEBUG(
+        "ICE punch session={:016x} event=prepare-failed reason=expired "
+        "window_ms={} peer_mapping_ms={} local_mapping_valid={}",
+        log_id_, original_deadline_ - now, remote_snapshot_deadline_ - now,
+        observation_valid);
     return Result::Failed;
+  }
   // Only polled by Tick(), which has already validated the base for this
   // dispatch. Repeating it here doubles the interface/candidate query work.
   if (nice_agent_get_component_state(agent_, stream_, 1) ==
@@ -205,6 +238,10 @@ PunchNegotiation::Preparation PunchRuntime::PrepareBatch() {
     e.id = nice_agent_punch_open_v1(agent_, stream_, 1, epoch_, &base_, pool_,
                                     &e.bound);
     if (!e.id) {
+      LOG_DEBUG(
+          "ICE punch session={:016x} event=prepare-failed reason=socket-open "
+          "opened={} target={}",
+          log_id_, endpoints_.size(), prepare_socket_count_);
       return Result::Failed;
     }
     // Stop closes partial allocations before READY.
@@ -281,6 +318,11 @@ bool PunchRuntime::StartRetry(int64_t now) {
     excluded_ports_.insert(ports_.begin(), ports_.end());
   }
   if (!budget_->NextAttempt()) return false;
+  LOG_DEBUG(
+      "ICE punch session={:016x} event=retry finished_attempt={} "
+      "probes_tx={} probes_rx={} acks_tx={} acks_matched={} promoted={}",
+      log_id_, attempt_, probes_tx_, probes_rx_, acks_tx_, acks_matched_,
+      promoted_);
   ++attempt_;
   deadlines_ = deadlines;
   draining_ = false;
@@ -295,6 +337,14 @@ void PunchRuntime::Stop(const std::string& reason, bool notify) {
   if (stopped_) return;
   stopped_ = true;
   if (negotiation_) negotiation_->Stop(reason, notify);
+  LOG_DEBUG(
+      "ICE punch session={:016x} event=stop reason={} attempt={} sockets={} "
+      "control_tx_attempts={} control_tx_errors={} control_rx={} direct_rx={} "
+      "probes_tx={} probes_rx={} acks_tx={} acks_matched={} "
+      "direct_tx_errors={} promoted={} promotion_failures={}",
+      log_id_, reason, attempt_, endpoints_.size(), control_tx_,
+      control_tx_errors_, control_rx_, direct_rx_, probes_tx_, probes_rx_,
+      acks_tx_, acks_matched_, send_errors_, promoted_, promotion_failures_);
   nice_agent_punch_stop(agent_, stream_, 1, epoch_, TRUE);
   if (lease_) lease_->Reset();
   acks_.clear();
@@ -383,8 +433,15 @@ bool PunchRuntime::Emit(uint64_t handle, const NiceAddress& to,
   if (!budget_->Ready(now, ack)) return false;
   if (!PunchProcessBudget::Shared().Take(lease_->id(), ack, now)) return false;
   if (!budget_->Take(now, ack)) return false;
-  nice_agent_punch_send(agent_, stream_, 1, epoch_, handle, &to, bytes.data(),
-                        bytes.size());
+  const int sent = nice_agent_punch_send(agent_, stream_, 1, epoch_, handle,
+                                         &to, bytes.data(), bytes.size());
+  if (sent != static_cast<int>(bytes.size())) {
+    ++send_errors_;
+  } else if (ack) {
+    ++acks_tx_;
+  } else {
+    ++probes_tx_;
+  }
   return true;  // Attempt committed even if the kernel rejects the send.
 }
 bool PunchRuntime::Promote(uint64_t id) {
@@ -395,14 +452,26 @@ bool PunchRuntime::Promote(uint64_t id) {
       promoted_ >= agreed_.promoted_endpoint_limit)
     return false;
   if (!nice_agent_punch_promote(agent_, stream_, 1, epoch_, id, &anchor_)) {
+    if (++promotion_failures_ == 1)
+      LOG_DEBUG(
+          "ICE punch session={:016x} event=promotion-failed local_port={} "
+          "anchor={}:{}",
+          log_id_, nice_address_get_port(&it->bound), Ip(anchor_),
+          nice_address_get_port(&anchor_));
     return false;
   }
   it->promoted = true;
   ++promoted_;
+  LOG_DEBUG(
+      "ICE punch session={:016x} event=promoted local_port={} anchor={}:{}",
+      log_id_, nice_address_get_port(&it->bound), Ip(anchor_),
+      nice_address_get_port(&anchor_));
   return true;
 }
 void PunchRuntime::Control(const uint8_t* data, size_t size, int64_t now) {
-  if (!stopped_) negotiation_->Receive(data, size, now);
+  if (stopped_) return;
+  ++control_rx_;
+  negotiation_->Receive(data, size, now);
 }
 void PunchRuntime::Direct(uint64_t epoch, uint64_t handle,
                           const NiceCandidate* packet, const uint8_t* bytes,
@@ -410,6 +479,7 @@ void PunchRuntime::Direct(uint64_t epoch, uint64_t handle,
   if (stopped_ || !budget_ || now >= deadlines_.finish || epoch != epoch_ ||
       !packet)
     return;
+  ++direct_rx_;
   auto it = std::find_if(endpoints_.begin(), endpoints_.end(),
                          [&](const Endpoint& e) { return e.id == handle; });
   if (it == endpoints_.end() ||
@@ -435,8 +505,16 @@ void PunchRuntime::Direct(uint64_t epoch, uint64_t handle,
         !nice_address_equal(&found->second.destination, &packet->addr))
       return;
     outstanding_.erase(found);
+    ++acks_matched_;
     Promote(handle);
-  } else if (acks_.size() < 8 && sequence_) {
+  } else {
+    if (++probes_rx_ == 1)
+      LOG_DEBUG(
+          "ICE punch session={:016x} event=first-valid-probe local_port={} "
+          "peer={}:{}",
+          log_id_, nice_address_get_port(&it->bound), Ip(packet->addr),
+          nice_address_get_port(&packet->addr));
+    if (acks_.size() >= 8 || !sequence_) return;
     const auto cached = ack_cache_.find(p->sequence);
     if (cached != ack_cache_.end()) {
       acks_.push_back(cached->second);

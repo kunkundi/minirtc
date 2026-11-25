@@ -18,7 +18,9 @@ package("libnice")
         "314656b6d7ac276e867be3c308fc6f49255feae0aff9006861b0cd2ec110a774")
     add_patches("0.1.24", path.join(os.scriptdir(), "patches", "relay_ready_0.1.24.patch"),
         "4da37e42ebe8f02229c704e83e002747b483acca09b0fc7d0c5233783d87c1dc")
-    add_configs("relay_ready_revision", {description = "Nominated relay readiness and blocker diagnostics", default = "1", type = "string", readonly = true})
+    add_patches("0.1.24", path.join(os.scriptdir(), "patches", "relay_diagnostics_0.1.24.patch"),
+        "768eaf00e5e0c9c0a8ca4b00af3a3fba5ce6ec92708ef7904dae4dea388d6981")
+    add_configs("relay_ready_revision", {description = "Nominated relay readiness and blocker diagnostics", default = "2", type = "string", readonly = true})
     add_configs("direct_peer_ipv6", {description = "Pinned IPv6 peer and link-local scope", default = true, type = "boolean", readonly = true})
     add_configs("direct_peer", {description = "Pinned LAN peer address boundary", default = true, type = "boolean", readonly = true})
     add_configs("udp_punch_revision", {description = "MiniRTC bounded UDP punch backend", default = "1", type = "string", readonly = true})
