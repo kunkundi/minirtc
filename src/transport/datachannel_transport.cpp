@@ -28,12 +28,14 @@ Stream::Stream(std::shared_ptr<::rtc::Track> track,
 DataChannelTransport::DataChannelTransport(
     std::shared_ptr<SystemClock> clock,
     std::shared_ptr<::rtc::PeerConnection> peer_connection,
-    std::string local_id, std::string remote_id, bool offer_peer)
+    std::string local_id, std::string remote_id, bool offer_peer,
+    std::function<void(bool)> on_selected_route)
     : clock_(clock),
       peer_connection_(peer_connection),
       local_id_(local_id),
       remote_id_(remote_id),
       offer_peer_(offer_peer),
+      on_selected_route_(std::move(on_selected_route)),
       b_force_i_frame_(true),
       video_codec_inited_(false),
       audio_codec_inited_(false),
@@ -580,6 +582,22 @@ void DataChannelTransport::AddVideoStream(std::string stream_id,
   video_streams_.emplace(stream_id, stream);
 }
 
+void DataChannelTransport::ReportSelectedRoute() {
+  if (!on_selected_route_ || shutdown_.load()) return;
+  ::rtc::Candidate local, remote;
+  if (peer_connection_->getSelectedCandidatePair(&local, &remote))
+    ReportSelectedRoute(local, remote);
+}
+
+void DataChannelTransport::ReportSelectedRoute(const ::rtc::Candidate& local,
+                                               const ::rtc::Candidate& remote) {
+  if (!on_selected_route_) return;
+  using Type = ::rtc::Candidate::Type;
+  const bool relay = local.type() == Type::Relayed || remote.type() == Type::Relayed;
+  if (relay || (local.type() != Type::Unknown && remote.type() != Type::Unknown))
+    on_selected_route_(relay);
+}
+
 void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
   if (message.size() > 4096 || shutdown_.load()) return;
   const auto report = nlohmann::json::parse(message, nullptr, false);
@@ -612,6 +630,7 @@ void DataChannelTransport::ProcessBrowserFeedback(const std::string& message) {
       ::rtc::Candidate local, remote;
       std::ostringstream local_route, remote_route;
       if (peer_connection_->getSelectedCandidatePair(&local, &remote)) {
+        ReportSelectedRoute(local, remote);
         local_route << local.type() << '/' << local.transportType();
         remote_route << remote.type() << '/' << remote.transportType();
       }

@@ -69,7 +69,8 @@ class DataChannelTransport
   DataChannelTransport(std::shared_ptr<SystemClock> clock,
                        std::shared_ptr<::rtc::PeerConnection> peer_connection,
                        std::string local_id, std::string remote_id,
-                       bool offer_peer);
+                       bool offer_peer,
+                       std::function<void(bool)> on_selected_route = {});
   ~DataChannelTransport();
 
   void Shutdown();
@@ -84,6 +85,7 @@ class DataChannelTransport
   std::shared_ptr<WebMediaHandler> MediaHandler() const {
     return media_handler_;
   }
+  void ReportSelectedRoute();
   void ProcessBrowserFeedback(const std::string& message);
   bool IsControlChannelOpen();
 
@@ -127,6 +129,8 @@ class DataChannelTransport
   }
 
  private:
+  void ReportSelectedRoute(const ::rtc::Candidate& local,
+                           const ::rtc::Candidate& remote);
   int CreateStreamCodecs(std::shared_ptr<SystemClock> clock,
                          bool hardware_acceleration,
                          VideoCodecType codec_type);
@@ -172,6 +176,7 @@ class DataChannelTransport
   std::string local_id_;
   std::string remote_id_;
   bool offer_peer_;
+  std::function<void(bool)> on_selected_route_;
 
  private:
   std::shared_ptr<SystemClock> clock_;

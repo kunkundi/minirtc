@@ -90,6 +90,10 @@ class IceTransport {
     on_receive_net_status_report_ = on_receive_net_status_report;
   }
 
+  void SetOnSelectedRoute(std::function<void(bool)> callback) {
+    on_selected_route_ = std::move(callback);
+  }
+
   int JoinTransmission();
 
   int SetTransmissionId(const std::string& transmission_id);
@@ -269,6 +273,7 @@ class IceTransport {
   bool remote_gathering_done_ = false;
   std::atomic<NiceComponentState> state_{NICE_COMPONENT_STATE_DISCONNECTED};
   IceComponentStateTracker component_state_tracker_;
+  std::function<void(bool)> on_selected_route_;
   std::mutex selected_pair_mutex_;
   TraversalType traversal_type_ = TraversalType::TUnknown;
   std::string local_endpoint_;

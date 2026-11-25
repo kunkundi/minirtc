@@ -570,6 +570,8 @@ void IceTransport::OnNewSelectedPair(NiceAgent* agent, guint stream_id,
     local_endpoint_ = relay ? "" : local_address;
     remote_endpoint_ = relay ? "" : remote_address;
   }
+  if (on_selected_route_ && previous != (relay ? TraversalType::TRelay : TraversalType::TP2P))
+    on_selected_route_(relay);
   if (relay) {
     LOG_INFO("Traversal using relay server");
     if (previous != TraversalType::TRelay &&

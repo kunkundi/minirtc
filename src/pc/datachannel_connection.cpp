@@ -403,7 +403,14 @@ DataChannelConnection::CreateDataChannelConnection(
   auto peer_connection =
       std::make_shared<::rtc::PeerConnection>(resolved_config);
   auto dc_transport = std::make_shared<DataChannelTransport>(
-      clock, peer_connection, info_.user_id, remote_user_id, offer_peer_);
+      clock, peer_connection, info_.user_id, remote_user_id, offer_peer_,
+      callbacks_.on_selected_route);
+  peer_connection->onIceStateChange(
+      [weak = make_weak_ptr(dc_transport)](::rtc::PeerConnection::IceState state) {
+        if (state != ::rtc::PeerConnection::IceState::Connected &&
+            state != ::rtc::PeerConnection::IceState::Completed) return;
+        if (auto transport = weak.lock()) transport->ReportSelectedRoute();
+      });
   dc_transport->SetVideoConfig(
       info_.video_quality, info_.video_frame_rate, info_.video_content_type,
       info_.video_degradation_preference, info_.desktop_realtime_rate_control);

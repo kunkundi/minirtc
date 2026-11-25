@@ -699,6 +699,23 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
                                             const ConnectionInfo& info) {
   auto weak_connection = std::make_shared<std::weak_ptr<ConnectionInterface>>();
   ConnectionCallbacks callbacks = connection_callbacks_;
+  if (!info.route_generation.empty()) {
+    callbacks.on_selected_route =
+        [this, remote_user_id, weak_connection, tx = info.transmission_id,
+         generation = info.route_generation](bool relay) {
+          std::unique_lock lock(peer_connection_map_mutex_);
+          const auto current = peer_connection_map_.find(remote_user_id);
+          if (current == peer_connection_map_.end() ||
+              current->second != weak_connection->lock()) return;
+          auto& report = session_routes_[remote_user_id];
+          const char* route = relay ? "relay" : "direct";
+          if (!report.is_null() && report.at("route") == route) return;
+          report = {{"type", "session_route"}, {"transmission_id", tx},
+                    {"remote_user_id", remote_user_id}, {"route_generation", generation},
+                    {"route", route}};
+          signal_sender_->Send(report.dump());
+        };
+  }
   callbacks.on_connection_status = [this, remote_user_id, weak_connection](
                                        MiniRtcConnectionStatus status,
                                        const char* peer_id, size_t peer_id_size,
@@ -778,6 +795,7 @@ bool PeerConnection::RetirePeerConnection(
     }
     peer_connection_map_.erase(it);
     connected_peers_.erase(remote_user_id);
+    session_routes_.erase(remote_user_id);
     auto ticket = session_tickets_.find(remote_user_id);
     if (ticket != session_tickets_.end()) {
       auto report = ticket->second;
@@ -817,6 +835,7 @@ PeerConnection::ReplaceOrCreatePeerConnection(const std::string& remote_user_id,
       LOG_WARN("Replace existing peer connection on {}", context);
     }
     connected_peers_.erase(remote_user_id);
+    session_routes_.erase(remote_user_id);
 
     connection = CreateManagedPeerConnection(remote_user_id, info);
     peer_connection_map_.emplace(remote_user_id, connection);
@@ -852,6 +871,7 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
     peer_connection_map_.clear();
     connected_peers_.clear();
     session_tickets_.clear();
+    session_routes_.clear();
   }
 
   if (connections.empty()) {
@@ -870,7 +890,7 @@ void PeerConnection::ClearPeerConnections(const char* reason) {
   }
 }
 
-void PeerConnection::ReportSessions() {
+void PeerConnection::ReportSessions(bool replay_routes) {
   std::shared_lock lock(peer_connection_map_mutex_);
   if (!ws_transport_ || ws_transport_->GetStatus() != WsStatus::WsOpened) return;
   for (const auto& pair : session_tickets_) {
@@ -878,7 +898,16 @@ void PeerConnection::ReportSessions() {
     auto report = pair.second;
     report["type"] = "session_report";
     report["alive"] = true;
+    auto route = session_routes_.find(pair.first);
+    if (replay_routes && route != session_routes_.end()) {
+      report["route"] = route->second.at("route");
+      report["route_generation"] = route->second.at("route_generation");
+    }
     ws_transport_->Send(report.dump());
+  }
+  if (replay_routes) {
+    for (const auto& [peer, route] : session_routes_)
+      if (!session_tickets_.count(peer)) ws_transport_->Send(route.dump());
   }
 }
 
@@ -1169,6 +1198,10 @@ bool PeerConnection::BuildConnectionInfo(const json& message,
     info = connection_info_;
   }
   info.transmission_id = transmission_id;
+  auto generation = message.find("route_generation");
+  if (generation != message.end() && generation->is_string() &&
+      generation->get_ref<const std::string&>().size() == 32)
+    info.route_generation = generation->get<std::string>();
   info.user_id = user_id_;
   info.remote_user_id = remote_user_id;
   const bool modern = message.contains("ice");
@@ -1280,7 +1313,7 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         }
         on_signal_status_(MiniRtcSignalStatus::MiniRtcSignalConnected, user_id_.data(),
                           user_id_.size(), user_data_);
-        ReportSessions();
+        ReportSessions(true);
       } else if (j["status"].get<std::string>() == "fail") {
         if (!on_signal_exchange_ && reconnect_login_.RetryPassword()) {
           LOG_INFO("Reconnect credential rejected; retrying password login");
@@ -1591,6 +1624,7 @@ void PeerConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
         connection = it->second;
         peer_connection_map_.erase(it);
         connected_peers_.erase(remote_user_id);
+        session_routes_.erase(remote_user_id);
         session_tickets_.erase(remote_user_id);
       }
     }

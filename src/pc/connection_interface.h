@@ -33,6 +33,7 @@ struct ConnectionInfo {
   DirectIcePolicy direct_policy;
   std::function<void(MiniRtcDirectError)> direct_error;
   std::optional<IceServerConfiguration> ice_config;
+  std::string route_generation;
   std::string transmission_id;
   std::string user_id;
   std::string remote_user_id;
@@ -66,6 +67,7 @@ struct ConnectionCallbacks {
   MiniRtcOnNetStatusReport on_net_status_report;
   void* user_data = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video = nullptr;
+  std::function<void(bool relay)> on_selected_route;
 };
 
 struct IceWorkMsg {
