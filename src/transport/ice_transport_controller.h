@@ -330,10 +330,12 @@ class IceTransportController
     int resolution_upgrade_probe_failure_count = 0;
     int64_t next_resolution_upgrade_probe_ms = 0;
     int64_t encoded_frame_rate_window_started_ms = 0;
+    uint64_t encoded_frame_rate_window_capture_start = 0;
     int encoded_frame_rate_window_frame_count = 0;
     int measured_encoded_frame_rate = 0;
     bool encoded_frame_rate_ready = false;
     int64_t encoded_frame_rate_healthy_since_ms = 0;
+    int64_t upgrade_frame_rate_healthy_since_ms = 0;
     std::array<int, 3> encoded_frame_rate_windows{};
     size_t encoded_frame_rate_valid_window_count = 0;
     std::atomic<uint64_t> capture_input_frame_total{0};
@@ -500,6 +502,7 @@ class IceTransportController
       measured_encoded_frame_rate = 0;
       encoded_frame_rate_ready = false;
       encoded_frame_rate_healthy_since_ms = 0;
+      upgrade_frame_rate_healthy_since_ms = 0;
       encoded_frame_rate_windows.fill(0);
       encoded_frame_rate_valid_window_count = 0;
       ResetFrameAdmissionTracking();

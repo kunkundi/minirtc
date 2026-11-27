@@ -63,8 +63,7 @@ public:
 
   static int UpgradeFrameRate(int configured_frame_rate,
                               bool balanced = false) {
-    // Balanced mode trades excess frame rate for spatial detail, accepting
-    // the same 30 fps floor before and during a resolution upgrade.
+    // Balanced mode trades output above 30 fps for spatial detail.
     if (balanced) return kBalancedFrameRate;
     // Keep substantially more headroom than the downgrade floor before
     // probing a higher spatial rung. A 60 fps stream that only just reaches
@@ -78,6 +77,22 @@ public:
                                         bool balanced = false) {
     return measured_frame_rate >=
            UpgradeFrameRate(configured_frame_rate, balanced);
+  }
+
+  static int FrameRateForWindow(uint64_t frames, int64_t duration_ms) {
+    if (duration_ms <= 0) return 0;
+    return static_cast<int>((frames * 1000 + duration_ms / 2) / duration_ms);
+  }
+
+  static int RequiredUpgradeFrameRate(int nominal_rate, bool balanced_screen,
+                                      uint64_t capture_frames,
+                                      int64_t duration_ms) {
+    const int capture_rate = FrameRateForWindow(capture_frames, duration_ms);
+    if (!balanced_screen || capture_rate <= 0 || capture_rate >= nominal_rate)
+      return nominal_rate;
+    // An on-demand desktop may supply fewer frames than the nominal floor.
+    // One captured frame can still be in flight at the window boundary.
+    return std::max(1, FrameRateForWindow(capture_frames - 1, duration_ms));
   }
 
   static size_t CountLowFrameRateWindows(

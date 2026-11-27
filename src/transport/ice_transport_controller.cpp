@@ -1411,10 +1411,9 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       context->frame_admission_encode_queue_dropped_samples =
           encode_queue_dropped_total -
           context->frame_admission_window_encode_queue_dropped_start;
-      context->measured_capture_input_frame_rate = static_cast<int>(
-          (context->frame_admission_capture_samples * 1000 +
-           admission_window_ms / 2) /
-          admission_window_ms);
+      context->measured_capture_input_frame_rate =
+          VideoAdaptationPolicy::FrameRateForWindow(
+              context->frame_admission_capture_samples, admission_window_ms);
       context->measured_pacer_rejection_percent =
           context->frame_admission_capture_samples > 0
               ? static_cast<int>(
@@ -1440,9 +1439,17 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     }
   }
 
+  auto update_since = [now_ms](bool condition, int64_t& since_ms) {
+    if (!condition) {
+      since_ms = 0;
+    } else if (since_ms == 0) {
+      since_ms = now_ms;
+    }
+  };
   bool encoded_frame_rate_window_updated = false;
   if (context->encoded_frame_rate_window_started_ms == 0) {
     context->encoded_frame_rate_window_started_ms = now_ms;
+    context->encoded_frame_rate_window_capture_start = capture_input_total;
     // This frame is the interval boundary; count subsequent arrivals only.
     context->encoded_frame_rate_window_frame_count = 0;
   } else {
@@ -1450,11 +1457,9 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     const int64_t frame_rate_window_ms =
         now_ms - context->encoded_frame_rate_window_started_ms;
     if (frame_rate_window_ms >= kFrameRateWindowMs) {
-      context->measured_encoded_frame_rate = static_cast<int>(
-          (static_cast<int64_t>(context->encoded_frame_rate_window_frame_count) *
-               1000 +
-           frame_rate_window_ms / 2) /
-          frame_rate_window_ms);
+      context->measured_encoded_frame_rate =
+          VideoAdaptationPolicy::FrameRateForWindow(
+              context->encoded_frame_rate_window_frame_count, frame_rate_window_ms);
       context->encoded_frame_rate_ready = true;
       if (context->encoded_frame_rate_valid_window_count <
           context->encoded_frame_rate_windows.size()) {
@@ -1471,14 +1476,16 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
             context->measured_encoded_frame_rate;
       }
       encoded_frame_rate_window_updated = true;
-      if (context->measured_encoded_frame_rate >= minimum_upgrade_frame_rate) {
-        if (context->encoded_frame_rate_healthy_since_ms == 0) {
-          context->encoded_frame_rate_healthy_since_ms = now_ms;
-        }
-      } else {
-        context->encoded_frame_rate_healthy_since_ms = 0;
-      }
+      const int required_fps = VideoAdaptationPolicy::RequiredUpgradeFrameRate(
+          minimum_upgrade_frame_rate, balanced_screen_content,
+          capture_input_total - context->encoded_frame_rate_window_capture_start,
+          frame_rate_window_ms);
+      update_since(context->measured_encoded_frame_rate >= minimum_upgrade_frame_rate,
+                   context->encoded_frame_rate_healthy_since_ms);
+      update_since(context->measured_encoded_frame_rate >= required_fps,
+                   context->upgrade_frame_rate_healthy_since_ms);
       context->encoded_frame_rate_window_started_ms = now_ms;
+      context->encoded_frame_rate_window_capture_start = capture_input_total;
       context->encoded_frame_rate_window_frame_count = 0;
     }
   }
@@ -1553,27 +1560,16 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       context->encode_queue_delay_window_ready &&
       context->p95_encode_queue_delay_ms >= kCriticalQueueDelayMs;
 
-  auto update_pressure_since = [now_ms](bool pressure, int64_t* since_ms) {
-    if (pressure) {
-      if (*since_ms == 0) {
-        *since_ms = now_ms;
-      }
-    } else {
-      *since_ms = 0;
-    }
-  };
-  update_pressure_since(normal_queue_pressure || severe_queue_pressure,
-                        &context->encode_backlog_since_ms);
-  update_pressure_since(severe_queue_pressure,
-                        &context->severe_encode_backlog_since_ms);
-  update_pressure_since(critical_queue_pressure,
-                        &context->critical_encode_backlog_since_ms);
-  update_pressure_since(frame_health.capture_frame_rate_low,
-                        &context->low_capture_frame_rate_since_ms);
-  update_pressure_since(frame_health.pacer_rejection_high,
-                        &context->high_pacer_rejection_since_ms);
-  update_pressure_since(frame_health.encode_queue_drop_high,
-                        &context->high_encode_queue_drop_since_ms);
+  update_since(normal_queue_pressure || severe_queue_pressure,
+               context->encode_backlog_since_ms);
+  update_since(severe_queue_pressure, context->severe_encode_backlog_since_ms);
+  update_since(critical_queue_pressure, context->critical_encode_backlog_since_ms);
+  update_since(frame_health.capture_frame_rate_low,
+               context->low_capture_frame_rate_since_ms);
+  update_since(frame_health.pacer_rejection_high,
+               context->high_pacer_rejection_since_ms);
+  update_since(frame_health.encode_queue_drop_high,
+               context->high_encode_queue_drop_since_ms);
 
   const bool sustained_encode_backlog =
       context->encode_backlog_since_ms > 0 &&
@@ -1800,16 +1796,15 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
             ? capture_input_total -
                   context->resolution_upgrade_probe_capture_start
             : 0;
-    const int probe_frame_rate =
-        probe_duration_ms > 0
-            ? static_cast<int>(
-                  (static_cast<int64_t>(
-                       context->resolution_upgrade_probe_sample_count) *
-                       1000 +
-                   probe_duration_ms / 2) /
-                  probe_duration_ms)
-            : 0;
+    const int probe_frame_rate = VideoAdaptationPolicy::FrameRateForWindow(
+        context->resolution_upgrade_probe_sample_count, probe_duration_ms);
+    const int probe_capture_rate = VideoAdaptationPolicy::FrameRateForWindow(
+        probe_capture_samples, probe_duration_ms);
+    const int required_fps = VideoAdaptationPolicy::RequiredUpgradeFrameRate(
+        minimum_upgrade_frame_rate, balanced_screen_content, probe_capture_samples,
+        probe_duration_ms);
     const bool probe_backlogged =
+        (required_fps < minimum_upgrade_frame_rate && sustained_encode_backlog) ||
         sustained_severe_encode_backlog || sustained_critical_encode_backlog ||
         // A one-second trial finishes before the ordinary pressure sustain
         // timer; inspect its full queue window before accepting the new size.
@@ -1824,7 +1819,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
             VideoAdaptationPolicy::kMinimumPacerAdmissionSamples;
     const bool probe_frame_rate_too_low =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
-        !insufficient_capture && probe_frame_rate < minimum_upgrade_frame_rate;
+        !insufficient_capture && probe_frame_rate < required_fps;
     const bool probe_qp_too_high =
         probe_duration_ms >= kUpgradeProbeMinDurationMs &&
         context->normalized_qp_ewma >= 0.0f &&
@@ -1844,7 +1839,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
 
       LOG_INFO(
           "Resolution upgrade probe failed: channel={} reason={} fps={} "
-          "required_fps={} delay_avg_ms={} delay_p95_ms={} qp={} "
+          "capture_fps={} required_fps={} delay_avg_ms={} delay_p95_ms={} qp={} "
           "target={}x{} rollback={}x{} backoff_ms={}",
           channel_name,
           probe_start_timed_out
@@ -1852,7 +1847,7 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
               : (probe_backlogged
                      ? "encode_backlog"
                      : (probe_frame_rate_too_low ? "low_frame_rate" : "high_qp")),
-          probe_frame_rate, minimum_upgrade_frame_rate,
+          probe_frame_rate, probe_capture_rate, required_fps,
           context->average_encode_queue_delay_ms,
           context->p95_encode_queue_delay_ms,
           context->last_encoder_quality_stats.qp, failed_width, failed_height,
@@ -1885,11 +1880,11 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
     if (probe_duration_ms >= kUpgradeProbeMinDurationMs) {
       LOG_INFO(
           "Resolution upgrade probe succeeded: channel={} target={}x{} "
-          "fps={} required_fps={} qp={} delay_avg_ms={} delay_p95_ms={} "
+          "fps={} capture_fps={} required_fps={} qp={} delay_avg_ms={} delay_p95_ms={} "
           "duration_ms={} samples={}",
           channel_name, context->resolution_upgrade_probe_target_width,
           context->resolution_upgrade_probe_target_height, probe_frame_rate,
-          minimum_upgrade_frame_rate, context->last_encoder_quality_stats.qp,
+          probe_capture_rate, required_fps, context->last_encoder_quality_stats.qp,
           context->average_encode_queue_delay_ms,
           context->p95_encode_queue_delay_ms, probe_duration_ms,
           context->resolution_upgrade_probe_sample_count);
@@ -2035,9 +2030,8 @@ void IceTransportController::MaybeDegradeResolutionOnEncodeTime(
       return;
     }
     if (!context->encoded_frame_rate_ready ||
-        context->measured_encoded_frame_rate < minimum_upgrade_frame_rate ||
-        context->encoded_frame_rate_healthy_since_ms == 0 ||
-        now_ms - context->encoded_frame_rate_healthy_since_ms <
+        context->upgrade_frame_rate_healthy_since_ms == 0 ||
+        now_ms - context->upgrade_frame_rate_healthy_since_ms <
             kFrameRateHealthyDurationMs ||
         context->normalized_qp_ewma > kMaxNormalizedQpForUpgrade ||
         now_ms < context->next_resolution_upgrade_probe_ms ||
