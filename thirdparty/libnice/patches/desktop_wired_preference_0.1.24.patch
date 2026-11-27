@@ -1,3 +1,17 @@
+diff --git a/agent/agent-priv.h b/agent/agent-priv.h
+index cf82f61..46a7155 100644
+--- a/agent/agent-priv.h
++++ b/agent/agent-priv.h
+@@ -316,6 +316,9 @@ nice_candidate_jingle_priority (NiceCandidate *candidate);
+ guint32
+ nice_candidate_msn_priority (NiceCandidate *candidate);
+ 
++void
++nice_interfaces_add_wired_indices (GHashTable *indices);
++
+ guint32
+ nice_candidate_ice_priority_full (guint type_pref, guint local_pref,
+     guint component_id);
 diff --git a/agent/agent.c b/agent/agent.c
 index b7d7a1e..853ba73 100644
 --- a/agent/agent.c
@@ -49,6 +63,143 @@ index cb35dd2..f5aa8bb 100644
          agent->reliable, nat_assisted);
    }
  
+diff --git a/agent/interfaces.c b/agent/interfaces.c
+index 27fdaf0..a0256f1 100644
+--- a/agent/interfaces.c
++++ b/agent/interfaces.c
+@@ -46,6 +46,15 @@
+ #include "interfaces.h"
+ #include "agent-priv.h"
+ 
++#if defined(__APPLE__)
++#include <SystemConfiguration/SystemConfiguration.h>
++#elif defined(__linux__)
++#include <fcntl.h>
++#include <linux/ethtool.h>
++#include <linux/sockios.h>
++#include <net/if_arp.h>
++#endif
++
+ #ifdef G_OS_UNIX
+ 
+ #include <stdio.h>
+@@ -642,6 +651,7 @@ nice_interfaces_get_ip_for_interface (gchar *interface_name)
+ 
+ #include <winsock2.h>
+ #include <iphlpapi.h>
++#include <netioapi.h>
+ 
+ // Should be in Iphlpapi.h, but mingw doesn't seem to have these
+ // Values copied directly from:
+@@ -930,3 +940,108 @@ out:
+ #error Can not use this method for retreiving ip list from OS other than unix or windows
+ #endif /* G_OS_WIN32 */
+ #endif /* G_OS_UNIX */
++
++#ifdef __linux__
++static gboolean
++linux_interface_is_wired (int sock, const char *name)
++{
++  struct ethtool_cmd settings = { .cmd = ETHTOOL_GSET };
++  struct ifreq request = { 0 };
++  gchar path[sizeof ("/sys/class/net/") + IF_NAMESIZE];
++  int dir;
++  gboolean physical;
++
++  g_strlcpy (request.ifr_name, name, sizeof (request.ifr_name));
++  if (ioctl (sock, SIOCGIFHWADDR, &request) < 0 ||
++      request.ifr_hwaddr.sa_family != ARPHRD_ETHER)
++    return FALSE;
++
++  /* Wi-Fi and virtual interfaces can expose an Ethernet link-layer address. */
++  g_snprintf (path, sizeof (path), "/sys/class/net/%s", name);
++  dir = open (path, O_RDONLY | O_DIRECTORY | O_CLOEXEC);
++  if (dir < 0)
++    return FALSE;
++  physical = faccessat (dir, "device", F_OK, 0) == 0 &&
++      faccessat (dir, "phy80211", F_OK, 0) < 0 && errno == ENOENT &&
++      faccessat (dir, "wireless", F_OK, 0) < 0 && errno == ENOENT;
++  close (dir);
++  if (!physical)
++    return FALSE;
++
++  request.ifr_data = (char *) &settings;
++  if (ioctl (sock, SIOCETHTOOL, &request) < 0)
++    return FALSE;
++
++  switch (settings.port) {
++    case PORT_TP:
++    case PORT_AUI:
++    case PORT_MII:
++    case PORT_FIBRE:
++    case PORT_BNC:
++    case PORT_DA:
++      return TRUE;
++    default:
++      return FALSE;
++  }
++}
++#endif
++
++void
++nice_interfaces_add_wired_indices (GHashTable *indices)
++{
++#ifdef G_OS_WIN32
++  IP_ADAPTER_ADDRESSES *adapters = _nice_get_adapters_addresses ();
++
++  for (IP_ADAPTER_ADDRESSES *a = adapters; a; a = a->Next) {
++    MIB_IF_ROW2 row = { 0 };
++
++    if (a->IfType != IF_TYPE_ETHERNET_CSMACD || a->OperStatus != IfOperStatusUp)
++      continue;
++    row.InterfaceLuid = a->Luid;
++    if (GetIfEntry2 (&row) != NO_ERROR ||
++        !row.InterfaceAndOperStatusFlags.HardwareInterface ||
++        row.PhysicalMediumType != NdisPhysicalMedium802_3)
++      continue;
++
++    if (a->IfIndex)
++      g_hash_table_add (indices, GUINT_TO_POINTER (a->IfIndex));
++    if (a->Ipv6IfIndex)
++      g_hash_table_add (indices, GUINT_TO_POINTER (a->Ipv6IfIndex));
++  }
++  g_free (adapters);
++#elif defined(__APPLE__)
++  CFArrayRef interfaces = SCNetworkInterfaceCopyAll ();
++  if (!interfaces)
++    return;
++  for (CFIndex i = 0; i < CFArrayGetCount (interfaces); ++i) {
++    SCNetworkInterfaceRef iface = (SCNetworkInterfaceRef)
++        CFArrayGetValueAtIndex (interfaces, i);
++    CFStringRef type = SCNetworkInterfaceGetInterfaceType (iface);
++    CFStringRef name = SCNetworkInterfaceGetBSDName (iface);
++    char bsd_name[IF_NAMESIZE];
++    guint index;
++
++    if (!type || !CFEqual (type, kSCNetworkInterfaceTypeEthernet) ||
++        !name || !CFStringGetCString (name, bsd_name, sizeof (bsd_name),
++            kCFStringEncodingUTF8))
++      continue;
++    index = if_nametoindex (bsd_name);
++    if (index)
++      g_hash_table_add (indices, GUINT_TO_POINTER (index));
++  }
++  CFRelease (interfaces);
++#elif defined(__linux__)
++  int sock = socket (AF_INET, SOCK_DGRAM | SOCK_CLOEXEC, 0);
++  if (sock < 0)
++    return;
++  struct if_nameindex *interfaces = if_nameindex ();
++  if (interfaces) {
++    for (struct if_nameindex *i = interfaces; i->if_index; ++i) {
++      if (linux_interface_is_wired (sock, i->if_name))
++        g_hash_table_add (indices, GUINT_TO_POINTER (i->if_index));
++    }
++    if_freenameindex (interfaces);
++  }
++  close (sock);
++#endif
++}
 diff --git a/agent/punch.c b/agent/punch.c
 index 7ce4957..3a605af 100644
 --- a/agent/punch.c
@@ -77,16 +228,13 @@ index 7ce4957..3a605af 100644
    g_snprintf (lc->c.foundation, NICE_CANDIDATE_MAX_FOUNDATION,
        "punch-%" G_GUINT64_FORMAT, handle);
 diff --git a/agent/stream.c b/agent/stream.c
-index c4fb8c3..df8afb9 100644
+index c4fb8c3..82857f6 100644
 --- a/agent/stream.c
 +++ b/agent/stream.c
-@@ -41,8 +41,86 @@
+@@ -41,8 +41,67 @@
  
  #include <string.h>
  
-+#include <net/if.h>
-+#include <SystemConfiguration/SystemConfiguration.h>
-+
 +#include "agent-priv.h"
 +#include "interfaces.h"
  #include "stream.h"
@@ -109,34 +257,18 @@ index c4fb8c3..df8afb9 100644
 +GSList *
 +nice_stream_prefer_wired_addresses (NiceStream *stream, GSList *addresses)
 +{
-+  CFArrayRef interfaces = SCNetworkInterfaceCopyAll ();
-+  GHashTable *wired_indices;
++  GHashTable *wired_indices = g_hash_table_new (g_direct_hash, g_direct_equal);
 +
 +  g_slist_free_full (stream->wired_addresses, (GDestroyNotify) nice_address_free);
 +  stream->wired_addresses = NULL;
-+  if (!interfaces)
++  nice_interfaces_add_wired_indices (wired_indices);
++
++
++  /* If no interface could be classified, retain the original gather order. */
++  if (g_hash_table_size (wired_indices) == 0) {
++    g_hash_table_unref (wired_indices);
 +    return addresses;
-+
-+  wired_indices = g_hash_table_new (g_direct_hash, g_direct_equal);
-+  for (CFIndex i = 0; i < CFArrayGetCount (interfaces); ++i) {
-+    SCNetworkInterfaceRef iface = (SCNetworkInterfaceRef)
-+        CFArrayGetValueAtIndex (interfaces, i);
-+    CFStringRef type = SCNetworkInterfaceGetInterfaceType (iface);
-+    CFStringRef name = SCNetworkInterfaceGetBSDName (iface);
-+    char bsd_name[IF_NAMESIZE];
-+    guint index;
-+
-+    if (!type || !CFEqual (type, kSCNetworkInterfaceTypeEthernet) ||
-+        !name || !CFStringGetCString (name, bsd_name, sizeof (bsd_name),
-+            kCFStringEncodingUTF8))
-+      continue;
-+    index = if_nametoindex (bsd_name);
-+    if (index)
-+      g_hash_table_add (wired_indices, GUINT_TO_POINTER (index));
 +  }
-+  CFRelease (interfaces);
-+
-+  /* Use the same address-to-index lookup as the Darwin UDP socket bind. */
 +  for (GSList *i = addresses; i; i = i->next) {
 +    guint index = nice_interfaces_get_if_index_by_addr (i->data);
 +    if (g_hash_table_contains (wired_indices, GUINT_TO_POINTER (index)))
@@ -167,7 +299,7 @@ index c4fb8c3..df8afb9 100644
  /* Simple tracking for the number of alive streams. These must be accessed
   * atomically. */
  static volatile unsigned int n_streams_created = 0;
-@@ -191,6 +269,7 @@ nice_stream_finalize (GObject *obj)
+@@ -191,6 +250,7 @@ nice_stream_finalize (GObject *obj)
    stream = NICE_STREAM (obj);
  
    g_free (stream->name);
@@ -202,15 +334,15 @@ index 5f652aa..26c5af9 100644
  nice_stream_close (NiceAgent *agent, NiceStream *stream);
  
 diff --git a/meson.build b/meson.build
-index a9d9f5e..7f3df8e 100644
+index a9d9f5e..f8ae804 100644
 --- a/meson.build
 +++ b/meson.build
-@@ -32,7 +32,7 @@ nice_datadir = join_paths(get_option('prefix'), get_option('datadir'))
- cc = meson.get_compiler('c')
- static_build = get_option('default_library') == 'static'
- 
--syslibs = []
-+syslibs = [dependency('appleframeworks', modules: ['SystemConfiguration', 'CoreFoundation'])]
- 
- if cc.get_id() == 'msvc'
-   add_project_arguments(
+@@ -43,6 +43,8 @@ endif
+ if host_machine.system() == 'windows'
+   syslibs += [cc.find_library('iphlpapi')]
+   syslibs += [cc.find_library('ws2_32')]
++elif host_machine.system() == 'darwin'
++  syslibs += [dependency('appleframeworks', modules: ['SystemConfiguration', 'CoreFoundation'])]
+ elif host_machine.system() == 'sunos'
+   add_project_arguments('-D_XOPEN_SOURCE=600', language: 'c')
+   add_project_arguments('-D__EXTENSIONS__=1', language: 'c')
