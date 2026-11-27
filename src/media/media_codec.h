@@ -161,6 +161,12 @@ class MediaCodec {
     return false;
   }
 
+  // Called on the encode queue. A failed native resize leaves the input intact
+  // for the transport's CPU scaler.
+  virtual bool TryScaleNativeFrame(RawFrame& frame, uint32_t width, uint32_t height) {
+    return frame.TryScaleNativeFrame(width, height);
+  }
+
   // Hardware encoders that can separate their internal stages report how long
   // the last Encode() spent copying the frame into device memory and in the
   // encoder call itself. Everything else returns false, which keeps the caller

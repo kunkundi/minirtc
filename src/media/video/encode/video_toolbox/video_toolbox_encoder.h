@@ -27,6 +27,7 @@ class VideoToolboxEncoder : public MediaCodec {
 
 #if TARGET_OS_OSX
   static bool IsHardwareHevcSupported();
+  bool TryScaleNativeFrame(RawFrame& frame, uint32_t width, uint32_t height) override;
 #endif
 
   int Init(const MediaCodecConfig& config) override;

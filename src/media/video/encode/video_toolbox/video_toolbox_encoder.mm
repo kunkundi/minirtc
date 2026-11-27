@@ -11,6 +11,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+#include "cv_pixel_buffer_frame.h"
 #include "h264_bitstream_parser.h"
 #include "log.h"
 
@@ -27,6 +28,9 @@ class VideoToolboxEncoder::Impl {
   ~Impl();
 
   int Init(const MediaCodecConfig& config);
+#if TARGET_OS_OSX
+  bool TryScaleNativeFrame(RawFrame& frame, uint32_t width, uint32_t height);
+#endif
   pair<int, int> PrepareEncodeResolution(int width, int height) {
     lock_guard<mutex> guard(lock_);
     return SelectResolution(width, height);
@@ -95,6 +99,12 @@ class VideoToolboxEncoder::Impl {
   std::atomic<bool> force_idr_ = false;
   std::atomic<bool> native_input_logged_ = false;
 
+#if TARGET_OS_OSX
+  VTPixelTransferSessionRef transfer_ = nullptr;
+  CVPixelBufferPoolRef scale_pool_ = nullptr;
+  uint32_t scale_width_ = 0, scale_height_ = 0;
+  OSType scale_format_ = 0;
+#endif
   VTCompressionSessionRef session_ = nullptr;
   mutex lock_;
   atomic<uint64_t> session_generation_{0};
@@ -131,6 +141,10 @@ VideoToolboxEncoder::Impl::Impl(std::shared_ptr<SystemClock> clock, VideoCodecTy
     : clock_(std::move(clock)), hevc_(codec == VideoCodecType::H265) {}
 
 VideoToolboxEncoder::Impl::~Impl() {
+#if TARGET_OS_OSX
+  if (scale_pool_) CVPixelBufferPoolRelease(scale_pool_);
+  if (transfer_) CFRelease(transfer_);
+#endif
 #ifdef SAVE_RECEIVED_NV12_STREAM
   if (file_nv12_) {
     fflush(file_nv12_);
@@ -477,6 +491,57 @@ void VideoToolboxEncoder::Impl::ResetCodecState() {
     h264_parser_generation_ = session_generation_.load();
   }
 }
+
+#if TARGET_OS_OSX
+bool VideoToolboxEncoder::Impl::TryScaleNativeFrame(RawFrame& frame, uint32_t width,
+                                                   uint32_t height) {
+  const auto* native = frame.NativeFrame();
+  size_t size;
+  if (!native || native->type != MiniRtcNativeVideoFrameCVPixelBuffer ||
+      !GetNv12FrameSize(width, height, &size)) return false;
+  auto source = static_cast<CVPixelBufferRef>(native->payload.cv_pixel_buffer);
+  const auto format = CVPixelBufferGetPixelFormatType(source);
+  if ((format != kCVPixelFormatType_420YpCbCr8BiPlanarVideoRange &&
+       format != kCVPixelFormatType_420YpCbCr8BiPlanarFullRange) ||
+      CVPixelBufferGetWidth(source) != frame.Width() ||
+      CVPixelBufferGetHeight(source) != frame.Height()) return false;
+
+  // Each viewer has its own encode queue and output pool. A retained frame
+  // keeps its storage even when this viewer changes resolution again.
+  if (!transfer_ && VTPixelTransferSessionCreate(nullptr, &transfer_) != noErr) return false;
+  if (!scale_pool_ || scale_width_ != width || scale_height_ != height || scale_format_ != format) {
+    CVPixelBufferPoolRef pool = nullptr;
+    @autoreleasepool {
+      NSDictionary* attrs = @{(id)kCVPixelBufferWidthKey: @(width),
+                              (id)kCVPixelBufferHeightKey: @(height),
+                              (id)kCVPixelBufferPixelFormatTypeKey: @(format),
+                              (id)kCVPixelBufferIOSurfacePropertiesKey: @{}};
+      if (CVPixelBufferPoolCreate(nullptr, nullptr, (__bridge CFDictionaryRef)attrs,
+                                  &pool) != kCVReturnSuccess) return false;
+    }
+    if (scale_pool_) CVPixelBufferPoolRelease(scale_pool_);
+    scale_pool_ = pool;
+    scale_width_ = width;
+    scale_height_ = height;
+    scale_format_ = format;
+  }
+
+  CVPixelBufferRef dest = nullptr;
+  if (CVPixelBufferPoolCreatePixelBuffer(nullptr, scale_pool_, &dest) != kCVReturnSuccess)
+    return false;
+  const auto status = VTPixelTransferSessionTransferImage(transfer_, source, dest);
+  if (status != noErr) {
+    CVPixelBufferRelease(dest);
+    return false;
+  }
+  RawFrame scaled(DescribePixelBuffer(dest));
+  CVPixelBufferRelease(dest);
+  if (!scaled.NativeFrame()) return false;
+  scaled.SetCapturedTimestamp(frame.CapturedTimestamp());
+  frame = std::move(scaled);
+  return true;
+}
+#endif
 
 static CVPixelBufferRef CreateNV12PixelBufferFromData(const char* data, size_t width,
                                                       size_t height) {
@@ -973,6 +1038,12 @@ bool VideoToolboxEncoder::IsHardwareHevcSupported() {
 VideoToolboxEncoder::~VideoToolboxEncoder() = default;
 
 int VideoToolboxEncoder::Init(const MediaCodecConfig& config) { return impl_->Init(config); }
+
+#if TARGET_OS_OSX
+bool VideoToolboxEncoder::TryScaleNativeFrame(RawFrame& frame, uint32_t width, uint32_t height) {
+  return impl_->TryScaleNativeFrame(frame, width, height);
+}
+#endif
 
 std::pair<int, int> VideoToolboxEncoder::PrepareEncodeResolution(int width, int height) {
   return impl_->PrepareEncodeResolution(width, height);

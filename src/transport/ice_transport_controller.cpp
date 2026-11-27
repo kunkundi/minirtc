@@ -1070,7 +1070,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
           (target_width < frame.Width() || target_height < frame.Height());
       if (needs_scaling && frame.NativeFrame() &&
           context->codec->SupportsNativeFrameInput(frame.NativeFrame()->type) &&
-          frame.TryScaleNativeFrame(target_width, target_height)) {
+          context->codec->TryScaleNativeFrame(frame, target_width, target_height)) {
         needs_scaling = false;
       }
       if (const auto* native_frame = frame.NativeFrame();

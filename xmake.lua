@@ -194,6 +194,10 @@ target("frame")
     set_kind("object")
     add_deps("common")
     add_files("src/frame/*.cpp")
+    if is_os("macosx") or is_iphoneos then
+        add_files("src/frame/cv_pixel_buffer_frame.mm")
+        add_includedirs("src/shared")
+    end
     add_includedirs("src/frame", "src/api", {public = true})
 
 target("fec")

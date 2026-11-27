@@ -426,7 +426,7 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                  encode_height != static_cast<int>(raw_frame.Height());
     if (scale && raw_frame.NativeFrame() &&
         codec->SupportsNativeFrameInput(raw_frame.NativeFrame()->type) &&
-        raw_frame.TryScaleNativeFrame(encode_width, encode_height)) {
+        codec->TryScaleNativeFrame(raw_frame, encode_width, encode_height)) {
       scale = false;
     }
     if (const auto* native_frame = raw_frame.NativeFrame();
