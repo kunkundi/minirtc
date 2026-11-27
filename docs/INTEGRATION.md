@@ -197,6 +197,7 @@ MiniRtcParams MakeParams(const char* login_identity,
 - 示例参数将静态 TURN 地址与用户名 / 密码留空，使用服务端下发值。需要中继时，服务端必须正确配置 Coturn、公布可达地址并签发有效凭据；`MiniRtcTurnAutoUdpTcp` 本身不会部署中继服务。
 - 桌面 libnice 构建启用 UPnP，可在非强制中继模式尝试网关映射。iOS、Android 和 HarmonyOS 配方禁用 UPnP；实际映射能力还取决于网关。
 - 匹配的 libnice 补丁允许受支持的原生对端在使用中继后继续尝试升级到 P2P；强制中继模式不执行这种升级。不要将其理解为所有对端都能无条件切回直连。
+- macOS 使用设备 ID 建连时，根据系统报告的接口类型优先发布和检查以太网直连候选。Wi-Fi 仍参与连通性检查，有线路径不可达时可通过 Wi-Fi 建连。
 - 默认忽略若干虚拟接口前缀，包括 Docker、TUN / TAP、WireGuard、Tailscale、ZeroTier。需要通过这些接口收集候选时，以 `--MINIRTC_INCLUDE_VIRTUAL_ICE_INTERFACES=true` 重新配置并构建。列表与补丁见 [libnice 配方](../thirdparty/libnice/xmake.lua)。
 
 ### TLS 与 INI 配置

@@ -20,6 +20,12 @@ package("libnice")
         "4da37e42ebe8f02229c704e83e002747b483acca09b0fc7d0c5233783d87c1dc")
     add_patches("0.1.24", path.join(os.scriptdir(), "patches", "relay_diagnostics_0.1.24.patch"),
         "768eaf00e5e0c9c0a8ca4b00af3a3fba5ce6ec92708ef7904dae4dea388d6981")
+    if is_plat("macosx") then
+        add_patches("0.1.24", path.join(os.scriptdir(), "patches", "macos_wired_preference_0.1.24.patch"),
+            "46a7c1c8188b660a18ea2f375d9551711935c2dd99e7736561cdb2546c709fe0")
+        add_configs("macos_wired_preference", {description = "Prefer Ethernet for direct ICE candidates", default = true, type = "boolean", readonly = true})
+        add_frameworks("SystemConfiguration", "CoreFoundation")
+    end
     add_configs("relay_ready_revision", {description = "Nominated relay readiness and blocker diagnostics", default = "2", type = "string", readonly = true})
     add_configs("direct_peer_ipv6", {description = "Pinned IPv6 peer and link-local scope", default = true, type = "boolean", readonly = true})
     add_configs("direct_peer", {description = "Pinned LAN peer address boundary", default = true, type = "boolean", readonly = true})

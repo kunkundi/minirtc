@@ -1,0 +1,216 @@
+diff --git a/agent/agent.c b/agent/agent.c
+index b7d7a1e..853ba73 100644
+--- a/agent/agent.c
++++ b/agent/agent.c
+@@ -3951,6 +3951,10 @@ nice_agent_gather_candidates (
+     }
+   }
+ 
++  if (agent->compatibility == NICE_COMPATIBILITY_RFC5245 &&
++      !agent->direct_peer_ip && !agent->force_relay)
++    local_addresses = nice_stream_prefer_wired_addresses (stream, local_addresses);
++
+   length = g_slist_length (local_addresses);
+   if (length > NICE_CANDIDATE_MAX_LOCAL_ADDRESSES) {
+     g_warning ("Agent %p : cannot have more than %d local addresses.",
+diff --git a/agent/conncheck.c b/agent/conncheck.c
+index fe5b97e..7ee97d5 100644
+--- a/agent/conncheck.c
++++ b/agent/conncheck.c
+@@ -1438,7 +1438,8 @@ static guint32 peer_reflexive_candidate_priority (NiceAgent *agent,
+     priority = nice_candidate_ms_ice_priority (candidate_priority,
+         agent->reliable, FALSE);
+   } else {
+-    priority = nice_candidate_ice_priority (candidate_priority,
++    priority = nice_stream_ice_priority (
++        agent_find_stream (agent, local_candidate->stream_id), candidate_priority,
+         agent->reliable, FALSE);
+   }
+   nice_candidate_free (candidate_priority);
+diff --git a/agent/discovery.c b/agent/discovery.c
+index cb35dd2..f5aa8bb 100644
+--- a/agent/discovery.c
++++ b/agent/discovery.c
+@@ -819,7 +819,7 @@ HostCandidateResult discovery_add_local_host_candidate (
+     candidate->priority =  nice_candidate_ms_ice_priority (candidate,
+         agent->reliable, FALSE);
+   } else {
+-    candidate->priority = nice_candidate_ice_priority (candidate,
++    candidate->priority = nice_stream_ice_priority (stream, candidate,
+         agent->reliable, FALSE);
+   }
+ 
+@@ -901,7 +901,7 @@ discovery_add_server_reflexive_candidate (
+     candidate->priority =  nice_candidate_ms_ice_priority (candidate,
+         agent->reliable, nat_assisted);
+   } else {
+-    candidate->priority =  nice_candidate_ice_priority (candidate,
++    candidate->priority = nice_stream_ice_priority (stream, candidate,
+         agent->reliable, nat_assisted);
+   }
+ 
+diff --git a/agent/punch.c b/agent/punch.c
+index 7ce4957..3a605af 100644
+--- a/agent/punch.c
++++ b/agent/punch.c
+@@ -152,11 +152,12 @@ gint nice_agent_punch_send (NiceAgent *a, guint sid, guint cid,
+ gboolean nice_agent_punch_promote (NiceAgent *a, guint sid, guint cid,
+     guint64 generation, guint64 handle, const NiceAddress *remote) {
+   NiceComponent *c; PunchEndpoint *e; GSList *i; NiceCandidate *rc = NULL;
++  NiceStream *stream;
+   NiceCandidateImpl *lc; gboolean result = FALSE;
+   g_return_val_if_fail (g_main_context_is_owner (a->main_context), FALSE);
+   if (!remote) return FALSE;
+   agent_lock (a);
+-  if (!agent_find_component (a, sid, cid, NULL, &c) || !active (a, c) ||
++  if (!agent_find_component (a, sid, cid, &stream, &c) || !active (a, c) ||
+       !(e = lookup (c, generation, handle)) || !e->extra || !e->receiving) goto done;
+   if (e->promoted) { result = TRUE; goto done; }
+   guint promoted = 0;
+@@ -175,7 +176,7 @@ gboolean nice_agent_punch_promote (NiceAgent *a, guint sid, guint cid,
+   lc->c.transport = NICE_CANDIDATE_TRANSPORT_UDP;
+   lc->c.addr = lc->c.base_addr = e->socket->addr;
+   lc->sockptr = e->socket; lc->punch_internal = TRUE;
+-  lc->c.priority = nice_candidate_ice_priority (&lc->c, FALSE, FALSE);
++  lc->c.priority = nice_stream_ice_priority (stream, &lc->c, FALSE, FALSE);
+   /* Internal foundation is unique to this base port, never signalled. */
+   g_snprintf (lc->c.foundation, NICE_CANDIDATE_MAX_FOUNDATION,
+       "punch-%" G_GUINT64_FORMAT, handle);
+diff --git a/agent/stream.c b/agent/stream.c
+index c4fb8c3..df8afb9 100644
+--- a/agent/stream.c
++++ b/agent/stream.c
+@@ -41,8 +41,86 @@
+ 
+ #include <string.h>
+ 
++#include <net/if.h>
++#include <SystemConfiguration/SystemConfiguration.h>
++
++#include "agent-priv.h"
++#include "interfaces.h"
+ #include "stream.h"
+ 
++static gboolean
++is_wired_address (const NiceStream *stream, const NiceAddress *address)
++{
++  for (const GSList *i = stream->wired_addresses; i; i = i->next)
++    if (nice_address_equal_no_port (i->data, address))
++      return TRUE;
++  return FALSE;
++}
++
++static gint
++wired_first (gconstpointer a, gconstpointer b, gpointer stream)
++{
++  return is_wired_address (stream, b) - is_wired_address (stream, a);
++}
++
++GSList *
++nice_stream_prefer_wired_addresses (NiceStream *stream, GSList *addresses)
++{
++  CFArrayRef interfaces = SCNetworkInterfaceCopyAll ();
++  GHashTable *wired_indices;
++
++  g_slist_free_full (stream->wired_addresses, (GDestroyNotify) nice_address_free);
++  stream->wired_addresses = NULL;
++  if (!interfaces)
++    return addresses;
++
++  wired_indices = g_hash_table_new (g_direct_hash, g_direct_equal);
++  for (CFIndex i = 0; i < CFArrayGetCount (interfaces); ++i) {
++    SCNetworkInterfaceRef iface = (SCNetworkInterfaceRef)
++        CFArrayGetValueAtIndex (interfaces, i);
++    CFStringRef type = SCNetworkInterfaceGetInterfaceType (iface);
++    CFStringRef name = SCNetworkInterfaceGetBSDName (iface);
++    char bsd_name[IF_NAMESIZE];
++    guint index;
++
++    if (!type || !CFEqual (type, kSCNetworkInterfaceTypeEthernet) ||
++        !name || !CFStringGetCString (name, bsd_name, sizeof (bsd_name),
++            kCFStringEncodingUTF8))
++      continue;
++    index = if_nametoindex (bsd_name);
++    if (index)
++      g_hash_table_add (wired_indices, GUINT_TO_POINTER (index));
++  }
++  CFRelease (interfaces);
++
++  /* Use the same address-to-index lookup as the Darwin UDP socket bind. */
++  for (GSList *i = addresses; i; i = i->next) {
++    guint index = nice_interfaces_get_if_index_by_addr (i->data);
++    if (g_hash_table_contains (wired_indices, GUINT_TO_POINTER (index)))
++      stream->wired_addresses = g_slist_prepend (stream->wired_addresses,
++          nice_address_dup (i->data));
++  }
++  g_hash_table_unref (wired_indices);
++
++  /* Trickle the preferred host candidates first, even before the peer has
++   * received the full checklist. The sort is stable within each group. */
++  return stream->wired_addresses ?
++      g_slist_sort_with_data (addresses, wired_first, stream) : addresses;
++}
++
++guint32
++nice_stream_ice_priority (NiceStream *stream, const NiceCandidate *candidate,
++    gboolean reliable, gboolean nat_assisted)
++{
++  guint32 priority = nice_candidate_ice_priority (candidate, reliable, nat_assisted);
++
++  /* RFC local preference bit 9 is unused by libnice. Keep the transport
++   * direction, candidate type and per-address tie breakers intact. */
++  if (is_wired_address (stream, &candidate->base_addr))
++    priority |= 1u << (8 + 9);
++  return priority;
++}
++
+ /* Simple tracking for the number of alive streams. These must be accessed
+  * atomically. */
+ static volatile unsigned int n_streams_created = 0;
+@@ -191,6 +269,7 @@ nice_stream_finalize (GObject *obj)
+   stream = NICE_STREAM (obj);
+ 
+   g_free (stream->name);
++  g_slist_free_full (stream->wired_addresses, (GDestroyNotify) nice_address_free);
+   g_slist_free_full (stream->components, (GDestroyNotify) g_object_unref);
+ 
+   g_atomic_int_inc (&n_streams_destroyed);
+diff --git a/agent/stream.h b/agent/stream.h
+index 5f652aa..26c5af9 100644
+--- a/agent/stream.h
++++ b/agent/stream.h
+@@ -79,6 +79,7 @@ struct _NiceStream {
+   guint id;
+   guint n_components;
+   gboolean initial_binding_request_received;
++  GSList *wired_addresses; /* local base addresses, fixed for this gather */
+   GSList *components; /* list of 'NiceComponent' objects */
+   GSList *conncheck_list;         /* list of CandidateCheckPair items */
+   gchar local_ufrag[NICE_STREAM_MAX_UFRAG];
+@@ -107,6 +108,13 @@ GType nice_stream_get_type (void);
+ NiceStream *
+ nice_stream_new (guint stream_id, guint n_components, NiceAgent *agent);
+ 
++GSList *
++nice_stream_prefer_wired_addresses (NiceStream *stream, GSList *addresses);
++
++guint32
++nice_stream_ice_priority (NiceStream *stream, const NiceCandidate *candidate,
++    gboolean reliable, gboolean nat_assisted);
++
+ void
+ nice_stream_close (NiceAgent *agent, NiceStream *stream);
+ 
+diff --git a/meson.build b/meson.build
+index a9d9f5e..7f3df8e 100644
+--- a/meson.build
++++ b/meson.build
+@@ -32,7 +32,7 @@ nice_datadir = join_paths(get_option('prefix'), get_option('datadir'))
+ cc = meson.get_compiler('c')
+ static_build = get_option('default_library') == 'static'
+ 
+-syslibs = []
++syslibs = [dependency('appleframeworks', modules: ['SystemConfiguration', 'CoreFoundation'])]
+ 
+ if cc.get_id() == 'msvc'
+   add_project_arguments(
