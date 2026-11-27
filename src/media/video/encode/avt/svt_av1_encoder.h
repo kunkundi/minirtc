@@ -23,6 +23,10 @@ class SvtAv1Encoder : public MediaCodec {
   ~SvtAv1Encoder();
 
   int Init(const MediaCodecConfig& config) override;
+  VideoResolutionLimits GetEncoderResolutionLimits() const override {
+    // AV1 Level 5.2, selected in Reconfigure (Annex A, MaxHSize/MaxVSize).
+    return {8192, 4352};
+  }
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame& encoded_frame)>
                  on_encoded_image) override;

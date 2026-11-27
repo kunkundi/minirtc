@@ -19,6 +19,8 @@ class WmfVideoEncoder final : public MediaCodec {
   ~WmfVideoEncoder() override;
   static bool IsSupported(VideoCodecType codec);
   int Init(const MediaCodecConfig& config) override;
+  VideoResolutionLimits GetEncoderResolutionLimits() const override { return {8192, 8192}; }
+  std::pair<int, int> PrepareEncodeResolution(int width, int height) override;
   int Encode(const RawFrame& frame,
              std::function<int(const EncodedFrame&)> callback) override;
   int ForceIdr() override;
@@ -32,6 +34,7 @@ class WmfVideoEncoder final : public MediaCodec {
  private:
   class Impl;
   std::unique_ptr<Impl> impl_;
+  EncoderResolutionSelector resolution_selector_;
 };
 }  // namespace minirtc
 #endif

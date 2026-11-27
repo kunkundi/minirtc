@@ -30,6 +30,7 @@ class VideoToolboxEncoder : public MediaCodec {
 #endif
 
   int Init(const MediaCodecConfig& config) override;
+  std::pair<int, int> PrepareEncodeResolution(int width, int height) override;
 
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame&)> on_encoded_image) override;

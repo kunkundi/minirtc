@@ -183,6 +183,12 @@ class MediaCodec {
   // limits as soon as Init succeeds, before the first encoded frame.
   virtual VideoResolutionLimits GetEncoderResolutionLimits() const { return {}; }
 
+  // Called before scaling on the encode queue, outside transport locks. An
+  // encoder can negotiate the actual format here. An empty size drops the frame.
+  virtual std::pair<int, int> PrepareEncodeResolution(int width, int height) {
+    return FitVideoResolution(width, height, 0, 0, GetEncoderResolutionLimits());
+  }
+
   virtual std::string GetEncoderName() const { return ""; }
 
   virtual std::string GetDecoderName() const { return ""; }

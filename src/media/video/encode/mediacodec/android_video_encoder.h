@@ -16,6 +16,8 @@ class AndroidVideoEncoder final : public MediaCodec {
  public:
   AndroidVideoEncoder(std::shared_ptr<SystemClock> clock, VideoCodecType type);
   int Init(const MediaCodecConfig& config) override;
+  VideoResolutionLimits GetEncoderResolutionLimits() const override;
+  std::pair<int, int> PrepareEncodeResolution(int width, int height) override;
   int Encode(const RawFrame& frame,
              std::function<int(const EncodedFrame&)> callback) override;
   int ForceIdr() override;
@@ -25,6 +27,9 @@ class AndroidVideoEncoder final : public MediaCodec {
 
  private:
   int Fallback(const char* reason);
+  std::pair<int, int> SelectResolution(int width, int height);
+  EncoderResolutionSelector resolution_selector_;
+  VideoResolutionLimits hardware_limits_{0, 0};
   std::shared_ptr<SystemClock> clock_;
   VideoCodecType type_;
   MediaCodecConfig config_;

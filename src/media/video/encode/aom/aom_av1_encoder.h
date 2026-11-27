@@ -39,6 +39,10 @@ class AomAv1Encoder : public MediaCodec {
 
  public:
   int Init(const MediaCodecConfig& config) override;
+  VideoResolutionLimits GetEncoderResolutionLimits() const override {
+    // libaom accepts 16-bit frame dimensions minus one.
+    return {65536, 65536};
+  }
 
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame& encoded_frame)>
@@ -95,6 +99,7 @@ class AomAv1Encoder : public MediaCodec {
   aom_codec_ctx_t aom_av1_encoder_ctx_;
   aom_codec_enc_cfg_t aom_av1_encoder_config_;
   bool disable_frame_dropping_ = true;
+  MediaCodecConfig config_;
   bool inited_ = false;
   int64_t timestamp_ = 0;
   aom_enc_frame_flags_t force_i_frame_flags_ = 0;

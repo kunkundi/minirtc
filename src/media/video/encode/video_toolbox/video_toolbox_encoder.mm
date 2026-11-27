@@ -27,6 +27,10 @@ class VideoToolboxEncoder::Impl {
   ~Impl();
 
   int Init(const MediaCodecConfig& config);
+  pair<int, int> PrepareEncodeResolution(int width, int height) {
+    lock_guard<mutex> guard(lock_);
+    return SelectResolution(width, height);
+  }
   int Encode(const RawFrame& raw_frame, function<int(const EncodedFrame&)> on_encoded_image);
   int ForceIdr();
   int SetTargetBitrate(int bitrate);
@@ -52,6 +56,8 @@ class VideoToolboxEncoder::Impl {
                             bool low_latency, bool try_spatial_aq,
                             VTCompressionSessionRef* session_out);
   int ResetEncodeResolution(int width, int height);
+  pair<int, int> SelectResolution(int width, int height);
+  EncoderResolutionSelector resolution_selector_;
   int ApplyBitrateProperties(VTCompressionSessionRef session, int bitrate, bool low_latency);
   int ApplyEncodingSpeedPriority(VTCompressionSessionRef session,
                                  bool prioritize_speed);
@@ -173,7 +179,8 @@ int VideoToolboxEncoder::Impl::Init(const MediaCodecConfig& config) {
       ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_);
   keyframe_interval_ = config.key_frame_interval;
 
-  if (ResetEncodeResolution(config.init_width, config.init_height) != 0) {
+  resolution_selector_ = {};
+  if (!SelectResolution(config.init_width, config.init_height).first) {
     return -1;
   }
 
@@ -261,7 +268,7 @@ int VideoToolboxEncoder::Impl::TryCompressionSession(
                                                this, &new_session);
   if (status != noErr || new_session == nullptr) {
     LOG_ERROR("Failed to create VideoToolbox encoder session [{}x{}]: {}", width, height, status);
-    return -1;
+    return status != noErr ? status : kVTAllocationFailedErr;
   }
 
   const bool speed_priority_supported =
@@ -282,7 +289,7 @@ int VideoToolboxEncoder::Impl::TryCompressionSession(
     LOG_WARN("{} rejected the requested profile: {}", GetEncoderName(), status);
     VTCompressionSessionInvalidate(new_session);
     CFRelease(new_session);
-    return -1;
+    return status;
   }
 
   CFNumberRef frameIntervalRef = CFNumberCreate(nullptr, kCFNumberIntType, &keyframe_interval_);
@@ -329,7 +336,7 @@ int VideoToolboxEncoder::Impl::TryCompressionSession(
     if (applied_aq) {
       return TryCompressionSession(width, height, encoder_spec, low_latency, false, session_out);
     }
-    return -1;
+    return status;
   }
 
   low_latency_active_ = low_latency;
@@ -337,6 +344,16 @@ int VideoToolboxEncoder::Impl::TryCompressionSession(
   *session_out = new_session;
   LOG_INFO("{} session {}x{}: low_latency={}", GetEncoderName(), width, height, low_latency);
   return 0;
+}
+
+pair<int, int> VideoToolboxEncoder::Impl::SelectResolution(int width, int height) {
+  return resolution_selector_.Select(width, height, {}, [&](int w, int h) {
+    if (session_ && width_ == w && height_ == h) return EncoderSizeSupport::Supported;
+    const int status = ResetEncodeResolution(w, h);
+    if (status == noErr) return EncoderSizeSupport::Supported;
+    return status == kVTVideoEncoderNotAvailableNowErr || status == -1
+               ? EncoderSizeSupport::Unavailable : EncoderSizeSupport::Unsupported;
+  });
 }
 
 int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
@@ -357,9 +374,10 @@ int VideoToolboxEncoder::Impl::ResetEncodeResolution(int width, int height) {
   }
 
   VTCompressionSessionRef new_session = nullptr;
-  if (CreateCompressionSession(width, height, !retry_failed_session, &new_session) != 0) {
+  const int status = CreateCompressionSession(width, height, !retry_failed_session, &new_session);
+  if (status != noErr) {
     next_recovery_attempt_ms_ = clock_->CurrentTimeMs() + 1000;
-    return -1;
+    return status;
   }
 
   session_ = new_session;
@@ -955,6 +973,10 @@ bool VideoToolboxEncoder::IsHardwareHevcSupported() {
 VideoToolboxEncoder::~VideoToolboxEncoder() = default;
 
 int VideoToolboxEncoder::Init(const MediaCodecConfig& config) { return impl_->Init(config); }
+
+std::pair<int, int> VideoToolboxEncoder::PrepareEncodeResolution(int width, int height) {
+  return impl_->PrepareEncodeResolution(width, height);
+}
 
 int VideoToolboxEncoder::Encode(const RawFrame& raw_frame,
                                 function<int(const EncodedFrame&)> on_encoded_image) {

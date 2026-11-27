@@ -85,29 +85,35 @@ int AomAv1Encoder::GetCpuSpeed(int width, int height) {
 
 int AomAv1Encoder::ResetEncodeResolution(unsigned int width,
                                          unsigned int height) {
-  LOG_INFO("Reset encode resolution from [{}x{}] to [{}x{}]]", frame_width_,
-           frame_height_, width, height);
-
-  frame_width_ = width;
-  frame_height_ = height;
-
-  aom_av1_encoder_config_.g_w = width;
-  aom_av1_encoder_config_.g_h = height;
-
-  if (frame_for_encode_ != nullptr) {
-    aom_img_free(frame_for_encode_);
-    frame_for_encode_ = aom_img_wrap(nullptr, AOM_IMG_FMT_NV12, frame_width_,
-                                     frame_height_, 1, nullptr);
+  const auto size = PrepareEncodeResolution(width, height);
+  if (size.first != int(width) || size.second != int(height)) return -1;
+  // enc_config_set can succeed when the first frame at the new size would
+  // exceed the sequence header. Only reconfigure in place within its bounds.
+  if (inited_ && frame_for_encode_ && size.first <= config_.init_width &&
+      size.second <= config_.init_height) {
+    auto updated = aom_av1_encoder_config_;
+    updated.g_w = width;
+    updated.g_h = height;
+    auto* image = aom_img_wrap(nullptr, AOM_IMG_FMT_NV12, width, height, 1, nullptr);
+    if (!image) return -1;
+    if (aom_codec_enc_config_set(&aom_av1_encoder_ctx_, &updated) == AOM_CODEC_OK) {
+      aom_img_free(frame_for_encode_);
+      frame_for_encode_ = image;
+      aom_av1_encoder_config_ = updated;
+      frame_width_ = width;
+      frame_height_ = height;
+      force_i_frame_.store(true);
+      return 0;
+    }
+    aom_img_free(image);
   }
-
-  const int result = aom_codec_enc_config_set(&aom_av1_encoder_ctx_,
-                                              &aom_av1_encoder_config_);
-  if (result == AOM_CODEC_OK) {
-    // AOM updates the existing encoder context in place, so explicitly start
-    // the new resolution with a key frame.
-    force_i_frame_.store(true);
-  }
-  return result;
+  auto config = config_;
+  config.init_width = width;
+  config.init_height = height;
+  config.average_bitrate = target_bitrate_ * 1000;
+  if (Release() != 0 || Init(config) != 0) return -1;
+  force_i_frame_.store(true);
+  return 0;
 }
 
 AomAv1Encoder::AomAv1Encoder(std::shared_ptr<SystemClock> clock)
@@ -137,8 +143,13 @@ AomAv1Encoder::~AomAv1Encoder() {
 }
 
 int AomAv1Encoder::Init(const MediaCodecConfig& config) {
-  frame_width_ = config.init_width;
-  frame_height_ = config.init_height;
+  const auto [width, height] = PrepareEncodeResolution(config.init_width, config.init_height);
+  if (width == 0) return -1;
+  config_ = config;
+  config_.init_width = width;
+  config_.init_height = height;
+  frame_width_ = width;
+  frame_height_ = height;
   key_frame_interval_ = config.key_frame_interval;
   max_bitrate_ = config.max_bitrate;
   target_bitrate_ =
@@ -291,11 +302,12 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
 
   frame_for_encode_ = aom_img_wrap(nullptr, AOM_IMG_FMT_NV12, frame_width_,
                                    frame_height_, 1, nullptr);
+  if (!frame_for_encode_) return -1;
 
 #ifdef SAVE_RECEIVED_NV12_STREAM
   nv12_file_name_ = "received_nv12_stream_" +
                     std::to_string(reinterpret_cast<uintptr_t>(this)) + ".yuv";
-  file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
+  if (!file_nv12_) file_nv12_ = fopen(nv12_file_name_.c_str(), "w+b");
   if (!file_nv12_) {
     LOG_ERROR("Fail to open {}", nv12_file_name_.c_str());
   }
@@ -304,7 +316,7 @@ int AomAv1Encoder::Init(const MediaCodecConfig& config) {
 #ifdef SAVE_ENCODED_AV1_STREAM
   av1_file_name_ = "encoded_h264_stream_" +
                    std::to_string(reinterpret_cast<uintptr_t>(this)) + ".ivf";
-  file_av1_ = fopen(av1_file_name_.c_str(), "w+b");
+  if (!file_av1_) file_av1_ = fopen(av1_file_name_.c_str(), "w+b");
   if (!file_av1_) {
     LOG_ERROR("Fail to open {}", av1_file_name_.c_str());
   }
@@ -333,7 +345,7 @@ int AomAv1Encoder::Encode(
     encoded_frame_ = new uint8_t[encoded_frame_capacity_];
   }
 
-  if (raw_frame.Width() != frame_width_ ||
+  if (!frame_for_encode_ || raw_frame.Width() != frame_width_ ||
       raw_frame.Height() != frame_height_) {
     if (AOM_CODEC_OK !=
         ResetEncodeResolution(raw_frame.Width(), raw_frame.Height())) {

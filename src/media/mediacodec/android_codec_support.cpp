@@ -96,6 +96,11 @@ std::vector<AndroidCodecInfo> FindAndroidCodecs(VideoCodecType type,
       e->GetMethodID(video_class, "getWidthAlignment", "()I");
   auto height_alignment =
       e->GetMethodID(video_class, "getHeightAlignment", "()I");
+  auto widths_id = e->GetMethodID(video_class, "getSupportedWidths", "()Landroid/util/Range;");
+  auto heights_id = e->GetMethodID(video_class, "getSupportedHeights", "()Landroid/util/Range;");
+  auto upper_id = e->GetMethodID(e->FindClass("android/util/Range"), "getUpper",
+                                 "()Ljava/lang/Comparable;");
+  auto integer_id = e->GetMethodID(e->FindClass("java/lang/Integer"), "intValue", "()I");
   auto colors_id = e->GetFieldID(caps_class, "colorFormats", "[I");
   auto profile_id = e->GetFieldID(profile_class, "profile", "I");
   auto level_id = e->GetFieldID(profile_class, "level", "I");
@@ -159,10 +164,22 @@ std::vector<AndroidCodecInfo> FindAndroidCodecs(VideoCodecType type,
         }
         if (!avc_level) return;
       }
-      if (width > 0 && height > 0) {
+      VideoResolutionLimits limits;
+      if (encoder || (width > 0 && height > 0)) {
         auto video = e->CallObjectMethod(caps, video_id);
-        if (!video) return;
-        if (!e->CallBooleanMethod(video, size_id, width, height)) {
+        if (!env.Ok() || !video) return;
+        if (encoder && width == 0 && height == 0) {
+          auto upper = [&](jmethodID range_id) {
+            auto range = e->CallObjectMethod(video, range_id);
+            if (!env.Ok() || !range) return 0;
+            auto value = e->CallObjectMethod(range, upper_id);
+            if (!env.Ok() || !value) return 0;
+            const int upper_bound = e->CallIntMethod(value, integer_id);
+            return env.Ok() ? upper_bound : 0;
+          };
+          limits = {upper(widths_id), upper(heights_id)};
+          if (!env.Ok() || limits.max_width < 2 || limits.max_height < 2) return;
+        } else if (!e->CallBooleanMethod(video, size_id, width, height)) {
           // Some OMX encoders advertise macroblock alignment even though
           // configure accepts visible dimensions and writes SPS cropping.
           const int wa = e->CallIntMethod(video, width_alignment);
@@ -190,7 +207,7 @@ std::vector<AndroidCodecInfo> FindAndroidCodecs(VideoCodecType type,
       if (encoder && !color) return;
       bool low_latency = e->CallBooleanMethod(caps, feature_id,
                                               e->NewStringUTF("low-latency"));
-      if (env.Ok()) result.push_back({name, color, avc_level, low_latency});
+      if (env.Ok()) result.push_back({name, color, avc_level, low_latency, limits});
     }();
     if (e->ExceptionCheck()) e->ExceptionClear();
     e->PopLocalFrame(nullptr);

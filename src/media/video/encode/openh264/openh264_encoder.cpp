@@ -141,11 +141,11 @@ int OpenH264Encoder::InitEncoderParams(int width, int height) {
 
 int OpenH264Encoder::ResetEncodeResolution(unsigned int width,
                                            unsigned int height) {
-  frame_width_ = width;
-  frame_height_ = height;
-
+  const auto size = PrepareEncodeResolution(width, height);
+  if (size.first != int(width) || size.second != int(height)) return -1;
   if (openh264_encoder_) {
     openh264_encoder_->Uninitialize();
+    frame_width_ = frame_height_ = 0;
   } else {
     LOG_ERROR("Invalid openh264 encoder");
     return -1;
@@ -163,14 +163,18 @@ int OpenH264Encoder::ResetEncodeResolution(unsigned int width,
 
   // Restart the GOP so Encode() requests an IDR from the newly initialized
   // encoder, rather than relying on a request made against the old instance.
+  frame_width_ = width;
+  frame_height_ = height;
   seq_ = 0;
 
   return 0;
 }
 
 int OpenH264Encoder::Init(const MediaCodecConfig& config) {
-  frame_width_ = config.init_width;
-  frame_height_ = config.init_height;
+  const auto [width, height] = PrepareEncodeResolution(config.init_width, config.init_height);
+  if (width == 0) return -1;
+  frame_width_ = width;
+  frame_height_ = height;
   key_frame_interval_ = config.key_frame_interval;
   max_bitrate_ = config.max_bitrate;
   target_bitrate_ =

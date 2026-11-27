@@ -439,6 +439,7 @@ class WmfVideoEncoder::Impl {
     HRESULT hr = EnumerateEncoders(hevc_, &activations, &count);
     if (FAILED(hr)) return hr;
     hr = MF_E_TOPO_CODEC_NOT_FOUND;
+    bool format_rejected = false;
     for (UINT32 i = 0; i < count; ++i) {
       if (!encoder_) {
         bool applied_realtime = false;
@@ -463,6 +464,8 @@ class WmfVideoEncoder::Impl {
                                    : Configure(activations[i], false);
         }
         if (FAILED(hr)) {
+          format_rejected |= hr == MF_E_INVALIDMEDIATYPE || hr == E_INVALIDARG ||
+                             hr == E_OUTOFMEMORY;
           LOG_DEBUG("Hardware {} MFT initialization failed: 0x{:08x}",
                     hevc_ ? "H.265" : "H.264", static_cast<uint32_t>(hr));
           Reset();
@@ -484,7 +487,9 @@ class WmfVideoEncoder::Impl {
     }
     CoTaskMemFree(activations);
     reconfigure_ = false;
-    return encoder_ ? S_OK : hr;
+    if (encoder_) return S_OK;
+    // An unavailable adapter must not mask a size rejection on another GPU.
+    return format_rejected ? MF_E_INVALIDMEDIATYPE : hr;
   }
 
   unsigned CacheHeaders(const uint8_t* data,
@@ -703,16 +708,45 @@ bool WmfVideoEncoder::IsSupported(VideoCodecType codec) {
 }
 
 int WmfVideoEncoder::Init(const MediaCodecConfig& config) {
-  if (!ValidConfig(config)) return -1;
-  return impl_->worker_.Call([&] {
+  auto bounded = config;
+  const auto [width, height] = FitVideoResolution(
+      config.init_width, config.init_height, 0, 0, GetEncoderResolutionLimits());
+  bounded.init_width = width;
+  bounded.init_height = height;
+  if (!ValidConfig(bounded)) return -1;
+  resolution_selector_ = {};
+  impl_->worker_.Call([&] {
+    impl_->Reset();
     impl_->fallback_.reset();
-    impl_->config_ = config;
+    impl_->initialized_ = false;
+    impl_->config_ = bounded;
     impl_->input_frame_rate_ = config.max_frame_rate;
     impl_->config_.init_bitrate =
         ClampEncoderTargetBitrate(config.init_bitrate, config.max_bitrate);
-    impl_->initialized_ = SUCCEEDED(impl_->Initialize());
-    return impl_->initialized_ ? 0 : -1;
   });
+  impl_->initialized_ = PrepareEncodeResolution(width, height).first > 0;
+  return impl_->initialized_ ? 0 : -1;
+}
+
+std::pair<int, int> WmfVideoEncoder::PrepareEncodeResolution(int width, int height) {
+  const auto limits = GetEncoderResolutionLimits();
+  auto size = resolution_selector_.Select(width, height, limits, [&](int w, int h) {
+    return impl_->worker_.Call([&] {
+      if (impl_->fallback_ || (impl_->encoder_ && impl_->config_.init_width == w &&
+                               impl_->config_.init_height == h && !impl_->reconfigure_))
+        return EncoderSizeSupport::Supported;
+      impl_->config_.init_width = w;
+      impl_->config_.init_height = h;
+      const HRESULT hr = impl_->Initialize();
+      if (SUCCEEDED(hr)) return EncoderSizeSupport::Supported;
+      return hr == MF_E_INVALIDMEDIATYPE || hr == E_INVALIDARG
+                 ? EncoderSizeSupport::Unsupported : EncoderSizeSupport::Unavailable;
+    });
+  });
+  // After device loss, Encode still owns the H.264 runtime software fallback.
+  if (!size.first && impl_->initialized_ && !impl_->hevc_)
+    return FitVideoResolution(width, height, 0, 0, limits);
+  return size;
 }
 
 int WmfVideoEncoder::Encode(const RawFrame& raw,

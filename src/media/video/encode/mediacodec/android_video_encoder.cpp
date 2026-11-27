@@ -1,5 +1,6 @@
 #include "android_video_encoder.h"
 
+#include "android_codec_support.h"
 #include "avt/svt_av1_encoder.h"
 #include "openh264/openh264_encoder.h"
 
@@ -14,14 +15,52 @@ AndroidVideoEncoder::AndroidVideoEncoder(std::shared_ptr<SystemClock> clock,
 int AndroidVideoEncoder::Init(const MediaCodecConfig& config) {
   std::lock_guard<std::mutex> lock(mutex_);
   if (initialized_) return -1;
+  resolution_selector_ = {};
   config_ = config;
   config_.init_bitrate =
       ClampEncoderTargetBitrate(config.init_bitrate, config.max_bitrate);
-  if (hardware_.InitEncoder(config_) != 0 &&
-      Fallback("initialization failed") != 0)
-    return -1;
+  // The outer bound covers all eligible components. Configure still checks
+  // the width/height pair and alignment on the component it actually opens.
+  hardware_limits_ = {0, 0};
+  for (const auto& codec : FindAndroidCodecs(type_, true)) {
+    hardware_limits_.max_width =
+        std::max(hardware_limits_.max_width, codec.limits.max_width);
+    hardware_limits_.max_height =
+        std::max(hardware_limits_.max_height, codec.limits.max_height);
+  }
+  hardware_limits_.max_width = std::min(8192, hardware_limits_.max_width);
+  hardware_limits_.max_height = std::min(8192, hardware_limits_.max_height);
+  if (!SelectResolution(config.init_width, config.init_height).first) return -1;
   initialized_ = true;
   return 0;
+}
+
+VideoResolutionLimits AndroidVideoEncoder::GetEncoderResolutionLimits() const {
+  // The encode queue owns fallback transitions. Avoid taking mutex_ from a
+  // transport stream lock while an asynchronous output callback is running.
+  return software_ ? software_->GetEncoderResolutionLimits() : hardware_limits_;
+}
+
+std::pair<int, int> AndroidVideoEncoder::PrepareEncodeResolution(int width, int height) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  return SelectResolution(width, height);
+}
+
+std::pair<int, int> AndroidVideoEncoder::SelectResolution(int width, int height) {
+  if (!software_) {
+    const auto size = resolution_selector_.Select(
+        width, height, hardware_limits_, [&](int w, int h) {
+          config_.init_width = w;
+          config_.init_height = h;
+          return hardware_.InitEncoder(config_) == 0 ? EncoderSizeSupport::Supported
+                                                     : EncoderSizeSupport::Unsupported;
+        });
+    if (size.first) return size;
+    config_.init_width = width;
+    config_.init_height = height;
+    if (Fallback("no supported hardware size") != 0) return {};
+  }
+  return software_->PrepareEncodeResolution(width, height);
 }
 
 int AndroidVideoEncoder::Fallback(const char* reason) {
@@ -43,10 +82,9 @@ int AndroidVideoEncoder::Fallback(const char* reason) {
 int AndroidVideoEncoder::Encode(
     const RawFrame& frame, std::function<int(const EncodedFrame&)> callback) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!initialized_ ||
-      !AndroidMediaCodec::IsValidSize(frame.Width(), frame.Height()))
-    return -1;
+  if (!initialized_) return -1;
   if (software_) return software_->Encode(frame, std::move(callback));
+  if (!AndroidMediaCodec::IsValidSize(frame.Width(), frame.Height())) return -1;
   const auto result = hardware_.Encode(frame, callback);
   if (result == AndroidMediaCodec::Result::Ok) return 0;
   if (result == AndroidMediaCodec::Result::InvalidInput) return -1;
@@ -56,6 +94,8 @@ int AndroidVideoEncoder::Encode(
                    ? "unsupported size or resolution change"
                    : "input/output error or exhausted input buffers") != 0)
     return -1;
+  const auto size = software_->PrepareEncodeResolution(frame.Width(), frame.Height());
+  if (size.first != int(frame.Width()) || size.second != int(frame.Height())) return -1;
   return software_->Encode(frame, std::move(callback));
 }
 

@@ -311,6 +311,9 @@ int NvidiaVideoEncoder::Encode(
     LOG_WARN("NVENC unavailable; continuing with {}",
              replacement->GetEncoderName());
     std::atomic_store(&fallback_, std::move(replacement));
+    const auto size = fallback_->PrepareEncodeResolution(raw_frame.Width(), raw_frame.Height());
+    if (size.first != int(raw_frame.Width()) || size.second != int(raw_frame.Height()))
+      return -1;  // The next input is scaled for the replacement backend.
     // Re-enter to materialize the failed hardware input for the new encoder.
     return Encode(raw_frame, std::move(on_encoded_image));
   }

@@ -80,6 +80,13 @@ class NvidiaVideoEncoder : public MediaCodec {
     return resolution_limits_;
   }
 
+  std::pair<int, int> PrepareEncodeResolution(int width, int height) override {
+#ifdef _WIN32
+    if (fallback_) return fallback_->PrepareEncodeResolution(width, height);
+#endif
+    return MediaCodec::PrepareEncodeResolution(width, height);
+  }
+
   std::string GetEncoderName() const override {
 #ifdef _WIN32
     if (auto fallback = std::atomic_load(&fallback_)) return fallback->GetEncoderName();

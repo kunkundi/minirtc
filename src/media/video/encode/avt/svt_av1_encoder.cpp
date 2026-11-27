@@ -46,8 +46,10 @@ void SvtAv1Encoder::Release() {
 }
 
 int SvtAv1Encoder::Init(const MediaCodecConfig& config) {
-  frame_width_ = config.init_width;
-  frame_height_ = config.init_height;
+  const auto [width, height] = PrepareEncodeResolution(config.init_width, config.init_height);
+  if (width == 0) return -1;
+  frame_width_ = width;
+  frame_height_ = height;
   max_bitrate_ = config.max_bitrate;
   target_bitrate_ =
       ClampEncoderTargetBitrate(config.average_bitrate, max_bitrate_);
@@ -160,6 +162,8 @@ int SvtAv1Encoder::Encode(
   }
 
   if (!svt_av1_encoder_ || width != frame_width_ || height != frame_height_) {
+    const auto size = PrepareEncodeResolution(width, height);
+    if (size.first != int(width) || size.second != int(height)) return -1;
     if (ResetEncodeResolution(width, height) != 0) {
       return -1;
     }

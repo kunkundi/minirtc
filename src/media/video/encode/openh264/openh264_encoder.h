@@ -25,6 +25,10 @@ class OpenH264Encoder : public MediaCodec {
   virtual ~OpenH264Encoder();
 
   int Init(const MediaCodecConfig& config) override;
+  VideoResolutionLimits GetEncoderResolutionLimits() const override {
+    // H.264 Level 5.2 permits 543 macroblocks per side (Annex A).
+    return {543 * 16, 543 * 16};
+  }
 
   int Encode(const RawFrame& raw_frame,
              std::function<int(const EncodedFrame& encoded_frame)>

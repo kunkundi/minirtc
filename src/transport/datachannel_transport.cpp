@@ -416,13 +416,17 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       stream->source_height_ = source_height;
       stream->last_resize_ms_ = now_ms;
     }
-    bool scale =
-        stream->adapted_width_ > 0 && stream->adapted_height_ > 0 &&
-        (stream->adapted_width_ != static_cast<int>(raw_frame.Width()) ||
-         stream->adapted_height_ != static_cast<int>(raw_frame.Height()));
+    const auto [encode_width, encode_height] = codec->PrepareEncodeResolution(
+        stream->adapted_width_, stream->adapted_height_);
+    if (encode_width <= 0 || encode_height <= 0) {
+      if (should_force_i_frame) self->RequestVideoKeyFrame(stream_id);
+      return -1;
+    }
+    bool scale = encode_width != static_cast<int>(raw_frame.Width()) ||
+                 encode_height != static_cast<int>(raw_frame.Height());
     if (scale && raw_frame.NativeFrame() &&
         codec->SupportsNativeFrameInput(raw_frame.NativeFrame()->type) &&
-        raw_frame.TryScaleNativeFrame(stream->adapted_width_, stream->adapted_height_)) {
+        raw_frame.TryScaleNativeFrame(encode_width, encode_height)) {
       scale = false;
     }
     if (const auto* native_frame = raw_frame.NativeFrame();
@@ -437,8 +441,7 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     if (scale) {
       RawFrame scaled;
       if (self->resolution_adapter_->ResolutionDowngrade(
-              raw_frame, stream->adapted_width_, stream->adapted_height_,
-              scaled) != 0) {
+              raw_frame, encode_width, encode_height, scaled) != 0) {
         if (should_force_i_frame) self->RequestVideoKeyFrame(stream_id);
         return -1;
       }

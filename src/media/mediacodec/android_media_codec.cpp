@@ -397,12 +397,14 @@ int AndroidMediaCodec::InitDecoder() {
 }
 int AndroidMediaCodec::InitEncoder(const MediaCodecConfig& config) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (!encoder_ || drain_thread_.joinable()) return -1;
+  if (!encoder_) return -1;
   config_ = config;
   config_.init_bitrate =
       ClampEncoderTargetBitrate(config.init_bitrate, config.max_bitrate);
-  if (!Configure(config.init_width, config.init_height)) return -1;
-  drain_thread_ = std::thread(&AndroidMediaCodec::DrainLoop, this);
+  if ((!state_ || width_ != config.init_width || height_ != config.init_height) &&
+      !Configure(config.init_width, config.init_height)) return -1;
+  if (!drain_thread_.joinable())
+    drain_thread_ = std::thread(&AndroidMediaCodec::DrainLoop, this);
   return 0;
 }
 bool AndroidMediaCodec::Configure(int w, int h) {
