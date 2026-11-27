@@ -7,6 +7,7 @@
 #ifndef _PEER_CONNECTION_H_
 #define _PEER_CONNECTION_H_
 
+#include <deque>
 #include <iostream>
 #include <map>
 #include <mutex>
@@ -157,6 +158,7 @@ class PeerConnection {
   }
   int SendSignalMessage(const char* message, size_t size);
 
+  int VerifySignal();
   int ForceSignalReconnect();
 
  private:
@@ -250,6 +252,14 @@ class PeerConnection {
   MiniRtcSignalStatus signal_status_ = MiniRtcSignalStatus::MiniRtcSignalClosed;
   std::mutex signal_status_mutex_;
   std::optional<std::string> pending_join_transmission_id_;
+  bool join_delivery_enabled_ = false;  // signal_status_mutex_
+  uint64_t join_sequence_ = 0;
+  struct JoinAttempt {
+    std::string id;
+    std::chrono::steady_clock::time_point submitted;
+  };
+  std::map<std::string, JoinAttempt> outgoing_joins_;  // signal_status_mutex_
+  std::deque<std::string> received_delivery_ids_;  // signaling callback thread
   std::atomic<bool> leave_{false};
   std::string sdp_without_cands_ = "";
 

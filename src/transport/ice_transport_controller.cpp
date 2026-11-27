@@ -139,7 +139,10 @@ void IceTransportController::Create(bool offer_peer, std::string remote_user_id,
                                     OnReceiveAudio on_receive_audio,
                                     OnReceiveData on_receive_data,
                                     void* user_data,
-                                    MiniRtcOnReceiveEncodedVideo encoded) {
+                                    MiniRtcOnReceiveEncodedVideo encoded,
+                                    std::function<void()> first_video_frame) {
+  std::atomic_store(&first_video_frame_, first_video_frame
+      ? std::make_shared<std::function<void()>>(std::move(first_video_frame)) : nullptr);
   offer_peer_ = offer_peer;
   remote_user_id_ = remote_user_id;
   video_rtx_enabled_ = video_rtx_enabled;
@@ -2802,7 +2805,7 @@ void IceTransportController::OnReceiveCompleteFrame(
     }
     int num_frame_returned = codec->Decode(
         std::move(received_frame),
-        [on_receive_video, remote_user_id, channel_name,
+        [weak_self, on_receive_video, remote_user_id, channel_name,
          user_data, weak_context = std::weak_ptr<StreamContext>(stream_context),
          reservation = std::move(reservation)](const DecodedFrame* decoded_frame) {
           auto stream_context = weak_context.lock();
@@ -2823,6 +2826,14 @@ void IceTransportController::OnReceiveCompleteFrame(
           minirtc_video_frame.received_timestamp = decoded_frame->ReceivedTimestamp();
           minirtc_video_frame.decoded_timestamp = decoded_frame->DecodedTimestamp();
           minirtc_video_frame.native_frame = decoded_frame->NativeFrame();
+          if (!stream_context->first_decoded_frame_seen.load(std::memory_order_relaxed) &&
+              !stream_context->first_decoded_frame_seen.exchange(true)) {
+            if (auto owner = weak_self.lock()) {
+              auto report = std::atomic_exchange(&owner->first_video_frame_,
+                  std::shared_ptr<std::function<void()>>{});
+              if (report) (*report)();
+            }
+          }
           on_receive_video(&minirtc_video_frame, remote_user_id.data(),
                            remote_user_id.size(), channel_name.data(),
                            channel_name.size(), user_data);

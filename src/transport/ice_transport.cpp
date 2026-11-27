@@ -1304,7 +1304,7 @@ int IceTransport::AppendLocalCapabilitiesToAnswer() {
         video_abs_recv_time_ext_id_, audio_abs_send_time_ext_id_,
         audio_abs_recv_time_ext_id_,
         on_receive_video_, on_receive_audio_, on_receive_data_, user_data_,
-        on_receive_encoded_video_);
+        on_receive_encoded_video_, first_video_frame_);
     ice_transport_controller_->Start();
   }
 
@@ -1616,7 +1616,7 @@ std::string IceTransport::GetRemoteCapabilities(const std::string& remote_sdp) {
           video_abs_recv_time_ext_id_, audio_abs_send_time_ext_id_,
           audio_abs_recv_time_ext_id_,
           on_receive_video_, on_receive_audio_, on_receive_data_, user_data_,
-        on_receive_encoded_video_);
+        on_receive_encoded_video_, first_video_frame_);
       ice_transport_controller_->Start();
     }
 

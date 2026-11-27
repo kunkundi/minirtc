@@ -466,6 +466,11 @@ int MiniRtcSetAnnouncementCacheDirectory(MiniRtcPeerPtr* peer, const char* direc
   return 0;
 }
 
+int MiniRtcVerifySignal(MiniRtcPeerPtr* peer) {
+  if (!peer || !peer->peer_connection) return -1;
+  return peer->peer_connection->VerifySignal();
+}
+
 int MiniRtcReconnectSignal(MiniRtcPeerPtr* peer_ptr) {
   if (!peer_ptr || !peer_ptr->peer_connection) {
     LOG_ERROR("Peer connection not created");

@@ -1,5 +1,9 @@
 #include "peer_connection.h"
 
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
+
 #include <chrono>
 #include <array>
 #include <exception>
@@ -374,6 +378,13 @@ int PeerConnection::Init(PeerConnectionParams params) {
           return;
         }
       }
+      if ((t == "join_delivery" || t == "user_join_transmission") && j.contains("request_id")) {
+        std::lock_guard lock(signal_status_mutex_);
+        const auto it = outgoing_joins_.find(j.value("transmission_id", ""));
+        if (it == outgoing_joins_.end() || j["request_id"] != it->second.id) return;
+        if (t == "user_join_transmission")
+          outgoing_joins_.erase(it);
+      }
       if (internal_signal_types_.find(t) != internal_signal_types_.end()) {
         ProcessSignal(msg);
         return;
@@ -507,6 +518,13 @@ int PeerConnection::Login() {
       ? json{{"type", "login"}, {"user_id", user_id_with_pwd_}}
       : reconnect_login_.Request(user_id_with_pwd_, now);
   if (announcements_) announcements_->PrepareLogin(message, uri_, user_id_);
+  message["join_delivery_version"] = 1;
+  message["heartbeat_version"] = 1;
+#if defined(__ANDROID__) || defined(__OHOS__) || (defined(__APPLE__) && TARGET_OS_IPHONE)
+  message["heartbeat_profile"] = "mobile";
+#else
+  message["heartbeat_profile"] = "desktop";
+#endif
   message["session_resume_version"] = 1;
   message["ice_config_version"] = 1;
   legacy_turn_config_.reset();
@@ -533,10 +551,17 @@ int PeerConnection::SendJoinRequestLocked(
   json message = {{"type", "join_transmission"},
                   {"user_id", user_id_},
                   {"transmission_id", transmission_id}};
+  if (join_delivery_enabled_) {
+    const auto target = transmission_id.substr(0, transmission_id.find('@'));
+    const auto id = std::to_string(++join_sequence_);
+    outgoing_joins_[target] = {id, std::chrono::steady_clock::now()};
+    message["request_id"] = id;
+  }
   remote_transmission_id_ = transmission_id;
 
   if (ws_transport_) {
     ws_transport_->Send(message.dump());
+    if (join_delivery_enabled_) ws_transport_->VerifyConnection();
 #ifndef NDEBUG
     ws_transport_->TraceSignal("join_submitted");
 #endif
@@ -581,6 +606,7 @@ int PeerConnection::Leave(const std::string& transmission_id) {
   {
     std::lock_guard<std::mutex> lock(signal_status_mutex_);
     signal_status = signal_status_;
+    outgoing_joins_.erase(transmission_id.substr(0, transmission_id.find('@')));
     if (pending_join_transmission_id_) {
       LOG_INFO("Cancel queued join transmission");
       pending_join_transmission_id_.reset();
@@ -699,6 +725,20 @@ PeerConnection::CreateManagedPeerConnection(const std::string& remote_user_id,
                                             const ConnectionInfo& info) {
   auto weak_connection = std::make_shared<std::weak_ptr<ConnectionInterface>>();
   ConnectionCallbacks callbacks = connection_callbacks_;
+  {
+    std::lock_guard lock(signal_status_mutex_);
+    auto attempt = outgoing_joins_.find(remote_user_id);
+    if (attempt != outgoing_joins_.end() && remote_user_id == info.transmission_id) {
+      callbacks.on_first_video_frame = [ws = std::weak_ptr<WsClient>(ws_transport_),
+          tx = info.transmission_id, join = attempt->second] {
+        const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - join.submitted).count();
+        if (auto socket = ws.lock(); socket && socket->GetStatus() == WsOpened)
+          socket->Send(json{{"type", "join_first_frame"}, {"transmission_id", tx},
+                            {"request_id", join.id}, {"elapsed_ms", elapsed}}.dump());
+      };
+    }
+  }
   if (!info.route_generation.empty()) {
     callbacks.on_selected_route =
         [this, remote_user_id, weak_connection, tx = info.transmission_id,
@@ -1117,6 +1157,13 @@ int PeerConnection::SendSignalMessage(const char* message, size_t size) {
   return 0;
 }
 
+int PeerConnection::VerifySignal() {
+  if (!ws_transport_) return -1;
+  if (GetSignalStatus() == MiniRtcSignalStatus::MiniRtcSignalConnected)
+    ws_transport_->VerifyConnection();
+  return 0;
+}
+
 int PeerConnection::ForceSignalReconnect() {
   if (!ws_transport_) {
     LOG_ERROR("Websocket transport is unavailable");
@@ -1125,6 +1172,7 @@ int PeerConnection::ForceSignalReconnect() {
   // A live WebSocket can still have a failed login. Only an authenticated
   // signaling connection is a no-op; the transport status alone is not enough.
   if (MiniRtcSignalStatus::MiniRtcSignalConnected == GetSignalStatus()) {
+    ws_transport_->VerifyConnection();
     return 0;
   }
   ws_transport_->ForceReconnect();
@@ -1271,6 +1319,9 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
       break;
     case "login"_H: {
       if (j["status"].get<std::string>() == "success") {
+        received_delivery_ids_.clear();
+        if (ws_transport_ && j.contains("heartbeat_seconds") && j["heartbeat_seconds"].is_number_integer())
+          ws_transport_->UseServerHeartbeat(j["heartbeat_seconds"].get<int>());
         per_connection_ice_config_ =
             j.contains("ice_config_version") && j["ice_config_version"] == 1;
         ApplyTurnCredentials(j);
@@ -1303,6 +1354,8 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
         LOG_DEBUG("Local user id: [{}]", user_id_);
         {
           std::lock_guard<std::mutex> lock(signal_status_mutex_);
+          outgoing_joins_.clear();
+          join_delivery_enabled_ = j.contains("join_delivery_version") && j["join_delivery_version"] == 1;
           signal_status_ = MiniRtcSignalStatus::MiniRtcSignalConnected;
           if (pending_join_transmission_id_) {
             std::string transmission_id =
@@ -1315,6 +1368,12 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
                           user_id_.size(), user_data_);
         ReportSessions(true);
       } else if (j["status"].get<std::string>() == "fail") {
+        const auto code = j.value("error_code", "");
+        if (code == "CREDENTIAL_SERVICE_BUSY" || code == "CREDENTIAL_RATE_LIMITED" ||
+            code == "AUTHENTICATION_THROTTLED") {
+          if (ws_transport_) ws_transport_->RetryAfter(j.value("retry_after", 1));
+          break;
+        }
         if (!on_signal_exchange_ && reconnect_login_.RetryPassword()) {
           LOG_INFO("Reconnect credential rejected; retrying password login");
           Login();
@@ -1367,6 +1426,15 @@ void PeerConnection::ProcessSignal(const std::string& signal) {
           break;
         }
 
+        if (ws_transport_ && j.contains("delivery_id") && j["delivery_id"].is_string()) {
+          const auto id = j["delivery_id"].get<std::string>();
+          ws_transport_->Send(json{{"type", "join_receipt"}, {"delivery_id", id},
+              {"transmission_id", transmission_id}, {"user_id", remote_user_id}}.dump());
+          if (std::find(received_delivery_ids_.begin(), received_delivery_ids_.end(), id) !=
+              received_delivery_ids_.end()) break;
+          received_delivery_ids_.push_back(id);
+          if (received_delivery_ids_.size() > 256) received_delivery_ids_.pop_front();
+        }
         ConnectionInfo info;
         if (!BuildConnectionInfo(j, transmission_id, remote_user_id, info)) {
           on_connection_status_(MiniRtcConnectionStatus::MiniRtcConnectionFailed, remote_user_id.data(),

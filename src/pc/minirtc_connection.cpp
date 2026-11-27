@@ -265,7 +265,8 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       ice_transport_->SetOnReceiveFunc(callbacks_.on_receive_video_frame,
                                        callbacks_.on_receive_audio_buffer,
                                        callbacks_.on_receive_data_buffer,
-                                       callbacks_.on_receive_encoded_video);
+                                       callbacks_.on_receive_encoded_video,
+                                       callbacks_.on_first_video_frame);
 
       ice_transport_->SetOnSelectedRoute(callbacks_.on_selected_route);
       ice_transport_->SetOnReceiveNetStatusReportFunc(
@@ -333,7 +334,8 @@ void MiniRtcConnection::ProcessIceWorkMsg(const IceWorkMsg& msg) {
       ice_transport_->SetOnReceiveFunc(callbacks_.on_receive_video_frame,
                                        callbacks_.on_receive_audio_buffer,
                                        callbacks_.on_receive_data_buffer,
-                                       callbacks_.on_receive_encoded_video);
+                                       callbacks_.on_receive_encoded_video,
+                                       callbacks_.on_first_video_frame);
 
       ice_transport_->SetOnSelectedRoute(callbacks_.on_selected_route);
       ice_transport_->SetOnReceiveNetStatusReportFunc(

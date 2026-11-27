@@ -69,6 +69,9 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
   void ForceReconnect();
 
   void AsyncReConnect();
+  void RetryAfter(int seconds);
+  void UseServerHeartbeat(int seconds);
+  void VerifyConnection();
 
   void Close();
 
@@ -129,9 +132,10 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   void StopThreads();
 
+  void StopPingLoop();
   void RestartPingThread(websocketpp::connection_hdl hdl);
 
-  void PingLoop(websocketpp::connection_hdl hdl);
+  void PingLoop(websocketpp::connection_hdl hdl, asio::ip::tcp::endpoint peer);
 
   void SetStatus(WsStatus status);
 
@@ -185,6 +189,9 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   std::atomic<bool> heartbeat_started_{false};
   unsigned int ping_interval_seconds_ = 3;
+  int server_heartbeat_seconds_ = 0;
+  bool verify_requested_ = false;
+  Clock::time_point last_server_activity_{};
   // Protected by ping_mtx_. A new ping is sent only after the matching pong.
   std::string pending_ping_payload_;
   uint64_t ping_sequence_ = 0;
@@ -196,7 +203,7 @@ class WsClient : public std::enable_shared_from_this<WsClient> {
 
   std::atomic<WsStatus> ws_status_{WsStatus::WsClosed};
   std::atomic<bool> shutdown_{false};
-  std::atomic<int> reconnect_attempts_{0};
+  std::atomic<int> reconnect_attempts_{0}, retry_floor_seconds_{0};
   std::atomic<int> tls_failure_count_{0};
   std::atomic<uint64_t> reconnect_generation_{0};
 

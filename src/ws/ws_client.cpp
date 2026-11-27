@@ -6,6 +6,9 @@
 #include <random>
 #include <thread>
 #include <vector>
+#if defined(__APPLE__)
+#include <TargetConditionals.h>
+#endif
 #if defined(__ANDROID__)
 #include <asio/ssl/host_name_verification.hpp>
 #endif
@@ -75,8 +78,7 @@ void WsClient::Shutdown() {
     retry_requested_ = false;
     reconnect_generation_.fetch_add(1);
   }
-  running_ = false;
-  cond_var_.notify_all();
+  StopPingLoop();
   reconnect_cv_.notify_all();
   callbacks_->ready.notify_all();
 
@@ -98,8 +100,7 @@ void WsClient::Shutdown() {
   LOG_DEBUG("WebSocket reconnect workers stopped");
 
   // A reconnect that was already running may have restarted the heartbeat.
-  running_ = false;
-  cond_var_.notify_all();
+  StopPingLoop();
   JoinThread(ping_thread_);
   LOG_DEBUG("WebSocket heartbeat worker stopped");
 
@@ -138,8 +139,7 @@ void WsClient::StopThreads() {
   const auto diagnostics = GetTransport().diagnostics;
   if (diagnostics) diagnostics->Event("workers_stop_start");
 #endif
-  running_ = false;
-  cond_var_.notify_all();
+  StopPingLoop();
 
   JoinThread(ping_thread_);
 
@@ -292,11 +292,12 @@ void WsClient::ScheduleReconnect(bool force) {
 }
 
 void WsClient::StartReconnectLocked(bool force) {
+  const int retry_floor = retry_floor_seconds_.exchange(0);
   int delay_seconds = 0;
   if (!force) {
     const int attempt = std::min(reconnect_attempts_.load() + 1, 6);
     reconnect_attempts_ = attempt;
-    delay_seconds = std::min(1 << attempt, 60);
+    delay_seconds = std::max(retry_floor, std::min(1 << attempt, 60));
     LOG_INFO("Scheduling signaling reconnect: attempt={} base_seconds={}",
              attempt, delay_seconds);
   }
@@ -569,6 +570,11 @@ int WsClient::ReConnect() {
   return Connect(uri_);
 }
 
+void WsClient::RetryAfter(int seconds) {
+  retry_floor_seconds_ = std::clamp(seconds, 1, 900);
+  AsyncReConnect();
+}
+
 void WsClient::AsyncReConnect() {
   if (shutdown_) {
     return;
@@ -631,40 +637,102 @@ void WsClient::SetStatus(WsStatus status) {
   }
 }
 
+void WsClient::StopPingLoop() {
+  std::lock_guard lock(ping_mtx_);
+  running_ = false;
+  cond_var_.notify_all();
+}
+
 void WsClient::RestartPingThread(websocketpp::connection_hdl hdl) {
   if (shutdown_) {
     return;
   }
 
   if (ping_thread_.joinable()) {
-    running_ = false;
-    cond_var_.notify_all();
+    StopPingLoop();
     JoinThread(ping_thread_);
   }
 
   {
     std::lock_guard<std::mutex> lock(ping_mtx_);
     pending_ping_payload_.clear();
-    connection_opened_at_ = Clock::now();
+    server_heartbeat_seconds_ = 0;
+    verify_requested_ = false;
+    connection_opened_at_ = last_server_activity_ = Clock::now();
     next_heartbeat_report_ = connection_opened_at_ + std::chrono::seconds(60);
     connection_stable_ = false;
     last_pong_rtt_ms_ = 0;
   }
   running_ = true;
-  ping_thread_ = std::thread(&WsClient::PingLoop, this, hdl);
+  websocketpp::lib::error_code ec;
+  auto connection = m_endpoint_->get_con_from_hdl(hdl, ec);
+  const auto peer = ec ? asio::ip::tcp::endpoint{} : connection->get_raw_socket().remote_endpoint(ec);
+  ping_thread_ = std::thread(&WsClient::PingLoop, this, hdl, peer);
   heartbeat_started_ = true;
 }
 
-void WsClient::PingLoop(websocketpp::connection_hdl hdl) {
+void WsClient::UseServerHeartbeat(int seconds) {
+  if (seconds != 20 && seconds != 60) return;
+  std::lock_guard lock(ping_mtx_);
+  server_heartbeat_seconds_ = seconds;
+  last_server_activity_ = Clock::now();
+  cond_var_.notify_all();
+}
+
+void WsClient::VerifyConnection() {
+  std::lock_guard lock(ping_mtx_);
+  if (pending_ping_payload_.empty()) verify_requested_ = true;
+  cond_var_.notify_all();
+}
+
+void WsClient::PingLoop(websocketpp::connection_hdl hdl, asio::ip::tcp::endpoint peer) {
   constexpr auto kWarningTimeout = std::chrono::seconds(5);
   constexpr auto kPongTimeout = std::chrono::seconds(15);
   const auto interval = std::chrono::seconds(ping_interval_seconds_);
   auto next_ping = Clock::now() + interval;
   const auto endpoint = m_endpoint_;
   std::weak_ptr<WsClient> weak_self = shared_from_this();
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+  // A connected UDP socket asks the kernel for the selected local route. No
+  // datagram is written. This also works in headless desktop hosts without a
+  // GUI event loop or permission to subscribe to platform connectivity events.
+  const auto source_address = [&] {
+    asio::error_code ec;
+    asio::ip::udp::socket route(endpoint->get_io_service());
+    route.connect(asio::ip::udp::endpoint(peer.address(), peer.port()), ec);
+    if (!ec) return route.local_endpoint(ec).address();
+    return asio::ip::address{};
+  };
+  auto source = peer.port() ? source_address() : asio::ip::address{};
+  auto next_route_check = Clock::now() + std::chrono::seconds(5);
+  auto previous_wall_check = std::chrono::system_clock::now();
+#endif
   std::unique_lock lock(ping_mtx_);
   while (running_) {
-    cond_var_.wait_until(lock, next_ping, [this] { return !running_; });
+    // A missing server probe can mean a silently lost mobile route. Send a
+    // single client probe only after the negotiated interval plus loop slack.
+    auto deadline = server_heartbeat_seconds_
+        ? last_server_activity_ + std::chrono::seconds(server_heartbeat_seconds_ + 12)
+        : next_ping;
+    if (!verify_requested_ && Clock::now() < deadline) {
+#if !defined(__ANDROID__) && !(defined(__APPLE__) && TARGET_OS_IPHONE)
+      if (server_heartbeat_seconds_ && peer.port()) {
+        if (Clock::now() >= next_route_check) {
+          const auto wall = std::chrono::system_clock::now();
+          const auto current = source_address();
+          verify_requested_ = current != source || wall - previous_wall_check > std::chrono::seconds(10);
+          previous_wall_check = wall;
+          source = current;
+          next_route_check = Clock::now() + std::chrono::seconds(5);
+          if (verify_requested_) continue;
+        }
+        deadline = std::min(deadline, next_route_check);
+      }
+#endif
+      cond_var_.wait_until(lock, deadline);
+      continue;
+    }
+    verify_requested_ = false;
     if (!running_) break;
     ping_queued_at_ = Clock::now();
     ping_dispatched_at_ = {};
@@ -886,14 +954,24 @@ void WsClient::OnClose(client* c, websocketpp::connection_hdl hdl) {
       con ? con->get_remote_close_code()
           : websocketpp::close::status::blank;
   LOG_WARN("Signaling transport closed: code={}", static_cast<int>(close_code));
-  running_ = false;
-  cond_var_.notify_all();
+  StopPingLoop();
   if (!shutdown_ && ws_status_ != WsReconnecting) {
     AsyncReConnect();
   }
 }
 
-bool WsClient::OnPing(websocketpp::connection_hdl, std::string) { return true; }
+bool WsClient::OnPing(websocketpp::connection_hdl hdl, std::string) {
+  std::lock_guard lock(ping_mtx_);
+  auto transport = GetTransport();
+  if (hdl.owner_before(transport.handle) || transport.handle.owner_before(hdl)) return false;
+  last_server_activity_ = Clock::now();
+  if (!connection_stable_ && last_server_activity_ - connection_opened_at_ >= std::chrono::seconds(60)) {
+    connection_stable_ = true;
+    reconnect_attempts_ = 0;
+  }
+  cond_var_.notify_all();
+  return true;
+}
 
 bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
   std::lock_guard<std::mutex> lock(ping_mtx_);
@@ -904,6 +982,7 @@ bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
     return true;
   }
   const auto now = Clock::now();
+  last_server_activity_ = now;
   last_pong_rtt_ms_ = std::chrono::duration_cast<std::chrono::milliseconds>(
                           now - ping_queued_at_)
                           .count();
@@ -929,7 +1008,14 @@ bool WsClient::OnPong(websocketpp::connection_hdl hdl, std::string msg) {
   return true;
 }
 
-void WsClient::OnMessage(websocketpp::connection_hdl, client::message_ptr msg) {
+void WsClient::OnMessage(websocketpp::connection_hdl hdl, client::message_ptr msg) {
+  {
+    std::lock_guard lock(ping_mtx_);
+    const auto transport = GetTransport();
+    if (hdl.owner_before(transport.handle) || transport.handle.owner_before(hdl)) return;
+    last_server_activity_ = Clock::now();
+    cond_var_.notify_all();
+  }
   if (!on_receive_msg_ || shutdown_) return;
   const auto& payload = msg->get_payload();
   if (!QueueCallback(

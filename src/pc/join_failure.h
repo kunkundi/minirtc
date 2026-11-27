@@ -22,7 +22,7 @@ inline JoinFailureKind ClassifyJoinFailure(std::string_view reason,
     if (code == "PASSWORD_REQUIRED") return JoinFailureKind::PasswordRequired;
     if (code == "AUTHENTICATION_FAILED")
       return JoinFailureKind::AuthenticationFailed;
-    if (code == "REMOTE_UNAVAILABLE") return JoinFailureKind::RemoteUnavailable;
+    if (code == "REMOTE_UNAVAILABLE" || code == "REMOTE_UNRESPONSIVE") return JoinFailureKind::RemoteUnavailable;
     if (code == "AUTHENTICATION_THROTTLED") return JoinFailureKind::Throttled;
     if (code == "CREDENTIAL_SERVICE_BUSY" || code == "CREDENTIAL_RATE_LIMITED")
       return JoinFailureKind::Busy;

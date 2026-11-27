@@ -75,7 +75,9 @@ class IceTransport {
   void SetOnReceiveFunc(OnReceiveVideo on_receive_video,
                         OnReceiveAudio on_receive_audio,
                         OnReceiveData on_receive_data,
-                        MiniRtcOnReceiveEncodedVideo encoded = nullptr) {
+                        MiniRtcOnReceiveEncodedVideo encoded = nullptr,
+                        std::function<void()> first_video_frame = {}) {
+    first_video_frame_ = std::move(first_video_frame);
     on_receive_video_ = on_receive_video;
     on_receive_encoded_video_ = encoded;
     on_receive_audio_ = on_receive_audio;
@@ -289,6 +291,7 @@ class IceTransport {
   std::function<void(MiniRtcDirectError)> direct_error_;
   std::atomic<bool> secure_ready_reported_{false};
 
+  std::function<void()> first_video_frame_;
   OnReceiveVideo on_receive_video_ = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;

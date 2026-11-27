@@ -68,6 +68,7 @@ struct ConnectionCallbacks {
   void* user_data = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video = nullptr;
   std::function<void(bool relay)> on_selected_route;
+  std::function<void()> on_first_video_frame;
 };
 
 struct IceWorkMsg {

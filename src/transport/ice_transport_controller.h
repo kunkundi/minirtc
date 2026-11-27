@@ -85,7 +85,8 @@ class IceTransportController
               std::optional<uint8_t> audio_abs_recv_time_ext_id,
               OnReceiveVideo on_receive_video, OnReceiveAudio on_receive_audio,
               OnReceiveData on_receive_data, void* user_data,
-              MiniRtcOnReceiveEncodedVideo encoded = nullptr);
+              MiniRtcOnReceiveEncodedVideo encoded = nullptr,
+              std::function<void()> first_video_frame = {});
   void Destroy();
 
   // SRTP is negotiated from the local setting and the remote SDP before
@@ -417,6 +418,7 @@ class IceTransportController
     // still reports success, so this count is the only observable signal. The
     // decode task increments it; output delivery, which may run on a decoder
     // thread, clears it.
+    std::atomic<bool> first_decoded_frame_seen{false};
     std::atomic<int> decode_inputs_without_output{0};
     int64_t last_decode_stall_request_ms = 0;
 
@@ -579,6 +581,7 @@ class IceTransportController
   StartingBitrates starting_bitrates_;
   bool disable_receiver_padding_probing_ = false;
 
+  std::shared_ptr<std::function<void()>> first_video_frame_;
   OnReceiveVideo on_receive_video_ = nullptr;
   MiniRtcOnReceiveEncodedVideo on_receive_encoded_video_ = nullptr;
   OnReceiveAudio on_receive_audio_ = nullptr;

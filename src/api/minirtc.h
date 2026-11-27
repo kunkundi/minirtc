@@ -810,6 +810,10 @@ MINIRTC_API int MiniRtcSetAnnouncementCacheDirectory(MiniRtcPeerPtr* peer_ptr,
  */
 MINIRTC_API int MiniRtcReconnectSignal(MiniRtcPeerPtr* peer_ptr);
 
+/** Check an authenticated socket after a wake or network change. Existing
+ * login attempts and reconnect backoff continue on their original schedule. */
+MINIRTC_API int MiniRtcVerifySignal(MiniRtcPeerPtr* peer_ptr);
+
 // -----------------------------------------------------------------------------
 // Stream registration
 // -----------------------------------------------------------------------------
