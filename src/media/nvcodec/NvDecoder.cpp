@@ -248,10 +248,25 @@ int NvDecoder::HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat) {
     return nDecodeSurface;
   }
 
-  if (m_nWidth && m_nLumaHeight && m_nChromaHeight) {
-    // cuvidCreateDecoder() has been called before, and now there's possible
-    // config change
-    return ReconfigureDecoder(pVideoFormat);
+  if (m_hDecoder) {
+    const bool isH264OrHevc = pVideoFormat->codec == cudaVideoCodec_H264 ||
+                              pVideoFormat->codec == cudaVideoCodec_HEVC;
+    if (!isH264OrHevc || (pVideoFormat->coded_width <= m_nMaxWidth &&
+                          pVideoFormat->coded_height <= m_nMaxHeight))
+      return ReconfigureDecoder(pVideoFormat);
+
+    // The sequence fits this GPU but exceeds the session's allocation.
+    // Keep the parser on this keyframe and retire the old output pool;
+    // retained native frames are freed by UnlockFrame on their last release.
+    setReconfigParams(nullptr, nullptr);
+    m_bReconfigExternal = false;
+    CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
+    const CUresult destroyResult = cuvidDestroyDecoder_ld(m_hDecoder);
+    CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(nullptr));
+    NVDEC_API_CALL(destroyResult);
+    m_hDecoder = nullptr;
+    m_nMaxWidth = pVideoFormat->coded_width;
+    m_nMaxHeight = pVideoFormat->coded_height;
   }
 
   // eCodec has been set in the constructor (for parser). Here it's set again
@@ -386,8 +401,10 @@ int NvDecoder::HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat) {
   m_videoInfo << std::endl;
 
   CUDA_DRVAPI_CALL(cuCtxPushCurrent_ld(m_cuContext));
-  NVDEC_API_CALL(cuvidCreateDecoder_ld(&m_hDecoder, &videoDecodeCreateInfo));
+  const CUresult createResult =
+      cuvidCreateDecoder_ld(&m_hDecoder, &videoDecodeCreateInfo);
   CUDA_DRVAPI_CALL(cuCtxPopCurrent_ld(NULL));
+  NVDEC_API_CALL(createResult);
   STOP_TIMER("Session Initialization Time: ");
   NvDecoder::addDecoderSessionOverHead(getDecoderSessionID(), elapsedTime);
   return nDecodeSurface;
