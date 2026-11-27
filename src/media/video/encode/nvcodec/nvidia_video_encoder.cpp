@@ -124,10 +124,17 @@ int NvidiaVideoEncoder::InitBackend(const MediaCodecConfig& config,
     encoder_->CreateDefaultEncoderParams(&init_params, codec_guid_,
                                          preset_guid_, tuning_info_);
 
-    frame_width_max_ = encoder_->GetCapabilityValue(codec_guid_,
-                                                    NV_ENC_CAPS_WIDTH_MAX);
-    frame_height_max_ = encoder_->GetCapabilityValue(codec_guid_,
-                                                     NV_ENC_CAPS_HEIGHT_MAX);
+    const VideoResolutionLimits limits{
+        encoder_->GetCapabilityValue(codec_guid_, NV_ENC_CAPS_WIDTH_MAX),
+        encoder_->GetCapabilityValue(codec_guid_, NV_ENC_CAPS_HEIGHT_MAX)};
+    const auto [width, height] =
+        FitVideoResolution(config.init_width, config.init_height, 0, 0, limits);
+    if (width == 0 || height == 0)
+      NVENC_THROW_ERROR("Invalid NVENC resolution limits or input size",
+                        NV_ENC_ERR_UNSUPPORTED_PARAM);
+    resolution_limits_ = limits;
+    frame_width_ = width;
+    frame_height_ = height;
     // frame_width_min_ = encoder_->GetCapabilityValue(codec_guid_,
     //                                                 NV_ENC_CAPS_WIDTH_MIN);
     // frame_height_min_ = encoder_->GetCapabilityValue(codec_guid_,
@@ -141,14 +148,14 @@ int NvidiaVideoEncoder::InitBackend(const MediaCodecConfig& config,
     support_dynamic_bitrate_ = encoder_->GetCapabilityValue(
         codec_guid_, NV_ENC_CAPS_SUPPORT_DYN_BITRATE_CHANGE);
 
-    init_params.encodeWidth = frame_width_;
-    init_params.encodeHeight = frame_height_;
+    init_params.darWidth = init_params.encodeWidth = frame_width_;
+    init_params.darHeight = init_params.encodeHeight = frame_height_;
     init_params.frameRateNum = max_fps_;
     init_params.frameRateDen = 1;
     // must set max encode width and height otherwise will get crash when try to
     // reconfigure the resolution
-    init_params.maxEncodeWidth = frame_width_max_;
-    init_params.maxEncodeHeight = frame_height_max_;
+    init_params.maxEncodeWidth = limits.max_width;
+    init_params.maxEncodeHeight = limits.max_height;
 #ifdef _WIN32
     if (directx_) {
       // NVENC reserves driver surfaces for this envelope, irrespective of the
@@ -157,9 +164,6 @@ int NvidiaVideoEncoder::InitBackend(const MediaCodecConfig& config,
       init_params.maxEncodeHeight = frame_height_;
     }
 #endif
-    // init_params.darWidth = init_params.encodeWidth;
-    // init_params.darHeight = init_params.encodeHeight;
-
     encodeConfig.gopLength = key_frame_interval_;
     encodeConfig.frameIntervalP = 1;
     encodeConfig.rcParams.rateControlMode = NV_ENC_PARAMS_RC_CBR;
@@ -510,11 +514,12 @@ int NvidiaVideoEncoder::ResetEncodeResolution(unsigned int width,
     return -1;
   }
 
-  if (width > frame_width_max_ || height > frame_height_max_) {
+  if (width > static_cast<unsigned>(resolution_limits_.max_width) ||
+      height > static_cast<unsigned>(resolution_limits_.max_height)) {
     LOG_ERROR(
         "Target resolution is too large for this hardware encoder, which "
         "[{}x{}] and support max resolution is [{}x{}]",
-        width, height, frame_width_max_, frame_height_max_);
+        width, height, resolution_limits_.max_width, resolution_limits_.max_height);
     NVENC_THROW_ERROR("Requested resolution exceeds NVENC capabilities",
                       NV_ENC_ERR_UNSUPPORTED_PARAM);
   }

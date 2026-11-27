@@ -73,6 +73,13 @@ class NvidiaVideoEncoder : public MediaCodec {
     return 0;
   }
 
+  VideoResolutionLimits GetEncoderResolutionLimits() const override {
+#ifdef _WIN32
+    if (fallback_) return fallback_->GetEncoderResolutionLimits();
+#endif
+    return resolution_limits_;
+  }
+
   std::string GetEncoderName() const override {
 #ifdef _WIN32
     if (auto fallback = std::atomic_load(&fallback_)) return fallback->GetEncoderName();
@@ -107,8 +114,7 @@ class NvidiaVideoEncoder : public MediaCodec {
   NV_ENC_BUFFER_FORMAT buffer_format_ =
       NV_ENC_BUFFER_FORMAT::NV_ENC_BUFFER_FORMAT_NV12;
 
-  uint32_t frame_width_max_ = 0;
-  uint32_t frame_height_max_ = 0;
+  VideoResolutionLimits resolution_limits_;
   uint32_t frame_width_min_ = 0;
   uint32_t frame_height_min_ = 0;
   uint32_t encode_level_max_ = 0;

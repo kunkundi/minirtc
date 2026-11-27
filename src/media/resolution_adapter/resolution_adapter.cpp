@@ -8,6 +8,7 @@
 #include "libyuv.h"
 #include "log.h"
 #include "nv12_scaler.h"
+#include "video_resolution_limit.h"
 
 namespace minirtc {
 namespace {
@@ -185,7 +186,7 @@ ResolutionAdapter::~ResolutionAdapter() {}
 int ResolutionAdapter::GetMaxPixelsForQuality() const {
   switch (video_quality_) {
     case MiniRtcVideoQualityHigh:
-      return 3840 * 2160;  // up to 4K
+      return kMaxVideoPixels;
     case MiniRtcVideoQualityMedium:
       return 1920 * 1080;  // up to 1080p
     default:

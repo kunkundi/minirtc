@@ -29,6 +29,7 @@
 #include "minirtc.h"
 #include "raw_frame.h"
 #include "received_frame.h"
+#include "resolution_adapter/video_resolution_limit.h"
 #include "bitrate_limits.h"
 
 #define MINIRTC_INIT_WIDTH 1920
@@ -177,6 +178,10 @@ class MediaCodec {
   }
 
   virtual int GetResolution(int* width, int* height) const { return 0; }
+
+  // Queried on the encode queue. Backends can report device/codec-specific
+  // limits as soon as Init succeeds, before the first encoded frame.
+  virtual VideoResolutionLimits GetEncoderResolutionLimits() const { return {}; }
 
   virtual std::string GetEncoderName() const { return ""; }
 

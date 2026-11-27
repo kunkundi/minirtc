@@ -8,6 +8,7 @@
 #include <limits>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <vector>
 
 #include "data_channel_send.h"
@@ -919,11 +920,10 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
             ? static_cast<int64_t>(video_frame->captured_timestamp)
             : clock_->CurrentTimeUs());
 
-    // Adapt against the viewer's useful source size. This keeps recovery and
-    // bandwidth probes from repeatedly trying to exceed the viewport ceiling.
+    // Recovery and bandwidth probes must use a size this peer can encode.
     const auto [source_width, source_height] = FitVideoResolution(
         raw_frame.Width(), raw_frame.Height(), video_resolution_width_,
-        video_resolution_height_);
+        video_resolution_height_, context->encoder_limits);
     if (context->source_width <= 0 || context->source_height <= 0 ||
         context->source_width != source_width ||
         context->source_height != source_height) {
@@ -1022,11 +1022,10 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
     const auto target_resolution = FitVideoResolution(
         source_width, source_height,
         context->target_width.value_or(source_width),
-        context->target_height.value_or(source_height));
-    const int target_width = target_resolution.first;
-    const int target_height = target_resolution.second;
+        context->target_height.value_or(source_height), {},
+        resolution_adapter_->GetMaxPixelsForQuality());
     encode_queue->PostTask([weak_self, weak_context, encode_queue, channel_name,
-                            force_i_frame, target_width, target_height, settings_generation,
+                            force_i_frame, target_resolution, settings_generation,
 #if SPDLOG_ACTIVE_LEVEL <= SPDLOG_LEVEL_DEBUG
                             sample_timings, timing_generation = context->encode_timing_generation,
 #endif
@@ -1049,10 +1048,16 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         return;
       }
 
-      if (!context->codec && !self->CreateVideoCodec(context, target_width, target_height)) {
+      if (!context->codec && !self->CreateVideoCodec(
+              context, target_resolution.first, target_resolution.second)) {
         if (force_i_frame) self->FullIntraRequest(channel_name);
         return;
       }
+      // The first admitted frame predates codec creation. A runtime backend
+      // change can also give an already queued frame different size limits.
+      const auto encoder_limits = context->codec->GetEncoderResolutionLimits();
+      const auto [target_width, target_height] = FitVideoResolution(
+          target_resolution.first, target_resolution.second, 0, 0, encoder_limits);
       bool needs_scaling =
           target_width > 0 && target_height > 0 &&
           (target_width < frame.Width() || target_height < frame.Height());
@@ -1105,6 +1110,7 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
         if (self->video_send_paused_ ||
             context->video_settings_generation != settings_generation) return;
         const int64_t input_time_ms = self->clock_->CurrentTimeMs();
+        context->encoder_limits = encoder_limits;
         context->video_rate_control.OnEncoderInput(input_time_ms);
         input_frame_rate = context->encoder_input_cadence.Observe(
             input_time_ms, self->media_config_.max_frame_rate);
@@ -3153,8 +3159,10 @@ int IceTransportController::UpdateVideoSettings(
       config.init_bitrate =
           context->applied_target_bitrate.value_or(MINIRTC_INIT_BITRATE);
       if (context->source_width > 0 && context->source_height > 0) {
-        adapter.GetResolution(config.init_bitrate, context->source_width,
-                              context->source_height, &config.init_width,
+        const auto [width, height] = FitVideoResolution(
+            context->source_width, context->source_height, 0, 0,
+            context->encoder_limits, adapter.GetMaxPixelsForQuality());
+        adapter.GetResolution(config.init_bitrate, width, height, &config.init_width,
                               &config.init_height);
       }
       encoders.push_back({name, context, context->codec, config});
@@ -3181,8 +3189,9 @@ int IceTransportController::UpdateVideoSettings(
       // Publish the size accepted by Init so the next frame uses the new settings.
       if (prepared.codec->GetResolution(&prepared.width, &prepared.height) != 0 ||
           prepared.width <= 0 || prepared.height <= 0) {
-        prepared.width = prepared.config.init_width;
-        prepared.height = prepared.config.init_height;
+        std::tie(prepared.width, prepared.height) = FitVideoResolution(
+            prepared.config.init_width, prepared.config.init_height, 0, 0,
+            prepared.codec->GetEncoderResolutionLimits());
       }
     }
     lock.lock();
@@ -3209,6 +3218,7 @@ int IceTransportController::UpdateVideoSettings(
       if (prepared.previous) {
         retired_encoders.push_back(std::move(context->codec));
         context->codec = std::move(prepared.codec);
+        context->encoder_limits = context->codec->GetEncoderResolutionLimits();
       }
       ++context->video_settings_generation;
       context->video_rate_control.Reset();

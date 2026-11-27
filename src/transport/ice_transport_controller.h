@@ -252,7 +252,8 @@ class IceTransportController
 
     std::optional<int> target_width;
     std::optional<int> target_height;
-    int source_width = 0;   // capture fitted to this peer's viewport bound
+    VideoResolutionLimits encoder_limits;  // published by the encode queue
+    int source_width = 0;   // capture fitted to viewport and encoder limits
     int source_height = 0;  // aspect-ratio anchor for further adaptation
     std::optional<int64_t> last_active_time;
     std::optional<int64_t> last_capture_time;

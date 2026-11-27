@@ -332,11 +332,15 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     self->resolution_adapter_->SetPreferences(
         self->video_quality_, effective_fps,
         self->media_config_.video_degradation_preference);
-    int target_width = raw_frame.Width(), target_height = raw_frame.Height();
+    const auto [source_width, source_height] = FitVideoResolution(
+        raw_frame.Width(), raw_frame.Height(), 0, 0,
+        codec->GetEncoderResolutionLimits(),
+        self->resolution_adapter_->GetMaxPixelsForQuality());
+    int target_width = source_width, target_height = source_height;
     self->resolution_adapter_->GetResolution(
         std::max(16000,
                  static_cast<int>(budget.video_bps * budget.decode_scale)),
-        raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
+        source_width, source_height, &target_width, &target_height);
     // Only repeated IDRs that cannot fit the bounded pacer may temporarily
     // reduce quality-priority pixels. Keep at least a readable 720p desktop,
     // rather than mapping a transient bitrate estimate straight down to 180p.
@@ -344,13 +348,13 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
     if (keyframe_recovery) {
       int floor_width = 0, floor_height = 0;
       self->resolution_adapter_->GetStartupResolution(
-          raw_frame.Width(), raw_frame.Height(), &floor_width, &floor_height);
+          source_width, source_height, &floor_width, &floor_height);
       const int64_t floor_pixels = int64_t(floor_width) * floor_height;
       const int64_t desired = std::max(floor_pixels, static_cast<int64_t>(
           target_width * int64_t(target_height) * budget.keyframe_scale));
       while (int64_t(target_width) * target_height > desired) {
         const auto next = self->resolution_adapter_->GetNextLowerResolution(
-            target_width, target_height, raw_frame.Width(), raw_frame.Height());
+            target_width, target_height, source_width, source_height);
         if (next.first <= 0 || next.second <= 0 ||
             int64_t(next.first) * next.second >= int64_t(target_width) * target_height)
           break;
@@ -363,16 +367,15 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
         target_height = next.second;
       }
     }
-    const bool new_source =
-        stream->source_width_ != static_cast<int>(raw_frame.Width()) ||
-        stream->source_height_ != static_cast<int>(raw_frame.Height());
+    const bool new_source = stream->source_width_ != source_width ||
+                            stream->source_height_ != source_height;
     if (new_source || !stream->adapted_width_) {
       // A conservative initial bandwidth estimate is not evidence that the
       // desktop needs 180p. Start with readable pixels; bounded keyframe/queue
       // recovery can still reduce them immediately on genuinely weak links.
       if (!keep_resolution)
         self->resolution_adapter_->GetStartupResolution(
-            raw_frame.Width(), raw_frame.Height(), &target_width, &target_height);
+            source_width, source_height, &target_width, &target_height);
       stream->source_started_ms_ = now_ms;
       stream->downscale_since_ms_ = -1;
     }
@@ -409,8 +412,8 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
                                         : "sustained_bandwidth");
       stream->adapted_width_ = target_width;
       stream->adapted_height_ = target_height;
-      stream->source_width_ = raw_frame.Width();
-      stream->source_height_ = raw_frame.Height();
+      stream->source_width_ = source_width;
+      stream->source_height_ = source_height;
       stream->last_resize_ms_ = now_ms;
     }
     bool scale =

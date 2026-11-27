@@ -47,6 +47,7 @@ class ResolutionAdapter {
 
  public:
   std::vector<ResolutionBitrateLimits> GetBitrateLimits() const;
+  int GetMaxPixelsForQuality() const;
 
   int SetTargetBitrate(int bitrate);
 
@@ -65,8 +66,6 @@ class ResolutionAdapter {
   // signalling "no upper cap" so the encoder is never forced to upgrade.
   ResolutionBitrateLimits ComputeBitrateLimitsForResolution(
       int w, int h, bool is_highest) const;
-
-  int GetMaxPixelsForQuality() const;
 
   float GetBitrateCoefficient() const;
 
