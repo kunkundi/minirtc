@@ -131,19 +131,8 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
 #if defined(_WIN32) || defined(_WIN64)
   if (codec_type == VideoCodecType::H264 ||
       codec_type == VideoCodecType::H265) {
-    if (hardware_acceleration) {
-#if MINIRTC_HAS_CUDA_ENCODER
-      if (codec_type == VideoCodecType::H265 ? CheckIsCudaHevcEncodeSupported()
-                                             : CheckIsCudaEncodeSupported()) {
-        if (auto encoder = TryInitEncoder(
-                std::make_unique<NvidiaVideoEncoder>(clock, codec_type),
-                config)) {
-          return encoder;
-        }
-      }
-#endif
-      return CreateWindowsFallbackEncoder(clock, config, codec_type);
-    }
+    if (hardware_acceleration)
+      return CreateWindowsCaptureEncoder(clock, config, codec_type);
     if (codec_type == VideoCodecType::H265) return nullptr;
     return TryInitEncoder(std::make_unique<OpenH264Encoder>(clock), config);
   }
@@ -172,6 +161,18 @@ std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateInitializedVideoEncoder(
 }
 
 #ifdef _WIN32
+std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateWindowsDefaultEncoder(
+    std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config, VideoCodecType codec_type) {
+#if MINIRTC_HAS_CUDA_ENCODER
+  if (codec_type == VideoCodecType::H265 ? CheckIsCudaHevcEncodeSupported()
+                                         : CheckIsCudaEncodeSupported()) {
+    if (auto encoder = TryInitEncoder(std::make_unique<NvidiaVideoEncoder>(clock, codec_type), config))
+      return encoder;
+  }
+#endif
+  return CreateWindowsFallbackEncoder(clock, config, codec_type);
+}
+
 std::unique_ptr<MediaCodec> VideoEncoderFactory::CreateWindowsFallbackEncoder(
     std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
     VideoCodecType codec_type) {

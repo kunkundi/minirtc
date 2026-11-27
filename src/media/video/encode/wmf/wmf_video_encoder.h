@@ -9,13 +9,17 @@
 
 #include "media_codec.h"
 
+struct ID3D11Device;
+
 namespace minirtc {
 
 // Uses only hardware MFTs registered by the graphics driver. No vendor SDK or
-// CUDA runtime is required. Input is packed NV12; output is Annex-B H.264/HEVC.
+// CUDA runtime is required. Accepts packed NV12 or capture-device DXGI
+// surfaces when bound to an adapter. Output is Annex-B H.264/HEVC.
 class WmfVideoEncoder final : public MediaCodec {
  public:
-  WmfVideoEncoder(std::shared_ptr<SystemClock> clock, VideoCodecType codec);
+  WmfVideoEncoder(std::shared_ptr<SystemClock> clock, VideoCodecType codec,
+                  ID3D11Device* capture_device = nullptr);
   ~WmfVideoEncoder() override;
   static bool IsSupported(VideoCodecType codec);
   int Init(const MediaCodecConfig& config) override;
@@ -27,6 +31,7 @@ class WmfVideoEncoder final : public MediaCodec {
   int SetTargetBitrate(int bitrate) override;
   int SetTargetFrameRate(int frame_rate) override;
   bool SupportsInputFrameRateUpdates() const override { return true; }
+  bool SupportsNativeFrameInput(MiniRtcNativeVideoFrameType type) const override;
   int SetInputFrameRate(int frame_rate) override;
   int GetResolution(int* width, int* height) const override;
   std::string GetEncoderName() const override;

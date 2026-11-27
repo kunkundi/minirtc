@@ -1,6 +1,9 @@
 #include "wmf_video_encoder.h"
 
 #include <codecapi.h>
+#include <d3d10_1.h>
+#include <d3d11.h>
+#include <dxgi.h>
 #include <strmif.h>
 #include <wrl/implements.h>
 
@@ -84,10 +87,31 @@ HRESULT SetUint(ICodecAPI* api, const GUID& key, ULONG value) {
   return api->SetValue(&key, &variant);
 }
 
-HRESULT EnumerateEncoders(bool hevc, IMFActivate*** activates, UINT32* count) {
+HRESULT EnumerateEncoders(bool hevc, IMFActivate*** activates, UINT32* count,
+                          ID3D11Device* capture_device = nullptr) {
   MFT_REGISTER_TYPE_INFO input{MFMediaType_Video, MFVideoFormat_NV12};
   MFT_REGISTER_TYPE_INFO output{MFMediaType_Video,
                                 hevc ? MFVideoFormat_HEVC : MFVideoFormat_H264};
+  if (capture_device) {
+    ComPtr<IDXGIDevice> dxgi;
+    ComPtr<IDXGIAdapter> adapter;
+    DXGI_ADAPTER_DESC desc{};
+    ComPtr<IMFAttributes> attributes;
+    HRESULT hr = capture_device->QueryInterface(IID_PPV_ARGS(&dxgi));
+    if (SUCCEEDED(hr)) hr = dxgi->GetAdapter(&adapter);
+    if (SUCCEEDED(hr)) hr = adapter->GetDesc(&desc);
+    if (SUCCEEDED(hr)) hr = MFCreateAttributes(&attributes, 1);
+    if (SUCCEEDED(hr)) hr = attributes->SetBlob(MFT_ENUM_ADAPTER_LUID,
+        reinterpret_cast<const UINT8*>(&desc.AdapterLuid), sizeof(desc.AdapterLuid));
+    if (FAILED(hr)) return hr;
+    // Keep the legacy CPU/NVENC paths loadable on systems predating MFTEnum2.
+    const auto enumerate = reinterpret_cast<decltype(&MFTEnum2)>(
+        GetProcAddress(GetModuleHandleW(L"mfplat.dll"), "MFTEnum2"));
+    if (!enumerate) return E_NOTIMPL;
+    return enumerate(MFT_CATEGORY_VIDEO_ENCODER,
+        MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER, &input, &output,
+        attributes.Get(), activates, count);
+  }
   return MFTEnumEx(MFT_CATEGORY_VIDEO_ENCODER,
                    MFT_ENUM_FLAG_HARDWARE | MFT_ENUM_FLAG_SORTANDFILTER, &input,
                    &output, activates, count);
@@ -106,8 +130,8 @@ bool ValidConfig(const MediaCodecConfig& config) {
 
 class WmfVideoEncoder::Impl {
  public:
-  Impl(std::shared_ptr<SystemClock> clock, VideoCodecType codec)
-      : clock_(std::move(clock)), hevc_(codec == VideoCodecType::H265) {}
+  Impl(std::shared_ptr<SystemClock> clock, VideoCodecType codec, ID3D11Device* device)
+      : clock_(std::move(clock)), hevc_(codec == VideoCodecType::H265), capture_device_(device) {}
   ~Impl() {
     worker_.Call([this] {
       Reset();
@@ -119,6 +143,8 @@ class WmfVideoEncoder::Impl {
     event_reader_.Reset();
     api_.Reset();
     wmf::ShutdownTransform(encoder_);
+    surface_allocator_.Reset();
+    device_manager_.Reset();
     input_credit_ = 0;
     for (auto& header : parameter_sets_) header.clear();
     parser_.Reset();
@@ -343,6 +369,24 @@ class WmfVideoEncoder::Impl {
       event_reader_ = Microsoft::WRL::Make<MftEventReader>(events.Get());
       if (!event_reader_) return E_OUTOFMEMORY;
     }
+    if (capture_device_) {
+      if (!MFGetAttributeUINT32(attributes.Get(), MF_SA_D3D11_AWARE, FALSE))
+        return MF_E_UNSUPPORTED_D3D_TYPE;
+      if (capture_device_->GetCreationFlags() & D3D11_CREATE_DEVICE_SINGLETHREADED)
+        return MF_E_UNSUPPORTED_D3D_TYPE;
+      ComPtr<ID3D11DeviceContext> immediate;
+      ComPtr<ID3D10Multithread> multithread;
+      capture_device_->GetImmediateContext(&immediate);
+      hr = immediate.As(&multithread);
+      if (FAILED(hr)) return hr;
+      multithread->SetMultithreadProtected(TRUE);
+      UINT token = 0;
+      hr = MFCreateDXGIDeviceManager(&token, &device_manager_);
+      if (SUCCEEDED(hr)) hr = device_manager_->ResetDevice(capture_device_.Get(), token);
+      if (SUCCEEDED(hr)) hr = encoder_->ProcessMessage(MFT_MESSAGE_SET_D3D_MANAGER,
+          reinterpret_cast<ULONG_PTR>(device_manager_.Get()));
+      if (FAILED(hr)) return hr;
+    }
     DWORD inputs = 0, outputs = 0;
     hr = encoder_->GetStreamCount(&inputs, &outputs);
     if (FAILED(hr) || inputs != 1 || outputs != 1) return E_UNEXPECTED;
@@ -408,6 +452,13 @@ class WmfVideoEncoder::Impl {
     input->SetUINT32(MF_MT_DEFAULT_STRIDE, config_.init_width);
     hr = encoder_->SetInputType(input_id_, input.Get(), 0);
     if (FAILED(hr)) return hr;
+    if (capture_device_) {
+      hr = MFCreateVideoSampleAllocatorEx(IID_PPV_ARGS(&surface_allocator_));
+      if (SUCCEEDED(hr)) hr = surface_allocator_->SetDirectXManager(device_manager_.Get());
+      if (SUCCEEDED(hr)) hr = surface_allocator_->InitializeSampleAllocatorEx(
+          2, 8, nullptr, input.Get());
+      if (FAILED(hr)) return hr;
+    }
     if (speed_hr != S_OK)
       speed_hr = SetUint(api_.Get(), CODECAPI_AVEncCommonQualityVsSpeed, 0);
     hr = SetUint(api_.Get(), CODECAPI_AVEncCommonMeanBitRate,
@@ -436,7 +487,7 @@ class WmfVideoEncoder::Impl {
     if (FAILED(worker_.Status())) return worker_.Status();
     IMFActivate** activations = nullptr;
     UINT32 count = 0;
-    HRESULT hr = EnumerateEncoders(hevc_, &activations, &count);
+    HRESULT hr = EnumerateEncoders(hevc_, &activations, &count, capture_device_.Get());
     if (FAILED(hr)) return hr;
     hr = MF_E_TOPO_CODEC_NOT_FOUND;
     bool format_rejected = false;
@@ -565,6 +616,59 @@ class WmfVideoEncoder::Impl {
     return S_OK;
   }
 
+  // Give the asynchronous MFT its own pooled surface so the capture slot can
+  // immediately be reused or read by another viewer. Both devices are identical.
+  HRESULT CreateSurfaceSample(const RawFrame& raw, LONGLONG time, LONGLONG duration,
+                              ComPtr<IMFSample>& sample) {
+    HRESULT hr = surface_allocator_->AllocateSample(&sample);
+    ComPtr<IMFMediaBuffer> buffer;
+    ComPtr<IMFDXGIBuffer> dxgi;
+    ComPtr<ID3D11Texture2D> target;
+    UINT index = 0;
+    if (SUCCEEDED(hr)) hr = sample->GetBufferByIndex(0, &buffer);
+    if (SUCCEEDED(hr)) hr = buffer.As(&dxgi);
+    if (SUCCEEDED(hr)) hr = dxgi->GetResource(IID_PPV_ARGS(&target));
+    if (SUCCEEDED(hr)) hr = dxgi->GetSubresourceIndex(&index);
+    if (FAILED(hr)) return hr;
+    D3D11_TEXTURE2D_DESC target_desc{};
+    target->GetDesc(&target_desc);
+    ComPtr<ID3D11Device> target_device;
+    target->GetDevice(&target_device);
+    if (target_device.Get() != capture_device_.Get() ||
+        target_desc.Format != DXGI_FORMAT_NV12 || target_desc.Width < raw.Width() ||
+        target_desc.Height < raw.Height()) return E_INVALIDARG;
+    ComPtr<ID3D11DeviceContext> context;
+    capture_device_->GetImmediateContext(&context);
+    if (const auto* native = raw.NativeFrame()) {
+      if (native->type != MiniRtcNativeVideoFrameD3D11Nv12) return E_INVALIDARG;
+      auto* texture = static_cast<ID3D11Texture2D*>(native->payload.d3d11_nv12.texture);
+      ComPtr<ID3D11Device> device;
+      texture->GetDevice(&device);
+      D3D11_TEXTURE2D_DESC desc{};
+      texture->GetDesc(&desc);
+      if (device.Get() != capture_device_.Get() || desc.Format != DXGI_FORMAT_NV12 ||
+          desc.Width != raw.Width() || desc.Height != raw.Height()) return E_INVALIDARG;
+      ComPtr<IDXGIKeyedMutex> mutex;
+      hr = texture->QueryInterface(IID_PPV_ARGS(&mutex));
+      if (FAILED(hr)) return hr;
+      hr = mutex->AcquireSync(0, 100);
+      if (hr != S_OK) return FAILED(hr) ? hr : E_FAIL;
+      context->CopySubresourceRegion(target.Get(), index, 0, 0, 0, texture, 0, nullptr);
+      hr = mutex->ReleaseSync(0);
+      if (FAILED(hr)) return hr;
+    } else {
+      // Occasional CPU-composited cursor frames should not recreate the encoder.
+      if (target_desc.Width != raw.Width() || target_desc.Height != raw.Height())
+        return wmf::CreateSample(raw.Buffer(), size_t(raw.Width()) * raw.Height() * 3 / 2,
+                                 time, duration, sample);
+      context->UpdateSubresource(target.Get(), index, nullptr, raw.Buffer(), raw.Width(), 0);
+    }
+    hr = capture_device_->GetDeviceRemovedReason();
+    if (SUCCEEDED(hr)) hr = buffer->SetCurrentLength(static_cast<DWORD>(raw.Width() * raw.Height() * 3 / 2));
+    if (SUCCEEDED(hr)) hr = sample->SetSampleTime(time);
+    return SUCCEEDED(hr) ? sample->SetSampleDuration(duration) : hr;
+  }
+
   HRESULT EncodeHardware(const RawFrame& raw,
                          std::vector<EncodedFrame>& frames) {
     if (raw.Width() != static_cast<uint32_t>(config_.init_width) ||
@@ -587,8 +691,9 @@ class WmfVideoEncoder::Impl {
         raw.CapturedTimestamp(), clock_->CurrentTimeUs(), input_frame_rate_);
     size_t input_size = 0;
     GetNv12FrameSize(raw.Width(), raw.Height(), &input_size);
-    HRESULT hr = wmf::CreateSample(raw.Buffer(), input_size, timing.time_100ns,
-                                   timing.duration_100ns, input);
+    HRESULT hr = capture_device_
+        ? CreateSurfaceSample(raw, timing.time_100ns, timing.duration_100ns, input)
+        : wmf::CreateSample(raw.Buffer(), input_size, timing.time_100ns, timing.duration_100ns, input);
     if (FAILED(hr)) return hr;
     const auto deadline =
         std::chrono::steady_clock::now() + std::chrono::seconds(2);
@@ -656,6 +761,9 @@ class WmfVideoEncoder::Impl {
   wmf::CodecThread worker_;
   std::shared_ptr<SystemClock> clock_;
   const bool hevc_;
+  const ComPtr<ID3D11Device> capture_device_;
+  ComPtr<IMFDXGIDeviceManager> device_manager_;
+  ComPtr<IMFVideoSampleAllocatorEx> surface_allocator_;
   MediaCodecConfig config_;
   ComPtr<IMFTransform> encoder_;
   ComPtr<MftEventReader> event_reader_;
@@ -683,9 +791,13 @@ class WmfVideoEncoder::Impl {
 };
 
 WmfVideoEncoder::WmfVideoEncoder(std::shared_ptr<SystemClock> clock,
-                                 VideoCodecType codec)
-    : impl_(std::make_unique<Impl>(std::move(clock), codec)) {}
+                                 VideoCodecType codec, ID3D11Device* capture_device)
+    : impl_(std::make_unique<Impl>(std::move(clock), codec, capture_device)) {}
 WmfVideoEncoder::~WmfVideoEncoder() = default;
+
+bool WmfVideoEncoder::SupportsNativeFrameInput(MiniRtcNativeVideoFrameType type) const {
+  return impl_->capture_device_ && type == MiniRtcNativeVideoFrameD3D11Nv12;
+}
 
 bool WmfVideoEncoder::IsSupported(VideoCodecType codec) {
   if (codec == VideoCodecType::H265) {
@@ -744,7 +856,7 @@ std::pair<int, int> WmfVideoEncoder::PrepareEncodeResolution(int width, int heig
     });
   });
   // After device loss, Encode still owns the H.264 runtime software fallback.
-  if (!size.first && impl_->initialized_ && !impl_->hevc_)
+  if (!size.first && impl_->initialized_ && !impl_->hevc_ && !impl_->capture_device_)
     return FitVideoResolution(width, height, 0, 0, limits);
   return size;
 }
@@ -752,7 +864,8 @@ std::pair<int, int> WmfVideoEncoder::PrepareEncodeResolution(int width, int heig
 int WmfVideoEncoder::Encode(const RawFrame& raw,
                            std::function<int(const EncodedFrame&)> callback) {
   size_t size = 0;
-  if (!raw.Buffer() || raw.Width() > 8192 || raw.Height() > 8192 ||
+  if ((!raw.Buffer() && !(raw.NativeFrame() && SupportsNativeFrameInput(raw.NativeFrame()->type))) ||
+      raw.Width() > 8192 || raw.Height() > 8192 ||
       !GetNv12FrameSize(raw.Width(), raw.Height(), &size) || raw.Size() < size)
     return -1;
   std::vector<EncodedFrame> frames;
@@ -761,6 +874,10 @@ int WmfVideoEncoder::Encode(const RawFrame& raw,
     if (!impl_->fallback_) {
       const HRESULT hr = impl_->EncodeHardware(raw, frames);
       if (SUCCEEDED(hr)) return 0;
+      if (impl_->capture_device_) {
+        LOG_WARN("Quick Sync surface encoding failed (0x{:08x})", static_cast<uint32_t>(hr));
+        return -1;  // The selector retries this frame on the previous path.
+      }
       if (impl_->hevc_) {
         LOG_WARN("Media Foundation HEVC encoding failed (0x{:08x})",
                  static_cast<uint32_t>(hr));
@@ -865,6 +982,7 @@ int WmfVideoEncoder::GetResolution(int* width, int* height) const {
 std::string WmfVideoEncoder::GetEncoderName() const {
   return impl_->worker_.Call([&]() -> std::string {
     if (impl_->fallback_) return impl_->fallback_->GetEncoderName();
+    if (impl_->capture_device_) return impl_->hevc_ ? "Quick Sync (H.265)" : "Quick Sync (H.264)";
     return impl_->hevc_ ? "Media Foundation (H.265, HW)"
                         : "Media Foundation (H.264, HW)";
   });

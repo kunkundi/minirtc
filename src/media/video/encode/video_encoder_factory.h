@@ -29,6 +29,9 @@ class VideoEncoderFactory {
       bool hardware_acceleration, VideoCodecType codec_type);
 
 #ifdef _WIN32
+  static std::unique_ptr<MediaCodec> CreateWindowsDefaultEncoder(
+      std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
+      VideoCodecType codec_type);
   // Continue with the negotiated codec when neither NVENC input path is usable.
   static std::unique_ptr<MediaCodec> CreateWindowsFallbackEncoder(
       std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config,
@@ -38,6 +41,10 @@ class VideoEncoderFactory {
   static bool CheckIsHardwareAccelerationSupported(VideoCodecType codec_type);
 
  private:
+#ifdef _WIN32
+  static std::unique_ptr<MediaCodec> CreateWindowsCaptureEncoder(
+      std::shared_ptr<SystemClock> clock, const MediaCodecConfig& config, VideoCodecType codec_type);
+#endif
   static std::unique_ptr<MediaCodec> TryInitEncoder(
       std::unique_ptr<MediaCodec> encoder, const MediaCodecConfig& config);
 };

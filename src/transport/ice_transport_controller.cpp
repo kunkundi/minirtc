@@ -1058,9 +1058,9 @@ int IceTransportController::SendVideo(const MiniRtcVideoFrame* video_frame,
       }
       // The first admitted frame predates codec creation. A runtime backend
       // change can also give an already queued frame different size limits.
+      const auto [target_width, target_height] = context->codec->PrepareEncodeResolutionForFrame(
+          frame, target_resolution.first, target_resolution.second);
       const auto encoder_limits = context->codec->GetEncoderResolutionLimits();
-      const auto [target_width, target_height] = context->codec->PrepareEncodeResolution(
-          target_resolution.first, target_resolution.second);
       if (target_width <= 0 || target_height <= 0) {
         if (force_i_frame) self->FullIntraRequest(channel_name);
         return;

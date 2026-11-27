@@ -188,6 +188,10 @@ class MediaCodec {
   virtual std::pair<int, int> PrepareEncodeResolution(int width, int height) {
     return FitVideoResolution(width, height, 0, 0, GetEncoderResolutionLimits());
   }
+  virtual std::pair<int, int> PrepareEncodeResolutionForFrame(
+      const RawFrame&, int width, int height) {
+    return PrepareEncodeResolution(width, height);
+  }
 
   virtual std::string GetEncoderName() const { return ""; }
 

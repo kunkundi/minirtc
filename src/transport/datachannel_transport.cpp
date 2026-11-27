@@ -416,8 +416,8 @@ int DataChannelTransport::SendVideoFrame(const MiniRtcVideoFrame* video_frame,
       stream->source_height_ = source_height;
       stream->last_resize_ms_ = now_ms;
     }
-    const auto [encode_width, encode_height] = codec->PrepareEncodeResolution(
-        stream->adapted_width_, stream->adapted_height_);
+    const auto [encode_width, encode_height] = codec->PrepareEncodeResolutionForFrame(
+        raw_frame, stream->adapted_width_, stream->adapted_height_);
     if (encode_width <= 0 || encode_height <= 0) {
       if (should_force_i_frame) self->RequestVideoKeyFrame(stream_id);
       return -1;

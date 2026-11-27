@@ -268,6 +268,7 @@ target("transport")
 target("media")
     set_kind("object")
     add_deps("log", "frame", "common", "rtp")
+    add_includedirs("src/shared")
     if is_harmony then
         add_files("src/media/video/decode/harmony/*.cpp")
         add_syslinks("native_media_codecbase", "native_media_core", "native_media_vdec", "hilog_ndk.z", {public = true})
