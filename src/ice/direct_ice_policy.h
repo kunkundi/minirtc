@@ -14,6 +14,7 @@
 #include <sstream>
 #include <string>
 #include <string_view>
+#include <utility>
 
 #include "direct_address.h"
 
@@ -26,8 +27,11 @@ struct DirectIcePolicy {
   bool enabled() const { return mode == IcePolicy::HostOnly; }
 };
 
+enum class DirectCandidateOrigin { Local, Remote };
+
 inline std::optional<std::string> NormalizeDirectCandidate(
-    std::string candidate, const std::string& address) {
+    std::string candidate, const std::string& address,
+    DirectCandidateOrigin origin) {
   if (candidate.empty() || candidate.size() > 2048) return std::nullopt;
   if (candidate.size() >= 2 &&
       candidate.compare(candidate.size() - 2, 2, "\r\n") == 0)
@@ -59,33 +63,38 @@ inline std::optional<std::string> NormalizeDirectCandidate(
     v6.scope_id(0);
     expected = v6;
   }
-  if (*candidate_address != expected) return std::nullopt;
+  // A VPN can translate the advertised host address. For remote candidates
+  // use the authenticated signaling peer's address and the advertised port.
+  if (origin == DirectCandidateOrigin::Local && *candidate_address != expected)
+    return std::nullopt;
   ip = DirectAddressString(expected);
   // This native-only protocol does not negotiate candidate extensions.
   if (input >> extra) return std::nullopt;
-  return foundation + " 1 UDP " + std::to_string(priority) + " " + ip + " " +
-         std::to_string(port) + " typ host";
+  return "a=" + foundation + " 1 UDP " + std::to_string(priority) + " " + ip +
+         " " + std::to_string(port) + " typ host";
 }
-inline bool ValidateDirectSdp(const std::string& sdp,
-                              const std::string& address,
-                              std::string* ufrag = nullptr,
-                              std::set<std::string>* all_candidates = nullptr) {
+
+inline bool PrepareDirectSdp(std::string& sdp, const std::string& address,
+                             DirectCandidateOrigin origin,
+                             std::string* ufrag = nullptr,
+                             std::set<std::string>* all_candidates = nullptr) {
   if (sdp.empty() || sdp.size() > 128 * 1024 ||
       sdp.find('\0') != std::string::npos)
     return false;
   std::istringstream input(sdp);
-  std::string line, ice_ufrag;
+  std::string line, ice_ufrag, remote_sdp;
   std::set<std::string> candidates =
       all_candidates ? *all_candidates : std::set<std::string>{};
   while (std::getline(input, line)) {
-    if (!line.empty() && line.back() == '\r') line.pop_back();
+    const bool has_cr = !line.empty() && line.back() == '\r';
+    if (has_cr) line.pop_back();
     if (line.rfind("a=candidate:", 0) == 0) {
-      const auto candidate = NormalizeDirectCandidate(line, address);
+      auto candidate = NormalizeDirectCandidate(line, address, origin);
       if (!candidate) return false;
       candidates.insert(*candidate);
       if (candidates.size() > 128) return false;
-    }
-    if (line.rfind("a=ice-ufrag:", 0) == 0) {
+      line = std::move(*candidate);
+    } else if (line.rfind("a=ice-ufrag:", 0) == 0) {
       const auto value = line.substr(12);
       if (value.empty() || value.size() > 256 ||
           value.find_first_of(" \t\r\n") != std::string::npos ||
@@ -93,10 +102,17 @@ inline bool ValidateDirectSdp(const std::string& sdp,
         return false;
       ice_ufrag = value;
     }
+    if (origin == DirectCandidateOrigin::Remote) {
+      remote_sdp += line;
+      if (has_cr) remote_sdp += '\r';
+      if (!input.eof()) remote_sdp += '\n';
+    }
   }
+  if (ice_ufrag.empty()) return false;
+  if (origin == DirectCandidateOrigin::Remote) sdp = std::move(remote_sdp);
   if (all_candidates) *all_candidates = std::move(candidates);
-  if (ufrag) *ufrag = ice_ufrag;
-  return !ice_ufrag.empty();
+  if (ufrag) *ufrag = std::move(ice_ufrag);
+  return true;
 }
 }  // namespace minirtc
 

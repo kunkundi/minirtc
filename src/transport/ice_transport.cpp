@@ -1105,7 +1105,8 @@ int IceTransport::SendOffer() {
   }
   AppendAudioDataSrtpCapability();
   if (direct_policy_.enabled() &&
-      !ValidateDirectSdp(local_sdp_, direct_policy_.local_address)) {
+      !PrepareDirectSdp(local_sdp_, direct_policy_.local_address,
+                        DirectCandidateOrigin::Local)) {
     if (direct_error_) direct_error_(MiniRtcDirectNetworkPolicyFailed);
     return -1;
   }
@@ -1133,7 +1134,8 @@ int IceTransport::SendAnswer() {
   }
   AppendAudioDataSrtpCapability();
   if (direct_policy_.enabled() &&
-      !ValidateDirectSdp(local_sdp_, direct_policy_.local_address)) {
+      !PrepareDirectSdp(local_sdp_, direct_policy_.local_address,
+                        DirectCandidateOrigin::Local)) {
     if (direct_error_) direct_error_(MiniRtcDirectNetworkPolicyFailed);
     return -1;
   }

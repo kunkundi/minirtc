@@ -147,9 +147,10 @@ int PeerConnection::ReceiveDirect(const char* message, size_t size) {
       return fail();
     msg.remote_sdp = j["sdp"].get<std::string>();
     std::string remote_ufrag;
-    if (!ValidateDirectSdp(msg.remote_sdp,
-                           connection_info_.direct_policy.remote_address,
-                           &remote_ufrag, &direct_candidates_) ||
+    if (!PrepareDirectSdp(msg.remote_sdp,
+                          connection_info_.direct_policy.remote_address,
+                          DirectCandidateOrigin::Remote, &remote_ufrag,
+                          &direct_candidates_) ||
         (!direct_remote_ufrag_.empty() && remote_ufrag != direct_remote_ufrag_))
       return fail();
     direct_remote_ufrag_ = std::move(remote_ufrag);
@@ -176,12 +177,14 @@ int PeerConnection::ReceiveDirect(const char* message, size_t size) {
     } else {
       if (!j.contains("candidate") || !j["candidate"].is_string())
         return fail();
-      msg.new_candidate = j["candidate"].get<std::string>();
-      const auto normalized = NormalizeDirectCandidate(
-          msg.new_candidate, connection_info_.direct_policy.remote_address);
+      auto normalized = NormalizeDirectCandidate(
+          j["candidate"].get<std::string>(),
+          connection_info_.direct_policy.remote_address,
+          DirectCandidateOrigin::Remote);
       if (!normalized) return fail();
       if (!direct_candidates_.insert(*normalized).second) return 0;
       if (direct_candidates_.size() > 128) return fail();
+      msg.new_candidate = std::move(*normalized);
     }
     msg.type = IceWorkMsg::NewCandidate;
   } else
